@@ -1,0 +1,192 @@
+syntax = "proto3";
+
+package strategy.v1;
+option go_package = "github.com/hushine-tech/strategy-service/gen/strategyv1;strategyv1";
+
+service StrategyService {
+  // RunStrategy starts strategy execution. Returns immediately with a session_id.
+  // Data source is determined by account mode (fetched from account-service):
+  //   mode=0 (backtest) → BacktestDataLoop (TimescaleDB)
+  //   mode=1 (live)     → LiveDataLoop (Kafka)
+  //   mode=2 (testnet)  → LiveDataLoop (Kafka)
+  rpc RunStrategy(RunStrategyRequest) returns (RunStrategyResponse);
+
+  // PreviewRunStrategy runs the same profile-specific preflight as RunStrategy
+  // but does NOT create a session, persist state, or start a background worker.
+  // Gateway / UI surfaces call this to learn what will happen when the user
+  // clicks "run": profile classification, supported-ness, and any failing
+  // declared inputs. The evaluator is guaranteed to be byte-for-byte the same
+  // code path RunStrategy uses, so the UI can never drift from startup.
+  rpc PreviewRunStrategy(PreviewRunStrategyRequest) returns (PreviewRunStrategyResponse);
+
+  // GetStrategyStatus returns the current execution status of a strategy session.
+  rpc GetStrategyStatus(GetStrategyStatusRequest) returns (GetStrategyStatusResponse);
+
+  // StopStrategy stops a running strategy session.
+  rpc StopStrategy(StopStrategyRequest) returns (StopStrategyResponse);
+
+  // GetLiveConsumptionDiagnostics returns active mode=2 session bindings and
+  // anomaly counters for operator diagnostics.
+  rpc GetLiveConsumptionDiagnostics(GetLiveConsumptionDiagnosticsRequest) returns (GetLiveConsumptionDiagnosticsResponse);
+
+  // ValidateStrategyCode statically checks saved strategy source against the
+  // current runtime profile without importing or executing user code.
+  rpc ValidateStrategyCode(ValidateStrategyCodeRequest) returns (ValidateStrategyCodeResponse);
+}
+
+message RunStrategyRequest {
+  int64  account_id    = 1;
+  string strategy_path = 2;  // Python import path (Phase 2 后由 active strategy 替代)
+  reserved 3, 4;
+  reserved "symbol", "symbol_type";
+  string interval      = 5;  // "1m", "5m", "15m", "1h", "4h", "1d"
+  // Backtest only (used when account mode=0; ignored for mode=1/2)
+  int64  start_time_ms = 6;
+  int64  end_time_ms   = 7;
+  int64  user_id       = 100;
+  string runtime_id    = 101;
+}
+
+message RunStrategyResponse {
+  string session_id = 1;
+}
+
+message GetStrategyStatusRequest {
+  string session_id = 1;
+  int64  user_id    = 100;
+  string runtime_id = 101;
+}
+
+message GetStrategyStatusResponse {
+  string status         = 1;  // "running" / "stopping" / "finished" / "failed" / "stop_failed" / "stopped"
+  int32  bars_processed = 2;
+  string error          = 3;
+}
+
+enum StopAction {
+  STOP_ACTION_UNSPECIFIED = 0;
+  STOP_ACTION_CANCEL = 1;
+  STOP_ACTION_STOP_ONLY = 2;
+  STOP_ACTION_STOP_AND_CLOSE_POSITIONS = 3;
+  STOP_ACTION_FINISH = 4;
+}
+
+message StopStrategyRequest {
+  string session_id = 1;
+  bool close_positions = 2;  // legacy compatibility only
+  StopAction stop_action = 3;
+  int64 user_id = 100;
+  string runtime_id = 101;
+}
+
+message StopStrategyResponse {
+  bool stopped = 1;
+}
+
+message ValidateStrategyCodeRequest {
+  string code = 1;
+  string runtime_version = 2;
+  string runtime_profile = 3;
+  int64 user_id = 100;
+}
+
+message StrategyValidationIssue {
+  string code = 1;
+  string message = 2;
+  string module = 3;
+  int32 line = 4;
+}
+
+message ValidateStrategyCodeResponse {
+  bool ok = 1;
+  repeated StrategyValidationIssue issues = 2;
+  string runtime_version = 3;
+  string runtime_profile = 4;
+  repeated string allowed_third_party_modules = 5;
+}
+
+// ── PreviewRunStrategy ────────────────────────────────────────────────────
+//
+// Dry-run preflight: resolves the strategy's declared input universe, classifies
+// the runtime source profile, and reports declared-input-level readiness without
+// creating a session. Used by gateway to show "will this start?" feedback using
+// the same evaluator RunStrategy itself runs.
+
+message PreviewRunStrategyRequest {
+  int64  account_id    = 1;
+  string strategy_path = 2;  // same semantics as RunStrategy (may be empty)
+  int64  start_time_ms = 6;  // backtest-only; ignored for live/testnet
+  int64  end_time_ms   = 7;
+  int64  user_id       = 100;
+  string runtime_id    = 101;
+}
+
+message PreflightInputKey {
+  string market   = 1;
+  string symbol   = 2;
+  string interval = 3;
+}
+
+message PreflightFailureProto {
+  // Typed reason category:
+  //   "profile"          — runtime source profile is not wired up
+  //   "invalid_request"  — e.g. backtest missing a valid time range
+  //   "historical_data"  — no usable historical rows in requested range
+  //   "stream"           — live/testnet stream missing / not running / stale
+  //   "declaration"      — reserved; declaration errors surface via RPC status
+  string kind      = 1;
+  // Human-readable reason, safe to display in UI.
+  string reason    = 2;
+  // Populated when the failure is attributable to a specific declared input;
+  // absent (empty message) for profile-level failures.
+  PreflightInputKey input_key = 3;
+}
+
+message PreviewRunStrategyResponse {
+  // Conceptual profile: "backtest" / "live" / "testnet" / "unknown".
+  string profile   = 1;
+  // Whether the resolved profile has a wired runtime today.
+  bool   supported = 2;
+  // True only when (a) profile is supported AND (b) every declared input
+  // passed the profile-specific preflight.
+  bool   ok        = 3;
+  repeated PreflightFailureProto failures         = 4;
+  // Populated on success for live/testnet profiles — informs the UI what
+  // stream bindings will be subscribed to.
+  repeated LiveStreamBinding     required_streams = 5;
+  // Populated after strategy INPUTS are parsed so gateway/UI can evaluate
+  // mode=0 historical coverage without guessing the strategy's input universe.
+  repeated LiveStreamBinding     declared_inputs  = 6;
+}
+
+message GetLiveConsumptionDiagnosticsRequest {}
+
+message LiveStreamBinding {
+  int64 stream_id = 1;
+  string exchange = 2;
+  string market = 3;
+  string kind = 4;
+  string symbol = 5;
+  string interval = 6;
+}
+
+message LiveSessionDiagnostic {
+  string session_id = 1;
+  int64 user_id = 2;
+  int64 account_id = 3;
+  int64 strategy_id = 4;
+  int32 account_mode = 5;
+  string status = 6;
+  int32 bars_processed = 7;
+  string error = 8;
+  string consumer_group = 9;
+  repeated LiveStreamBinding streams = 10;
+  int32 unroutable_events = 11;
+  int64 last_unroutable_at_ms = 12;
+  string last_unroutable_reason = 13;
+  int64 last_lease_heartbeat_at_ms = 14;
+}
+
+message GetLiveConsumptionDiagnosticsResponse {
+  repeated LiveSessionDiagnostic sessions = 1;
+}

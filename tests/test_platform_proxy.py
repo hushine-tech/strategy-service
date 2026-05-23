@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+from strategy_service.gen import account_service_pb2, marketdata_service_pb2, order_service_pb2
+from strategy_service.platform_proxy import (
+    ACCOUNT_SAVE_SESSION,
+    LOGS_EMIT,
+    MARKETDATA_FETCH_KLINES,
+    MARKETDATA_GET_STATUS,
+    ORDER_PLACE,
+    RuntimeChannelLogHandler,
+    RuntimeChannelPlatformProxy,
+)
+from strategy_service.types import OrderDecision
+
+
+def test_proxy_account_client_sends_save_session_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    ok = proxy.account_client().save_session(
+        session_id="sess-1",
+        account_id=7,
+        strategy_id=9,
+        mode=2,
+        runtime_id="runtime-1",
+        runtime_source="self_hosted",
+        runtime_name="desk",
+    )
+
+    assert ok is True
+    method, req = runtime.calls[-1]
+    assert method == ACCOUNT_SAVE_SESSION
+    assert req.session_id == "sess-1"
+    assert req.runtime_id == "runtime-1"
+
+
+def test_proxy_order_client_places_order_without_direct_stub():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ORDER_PLACE] = order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-1",
+        attempt_id="attempt-1",
+        attempt_status="ACCEPTED",
+        order=order_service_pb2.ExchangeOrderEntry(
+            order_id="order-1",
+            symbol="ETHUSDT",
+            side="BUY",
+            status="FILLED",
+            orig_qty=1,
+            executed_qty=1,
+            avg_price=2000,
+        ),
+        fill_deltas=[
+            order_service_pb2.OrderFillEntry(
+                qty=1,
+                fill_price=2000,
+                fee=0.8,
+                status="CONFIRMED",
+            )
+        ],
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    feedback = proxy.order_client().place_order(
+        7,
+        OrderDecision(symbol="ETHUSDT", side="BUY", qty=1),
+        2000,
+        strategy_id=9,
+        market="futures",
+        session_id="sess-1",
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == ORDER_PLACE
+    assert req.account_id == 7
+    assert req.session_id == "sess-1"
+    assert feedback.attempt_status == "ACCEPTED"
+    assert feedback.order.order_id == "order-1"
+
+
+def test_proxy_marketdata_client_uses_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[MARKETDATA_GET_STATUS] = marketdata_service_pb2.GetMarketDataStreamStatusResponse(
+        stream=marketdata_service_pb2.MarketDataStream(
+            stream_id=11,
+            key=marketdata_service_pb2.StreamKey(
+                exchange="binance",
+                market="futures",
+                kind="kline",
+                symbol="ETHUSDT",
+                interval="1m",
+            ),
+        )
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    stream = proxy.marketdata_client().get_market_data_stream_status(
+        exchange="binance",
+        market="futures",
+        symbol="ETHUSDT",
+        interval="1m",
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == MARKETDATA_GET_STATUS
+    assert req.key.symbol == "ETHUSDT"
+    assert stream.stream_id == 11
+
+
+def test_proxy_marketdata_client_fetches_klines_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    from google.protobuf.struct_pb2 import Struct
+
+    resp = Struct()
+    resp.update({
+        "klines": [{
+            "exchange": "binance",
+            "market": "futures",
+            "symbol": "ETHUSDT",
+            "interval": "1m",
+            "open_time": 1000,
+            "close_time": 2000,
+            "timestamp": 2000,
+            "open": 1.0,
+            "high": 2.0,
+            "low": 0.5,
+            "close": 1.5,
+            "volume": 10.0,
+        }]
+    })
+    runtime.responses[MARKETDATA_FETCH_KLINES] = resp
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    rows = proxy.marketdata_client().fetch_klines(
+        market="futures",
+        symbol="ETHUSDT",
+        interval="1m",
+        start_time_ms=1000,
+        end_time_ms=2000,
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == MARKETDATA_FETCH_KLINES
+    assert req["symbol"] == "ETHUSDT"
+    assert rows[0].open_time == 1000
+    assert rows[0].close == 1.5
+
+
+def test_proxy_log_client_emits_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    ok = proxy.log_client().emit(
+        level="INFO",
+        logger_name="strategy_service.test",
+        message="hello",
+        log_type="root",
+        session_id="sess-1",
+    )
+
+    assert ok is True
+    method, req = runtime.calls[-1]
+    assert method == LOGS_EMIT
+    assert req["logger"] == "strategy_service.test"
+    assert req["message"] == "hello"
+    assert req["session_id"] == "sess-1"
+
+
+def test_runtime_channel_log_handler_forwards_non_internal_records():
+    runtime = _FakeRuntimeChannel()
+    proxy = RuntimeChannelPlatformProxy(runtime)
+    handler = RuntimeChannelLogHandler(proxy)
+
+    import logging
+
+    record = logging.LogRecord(
+        name="strategy_service.grpc_server",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=123,
+        msg="session %s",
+        args=("warned",),
+        exc_info=None,
+    )
+    handler.emit(record)
+
+    method, req = runtime.calls[-1]
+    assert method == LOGS_EMIT
+    assert req["level"] == "WARNING"
+    assert req["message"] == "session warned"
+
+
+def test_runtime_channel_log_handler_skips_proxy_internals():
+    runtime = _FakeRuntimeChannel()
+    proxy = RuntimeChannelPlatformProxy(runtime)
+    handler = RuntimeChannelLogHandler(proxy)
+
+    import logging
+
+    record = logging.LogRecord(
+        name="strategy_service.runtime_channel",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=123,
+        msg="loop",
+        args=(),
+        exc_info=None,
+    )
+    handler.emit(record)
+
+    assert runtime.calls == []
+
+
+class _FakeRuntimeChannel:
+    def __init__(self) -> None:
+        self.calls = []
+        self.responses = {
+            ACCOUNT_SAVE_SESSION: account_service_pb2.SaveSessionResponse(),
+            ORDER_PLACE: order_service_pb2.PlaceOrderResponse(),
+            MARKETDATA_GET_STATUS: marketdata_service_pb2.GetMarketDataStreamStatusResponse(),
+        }
+
+    def invoke_platform_unary(self, method, request, response_type, *, timeout_seconds=30.0):
+        del timeout_seconds
+        self.calls.append((method, request))
+        resp = self.responses.get(method)
+        if resp is None:
+            return response_type()
+        return resp

@@ -1,0 +1,15 @@
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+grpcio>=1.80.0
+grpcio-tools>=1.80.0
+psycopg2-binary>=2.9.9
+cryptography>=44.0.0
+kafka-python>=2.0.0
+
+# OpenTelemetry for cross-service distributed tracing. Optional at runtime —
+# strategy-library's grpc_interceptors degrade gracefully if missing, and
+# `log.tracing.enabled=false` in config.yaml disables the exporter. When
+# enabled, spans flow to the Jaeger OTLP endpoint at log.tracing.endpoint.
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-exporter-otlp-proto-http>=1.20.0

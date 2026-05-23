@@ -1,0 +1,84 @@
+server:
+  grpc_addr: "0.0.0.0:50053"
+  http_addr: ":8000"
+
+database:
+  host: "192.168.88.10"
+  port: 5432
+  database: "binance_{year}"
+  user: "postgres"
+  password: "postgres"
+
+dependencies:
+  account_service_grpc: "127.0.0.1:50051"
+  order_service_grpc: "127.0.0.1:50051"
+  # Phase D1 — control-panel-service. Set when running as a hosted
+  # strategy-runtime that should self-register on startup; leave empty
+  # in legacy / non-D1 deployments.
+  control_panel_service_grpc: ""
+
+# Legacy inbound strategy-runtime self-registration (off by default).
+# When register_with_control_panel=true, on startup the service calls
+# RegisterRuntime(source="hosted", bind_user_id, ...) against
+# control-panel-service and runs a heartbeat loop in the background.
+runtime:
+  # inbound = legacy/local direct gRPC behavior (default);
+  # outbound = RuntimeChannel only for hosted/self-hosted containers; both = dev/test.
+  # Outbound mode is the runtime isolation boundary: direct
+  # account-service, order API, Kafka, and database dependencies from this
+  # file are ignored at boot and strategy execution uses RuntimeChannel proxy
+  # clients instead.
+  ingress_mode: "inbound"
+  # Empty uses /etc/hushine/runtime.cred. Override with RUNTIME_CREDENTIAL_PATH.
+  credential_path: ""
+  register_with_control_panel: false
+  runtime_id: ""              # empty → control panel generates one
+  name: ""
+  bind_user_id: 0             # required when register_with_control_panel=true
+  endpoint_host: ""           # legacy inbound advertised host; unused in outbound
+  grpc_port: 50053
+  debug_port: 0
+  capabilities: ["strategy", "spot", "futures"]
+  resource_profile: "small"
+  version: "0.1.0"
+  heartbeat_interval_seconds: 10
+
+kafka:
+  brokers:
+    - "192.168.88.10:19092"
+
+market_data:
+  # Rollout toggles:
+  # - preflight_enabled=false lets mode=2 sessions bypass control-plane readiness checks.
+  # - lease_management_enabled=false disables lease create/renew/release.
+  # Use both together as the fast rollback path if control-plane rollout is unstable.
+  # For testnet C3 these should stay true.
+  preflight_enabled: true
+  lease_management_enabled: true
+  # mode=2 control-plane policy:
+  # - strategy-service preflight rejects streams older than interval*2 + freshness_grace_seconds
+  # - live sessions renew stream leases every lease_heartbeat_seconds
+  # - leases expire lease_ttl_seconds after the last successful renewal
+  lease_heartbeat_seconds: 30
+  lease_ttl_seconds: 90
+  freshness_grace_seconds: 30
+
+notification:
+  enabled: true
+  timeout_seconds: 2
+
+log:
+  output_dir: "./logs"
+  kafka:
+    enabled: true
+    brokers: ["192.168.88.10:19092"]
+    topic_prefix: "app-logs"
+  # Tracing uses the same key path as account/order/handler's config.yaml.
+  # When enabled=true, `run_grpc_server.py` calls
+  # `utils.log.tracer.init_tracer(service_name, endpoint)` on boot so gRPC
+  # spans join the cross-service Jaeger trace. When disabled the tracer is
+  # a noop and trace_id fields in log entries are empty.
+  tracing:
+    enabled: true
+    endpoint: "http://192.168.88.10:4318"
+    service_name: "strategy-service"

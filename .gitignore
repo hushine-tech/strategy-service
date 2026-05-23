@@ -1,0 +1,16 @@
+# back-test is the legacy implementation, managed separately
+back-test/
+pyproject.toml
+__pycache__/
+.deps/
+/logs
+.pytest_cache/
+/.run.pid
+config.local.yaml
+.claude/
+.cursor/
+.idea/
+.opencode/
+
+# Local process documents live outside the code repository.
+/openspec/
