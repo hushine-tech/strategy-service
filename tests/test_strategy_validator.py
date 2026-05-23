@@ -18,6 +18,37 @@ class MyStrategy:
     assert result.issues == []
 
 
+def test_validator_allows_public_platform_strategy_types():
+    result = validate_strategy_code(
+        """
+from strategy_service.types import OrderDecision
+
+class MyStrategy:
+    def on_market_data(self, data, wallet):
+        return OrderDecision(symbol=data.symbol, side="LONG", qty=0.1)
+"""
+    )
+
+    assert result.ok is True
+    assert result.issues == []
+
+
+def test_validator_rejects_internal_platform_modules():
+    result = validate_strategy_code(
+        """
+from strategy_service.wallet import BinanceWalletRuntime
+
+class MyStrategy:
+    def on_market_data(self, data, wallet):
+        return None
+"""
+    )
+
+    assert result.ok is False
+    assert result.issues[0].code == "unsupported_dependency"
+    assert result.issues[0].module == "strategy_service"
+
+
 def test_validator_rejects_unknown_dependency():
     result = validate_strategy_code(
         """

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from strategy_service.runtime_profile import DEBUGGER_ONLY_MODULES, current_runtime_profile
 
+PUBLIC_PLATFORM_MODULES = {"strategy_service.types"}
+
 
 @dataclass(frozen=True)
 class StrategyValidationIssue:
@@ -44,9 +46,9 @@ def validate_strategy_code(code: str) -> StrategyValidationResult:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                _validate_module(_root_module(alias.name), getattr(node, "lineno", 0), stdlib, allowed, issues)
+                _validate_module(alias.name, getattr(node, "lineno", 0), stdlib, allowed, issues)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            _validate_module(_root_module(node.module), getattr(node, "lineno", 0), stdlib, allowed, issues)
+            _validate_module(node.module, getattr(node, "lineno", 0), stdlib, allowed, issues)
 
     return _result(len(issues) == 0, issues)
 
@@ -73,13 +75,16 @@ def _stdlib_modules() -> set[str]:
 
 
 def _validate_module(
-    module_name: str,
+    import_name: str,
     line: int,
     stdlib: set[str],
     allowed: set[str],
     issues: list[StrategyValidationIssue],
 ) -> None:
+    module_name = _root_module(import_name)
     if not module_name:
+        return
+    if import_name in PUBLIC_PLATFORM_MODULES:
         return
     if module_name in DEBUGGER_ONLY_MODULES:
         issues.append(
