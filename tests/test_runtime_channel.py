@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from strategy_service.runtime_channel import (
+    DEFAULT_HEARTBEAT_SECONDS,
     RuntimeChannelClient,
     RuntimeCredential,
     RuntimeCredentialError,
@@ -29,6 +30,10 @@ from strategy_service.runtime_channel import (
 )
 from strategy_service.gen import control_panel_service_pb2 as cp_pb2
 from strategy_service.gen import account_service_pb2, strategy_service_pb2
+
+
+def test_runtime_channel_default_heartbeat_leaves_watchdog_margin():
+    assert DEFAULT_HEARTBEAT_SECONDS == 10
 
 
 def test_build_signed_hello_signs_canonical_payload():

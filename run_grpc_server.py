@@ -410,6 +410,7 @@ def main() -> None:
                     resource_profile=cfg.runtime.resource_profile,
                     version=cfg.runtime.version,
                 ),
+                heartbeat_seconds=cfg.runtime.heartbeat_interval_seconds,
                 request_handler=RuntimeChannelStrategyDispatcher(servicer),
             )
             runtime_agent = RuntimeAgent(

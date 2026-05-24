@@ -28,7 +28,7 @@ from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 logger = logging.getLogger(__name__)
 
 DEFAULT_RUNTIME_CREDENTIAL_PATH = "/etc/hushine/runtime.cred"
-DEFAULT_HEARTBEAT_SECONDS = 30
+DEFAULT_HEARTBEAT_SECONDS = 10
 COMMAND_PAYLOAD_JSON_TYPE_URL = "type.googleapis.com/controlpanel.v1.RuntimeCommandPayloadJSON"
 T = TypeVar("T", bound=Message)
 
