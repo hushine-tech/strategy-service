@@ -4,7 +4,7 @@ Verify that when a strategy-runtime is bound to a user_id, RPC requests
 carrying a different user_id get rejected with PermissionDenied. When
 bound_user_id=0 (legacy / unregistered mode) the check is skipped.
 
-The full StrategyServiceServicer __init__ requires a live account-service
+The full StrategyServiceServicer __init__ requires a live core-service
 (via _restore_running_sessions); these tests patch that out so we can
 construct a servicer in isolation.
 """
@@ -20,7 +20,7 @@ from strategy_service.grpc_server import StrategyServiceServicer
 
 def _build_servicer(bound_user_id: int) -> StrategyServiceServicer:
     """Construct a StrategyServiceServicer with `_restore_running_sessions`
-    patched to a no-op so tests don't need a live account-service."""
+    patched to a no-op so tests don't need a live core-service."""
     with patch.object(StrategyServiceServicer, "_restore_running_sessions", lambda self: None):
         return StrategyServiceServicer(
             account_service_addr="acct:1",

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROTO_SRC="${SCRIPT_DIR}/../account-service/proto"
+PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"
 OUT_DIR="${SCRIPT_DIR}/strategy_service/gen"
 
 mkdir -p "$OUT_DIR"

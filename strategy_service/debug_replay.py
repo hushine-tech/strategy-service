@@ -104,7 +104,7 @@ class DebugReplayRunner:
 
             info = account_client.get_online_account_info(dataset.account_id, dataset.user_id)
             if info is None:
-                raise RuntimeError(f"account {dataset.account_id} not found or account-service unreachable")
+                raise RuntimeError(f"account {dataset.account_id} not found or core-service unreachable")
             if int(getattr(info, "mode", 0) or 0) != 0:
                 raise RuntimeError("debug replay only supports mode=0 accounts")
             wallet = build_wallet_from_account(proto_to_account_spec(info))

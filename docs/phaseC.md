@@ -8,7 +8,7 @@
 
 截至当前代码状态：
 
-- `Phase A` 已完成：`account-service` 已切到 Binance v3 快照与帐号级凭证
+- `Phase A` 已完成：`core-service` 已切到 Binance v3 快照与帐号级凭证
 - `Phase B1` 已完成：canonical contract、mode-selected runtime、`mode=2` hydration 已落地
 - `Phase B2` 已完成：strict canonical ingress、backtest bootstrap、metadata-backed 风险字段已落地
 - `Phase B3` 已完成：futures open-order margin lifecycle、ledger events、isolated wallet / break-even、本地 spot locked lifecycle 已落地
@@ -45,7 +45,7 @@
 | 1 | Phase C 切分 | 分 `C1 / C2 / C3` 三段：先非破坏 reconciliation，再破坏性迁移，再全量验证。 |
 | 2 | Shadow compare 适用范围 | `C1` 只做 `mode=2`。`mode=1` 不参与，不打开。 |
 | 3 | 接口形态 | 复用 `UpdateAccountWalletState`；不改 proto。 |
-| 4 | 对账执行模型 | `account-service` 内独立协程 fire-and-forget；主流程立即返回。 |
+| 4 | 对账执行模型 | `core-service` 内独立协程 fire-and-forget；主流程立即返回。 |
 | 5 | exchange snapshot 来源 | 主流程只拉一次 exchange authoritative snapshot；协程直接复用主流程拿到的 authoritative payload，不再二次调用 Binance。 |
 | 6 | panic / timeout 处理 | 协程内 `defer recover()`；使用独立 timeout；任何错误只记 log / metrics。 |
 | 7 | DB 写入策略 | 每次 compare run 都持久化 `local snapshot + exchange snapshot + diff summary`；双快照统一使用 canonical JSON，不再只留 fail 样本。 |
@@ -57,7 +57,7 @@
 | 13 | legacy 去留 | `C2b` 已完成：`LegacyWalletAdapter` 已删除；主代码不再依赖 legacy runtime。 |
 | 14 | backtest 无 oracle 场景 | backtest 可以没有 exchange-backed 初值；已有本地状态机的字段继续按本地逻辑演化，不强制归零。 |
 | 15 | worker queue / 背压 | 不进入 `C1`；如果后续 testnet compare 压力上来，再单独作为优化项引入。 |
-| 16 | 对账存储后端 | `C1` 继续使用现有 `account-service` 数据库（Timescale/Postgres）；不提前为 TiDB/分库分表做抽象。 |
+| 16 | 对账存储后端 | `C1` 继续使用现有 `core-service` 数据库（Timescale/Postgres）；不提前为 TiDB/分库分表做抽象。 |
 
 ## 4. 三阶段执行
 
@@ -104,7 +104,7 @@ C3  验证：全量回归 + 阈值校准 + 收尾归档              ~2-3 天
 ### 5.2 主流程与协程分层
 
 ```text
-strategy-service                           account-service
+strategy-service                           core-service
 ────────────────                           ───────────────
 
 wallet sync
@@ -314,7 +314,7 @@ RUNTIME_REGISTRY = {
 
 目标：
 
-- 在 `account-service` 内新增 reconciliation 模块
+- 在 `core-service` 内新增 reconciliation 模块
 - 在 `UpdateAccountWalletState` mode=2 分支末尾 `LaunchAsync`
 - 在 strategy session 增加 K 线 bar 计数与 `PeriodicSample`
 
@@ -458,8 +458,8 @@ curl -s -X POST http://127.0.0.1:8090/api/accounts/<MODE2_ACCOUNT_ID>/run-strate
 
 - 观察 `checkpoint / event / sampled` 对账输出:
   - `gateway` 账户详情 / session reconciliation 视图
-  - `account-service` 库里的 `reconciliation_runs`
-  - `account-service` 结构化日志里的 reconciliation metrics
+  - `core-service` 库里的 `reconciliation_runs`
+  - `core-service` 结构化日志里的 reconciliation metrics
 
 ### 8.3 阈值校准原则
 

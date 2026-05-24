@@ -813,7 +813,7 @@ def test_renew_stream_leases_once_updates_heartbeat(monkeypatch):
     )
     calls: list[tuple[str, int, int, int, int]] = []
 
-    # Phase D2: market-data RPCs moved from account-service to control-panel-service.
+    # Phase D2: market-data RPCs moved from core-service to control-panel-service.
     # The lease-renewal path now talks to MarketDataClient, not AccountClient.
     class FakeMarketDataClient:
         def __init__(self, _addr: str) -> None:
@@ -1690,7 +1690,7 @@ def test_restore_running_sessions_fails_visible_when_list_fails(monkeypatch):
 
         def require_running_sessions(self, runtime_id: str = ""):
             assert runtime_id == "rt-owned"
-            raise RuntimeError("account-service unavailable")
+            raise RuntimeError("core-service unavailable")
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
     monkeypatch.setattr(grpc_server, "RESTORE_RUNNING_SESSIONS_RETRIES", 2)

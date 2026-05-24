@@ -4,7 +4,7 @@
 
 ## 目的
 
-`Phase B` 起，`account-service -> strategy-service` 之间的钱包 contract 以 canonical 命名为准。
+`Phase B` 起，`core-service -> strategy-service` 之间的钱包 contract 以 canonical 命名为准。
 
 原则：
 

@@ -168,13 +168,13 @@ def create_app() -> Any:
             if req.symbol_type.strip().lower() == "futures" and not wallet.futures.positions:
                 raise ValueError("account.futures.positions must define at least one futures slot")
 
-            # --- account-service integration (optional) ---
+            # --- core-service integration (optional) ---
             client = AccountClient(req.account_service_address)
             if req.account_id:
                 info = client.get_online_account_info(req.account_id, req.user_id)
                 if info is not None:
                     logger.info(
-                        "account-service calibration: account_id=%s mode=%s futures.wallet_balance=%.4f",
+                        "core-service calibration: account_id=%s mode=%s futures.wallet_balance=%.4f",
                         req.account_id, info.mode, info.futures.wallet_balance if info.futures else 0.0,
                     )
 
@@ -189,7 +189,7 @@ def create_app() -> Any:
                 account_id=req.account_id,
             )
 
-            # Register post-order callback to sync wallet to account-service
+            # Register post-order callback to sync wallet to core-service
             if req.account_id:
                 _aid = req.account_id
 

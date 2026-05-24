@@ -1,4 +1,4 @@
-"""gRPC client for account-service. Soft dependency: noop when grpc_address is empty."""
+"""gRPC client for core-service. Soft dependency: noop when grpc_address is empty."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class AccountClient:
-    """Thin wrapper around account-service gRPC stubs.
+    """Thin wrapper around core-service gRPC stubs.
 
     If *grpc_address* is empty, all methods return ``None`` immediately (noop mode).
     gRPC failures are caught and logged as warnings — never raised to callers.
@@ -29,7 +29,7 @@ class AccountClient:
             channel = grpc.insecure_channel(self._address)
 
             # Attach channel-level interceptor so every outbound call to
-            # account-service is written to `grpc_ext.log`. Unlike the older
+            # core-service is written to `grpc_ext.log`. Unlike the older
             # stub-wrap `GRPCClientMiddleware`, the interceptor looks up the
             # default logger at call time rather than capturing it at init
             # time, so it is immune to init-order ambiguity between logging
@@ -51,7 +51,7 @@ class AccountClient:
             self._stub = None
 
     def get_online_account_info(self, account_id: int, user_id: int):
-        """Fetch wallet state from account-service. Returns proto AccountWalletState or None."""
+        """Fetch wallet state from core-service. Returns proto AccountWalletState or None."""
         if not self._stub:
             return None
         try:
@@ -101,7 +101,7 @@ class AccountClient:
         runtime_version: str = "",
         session_name: str = "",
     ) -> bool:
-        """Create a session record in account-service. Returns True on success."""
+        """Create a session record in core-service. Returns True on success."""
         try:
             self.require_save_session(
                 session_id=session_id,
@@ -139,7 +139,7 @@ class AccountClient:
         runtime_version: str = "",
         session_name: str = "",
     ) -> None:
-        """Create a session record and raise on account-service errors."""
+        """Create a session record and raise on core-service errors."""
         if not self._stub:
             raise RuntimeError("AccountClient is not connected")
         from strategy_service.gen import account_service_pb2
@@ -165,7 +165,7 @@ class AccountClient:
         error: str = "",
         runtime_id: str = "",
     ) -> bool:
-        """Update session status in account-service. Returns True on success."""
+        """Update session status in core-service. Returns True on success."""
         if not self._stub:
             return False
         try:
@@ -190,9 +190,9 @@ class AccountClient:
             return []
 
     def require_running_sessions(self, runtime_id: str = ""):
-        """List running sessions, raising on account-service failures.
+        """List running sessions, raising on core-service failures.
 
-        Startup recovery uses this strict variant so "account-service is
+        Startup recovery uses this strict variant so "core-service is
         unreachable" is not silently treated as "there are no running sessions".
         """
         if not self._stub:
@@ -223,7 +223,7 @@ class AccountClient:
         strategy_id: int = 0,
         session_id: str = "",
     ):
-        """Push local wallet state to account-service. Returns proto AccountWalletState or None.
+        """Push local wallet state to core-service. Returns proto AccountWalletState or None.
 
         snapshot_reason: 0=no snapshot, 1=order_fill, 2=strategy_start, 3=strategy_end, etc.
         """

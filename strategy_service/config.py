@@ -31,7 +31,7 @@ class DependenciesConfig:
     account_service_grpc: str = "localhost:50051"
     order_service_grpc: str = "127.0.0.1:50051"
     control_panel_service_grpc: str = ""
-    # Phase D2: market-data control-plane RPCs moved out of account-service.
+    # Phase D2: market-data control-plane RPCs moved out of core-service.
     # When unset, falls back to control_panel_service_grpc (same address —
     # both services live on the same gRPC port :50054 in D2).
     market_data_control_panel_grpc: str = ""
@@ -229,7 +229,12 @@ class Config:
         if v:
             self.database.password = v
         # Dependencies
-        v = os.environ.get("DEPENDENCIES_ACCOUNT_SERVICE_GRPC") or os.environ.get("ACCOUNT_SERVICE_GRPC_ADDR")
+        v = (
+            os.environ.get("DEPENDENCIES_CORE_SERVICE_GRPC")
+            or os.environ.get("CORE_SERVICE_GRPC_ADDR")
+            or os.environ.get("DEPENDENCIES_ACCOUNT_SERVICE_GRPC")
+            or os.environ.get("ACCOUNT_SERVICE_GRPC_ADDR")
+        )
         if v:
             self.dependencies.account_service_grpc = v
         v = os.environ.get("DEPENDENCIES_ORDER_SERVICE_GRPC") or os.environ.get("ORDER_SERVICE_GRPC_ADDR")

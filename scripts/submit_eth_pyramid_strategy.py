@@ -4,7 +4,7 @@
 This helper exists for the real ``mode=2`` reconciliation smoke path. It uses
 the same portal HTTP chain as the product UI:
 
-    quant-handler -> account-service -> DB
+    quant-handler -> core-service -> DB
 
 Typical usage:
 

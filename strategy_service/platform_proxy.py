@@ -1,6 +1,6 @@
 """Proxy-only platform clients for self-hosted runtimes.
 
-Self-hosted runtimes cannot dial internal account-service, order API,
+Self-hosted runtimes cannot dial internal core-service, order API,
 market-data control-plane, Kafka, or platform databases. These clients keep
 the strategy runtime API shape the same while sending approved platform RPCs
 back over RuntimeChannel to control-panel-service.

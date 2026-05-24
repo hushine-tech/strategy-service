@@ -9,7 +9,7 @@
 #   2. The runtime_client + control_panel_service stubs are importable.
 #   3. The runtime config block parses cleanly with all defaults.
 #
-# Full mode=0 backtest end-to-end smoke (against a real account-service +
+# Full mode=0 backtest end-to-end smoke (against a real core-service +
 # TimescaleDB) is out of section 4 scope; that lands in D1 section 7
 # verification.
 
@@ -49,7 +49,7 @@ print('OK')
 echo
 echo "=== smoke 2: gRPC server entrypoint --help (compile-only) ==="
 # We don't actually start the server here because _restore_running_sessions
-# in StrategyServiceServicer.__init__ requires account-service to be
+# in StrategyServiceServicer.__init__ requires core-service to be
 # reachable. That dependency exists in main HEAD (pre-existing) and the
 # real cross-service smoke belongs to D1 section 7.
 docker run --rm --entrypoint python "${IMAGE}" -c "
@@ -59,5 +59,5 @@ print('run_grpc_server entrypoint loaded:', run_grpc_server.main.__name__)
 
 echo
 echo "All container smoke checks passed for ${IMAGE}."
-echo "Full mode=0 backtest smoke needs account-service + TimescaleDB"
+echo "Full mode=0 backtest smoke needs core-service + TimescaleDB"
 echo "and is exercised in D1 section 7 cross-service verification."

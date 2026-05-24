@@ -1,7 +1,7 @@
-"""Convert account-service wallet proto payloads into canonical wallet state.
+"""Convert core-service wallet proto payloads into canonical wallet state.
 
 Per ``canonical-wallet-display-boundary`` the ingress contract from
-account-service to strategy-service is **canonical** wallet data only.
+core-service to strategy-service is **canonical** wallet data only.
 Provider-specific display totals (``display_wallet_balance_usd`` and
 siblings) travel on the same proto but are NEVER read during this
 conversion — they would be dead bytes here if the gRPC layer didn't also

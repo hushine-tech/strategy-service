@@ -25,7 +25,7 @@ runtime:
   # inbound = legacy/local direct gRPC behavior (default);
   # outbound = RuntimeChannel only for hosted/self-hosted containers; both = dev/test.
   # Outbound mode is the runtime isolation boundary: direct
-  # account-service, order API, Kafka, and database dependencies from this
+  # core-service, order API, Kafka, and database dependencies from this
   # file are ignored at boot and strategy execution uses RuntimeChannel proxy
   # clients instead.
   ingress_mode: "inbound"

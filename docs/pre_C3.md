@@ -303,7 +303,7 @@ exchange display wallet 只用于 UI：
    - 页面上展示策略声明的输入 universe
    - 启动前 readiness 提示改为基于策略声明，而不是基于账户已有请求的模糊猜测
 
-3. `account-service`
+3. `core-service`
    - 继续提供 stream status / wallet / session 支撑能力
    - 不再承担“从账户余额推导策略输入 symbol”的职责
 
@@ -357,7 +357,7 @@ exchange display wallet 只用于 UI：
 - `USDT@-M` 单资产 canonical futures 边界
 - spot 以 `USDT` 为媒介的统一口径
 - display wallet 仅用于 UI，不进入核心运行态
-- gateway / account-service 的展示字段边界收敛
+- gateway / core-service 的展示字段边界收敛
 
 这个 spec 重要，但不必阻塞前两个 spec 的主线推进。
 

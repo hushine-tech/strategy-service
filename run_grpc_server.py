@@ -49,7 +49,7 @@ def _apply_runtime_dependency_boundary(
     """Return platform access mode and strip hosted-only deps in outbound mode.
 
     Self-hosted RuntimeChannel mode must not require or use direct internal
-    account-service, order API, Kafka, or database endpoints. Until
+    core-service, order API, Kafka, or database endpoints. Until
     approved proxy clients exist, strategy execution fails closed in
     ``proxy_only`` mode instead of silently dialing internal services.
     """
@@ -444,7 +444,7 @@ def main() -> None:
             cp_addr,
             credential.key_id,
         )
-    logger.info("  account-service → %s", cfg.dependencies.account_service_grpc)
+    logger.info("  core-service → %s", cfg.dependencies.account_service_grpc)
     logger.info("  order API       → %s", cfg.dependencies.order_service_grpc)
     logger.info("  timescale       → %s:%s/%s", cfg.database.host, cfg.database.port, cfg.database.database)
     logger.info("  kafka           → %s", cfg.kafka.brokers)

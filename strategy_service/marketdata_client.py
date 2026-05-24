@@ -1,6 +1,6 @@
 """gRPC client for control-panel-service market-data control plane (Phase D2).
 
-Before D2, these RPCs lived on account-service and were proxied through
+Before D2, these RPCs lived on core-service and were proxied through
 :class:`AccountClient`. The control plane was migrated to control-panel-service
 along with the underlying tables (`market_data_*` in the `control_panel`
 database). This client owns the strategy-service side of that subset:

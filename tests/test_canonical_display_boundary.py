@@ -107,7 +107,7 @@ def test_display_usd_fields_do_not_affect_runtime_state():
 def test_display_total_value_and_equity_do_not_affect_runtime_state():
     """``total_value``, ``spot_estimated_value``, ``futures_position_equity``
     are display-derived outputs; mutating them on ingress must not change
-    runtime state. This is the boundary property that lets account-service
+    runtime state. This is the boundary property that lets core-service
     populate display totals without risk of polluting the strategy runtime.
     """
     baseline = build_wallet_from_account(proto_to_account_spec(_wallet_proto()))

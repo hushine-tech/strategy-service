@@ -71,8 +71,8 @@ def _periodic_sample_every_bars(request: Any) -> int:
     `reconcile_every_n_bars` is NOT currently a field on `RunStrategyRequest`
     in `proto/strategy_service.proto`, so for real traffic this always falls
     through to `DEFAULT_PERIODIC_SAMPLE_EVERY_BARS`. The authoritative source
-    of truth for thresholds is `account-service`'s `reconciliation.*` config
-    (see `account-service/internal/config/config.go` → `ReconciliationConfig`).
+    of truth for thresholds is `core-service`'s `reconciliation.*` config
+    (see `core-service/internal/config/config.go` → `ReconciliationConfig`).
     The hook stays so a future proto extension (per-session override) can
     light up without touching this code path, and so unit tests can inject
     test doubles via SimpleNamespace.
@@ -260,7 +260,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if sessions is None:
             raise RuntimeError(
                 f"startup session recovery failed: cannot list running sessions "
-                f"from account-service at {self._account_addr}"
+                f"from core-service at {self._account_addr}"
             ) from last_error
 
         orphaned = 0
@@ -401,7 +401,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 )
             else:
                 context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details(f"failed to persist session to account-service: {self._error_details(exc)}")
+                context.set_details(f"failed to persist session to core-service: {self._error_details(exc)}")
             return False
 
     def _enforce_session_runtime(self, request: Any, state: SessionState, context) -> bool:
@@ -492,12 +492,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details("account_id is required")
             return pb2.RunStrategyResponse()
 
-        # 1. 从 account-service 获取帐号信息（mode + 钱包）
+        # 1. 从 core-service 获取帐号信息（mode + 钱包）
         acct_client = self._account_client()
         info = acct_client.get_online_account_info(account_id, user_id)
         if info is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"account {account_id} not found or account-service unreachable")
+            context.set_details(f"account {account_id} not found or core-service unreachable")
             return pb2.RunStrategyResponse()
 
         mode = info.mode
@@ -702,7 +702,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 notifier=StrategyNotifier(self._notification_client),
             )
 
-            # 注册 on_order 回调：同步钱包到 account-service（带 session_id 审计追溯）
+            # 注册 on_order 回调：同步钱包到 core-service（带 session_id 审计追溯）
             acct_client = self._account_client()
 
             def _on_order_sync() -> None:
@@ -848,7 +848,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
         Kept as a separate method so tests can patch it cleanly when they
         want to assert per-declared-input lookups without spinning up a
-        ``MarketDataClient``. (Phase D2 moved this RPC from account-service
+        ``MarketDataClient``. (Phase D2 moved this RPC from core-service
         into control-panel-service; the per-declared-input lookup contract
         is unchanged.)
         """
@@ -1595,7 +1595,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         info = acct_client.get_online_account_info(account_id, user_id)
         if info is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"account {account_id} not found or account-service unreachable")
+            context.set_details(f"account {account_id} not found or core-service unreachable")
             return pb2.PreviewRunStrategyResponse()
 
         mode = int(getattr(info, "mode", 0) or 0)

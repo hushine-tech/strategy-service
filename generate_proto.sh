@@ -10,8 +10,8 @@ GO_OUT_DIR="${SCRIPT_DIR}/gen/strategyv1"
 
 mkdir -p "$OUT_DIR" "$GO_OUT_DIR"
 
-# --- account-service proto (Python stubs only) ---
-ACCT_PROTO_SRC="${SCRIPT_DIR}/../account-service/proto"
+# --- core-service proto (Python stubs only) ---
+ACCT_PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"
 
 /opt/anaconda3/bin/python3 -m grpc_tools.protoc \
   -I "$ACCT_PROTO_SRC" \
@@ -22,7 +22,7 @@ ACCT_PROTO_SRC="${SCRIPT_DIR}/../account-service/proto"
 sed -i '' 's/^import account_service_pb2/from . import account_service_pb2/' "$OUT_DIR/account_service_pb2_grpc.py"
 
 # --- order.v1 proto (Python stubs only) ---
-ORDER_PROTO_SRC="${SCRIPT_DIR}/../account-service/proto"
+ORDER_PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"
 
 /opt/anaconda3/bin/python3 -m grpc_tools.protoc \
   -I "$ORDER_PROTO_SRC" \
@@ -48,7 +48,7 @@ sed -i '' 's/^import control_panel_service_pb2/from . import control_panel_servi
 sed -i '' 's/^import strategy_service_pb2/from . import strategy_service_pb2/' "$OUT_DIR/control_panel_service_pb2.py"
 sed -i '' 's/^import strategy_service_pb2/from . import strategy_service_pb2/' "$OUT_DIR/control_panel_service_pb2_grpc.py"
 
-# Phase D2: market-data control-plane RPCs moved out of account-service into
+# Phase D2: market-data control-plane RPCs moved out of core-service into
 # control-panel-service (package controlpanel.marketdata.v1). Strategy-service
 # calls a subset (lease lifecycle + stream status) via a separate client.
 /opt/anaconda3/bin/python3 -m grpc_tools.protoc \
