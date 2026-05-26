@@ -33,6 +33,23 @@ class MyStrategy:
     assert result.issues == []
 
 
+def test_validator_accepts_public_hushine_strategy_import():
+    result = validate_strategy_code(
+        """
+from hushine_strategy import OrderDecision
+
+class MyStrategy:
+    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]
+
+    def on_market_data(self, data, wallet):
+        return None
+"""
+    )
+
+    assert result.ok is True
+    assert result.issues == []
+
+
 def test_validator_rejects_internal_platform_modules():
     result = validate_strategy_code(
         """

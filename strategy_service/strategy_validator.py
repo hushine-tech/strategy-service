@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from strategy_service.runtime_profile import DEBUGGER_ONLY_MODULES, current_runtime_profile
 
 PUBLIC_PLATFORM_MODULES = {"strategy_service.types"}
+PUBLIC_STRATEGY_SDK_MODULE = "hushine_strategy"
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,11 @@ def _validate_module(
     module_name = _root_module(import_name)
     if not module_name:
         return
-    if import_name in PUBLIC_PLATFORM_MODULES:
+    if (
+        import_name in PUBLIC_PLATFORM_MODULES
+        or import_name == PUBLIC_STRATEGY_SDK_MODULE
+        or import_name.startswith(f"{PUBLIC_STRATEGY_SDK_MODULE}.")
+    ):
         return
     if module_name in DEBUGGER_ONLY_MODULES:
         issues.append(
