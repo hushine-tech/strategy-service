@@ -1,4 +1,4 @@
-PYTHON?=$(shell if [ -x /opt/anaconda3/bin/python3 ]; then echo /opt/anaconda3/bin/python3; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
+PYTHON?=$(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; elif [ -x /opt/anaconda3/bin/python3 ]; then echo /opt/anaconda3/bin/python3; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 PYTHONPATH_VAL=.:./strategy-library
 CONFIG?=./config.yaml
 PID_FILE=.run.pid
