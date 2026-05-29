@@ -73,6 +73,9 @@ def test_proxy_order_client_places_order_without_direct_stub():
     assert method == ORDER_PLACE
     assert req.account_id == 7
     assert req.session_id == "sess-1"
+    assert req.exchange == 1
+    assert req.market == 2
+    assert req.position_side == 0
     assert feedback.attempt_status == "ACCEPTED"
     assert feedback.order.order_id == "order-1"
 

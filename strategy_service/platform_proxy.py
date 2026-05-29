@@ -545,6 +545,10 @@ class ProxyOrderClient(OrderClient):
     ) -> ExecutionFeedback:
         symbol = account_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
+        effective_market = str(getattr(decision, "market", None) or market or "futures")
+        exchange_code = self._exchange_code(getattr(decision, "exchange", None))
+        market_code = self._market_code(effective_market)
+        position_side_code = self._position_side_code(getattr(decision, "position_side", None))
         try:
             from strategy_service.gen import order_service_pb2
 
@@ -555,9 +559,11 @@ class ProxyOrderClient(OrderClient):
                 qty=float(decision.qty),
                 mark_price=float(mark_price),
                 strategy_id=int(strategy_id),
-                market=market,
+                market=market_code,
                 session_id=session_id,
                 intent_id=intent,
+                exchange=exchange_code,
+                position_side=position_side_code,
             )
             if decision.price is not None:
                 kwargs["price"] = float(decision.price)
@@ -566,7 +572,7 @@ class ProxyOrderClient(OrderClient):
                 order_service_pb2.PlaceOrderRequest(**kwargs),
                 order_service_pb2.PlaceOrderResponse,
             )
-            return self._feedback_from_response(resp, decision=decision, market=market, symbol=symbol)
+            return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
         except Exception as exc:
             logger.warning("Proxy OrderClient.place_order failed for %d/%s", account_id, symbol, exc_info=True)
             return self._resolve_unknown_attempt(
@@ -574,7 +580,7 @@ class ProxyOrderClient(OrderClient):
                 intent_id=intent,
                 error_message=str(exc),
                 decision=decision,
-                market=market,
+                market=effective_market,
                 symbol=symbol,
             )
 

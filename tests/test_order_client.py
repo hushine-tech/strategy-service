@@ -74,6 +74,9 @@ def test_place_order_uses_canonical_symbol_and_emits_fill_events():
 
     assert stub.last_request is not None
     assert stub.last_request.symbol == "ETHUSDT"
+    assert stub.last_request.exchange == 1
+    assert stub.last_request.market == 2
+    assert stub.last_request.position_side == 0
     assert feedback.attempt_status == "ACCEPTED"
     assert feedback.fill_count == 2
     assert feedback.delta_qty == 0.05
@@ -180,3 +183,43 @@ def test_fee_missing_fill_is_not_wallet_settleable():
     assert feedback.fill_count == 0
     assert feedback.delta_qty == 0.0
     assert feedback.fill_events == []
+
+
+def test_place_order_sends_explicit_venue_route_fields():
+    response = order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-4",
+        attempt_id="attempt-4",
+        attempt_status="ACCEPTED",
+    )
+    client = OrderClient("")
+    stub = _Stub(response)
+    client._stub = stub
+
+    feedback = client.place_order(
+        13,
+        OrderDecision(
+            symbol="ETHUSDT",
+            side="SELL",
+            qty=0.05,
+            exchange="okx",
+            market="delivery_futures",
+            position_side="SHORT",
+        ),
+        51000.0,
+        account_symbol="ETHUSDT",
+        market="spot",
+        intent_id="intent-4",
+    )
+
+    assert stub.last_request is not None
+    assert stub.last_request.exchange == 2
+    assert stub.last_request.market == 3
+    assert stub.last_request.position_side == 2
+    assert feedback.attempt_status == "ACCEPTED"
+
+
+def test_wallet_qty_uses_market_enum_aliases():
+    assert OrderClient._wallet_qty(1, "SELL", "spot") == 1
+    assert OrderClient._wallet_qty(1, "SELL", "futures") == -1
+    assert OrderClient._wallet_qty(1, "SELL", "perpetual_futures") == -1
+    assert OrderClient._wallet_qty(1, "SELL", "delivery_futures") == -1

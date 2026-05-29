@@ -70,8 +70,8 @@ class OrderServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def PlaceOrder(self, request, context):
-        """PlaceOrder routes to mock (backtest) or exchange (live/testnet) based on
-        account mode. The response distinguishes attempt, order, and fill layers.
+        """PlaceOrder routes by account_id + exchange + market to one active venue.
+        The response distinguishes attempt, order, and fill layers.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

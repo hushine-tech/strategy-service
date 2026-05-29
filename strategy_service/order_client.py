@@ -9,6 +9,29 @@ from strategy_service.types import ExecutionFeedback, OrderDecision, OrderRespon
 
 logger = logging.getLogger(__name__)
 
+EXCHANGE_CODES = {
+    "binance": 1,
+    "okx": 2,
+}
+
+MARKET_CODES = {
+    "spot": 1,
+    "futures": 2,
+    "future": 2,
+    "usdm_futures": 2,
+    "perpetual_futures": 2,
+    "perp": 2,
+    "delivery_futures": 3,
+}
+
+POSITION_SIDE_CODES = {
+    "": 0,
+    "none": 0,
+    "both": 0,
+    "long": 1,
+    "short": 2,
+}
+
 
 class OrderClient:
     """Thin wrapper around order.v1 gRPC stubs.
@@ -60,9 +83,13 @@ class OrderClient:
         """Place an order via order.v1 (or mock if not configured)."""
         symbol = account_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
+        effective_market = str(getattr(decision, "market", None) or market or "futures")
+        exchange_code = self._exchange_code(getattr(decision, "exchange", None))
+        market_code = self._market_code(effective_market)
+        position_side_code = self._position_side_code(getattr(decision, "position_side", None))
 
         if not self._stub:
-            return self._mock_fill(decision, mark_price, symbol, market, intent)
+            return self._mock_fill(decision, mark_price, symbol, effective_market, intent)
 
         try:
             from strategy_service.gen import order_service_pb2
@@ -74,16 +101,18 @@ class OrderClient:
                 qty=float(decision.qty),
                 mark_price=float(mark_price),
                 strategy_id=int(strategy_id),
-                market=market,
+                market=market_code,
                 session_id=session_id,
                 intent_id=intent,
+                exchange=exchange_code,
+                position_side=position_side_code,
             )
             if decision.price is not None:
                 kwargs["price"] = float(decision.price)
 
             req = order_service_pb2.PlaceOrderRequest(**kwargs)
             resp = self._stub.PlaceOrder(req)
-            return self._feedback_from_response(resp, decision=decision, market=market, symbol=symbol)
+            return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
         except Exception as exc:
             logger.warning("OrderClient.place_order failed for %d/%s", account_id, decision.symbol, exc_info=True)
             return self._resolve_unknown_attempt(
@@ -91,7 +120,7 @@ class OrderClient:
                 intent_id=intent,
                 error_message=str(exc),
                 decision=decision,
-                market=market,
+                market=effective_market,
                 symbol=symbol,
             )
 
@@ -123,12 +152,40 @@ class OrderClient:
     @staticmethod
     def _wallet_qty(qty: float, side: str, market: str) -> float:
         q = abs(float(qty))
-        if str(market).lower() != "futures":
+        if not OrderClient._is_futures_market(market):
             return q
         side_upper = str(side).upper().strip()
         if side_upper in ("SHORT", "SELL"):
             return -q
         return q
+
+    @staticmethod
+    def _is_futures_market(market: str) -> bool:
+        try:
+            return OrderClient._market_code(market) in (2, 3)
+        except ValueError:
+            return str(market or "").strip().lower() == "futures"
+
+    @staticmethod
+    def _exchange_code(exchange: str | None) -> int:
+        key = str(exchange or "binance").strip().lower()
+        if key not in EXCHANGE_CODES:
+            raise ValueError(f"unsupported exchange: {exchange!r}")
+        return EXCHANGE_CODES[key]
+
+    @staticmethod
+    def _market_code(market: str | None) -> int:
+        key = str(market or "futures").strip().lower()
+        if key not in MARKET_CODES:
+            raise ValueError(f"unsupported market: {market!r}")
+        return MARKET_CODES[key]
+
+    @staticmethod
+    def _position_side_code(position_side: str | None) -> int:
+        key = str(position_side or "").strip().lower()
+        if key not in POSITION_SIDE_CODES:
+            raise ValueError(f"unsupported position_side: {position_side!r}")
+        return POSITION_SIDE_CODES[key]
 
     def _resolve_unknown_attempt(
         self,
