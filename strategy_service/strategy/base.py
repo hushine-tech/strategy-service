@@ -11,6 +11,8 @@ from strategy_service.inputs import (
     InputView,
     StrategyDeclarationError,
     StrategyInput,
+    _normalize_exchange,
+    _normalize_market,
     parse_declared_inputs,
 )
 from strategy_service.notification import StrategyNotifier
@@ -25,8 +27,23 @@ def _norm_symbol(symbol: str) -> str:
     return str(symbol).strip().upper()
 
 
+def _norm_exchange(exchange: str) -> str:
+    return _normalize_exchange(exchange)
+
+
 def _norm_market(market: str) -> str:
-    return str(market).strip().lower()
+    return _normalize_market(market)
+
+
+def _wallet_market(market: str) -> str:
+    market_key = _norm_market(market)
+    if market_key in {"perpetual_futures", "delivery_futures"}:
+        return "futures"
+    return market_key
+
+
+def _is_futures_market(market: str) -> bool:
+    return _norm_market(market) in {"perpetual_futures", "delivery_futures"}
 
 
 class VenueWalletView:
@@ -204,13 +221,14 @@ class BaseStrategy:
         )
         setattr(self._strategy_instance, "notify", self._notifier)
         self._inputs: list[StrategyInput] = _read_declared_inputs(self._strategy_instance)
-        self._input_keys: set[tuple[str, str, str]] = {i.key for i in self._inputs}
+        self._input_keys: set[tuple[str, str, str, str]] = {i.key for i in self._inputs}
         # Order-side universe check: OrderDecision doesn't carry ``interval`` so
-        # we guard at (market, symbol) granularity. A strategy that declared
-        # (futures, ETHUSDT, 1m) cannot place a BTCUSDT or spot-market order.
-        self._order_universe: set[tuple[str, str]] = {(i.market, i.symbol) for i in self._inputs}
+        # we guard at (exchange, market, symbol) granularity.
+        self._order_universe: set[tuple[str, str, str]] = {
+            (i.exchange, i.market, i.symbol) for i in self._inputs
+        }
         self._view: InputView = InputView(self._inputs)
-        self._blocked_order_keys: set[tuple[str, str]] = set()
+        self._blocked_order_keys: set[tuple[str, str, str]] = set()
 
     @property
     def declared_inputs(self) -> list[StrategyInput]:
@@ -249,10 +267,12 @@ class BaseStrategy:
         raise TypeError(f"unsupported execution feedback payload: {type(payload)!r}")
 
     def running_strategy(self, market_data: MarketData) -> None:
+        exchange = _norm_exchange(getattr(market_data, "exchange", "binance"))
         market = _norm_market(market_data.market)
+        wallet_market = _wallet_market(market)
         sym = _norm_symbol(market_data.symbol)
         interval = _norm_interval(getattr(market_data, "interval", ""))
-        key = (market, sym, interval)
+        key = (exchange, market, sym, interval)
 
         # Declaration gate: only declared (market, symbol, interval) keys reach
         # the strategy. Wallet state is irrelevant here per pre_C3.
@@ -260,7 +280,7 @@ class BaseStrategy:
             return
 
         # Refresh wallet mark price (wallet does not care about interval).
-        self.wallet.on_market_data(sym, market, float(market_data.price))
+        self.wallet.on_market_data(sym, wallet_market, float(market_data.price))
 
         # Refresh the bound view with this tick.
         if not self._view.update(market_data):
@@ -278,7 +298,9 @@ class BaseStrategy:
             raise ValueError("OrderDecision.qty must be != 0 when returning a signal")
 
         # Determine order market: signal override > tick market.
+        sig_exchange = _norm_exchange(signal.exchange or exchange)
         sig_market = _norm_market(signal.market or market)
+        sig_wallet_market = _wallet_market(sig_market)
         sig_sym = _norm_symbol(signal.symbol)
 
         # Order-side universe guard (pre_C3): reject orders that fall outside
@@ -286,16 +308,17 @@ class BaseStrategy:
         # strategy that only declared ETHUSDT could still place BTCUSDT orders
         # by returning a different symbol on OrderDecision — bypassing
         # preflight and stream-readiness entirely.
-        if (sig_market, sig_sym) not in self._order_universe:
+        if (sig_exchange, sig_market, sig_sym) not in self._order_universe:
             raise ValueError(
-                f"strategy attempted to place order outside declared universe: "
-                f"signal=({sig_market}, {sig_sym}), declared="
+                f"strategy attempted to place order target not declared in INPUTS: "
+                f"signal=({sig_exchange}, {sig_market}, {sig_sym}), declared="
                 f"{sorted(self._order_universe)}"
             )
-        if (sig_market, sig_sym) in self._blocked_order_keys:
+        blocked_key = (sig_exchange, sig_market, sig_sym)
+        if blocked_key in self._blocked_order_keys:
             logger.warning(
-                "skip order on blocked symbol while execution state unresolved: symbol=%s market=%s",
-                sig_sym, sig_market,
+                "skip order on blocked symbol while execution state unresolved: exchange=%s symbol=%s market=%s",
+                sig_exchange, sig_sym, sig_market,
             )
             return
 
@@ -304,7 +327,7 @@ class BaseStrategy:
         # Look up a position/asset to get leverage for margin math.
         fw = getattr(self.wallet, "futures", None)
         pos = None
-        if fw is not None and sig_market == "futures":
+        if fw is not None and _is_futures_market(sig_market):
             matched = fw._get_positions_for_symbol(sig_sym)
             if matched:
                 pos = matched[0][1]
@@ -381,9 +404,9 @@ class BaseStrategy:
             and not has_settleable_fill
         )
         if feedback.attempt_status in {"UNKNOWN", "RECOVERING", "RECOVERY_FAILED"} or pending_fill_confirmation:
-            self._blocked_order_keys.add((sig_market, sig_sym))
+            self._blocked_order_keys.add(blocked_key)
         elif feedback.attempt_status in {"FAILED", "ACCEPTED", "RECOVERED"}:
-            self._blocked_order_keys.discard((sig_market, sig_sym))
+            self._blocked_order_keys.discard(blocked_key)
         if feedback.attempt_status not in {"ACCEPTED", "RECOVERED"} or pending_fill_confirmation:
             self._notify_order_response(feedback)
             logger.warning(
@@ -402,9 +425,9 @@ class BaseStrategy:
 
         if feedback.fill_events:
             for fill_event in feedback.fill_events:
-                self.wallet.on_order(sig_sym, sig_market, fill_event)
+                self.wallet.on_order(sig_sym, sig_wallet_market, fill_event)
         elif has_settleable_fill:
-            self.wallet.on_order(sig_sym, sig_market, feedback.order)
+            self.wallet.on_order(sig_sym, sig_wallet_market, feedback.order)
         else:
             self._notify_order_response(feedback)
             logger.warning(

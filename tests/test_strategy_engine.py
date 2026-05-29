@@ -108,7 +108,7 @@ def _inline(body: str, *, symbol: str = "TESTUSDT", market: str = "futures", int
         "from strategy_service.types import OrderDecision\n"
         "\n"
         "class MyStrategy:\n"
-        f'    INPUTS = [{{"market": "{market}", "symbol": "{symbol}", "interval": "{interval}"}}]\n'
+        f'    INPUTS = [{{"exchange": "binance", "market": "{market}", "symbol": "{symbol}", "interval": "{interval}"}}]\n'
         + body
     )
 
@@ -116,7 +116,7 @@ def _inline(body: str, *, symbol: str = "TESTUSDT", market: str = "futures", int
 def test_inline_strategy_code_uses_strategy_path_as_python_filename():
     code = (
         "class MyStrategy:\n"
-        "    INPUTS = [{\"market\": \"futures\", \"symbol\": \"TESTUSDT\", \"interval\": \"1m\"}]\n"
+        "    INPUTS = [{\"exchange\": \"binance\", \"market\": \"futures\", \"symbol\": \"TESTUSDT\", \"interval\": \"1m\"}]\n"
         "    def on_market_data(self, data, wallet):\n"
         "        return None\n"
     )
@@ -327,6 +327,22 @@ def test_strategy_can_access_wallet_by_exchange_market():
     svc.running_strategy(_md(symbol="TESTUSDT", market="futures", interval="1m"))
 
 
+def test_order_decision_requires_declared_exchange_market_symbol():
+    wallet = _wallet_with_futures_slot(symbol="ETHUSDT")
+    strategy_code = (
+        "from strategy_service.types import OrderDecision\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+        "    def on_market_data(self, data, wallet):\n"
+        "        return OrderDecision(symbol='ETHUSDT', side='LONG', qty=0.1, market='futures', exchange='okx')\n"
+    )
+    svc = StrategyService()
+    svc.create_strategy("u1", "<db:bad_exchange_target>", wallet, strategy_code=strategy_code)
+
+    with pytest.raises(ValueError, match="not declared in INPUTS"):
+        svc.running_strategy(_md(symbol="ETHUSDT", market="futures", interval="1m"))
+
+
 def test_strategy_declared_symbols_route_even_without_wallet_slot():
     """Pre_C3 §2.2: wallet can be empty; declaration alone drives routing."""
     wallet = make_backtest_wallet(
@@ -344,8 +360,8 @@ def test_strategy_declared_symbols_route_even_without_wallet_slot():
     svc.create_strategy("u1", "<db:declared_symbols>", wallet, strategy_code=strategy_code)
     wallet.on_market_data = MagicMock(wraps=wallet.on_market_data)
 
-    # Router is keyed by the 3-tuple from the declaration.
-    assert ("futures", "ETHUSDT", "1m") in svc.strategy_router
+    # Router is keyed by the normalized 4-tuple from the declaration.
+    assert ("binance", "perpetual_futures", "ETHUSDT", "1m") in svc.strategy_router
     svc.running_strategy(_md(symbol="ETHUSDT", market="futures", interval="1m"))
 
     wallet.on_market_data.assert_called_once()
@@ -361,8 +377,8 @@ def test_same_symbol_different_market_routes_correctly():
     strategy_code = (
         "class MyStrategy:\n"
         '    INPUTS = [\n'
-        '        {"market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
-        '        {"market": "spot",    "symbol": "BTCUSDT", "interval": "1m"},\n'
+        '        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
+        '        {"exchange": "binance", "market": "spot",    "symbol": "BTCUSDT", "interval": "1m"},\n'
         '    ]\n'
         "    def on_market_data(self, data, wallet):\n"
         "        return None\n"
@@ -402,7 +418,7 @@ def test_empty_wallet_can_still_create_strategy():
     )
     strat = svc.create_strategy("u1", "<db:empty_wallet_ok>", wallet, strategy_code=strategy_code)
     # Router is built from declaration, not wallet.
-    assert ("futures", "TESTUSDT", "1m") in svc.strategy_router
+    assert ("binance", "perpetual_futures", "TESTUSDT", "1m") in svc.strategy_router
     assert strat is not None
 
 
@@ -681,8 +697,8 @@ def test_multi_symbol_routes_to_same_strategy():
     strategy_code = (
         "class MyStrategy:\n"
         '    INPUTS = [\n'
-        '        {"market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
-        '        {"market": "futures", "symbol": "ETHUSDT", "interval": "1m"},\n'
+        '        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
+        '        {"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"},\n'
         '    ]\n'
         "    def on_market_data(self, data, wallet):\n"
         "        return None\n"
@@ -690,5 +706,5 @@ def test_multi_symbol_routes_to_same_strategy():
     strat = svc.create_strategy("u1", "<db:multi_symbol>", wallet, strategy_code=strategy_code)
 
     # Both declared inputs route to the same instance.
-    assert svc.strategy_router[("futures", "BTCUSDT", "1m")] is strat
-    assert svc.strategy_router[("futures", "ETHUSDT", "1m")] is strat
+    assert svc.strategy_router[("binance", "perpetual_futures", "BTCUSDT", "1m")] is strat
+    assert svc.strategy_router[("binance", "perpetual_futures", "ETHUSDT", "1m")] is strat

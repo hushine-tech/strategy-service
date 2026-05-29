@@ -2,7 +2,7 @@ from strategy_service.types import MarketData, OrderDecision
 
 
 class MyStrategy:
-    INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
 
     def __init__(self) -> None:
         self.last_resp = None

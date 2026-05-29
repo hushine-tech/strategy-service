@@ -14,7 +14,7 @@ class MyStrategy:
     Step 4: wallet.on_order         更新持仓
     """
 
-    INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
 
     def __init__(self) -> None:
         self._counter: int = 0

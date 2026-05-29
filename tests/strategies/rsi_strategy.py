@@ -11,7 +11,7 @@ class MyStrategy:
     Computes RSI(14) and submits LONG when RSI < 30.
     """
 
-    INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
 
     def __init__(self, rsi_period: int = 14, oversold: float = 30.0, qty: float = 0.01):
         self.rsi_period = rsi_period

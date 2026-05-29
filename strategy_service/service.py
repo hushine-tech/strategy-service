@@ -7,21 +7,21 @@ from strategy_service.order_client import OrderClient
 from strategy_service.strategy.base import BaseStrategy
 from strategy_service.strategy.user import UserStrategy
 from strategy_service.types import MarketData
+from strategy_service.inputs import _normalize_exchange, _normalize_market
 
 
 class StrategyEngine:
-    """Route market ticks to strategies by declared (market, symbol, interval).
+    """Route market ticks to strategies by declared route key.
 
-    Pre-C3: the router is bound only to each strategy's declared ``INPUTS``
-    universe. Wallet positions / assets no longer contribute to the routing
-    key set — a strategy with an empty wallet still receives the ticks it
-    declared.
+    The router is bound only to each strategy's declared ``INPUTS`` universe:
+    ``(exchange, market, symbol, interval)``. Wallet positions / assets do not
+    contribute to the routing key set.
     """
 
     def __init__(self) -> None:
         self.strategies: dict[str, BaseStrategy] = {}
-        # Key: (market, symbol, interval)  →  strategy instance.
-        self.strategy_router: dict[tuple[str, str, str], BaseStrategy] = {}
+        # Key: (exchange, market, symbol, interval) -> strategy instance.
+        self.strategy_router: dict[tuple[str, str, str, str], BaseStrategy] = {}
 
     def create_strategy(
         self,
@@ -52,10 +52,11 @@ class StrategyEngine:
         return user_strategy
 
     def running_strategy(self, market_data: MarketData) -> bool:
-        market = str(market_data.market).strip().lower()
+        exchange = _normalize_exchange(getattr(market_data, "exchange", "binance"))
+        market = _normalize_market(market_data.market)
         symbol = str(market_data.symbol).strip().upper()
         interval = str(getattr(market_data, "interval", "")).strip()
-        key = (market, symbol, interval)
+        key = (exchange, market, symbol, interval)
         strategy = self.strategy_router.get(key)
         if strategy is None:
             return False
