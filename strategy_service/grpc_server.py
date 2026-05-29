@@ -11,6 +11,16 @@ from typing import Any, Callable
 
 import grpc
 
+try:  # OpenTelemetry is optional in unit/local contexts.
+    from opentelemetry import context as _otel_context
+    from opentelemetry import trace as _otel_trace
+
+    _OTEL_AVAILABLE = True
+except Exception:  # noqa: BLE001
+    _otel_context = None
+    _otel_trace = None
+    _OTEL_AVAILABLE = False
+
 from strategy_service.gen import strategy_service_pb2 as pb2
 from strategy_service.gen import strategy_service_pb2_grpc as pb2_grpc
 
@@ -54,6 +64,24 @@ RESTORE_RUNNING_SESSIONS_RETRIES = 5
 RESTORE_RUNNING_SESSIONS_RETRY_SECONDS = 1.0
 PLATFORM_ACCESS_DIRECT = "direct"
 PLATFORM_ACCESS_PROXY_ONLY = "proxy_only"
+
+
+def _capture_otel_context():
+    if not _OTEL_AVAILABLE or _otel_context is None:
+        return None
+    return _otel_context.get_current()
+
+
+def _run_in_otel_context(parent_context, span_name: str, fn):
+    if not _OTEL_AVAILABLE or _otel_context is None or _otel_trace is None or parent_context is None:
+        return fn()
+    tracer = _otel_trace.get_tracer("strategy-service/session")
+    token = _otel_context.attach(parent_context)
+    try:
+        with tracer.start_as_current_span(span_name):
+            return fn()
+    finally:
+        _otel_context.detach(token)
 
 
 @dataclass(frozen=True)
@@ -661,12 +689,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         )
 
         # 5. 启动后台线程
+        otel_parent_context = _capture_otel_context()
+
+        def _run_session_with_context() -> None:
+            _run_in_otel_context(
+                otel_parent_context,
+                f"StrategySession/{session_id}",
+                lambda: self._run_session(
+                    session_id, state, request, wallet, mode, account_id, user_id,
+                    declared_inputs, strategy_path, strategy_id, strategy_code,
+                ),
+            )
+
         t = threading.Thread(
-            target=self._run_session,
-            args=(
-                session_id, state, request, wallet, mode, account_id, user_id,
-                declared_inputs, strategy_path, strategy_id, strategy_code,
-            ),
+            target=_run_session_with_context,
             daemon=True,
         )
         t.start()

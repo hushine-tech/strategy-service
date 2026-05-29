@@ -50,6 +50,54 @@ def _current_timestamp() -> Timestamp:
     return ts
 
 
+def test_session_thread_otel_context_is_inherited_for_platform_proxy_calls():
+    try:
+        from opentelemetry import context as otel_context
+        from opentelemetry import propagate, trace
+        from opentelemetry.propagate import get_global_textmap, set_global_textmap
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    except ImportError:
+        return
+
+    old_textmap = get_global_textmap()
+    set_global_textmap(TraceContextTextMapPropagator())
+    parent_span = NonRecordingSpan(SpanContext(
+        trace_id=int("4bf92f3577b34da6a3ce929d0e0e4736", 16),
+        span_id=int("00f067aa0ba902b7", 16),
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        trace_state=TraceState(),
+    ))
+    token = otel_context.attach(trace.set_span_in_context(parent_span))
+    try:
+        parent_context = grpc_server._capture_otel_context()
+    finally:
+        otel_context.detach(token)
+
+    carrier: dict[str, str] = {}
+    errors: list[BaseException] = []
+
+    def worker():
+        try:
+            grpc_server._run_in_otel_context(
+                parent_context,
+                "StrategySession/test",
+                lambda: propagate.inject(carrier),
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=1)
+    set_global_textmap(old_textmap)
+
+    if errors:
+        raise errors[0]
+    assert carrier["traceparent"].startswith("00-4bf92f3577b34da6a3ce929d0e0e4736-")
+
+
 class _FakeContext:
     def __init__(self) -> None:
         self.code = None

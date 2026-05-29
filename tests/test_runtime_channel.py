@@ -469,6 +469,92 @@ def test_runtime_channel_client_invokes_platform_unary():
     assert isinstance(result[0], account_service_pb2.SaveSessionResponse)
 
 
+def test_runtime_channel_client_injects_trace_context_into_platform_request():
+    try:
+        from opentelemetry import context as otel_context
+        from opentelemetry import propagate, trace
+        from opentelemetry.propagate import get_global_textmap, set_global_textmap
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    except ImportError:
+        return
+
+    old_textmap = get_global_textmap()
+    set_global_textmap(TraceContextTextMapPropagator())
+    span_context = SpanContext(
+        trace_id=int("4bf92f3577b34da6a3ce929d0e0e4736", 16),
+        span_id=int("00f067aa0ba902b7", 16),
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        trace_state=TraceState(),
+    )
+    try:
+        private_key = Ed25519PrivateKey.generate()
+        private_pem = private_key.private_bytes(
+            encoding=Encoding.PEM,
+            format=PrivateFormat.PKCS8,
+            encryption_algorithm=NoEncryption(),
+        ).decode("utf-8")
+        client = RuntimeChannelClient(
+            "control-panel:50054",
+            RuntimeCredential(
+                key_id="key-1",
+                private_key_pem=private_pem,
+                private_key=private_key,
+                path="/tmp/runtime.cred",
+            ),
+            RuntimeHelloArgs(key_id="key-1", private_key_pem=private_pem),
+        )
+        outbound: queue.Queue[cp_pb2.RuntimeFrame | None] = queue.Queue()
+        with client._outbound_lock:
+            client._outbound = outbound
+        client._connected.set()
+
+        result: list[object] = []
+        errors: list[BaseException] = []
+
+        def call_with_span():
+            token = otel_context.attach(trace.set_span_in_context(NonRecordingSpan(span_context)))
+            try:
+                result.append(client.invoke_platform_unary(
+                    "account.SaveSession",
+                    account_service_pb2.SaveSessionRequest(session_id="sess-1", account_id=7),
+                    account_service_pb2.SaveSessionResponse,
+                    timeout_seconds=1,
+                ))
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                otel_context.detach(token)
+
+        thread = threading.Thread(
+            target=call_with_span,
+            daemon=True,
+        )
+        thread.start()
+        frame = outbound.get(timeout=1)
+        assert frame.request.trace_context["traceparent"].startswith("00-4bf92f3577b34da6a3ce929d0e0e4736-")
+
+        packed = Any()
+        packed.Pack(account_service_pb2.SaveSessionResponse())
+        client._handle_inbound_frame(
+            cp_pb2.RuntimeFrame(
+                correlation_id=frame.correlation_id,
+                frame_type=cp_pb2.FRAME_TYPE_RESPONSE,
+                response=cp_pb2.StrategyResponse(response=packed),
+            ),
+            outbound,
+        )
+        thread.join(timeout=1)
+        if errors:
+            raise errors[0]
+        assert len(result) == 1
+    finally:
+        set_global_textmap(old_textmap)
+        # Keep import referenced even if assertion changes later.
+        assert propagate is not None
+
+
 def test_runtime_channel_request_handler_can_call_platform_proxy_without_deadlock():
     private_key = Ed25519PrivateKey.generate()
     private_pem = private_key.private_bytes(
@@ -705,6 +791,49 @@ def test_runtime_channel_dispatcher_calls_existing_servicer_path():
     response = strategy_pb2.RunStrategyResponse()
     assert frame.response.response.Unpack(response)
     assert response.session_id == "sess-1"
+
+
+def test_runtime_channel_dispatcher_extracts_trace_context_for_servicer_call():
+    try:
+        from opentelemetry import propagate, trace
+        from opentelemetry.propagate import get_global_textmap, set_global_textmap
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    except ImportError:
+        return
+
+    old_textmap = get_global_textmap()
+    set_global_textmap(TraceContextTextMapPropagator())
+    seen: list[str] = []
+
+    class FakeContextServicer:
+        def RunStrategy(self, request, context):
+            span_context = trace.get_current_span().get_span_context()
+            seen.append(f"{span_context.trace_id:032x}")
+            return strategy_pb2.RunStrategyResponse(session_id="sess-1")
+
+    from google.protobuf.any_pb2 import Any
+    from strategy_service.gen import strategy_service_pb2 as strategy_pb2
+
+    packed = Any()
+    packed.Pack(strategy_pb2.RunStrategyRequest(account_id=7, user_id=42))
+    dispatcher = RuntimeChannelStrategyDispatcher(FakeContextServicer())
+
+    try:
+        frame = dispatcher(cp_pb2.RuntimeFrame(
+            correlation_id="corr-1",
+            frame_type=cp_pb2.FRAME_TYPE_REQUEST,
+            request=cp_pb2.StrategyRequest(
+                method="RunStrategy",
+                request=packed,
+                trace_context={"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+            ),
+        ))
+    finally:
+        set_global_textmap(old_textmap)
+        assert propagate is not None
+
+    assert frame.frame_type == cp_pb2.FRAME_TYPE_RESPONSE
+    assert seen == ["4bf92f3577b34da6a3ce929d0e0e4736"]
 
 
 class _DisconnectingStub:

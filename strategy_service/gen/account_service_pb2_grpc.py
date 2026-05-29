@@ -65,6 +65,46 @@ class AccountServiceStub(object):
                 request_serializer=account__service__pb2.GetAccountRequest.SerializeToString,
                 response_deserializer=account__service__pb2.GetAccountResponse.FromString,
                 _registered_method=True)
+        self.CreateVenue = channel.unary_unary(
+                '/account.v1.AccountService/CreateVenue',
+                request_serializer=account__service__pb2.CreateVenueRequest.SerializeToString,
+                response_deserializer=account__service__pb2.CreateVenueResponse.FromString,
+                _registered_method=True)
+        self.ListVenues = channel.unary_unary(
+                '/account.v1.AccountService/ListVenues',
+                request_serializer=account__service__pb2.ListVenuesRequest.SerializeToString,
+                response_deserializer=account__service__pb2.ListVenuesResponse.FromString,
+                _registered_method=True)
+        self.GetVenue = channel.unary_unary(
+                '/account.v1.AccountService/GetVenue',
+                request_serializer=account__service__pb2.GetVenueRequest.SerializeToString,
+                response_deserializer=account__service__pb2.GetVenueResponse.FromString,
+                _registered_method=True)
+        self.BindVenue = channel.unary_unary(
+                '/account.v1.AccountService/BindVenue',
+                request_serializer=account__service__pb2.BindVenueRequest.SerializeToString,
+                response_deserializer=account__service__pb2.BindVenueResponse.FromString,
+                _registered_method=True)
+        self.ReleaseVenue = channel.unary_unary(
+                '/account.v1.AccountService/ReleaseVenue',
+                request_serializer=account__service__pb2.ReleaseVenueRequest.SerializeToString,
+                response_deserializer=account__service__pb2.ReleaseVenueResponse.FromString,
+                _registered_method=True)
+        self.ArchiveVenue = channel.unary_unary(
+                '/account.v1.AccountService/ArchiveVenue',
+                request_serializer=account__service__pb2.ArchiveVenueRequest.SerializeToString,
+                response_deserializer=account__service__pb2.ArchiveVenueResponse.FromString,
+                _registered_method=True)
+        self.PreflightStrategySession = channel.unary_unary(
+                '/account.v1.AccountService/PreflightStrategySession',
+                request_serializer=account__service__pb2.PreflightStrategySessionRequest.SerializeToString,
+                response_deserializer=account__service__pb2.PreflightStrategySessionResponse.FromString,
+                _registered_method=True)
+        self.GetVenueRouteMeta = channel.unary_unary(
+                '/account.v1.AccountService/GetVenueRouteMeta',
+                request_serializer=account__service__pb2.GetVenueRouteMetaRequest.SerializeToString,
+                response_deserializer=account__service__pb2.GetVenueRouteMetaResponse.FromString,
+                _registered_method=True)
         self.GetOnlineAccountInfo = channel.unary_unary(
                 '/account.v1.AccountService/GetOnlineAccountInfo',
                 request_serializer=account__service__pb2.GetOnlineAccountInfoRequest.SerializeToString,
@@ -256,6 +296,54 @@ class AccountServiceServicer(object):
     def GetAccount(self, request, context):
         """Get one account by id; credentials are never returned.
         """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CreateVenue(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListVenues(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetVenue(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def BindVenue(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReleaseVenue(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ArchiveVenue(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PreflightStrategySession(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetVenueRouteMeta(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -508,6 +596,46 @@ def add_AccountServiceServicer_to_server(servicer, server):
                     servicer.GetAccount,
                     request_deserializer=account__service__pb2.GetAccountRequest.FromString,
                     response_serializer=account__service__pb2.GetAccountResponse.SerializeToString,
+            ),
+            'CreateVenue': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateVenue,
+                    request_deserializer=account__service__pb2.CreateVenueRequest.FromString,
+                    response_serializer=account__service__pb2.CreateVenueResponse.SerializeToString,
+            ),
+            'ListVenues': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListVenues,
+                    request_deserializer=account__service__pb2.ListVenuesRequest.FromString,
+                    response_serializer=account__service__pb2.ListVenuesResponse.SerializeToString,
+            ),
+            'GetVenue': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetVenue,
+                    request_deserializer=account__service__pb2.GetVenueRequest.FromString,
+                    response_serializer=account__service__pb2.GetVenueResponse.SerializeToString,
+            ),
+            'BindVenue': grpc.unary_unary_rpc_method_handler(
+                    servicer.BindVenue,
+                    request_deserializer=account__service__pb2.BindVenueRequest.FromString,
+                    response_serializer=account__service__pb2.BindVenueResponse.SerializeToString,
+            ),
+            'ReleaseVenue': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReleaseVenue,
+                    request_deserializer=account__service__pb2.ReleaseVenueRequest.FromString,
+                    response_serializer=account__service__pb2.ReleaseVenueResponse.SerializeToString,
+            ),
+            'ArchiveVenue': grpc.unary_unary_rpc_method_handler(
+                    servicer.ArchiveVenue,
+                    request_deserializer=account__service__pb2.ArchiveVenueRequest.FromString,
+                    response_serializer=account__service__pb2.ArchiveVenueResponse.SerializeToString,
+            ),
+            'PreflightStrategySession': grpc.unary_unary_rpc_method_handler(
+                    servicer.PreflightStrategySession,
+                    request_deserializer=account__service__pb2.PreflightStrategySessionRequest.FromString,
+                    response_serializer=account__service__pb2.PreflightStrategySessionResponse.SerializeToString,
+            ),
+            'GetVenueRouteMeta': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetVenueRouteMeta,
+                    request_deserializer=account__service__pb2.GetVenueRouteMetaRequest.FromString,
+                    response_serializer=account__service__pb2.GetVenueRouteMetaResponse.SerializeToString,
             ),
             'GetOnlineAccountInfo': grpc.unary_unary_rpc_method_handler(
                     servicer.GetOnlineAccountInfo,
@@ -818,6 +946,222 @@ class AccountService(object):
             '/account.v1.AccountService/GetAccount',
             account__service__pb2.GetAccountRequest.SerializeToString,
             account__service__pb2.GetAccountResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CreateVenue(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/CreateVenue',
+            account__service__pb2.CreateVenueRequest.SerializeToString,
+            account__service__pb2.CreateVenueResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListVenues(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/ListVenues',
+            account__service__pb2.ListVenuesRequest.SerializeToString,
+            account__service__pb2.ListVenuesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetVenue(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/GetVenue',
+            account__service__pb2.GetVenueRequest.SerializeToString,
+            account__service__pb2.GetVenueResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def BindVenue(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/BindVenue',
+            account__service__pb2.BindVenueRequest.SerializeToString,
+            account__service__pb2.BindVenueResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReleaseVenue(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/ReleaseVenue',
+            account__service__pb2.ReleaseVenueRequest.SerializeToString,
+            account__service__pb2.ReleaseVenueResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ArchiveVenue(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/ArchiveVenue',
+            account__service__pb2.ArchiveVenueRequest.SerializeToString,
+            account__service__pb2.ArchiveVenueResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PreflightStrategySession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/PreflightStrategySession',
+            account__service__pb2.PreflightStrategySessionRequest.SerializeToString,
+            account__service__pb2.PreflightStrategySessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetVenueRouteMeta(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/GetVenueRouteMeta',
+            account__service__pb2.GetVenueRouteMetaRequest.SerializeToString,
+            account__service__pb2.GetVenueRouteMetaResponse.FromString,
             options,
             channel_credentials,
             insecure,

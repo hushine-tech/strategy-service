@@ -25,6 +25,18 @@ from strategy_service.gen import control_panel_service_pb2 as cp_pb2
 from strategy_service.gen import control_panel_service_pb2_grpc as cp_grpc
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 
+try:  # OpenTelemetry is optional in local/unit contexts.
+    from opentelemetry import propagate as _otel_propagate
+    from opentelemetry import trace as _otel_trace
+    from opentelemetry.trace import SpanKind as _OtelSpanKind
+
+    _OTEL_AVAILABLE = True
+except Exception:  # noqa: BLE001
+    _otel_propagate = None
+    _otel_trace = None
+    _OtelSpanKind = None
+    _OTEL_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_RUNTIME_CREDENTIAL_PATH = "/etc/hushine/runtime.cred"
@@ -354,7 +366,11 @@ class RuntimeChannelClient:
                 correlation_id=correlation_id,
                 frame_type=cp_pb2.FRAME_TYPE_REQUEST,
                 deadline_unix_ms=int((time.time() + remaining) * 1000) if remaining else 0,
-                request=cp_pb2.StrategyRequest(method=method, request=packed),
+                request=cp_pb2.StrategyRequest(
+                    method=method,
+                    request=packed,
+                    trace_context=_inject_trace_context(),
+                ),
             ))
             while True:
                 remaining = deadline - time.monotonic()
@@ -723,6 +739,42 @@ def _data_ack_frame(session_id: str, stream_key: str, sequence: int) -> cp_pb2.R
     )
 
 
+def _inject_trace_context() -> dict[str, str]:
+    if not _OTEL_AVAILABLE or _otel_propagate is None:
+        return {}
+    carrier: dict[str, str] = {}
+    try:
+        _otel_propagate.inject(carrier)
+    except Exception:  # noqa: BLE001
+        logger.debug("failed to inject RuntimeChannel trace context", exc_info=True)
+        return {}
+    return carrier
+
+
+def _extract_trace_context(carrier: dict[str, str]):
+    if not _OTEL_AVAILABLE or _otel_propagate is None:
+        return None
+    try:
+        return _otel_propagate.extract(dict(carrier or {}))
+    except Exception:  # noqa: BLE001
+        logger.debug("failed to extract RuntimeChannel trace context", exc_info=True)
+        return None
+
+
+def _call_with_runtime_channel_span(method_name: str, trace_context: dict[str, str], fn):
+    if not _OTEL_AVAILABLE or _otel_trace is None:
+        return fn()
+    tracer = _otel_trace.get_tracer("strategy-service/runtime-channel")
+    parent_context = _extract_trace_context(trace_context)
+    kwargs = {}
+    if parent_context is not None:
+        kwargs["context"] = parent_context
+    if _OtelSpanKind is not None:
+        kwargs["kind"] = _OtelSpanKind.SERVER
+    with tracer.start_as_current_span(f"RuntimeChannel/{method_name or 'unknown'}", **kwargs):
+        return fn()
+
+
 def _is_terminal_runtime_channel_error(exc: BaseException) -> bool:
     code_getter = getattr(exc, "code", None)
     if not callable(code_getter):
@@ -787,7 +839,15 @@ class RuntimeChannelStrategyDispatcher:
             return _error_frame(frame.correlation_id, "InvalidArgument", f"invalid {method} request payload")
 
         context = _RuntimeChannelContext()
-        response = getattr(self._servicer, method_name)(request, context)
+
+        def _invoke_servicer():
+            return getattr(self._servicer, method_name)(request, context)
+
+        response = _call_with_runtime_channel_span(
+            method_name,
+            dict(req.trace_context or {}),
+            _invoke_servicer,
+        )
         if context.code is not grpc.StatusCode.OK:
             return _error_frame(
                 frame.correlation_id,

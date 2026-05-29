@@ -267,7 +267,7 @@ class ControlPanelServiceServicer(object):
         "Settings → Runtime Credentials" page; the private key is downloaded
         by the user and mounted into their self-hosted runtime container.
 
-        Fail-closed: if the requesting user does not exist (account-service
+        Fail-closed: if the requesting user does not exist (core-service
         GetUser miss), the RPC returns NotFound. user_id MUST be the
         authenticated user's id; quant-handler enforces that the JWT subject
         matches the request user_id.

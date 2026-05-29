@@ -71,7 +71,7 @@ class StrategyServiceServicer(object):
 
     def RunStrategy(self, request, context):
         """RunStrategy starts strategy execution. Returns immediately with a session_id.
-        Data source is determined by account mode (fetched from account-service):
+        Data source is determined by account mode (fetched from core-service):
         mode=0 (backtest) → BacktestDataLoop (TimescaleDB)
         mode=1 (live)     → LiveDataLoop (Kafka)
         mode=2 (testnet)  → LiveDataLoop (Kafka)
