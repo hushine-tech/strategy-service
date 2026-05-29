@@ -28,27 +28,27 @@ from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 def test_parse_dict_entries_normalizes_case_and_whitespace():
     result = parse_declared_inputs([
-        {"market": "FUTURES", "symbol": "ethusdt", "interval": " 1m "},
+        {"exchange": "binance", "market": "FUTURES", "symbol": "ethusdt", "interval": " 1m "},
     ])
-    assert result == [StrategyInput("futures", "ETHUSDT", "1m")]
+    assert result == [StrategyInput("binance", "futures", "ETHUSDT", "1m")]
 
 
-def test_parse_tuple_entries():
-    result = parse_declared_inputs([("spot", "BTCUSDT", "5m")])
-    assert result == [StrategyInput("spot", "BTCUSDT", "5m")]
+def test_parse_rejects_tuple_entries():
+    with pytest.raises(StrategyDeclarationError, match="unsupported shape"):
+        parse_declared_inputs([("spot", "BTCUSDT", "5m")])
 
 
-def test_parse_colon_string_entries():
-    result = parse_declared_inputs(["futures:ADAUSDT:15m"])
-    assert result == [StrategyInput("futures", "ADAUSDT", "15m")]
+def test_parse_rejects_colon_string_entries():
+    with pytest.raises(StrategyDeclarationError, match="unsupported shape"):
+        parse_declared_inputs(["futures:ADAUSDT:15m"])
 
 
 def test_parse_dedupes_equal_entries():
     result = parse_declared_inputs([
-        {"market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
-        {"market": "futures", "symbol": "btcusdt", "interval": "1m"},
+        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
+        {"exchange": "binance", "market": "futures", "symbol": "btcusdt", "interval": "1m"},
     ])
-    assert result == [StrategyInput("futures", "BTCUSDT", "1m")]
+    assert result == [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
 
 
 def test_parse_rejects_missing_declaration():
@@ -63,23 +63,23 @@ def test_parse_rejects_empty_list():
 
 def test_parse_rejects_unknown_market():
     with pytest.raises(StrategyDeclarationError, match="unsupported market"):
-        parse_declared_inputs([{"market": "perp", "symbol": "BTCUSDT", "interval": "1m"}])
+        parse_declared_inputs([{"exchange": "binance", "market": "margin", "symbol": "BTCUSDT", "interval": "1m"}])
 
 
 def test_parse_rejects_empty_symbol():
     with pytest.raises(StrategyDeclarationError):
-        parse_declared_inputs([{"market": "futures", "symbol": "   ", "interval": "1m"}])
+        parse_declared_inputs([{"exchange": "binance", "market": "futures", "symbol": "   ", "interval": "1m"}])
 
 
 def test_parse_rejects_empty_interval():
     with pytest.raises(StrategyDeclarationError):
-        parse_declared_inputs([{"market": "futures", "symbol": "BTCUSDT", "interval": ""}])
+        parse_declared_inputs([{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": ""}])
 
 
 def test_parse_rejects_bare_scalar():
     # A bare dict at the top level is almost always a typo.
     with pytest.raises(StrategyDeclarationError):
-        parse_declared_inputs({"market": "futures", "symbol": "BTCUSDT", "interval": "1m"})
+        parse_declared_inputs({"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"})
 
 
 # ── InputView ───────────────────────────────────────────────────────────────
@@ -92,12 +92,12 @@ def _md(symbol: str, market: str, interval: str, price: float = 100.0) -> Market
 
 
 def test_view_returns_none_for_declared_key_before_first_update():
-    view = InputView([StrategyInput("futures", "ETHUSDT", "1m")])
+    view = InputView([StrategyInput("binance", "futures", "ETHUSDT", "1m")])
     assert view.market["futures"].symbol["ETHUSDT"].interval["1m"] is None
 
 
 def test_view_returns_latest_md_after_update():
-    view = InputView([StrategyInput("futures", "ETHUSDT", "1m")])
+    view = InputView([StrategyInput("binance", "futures", "ETHUSDT", "1m")])
     md = _md("ETHUSDT", "futures", "1m", price=3000.0)
     assert view.update(md) is True
     got = view.market["futures"].symbol["ETHUSDT"].interval["1m"]
@@ -105,7 +105,7 @@ def test_view_returns_latest_md_after_update():
 
 
 def test_view_update_returns_false_for_undeclared_key():
-    view = InputView([StrategyInput("futures", "ETHUSDT", "1m")])
+    view = InputView([StrategyInput("binance", "futures", "ETHUSDT", "1m")])
     assert view.update(_md("BTCUSDT", "futures", "1m")) is False
     # Nothing cached for undeclared key.
     with pytest.raises(KeyError):
@@ -113,27 +113,27 @@ def test_view_update_returns_false_for_undeclared_key():
 
 
 def test_view_raises_key_error_on_undeclared_market():
-    view = InputView([StrategyInput("futures", "ETHUSDT", "1m")])
+    view = InputView([StrategyInput("binance", "futures", "ETHUSDT", "1m")])
     with pytest.raises(KeyError, match="market"):
         _ = view.market["spot"]
 
 
 def test_view_raises_key_error_on_undeclared_symbol():
-    view = InputView([StrategyInput("futures", "ETHUSDT", "1m")])
+    view = InputView([StrategyInput("binance", "futures", "ETHUSDT", "1m")])
     with pytest.raises(KeyError, match="symbol"):
         _ = view.market["futures"].symbol["BTCUSDT"]
 
 
 def test_view_raises_key_error_on_undeclared_interval():
-    view = InputView([StrategyInput("futures", "ETHUSDT", "1m")])
+    view = InputView([StrategyInput("binance", "futures", "ETHUSDT", "1m")])
     with pytest.raises(KeyError, match="interval"):
         _ = view.market["futures"].symbol["ETHUSDT"].interval["5m"]
 
 
 def test_view_trigger_is_most_recently_updated_md():
     view = InputView([
-        StrategyInput("futures", "BTCUSDT", "1m"),
-        StrategyInput("futures", "ETHUSDT", "1m"),
+        StrategyInput("binance", "futures", "BTCUSDT", "1m"),
+        StrategyInput("binance", "futures", "ETHUSDT", "1m"),
     ])
     view.update(_md("BTCUSDT", "futures", "1m", price=50000.0))
     view.update(_md("ETHUSDT", "futures", "1m", price=3000.0))
@@ -146,11 +146,11 @@ def test_view_trigger_is_most_recently_updated_md():
 
 def test_view_keys_expose_declared_structure():
     view = InputView([
-        StrategyInput("futures", "BTCUSDT", "1m"),
-        StrategyInput("futures", "BTCUSDT", "5m"),
-        StrategyInput("spot", "ETHUSDT", "1m"),
+        StrategyInput("binance", "futures", "BTCUSDT", "1m"),
+        StrategyInput("binance", "futures", "BTCUSDT", "5m"),
+        StrategyInput("binance", "spot", "ETHUSDT", "1m"),
     ])
-    assert set(view.market.keys()) == {"futures", "spot"}
+    assert set(view.market.keys()) == {"perpetual_futures", "spot"}
     assert set(view.market["futures"].symbol.keys()) == {"BTCUSDT"}
     assert set(view.market["futures"].symbol["BTCUSDT"].interval.keys()) == {"1m", "5m"}
     assert set(view.market["spot"].symbol.keys()) == {"ETHUSDT"}
@@ -169,16 +169,16 @@ def test_router_binds_only_to_declared_inputs_even_on_empty_wallet():
     svc = StrategyService()
     code = """
 class MyStrategy:
-    INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
     def on_market_data(self, data, wallet):
         return None
 """
     svc.create_strategy("u1", "<db:router_test>", wallet, strategy_code=code)
 
-    assert ("futures", "ETHUSDT", "1m") in svc.strategy_router
+    assert ("binance", "perpetual_futures", "ETHUSDT", "1m") in svc.strategy_router
     # Undeclared keys MUST NOT appear.
-    assert ("futures", "BTCUSDT", "1m") not in svc.strategy_router
-    assert ("spot", "ETHUSDT", "1m") not in svc.strategy_router
+    assert ("binance", "perpetual_futures", "BTCUSDT", "1m") not in svc.strategy_router
+    assert ("binance", "spot", "ETHUSDT", "1m") not in svc.strategy_router
 
 
 def test_router_drops_undeclared_ticks_silently():
@@ -186,7 +186,7 @@ def test_router_drops_undeclared_ticks_silently():
     svc = StrategyService()
     code = """
 class MyStrategy:
-    INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
     def on_market_data(self, data, wallet):
         return None
 """
@@ -206,7 +206,7 @@ def test_declared_input_routes_without_wallet_position():
     svc = StrategyService()
     code = """
 class MyStrategy:
-    INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
     def __init__(self):
         self.ticks_seen = 0
     def on_market_data(self, data, wallet):
@@ -226,8 +226,8 @@ def test_multi_symbol_same_market_both_route():
     code = """
 class MyStrategy:
     INPUTS = [
-        {"market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
-        {"market": "futures", "symbol": "ETHUSDT", "interval": "1m"},
+        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
+        {"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"},
     ]
     def __init__(self):
         self.seen = []
@@ -250,8 +250,8 @@ def test_mixed_spot_and_futures_both_route():
     code = """
 class MyStrategy:
     INPUTS = [
-        {"market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
-        {"market": "spot",    "symbol": "BTCUSDT", "interval": "1m"},
+        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
+        {"exchange": "binance", "market": "spot",    "symbol": "BTCUSDT", "interval": "1m"},
     ]
     def __init__(self):
         self.markets = []
@@ -271,8 +271,8 @@ def test_multiple_intervals_same_symbol_route_independently():
     code = """
 class MyStrategy:
     INPUTS = [
-        {"market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
-        {"market": "futures", "symbol": "BTCUSDT", "interval": "5m"},
+        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
+        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "5m"},
     ]
     def __init__(self):
         self.intervals = []
@@ -285,8 +285,8 @@ class MyStrategy:
     svc.running_strategy(_md("BTCUSDT", "futures", "5m"))
     assert strat._strategy_instance.intervals == ["1m", "5m"]
     # Router has both interval-scoped keys (not collapsed).
-    assert ("futures", "BTCUSDT", "1m") in svc.strategy_router
-    assert ("futures", "BTCUSDT", "5m") in svc.strategy_router
+    assert ("binance", "perpetual_futures", "BTCUSDT", "1m") in svc.strategy_router
+    assert ("binance", "perpetual_futures", "BTCUSDT", "5m") in svc.strategy_router
 
 
 def test_multi_interval_view_indexes_each_interval_separately():
@@ -296,8 +296,8 @@ def test_multi_interval_view_indexes_each_interval_separately():
     code = """
 class MyStrategy:
     INPUTS = [
-        {"market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
-        {"market": "futures", "symbol": "BTCUSDT", "interval": "5m"},
+        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},
+        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "5m"},
     ]
     def __init__(self):
         self.snapshot = None
@@ -340,7 +340,7 @@ def test_create_strategy_with_invalid_market_fails_fast():
     svc = StrategyService()
     code = (
         "class MyStrategy:\n"
-        '    INPUTS = [{"market": "perp", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "binance", "market": "margin", "symbol": "BTCUSDT", "interval": "1m"}]\n'
         "    def on_market_data(self, data, wallet):\n"
         "        return None\n"
     )
@@ -368,7 +368,7 @@ def test_order_guard_rejects_undeclared_symbol():
     code = (
         "from strategy_service.types import OrderDecision\n"
         "class MyStrategy:\n"
-        '    INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
         "    def on_market_data(self, data, wallet):\n"
         "        return OrderDecision(symbol='BTCUSDT', side='LONG', qty=0.1, market='futures')\n"
     )
@@ -391,7 +391,7 @@ def test_order_guard_rejects_undeclared_market():
     code = (
         "from strategy_service.types import OrderDecision\n"
         "class MyStrategy:\n"
-        '    INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
         "    def on_market_data(self, data, wallet):\n"
         "        return OrderDecision(symbol='TESTUSDT', side='BUY', qty=0.5, market='spot')\n"
     )
@@ -418,7 +418,7 @@ def test_order_guard_allows_declared_orders():
     code = (
         "from strategy_service.types import OrderDecision\n"
         "class MyStrategy:\n"
-        '    INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
         "    def on_market_data(self, data, wallet):\n"
         "        return OrderDecision(symbol='TESTUSDT', side='LONG', qty=0.1, market='futures')\n"
     )
@@ -436,7 +436,7 @@ def test_order_guard_rejects_signal_market_override_outside_universe():
     code = (
         "from strategy_service.types import OrderDecision\n"
         "class MyStrategy:\n"
-        '    INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
         "    def on_market_data(self, data, wallet):\n"
         "        # Inherits tick market (futures) if signal.market is None — legal.\n"
         "        # Override to 'spot' → outside declared universe.\n"

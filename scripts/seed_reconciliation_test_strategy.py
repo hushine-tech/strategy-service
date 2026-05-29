@@ -84,7 +84,7 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
 
 
     class MyStrategy:
-        INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+        INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
 
         # 触发阈值: ±0.1% (千分之一).
         TRIGGER_PCT = 0.001

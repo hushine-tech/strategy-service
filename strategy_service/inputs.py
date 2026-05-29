@@ -69,6 +69,12 @@ class StrategyInput:
     symbol: str
     interval: str
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "exchange", _normalize_exchange(self.exchange))
+        object.__setattr__(self, "market", _normalize_market(self.market))
+        object.__setattr__(self, "symbol", _normalize_symbol(self.symbol))
+        object.__setattr__(self, "interval", _normalize_interval(self.interval))
+
     @property
     def key(self) -> tuple[str, str, str, str]:
         return (self.exchange, self.market, self.symbol, self.interval)

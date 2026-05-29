@@ -74,8 +74,8 @@ def test_check_profile_supported_fails_unknown_mode():
 
 def test_backtest_preflight_passes_when_all_declared_inputs_have_data():
     declared = [
-        StrategyInput("futures", "BTCUSDT", "1m"),
-        StrategyInput("spot", "ETHUSDT", "5m"),
+        StrategyInput("binance", "futures", "BTCUSDT", "1m"),
+        StrategyInput("binance", "spot", "ETHUSDT", "5m"),
     ]
     seen: list[tuple[str, str, str, int, int]] = []
 
@@ -90,15 +90,15 @@ def test_backtest_preflight_passes_when_all_declared_inputs_have_data():
     # One lookup per declared input, honouring declared interval (NOT a single
     # request-level interval).
     assert seen == [
-        ("futures", "BTCUSDT", "1m", 1_700_000_000_000, 1_700_000_060_000),
+        ("perpetual_futures", "BTCUSDT", "1m", 1_700_000_000_000, 1_700_000_060_000),
         ("spot", "ETHUSDT", "5m", 1_700_000_000_000, 1_700_000_060_000),
     ]
 
 
 def test_backtest_preflight_reports_per_input_missing_data():
     declared = [
-        StrategyInput("futures", "BTCUSDT", "1m"),
-        StrategyInput("futures", "ETHUSDT", "1m"),
+        StrategyInput("binance", "futures", "BTCUSDT", "1m"),
+        StrategyInput("binance", "futures", "ETHUSDT", "1m"),
     ]
 
     def has_data(inp, _start, _end):
@@ -117,7 +117,7 @@ def test_backtest_preflight_reports_per_input_missing_data():
 
 
 def test_backtest_preflight_rejects_declared_input_when_availability_false():
-    declared = [StrategyInput(market="futures", symbol="ETHUSDT", interval="1m")]
+    declared = [StrategyInput(exchange="binance", market="futures", symbol="ETHUSDT", interval="1m")]
 
     result = backtest_preflight(
         declared,
@@ -132,7 +132,7 @@ def test_backtest_preflight_rejects_declared_input_when_availability_false():
 
 
 def test_backtest_preflight_fails_with_invalid_time_range():
-    declared = [StrategyInput("futures", "BTCUSDT", "1m")]
+    declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
 
     def has_data(_inp, _start, _end):
         raise AssertionError("availability_fn must not be called when time range is invalid")
@@ -147,7 +147,7 @@ def test_backtest_preflight_fails_with_invalid_time_range():
 
 
 def test_backtest_preflight_surfaces_availability_exception_as_failure():
-    declared = [StrategyInput("futures", "BTCUSDT", "1m")]
+    declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
 
     def has_data(_inp, _start, _end):
         raise RuntimeError("table missing")
@@ -211,7 +211,7 @@ def test_default_backtest_availability_accepts_dict_ts_config(monkeypatch):
     dict_cfg = {"host": "pg.local", "port": 5432, "database": "binance_{year}"}
     evaluator = default_backtest_availability(dict_cfg)
     # One call to actually materialise BacktestDataSource.
-    evaluator(StrategyInput("futures", "BTCUSDT", "1m"), 1, 2)
+    evaluator(StrategyInput("binance", "futures", "BTCUSDT", "1m"), 1, 2)
 
     assert len(captured_configs) == 1
     # Must be the TimescaleConfig instance, NOT the raw dict.
@@ -223,7 +223,7 @@ def test_backtest_preflight_ignores_undeclared_symbols():
     # Per pre_C3 gate 2: only declared inputs feed the evaluator. The evaluator
     # never receives wallet positions / spot assets, so this is effectively a
     # contract test — with zero declared inputs we'd raise at parse time.
-    declared = [StrategyInput("futures", "BTCUSDT", "1m")]
+    declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
     queried: list[str] = []
 
     def has_data(inp, _start, _end):
@@ -271,7 +271,7 @@ def _make_stream(
 
 
 def test_live_stream_preflight_passes_on_running_fresh_streams():
-    declared = [StrategyInput("futures", "BTCUSDT", "1m")]
+    declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
     streams = {("futures", "BTCUSDT", "1m"): _make_stream()}
 
     def lookup(m, s, i):
@@ -290,7 +290,7 @@ def test_live_stream_preflight_passes_on_running_fresh_streams():
 
 
 def test_live_stream_preflight_fails_when_stream_missing():
-    declared = [StrategyInput("futures", "BTCUSDT", "1m")]
+    declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
 
     def lookup(*_args):
         return None
@@ -308,7 +308,7 @@ def test_live_stream_preflight_fails_when_stream_missing():
 
 
 def test_live_stream_preflight_fails_when_state_not_running():
-    declared = [StrategyInput("futures", "BTCUSDT", "1m")]
+    declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
     stream = _make_stream(actual_state="error", last_error="kafka down")
 
     def lookup(*_args):
@@ -326,7 +326,7 @@ def test_live_stream_preflight_fails_when_state_not_running():
 
 
 def test_live_stream_preflight_fails_when_delivery_disabled():
-    declared = [StrategyInput("futures", "BTCUSDT", "1m")]
+    declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
 
     def lookup(*_args):
         return _make_stream(effective_live_delivery=False)
@@ -344,7 +344,7 @@ def test_live_stream_preflight_fails_when_delivery_disabled():
 def test_live_stream_preflight_fails_when_stream_stale():
     # Declared interval is 1m → max_age = 2 * 60 + 30 = 150s. Inject a stream
     # whose last_data_at is 10 minutes old, freshness check must reject.
-    declared = [StrategyInput("futures", "BTCUSDT", "1m")]
+    declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
     now_ms = 1_700_000_000_000
     stale_ts = Timestamp()
     stale_ts.FromMilliseconds(now_ms - 600_000)  # 10 min old
@@ -368,8 +368,8 @@ def test_live_stream_preflight_honours_per_input_interval():
     # Two declared inputs on same symbol, DIFFERENT intervals. Lookup must
     # receive each declared interval individually — not a single shared one.
     declared = [
-        StrategyInput("futures", "BTCUSDT", "1m"),
-        StrategyInput("futures", "BTCUSDT", "5m"),
+        StrategyInput("binance", "futures", "BTCUSDT", "1m"),
+        StrategyInput("binance", "futures", "BTCUSDT", "5m"),
     ]
     queried: list[tuple[str, str, str]] = []
 
@@ -391,8 +391,8 @@ def test_live_stream_preflight_honours_per_input_interval():
 
 def test_live_stream_preflight_aggregates_multiple_failures():
     declared = [
-        StrategyInput("futures", "BTCUSDT", "1m"),
-        StrategyInput("futures", "ETHUSDT", "1m"),
+        StrategyInput("binance", "futures", "BTCUSDT", "1m"),
+        StrategyInput("binance", "futures", "ETHUSDT", "1m"),
     ]
 
     def lookup(_m, symbol, _i):

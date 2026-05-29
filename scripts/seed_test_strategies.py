@@ -74,7 +74,7 @@ SPOT_ROUNDTRIP_CODE = textwrap.dedent('''\
 
 
     class MyStrategy:
-        INPUTS = [{"market": "spot", "symbol": "TESTUSDT", "interval": "1m"}]
+        INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "TESTUSDT", "interval": "1m"}]
 
         def __init__(self):
             self._has_position = False
@@ -111,7 +111,7 @@ FUTURES_LONG_ROUNDTRIP_CODE = textwrap.dedent('''\
 
 
     class MyStrategy:
-        INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+        INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
 
         def __init__(self):
             self._has_position = False
@@ -145,7 +145,7 @@ FUTURES_SHORT_ROUNDTRIP_CODE = textwrap.dedent('''\
 
 
     class MyStrategy:
-        INPUTS = [{"market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+        INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
 
         def __init__(self):
             self._has_position = False

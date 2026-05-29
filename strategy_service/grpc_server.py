@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import grpc
@@ -28,6 +29,7 @@ from strategy_service.preflight import (
     check_profile_supported,
     default_backtest_availability,
     live_stream_preflight,
+    _marketdata_market,
     resolve_profile,
 )
 from strategy_service.strategy.base import extract_strategy_inputs
@@ -832,7 +834,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 raise RuntimeError("market-data proxy client does not support fetch_klines")
             return bool(fetch(
                 exchange="binance",
-                market=inp.market,
+                market=_marketdata_market(inp.market),
                 symbol=inp.symbol,
                 interval=inp.interval,
                 start_time_ms=start_ms,
@@ -986,7 +988,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             StreamBinding(
                 stream_id=0,
                 exchange="binance",
-                market=inp.market,
+                market=_marketdata_market(inp.market),
                 kind="kline",
                 symbol=inp.symbol,
                 interval=inp.interval,
@@ -1081,8 +1083,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         # Multi-interval subscription — one Kafka topic per distinct
         # (market, interval) pair declared by the strategy. Ensures a
         # BTCUSDT 1m + 5m strategy consumes both topics, not just one.
+        marketdata_inputs = [
+            SimpleNamespace(
+                exchange=inp.exchange,
+                market=_marketdata_market(inp.market),
+                symbol=inp.symbol,
+                interval=inp.interval,
+            )
+            for inp in declared_inputs
+        ]
         subscription = LiveKlineSubscription.from_declared_inputs(
-            declared_inputs,
+            marketdata_inputs,
             consumer_group=consumer_group,
             exchange="binance",
         )
@@ -1629,7 +1640,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             declared_inputs_proto = [
                 pb2.LiveStreamBinding(
                     exchange="binance",
-                    market=inp.market,
+                    market=_marketdata_market(inp.market),
                     kind="kline",
                     symbol=inp.symbol,
                     interval=inp.interval,

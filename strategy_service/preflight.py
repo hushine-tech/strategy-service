@@ -174,6 +174,17 @@ def check_profile_supported(profile: RuntimeSourceProfile) -> PreflightResult:
 BacktestAvailabilityFn = Callable[[StrategyInput, int, int], bool]
 
 
+def _marketdata_market(market: str) -> str:
+    market_key = str(market or "").strip().lower()
+    if market_key == "perpetual_futures":
+        return "futures"
+    return market_key
+
+
+def _input_key(inp: StrategyInput) -> tuple[str, str, str]:
+    return (_marketdata_market(inp.market), inp.symbol, inp.interval)
+
+
 def _is_time_range_valid(start_ms: int, end_ms: int) -> tuple[bool, str]:
     if start_ms <= 0 or end_ms <= 0:
         return False, "start_time_ms and end_time_ms must be positive"
@@ -223,7 +234,7 @@ def backtest_preflight(
                 PreflightFailure(
                     kind=PreflightFailureKind.HISTORICAL_DATA,
                     reason=err_reason,
-                    input_key=inp.key,
+                    input_key=_input_key(inp),
                 )
             )
     return result
@@ -260,7 +271,7 @@ def default_backtest_availability(
     def _check(inp: StrategyInput, start_ms: int, end_ms: int) -> bool:
         with BacktestDataSource(resolved) as ds:
             return bool(ds.has_kline_coverage(
-                inp.symbol, inp.interval, start_ms, end_ms, market=inp.market,
+                inp.symbol, inp.interval, start_ms, end_ms, market=_marketdata_market(inp.market),
             ))
 
     return _check
@@ -358,7 +369,7 @@ def live_stream_preflight(
         max_age_seconds = (_interval_seconds(inp.interval) * 2) + freshness_grace_seconds
         stream = None
         try:
-            stream = lookup_stream(inp.market, inp.symbol, inp.interval)
+            stream = lookup_stream(_marketdata_market(inp.market), inp.symbol, inp.interval)
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "stream status lookup raised for %s: %s", inp.key, e, exc_info=True,
@@ -370,7 +381,7 @@ def live_stream_preflight(
                 PreflightFailure(
                     kind=PreflightFailureKind.STREAM,
                     reason=f"stream lookup failed: {e}",
-                    input_key=inp.key,
+                    input_key=_input_key(inp),
                 )
             )
             continue
@@ -381,7 +392,7 @@ def live_stream_preflight(
                 PreflightFailure(
                     kind=PreflightFailureKind.STREAM,
                     reason="stream missing or control-plane lookup returned nothing",
-                    input_key=inp.key,
+                    input_key=_input_key(inp),
                 )
             )
             continue
@@ -398,11 +409,11 @@ def live_stream_preflight(
             last_error = getattr(stream, "last_error", "")
             if last_error:
                 detail += f" ({last_error})"
-            _record_readiness_failure(detail, inp.key)
+            _record_readiness_failure(detail, _input_key(inp))
             continue
 
         if not bool(getattr(stream, "effective_live_delivery", False)):
-            _record_readiness_failure("live delivery is disabled", inp.key)
+            _record_readiness_failure("live delivery is disabled", _input_key(inp))
             continue
 
         last_data_at = getattr(stream, "last_data_at", None)
@@ -416,7 +427,7 @@ def live_stream_preflight(
 
         if not has_last_data_at or last_data_at is None:
             _record_readiness_failure(
-                "stream has no freshness timestamp yet", inp.key,
+                "stream has no freshness timestamp yet", _input_key(inp),
             )
             continue
 
@@ -424,7 +435,7 @@ def live_stream_preflight(
             last_ms = int(last_data_at.ToMilliseconds())
         except Exception as e:  # noqa: BLE001
             _record_readiness_failure(
-                f"invalid freshness timestamp: {e}", inp.key,
+                f"invalid freshness timestamp: {e}", _input_key(inp),
             )
             continue
 
@@ -435,7 +446,7 @@ def live_stream_preflight(
                     f"stream is stale ({age_ms // 1000}s old, "
                     f"max {max_age_seconds}s for interval {inp.interval})"
                 ),
-                inp.key,
+                _input_key(inp),
             )
             continue
 

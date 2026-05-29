@@ -339,7 +339,7 @@ def test_live_loop_callback_replays_spot_kline_into_spot_strategy():
         "from strategy_service.types import OrderDecision\n"
         "\n"
         "class MyStrategy:\n"
-        '    INPUTS = [{"market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
         "\n"
         "    def on_market_data(self, data, wallet):\n"
         "        return OrderDecision(symbol='BTCUSDT', side='LONG', qty=0.1, market='spot')\n"

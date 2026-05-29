@@ -169,7 +169,7 @@ def test_run_strategy_returns_internal_when_session_persist_fails(monkeypatch):
                 strategy_id=7,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="buy_once",
@@ -222,7 +222,7 @@ def test_run_strategy_rejects_empty_runtime_binding_before_persist(monkeypatch):
                 strategy_id=7,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="buy_once",
@@ -362,8 +362,8 @@ def test_run_live_initializes_loop_with_parsed_brokers(monkeypatch):
         state,
         engine=object(),
         declared_inputs=[
-            StrategyInput("futures", "BTCUSDT", "1m"),
-            StrategyInput("spot", "ETHUSDT", "1m"),
+            StrategyInput("binance", "futures", "BTCUSDT", "1m"),
+            StrategyInput("binance", "spot", "ETHUSDT", "1m"),
         ],
         strategy_id=77,
     )
@@ -479,7 +479,7 @@ def test_run_strategy_mode2_preflight_rejects_before_session_creation(monkeypatc
                 strategy_id=8,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="live_ready",
@@ -560,7 +560,7 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
                 strategy_id=9,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="live_skip_preflight",
@@ -658,7 +658,7 @@ def test_run_strategy_mode2_uses_strategy_declared_symbols_for_preflight(monkeyp
     captured: dict[str, list[tuple[str, str]]] = {}
     strategy_code = """
 class MyStrategy:
-    INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
 
     def on_market_data(self, data, wallet):
         return None
@@ -740,7 +740,7 @@ class MyStrategy:
     assert resp.session_id != ""
     assert context.code is None
     # Preflight sees ONLY the declared input — wallet-side USDC asset is ignored.
-    assert captured["declared_inputs"] == [("futures", "ETHUSDT", "1m")]
+    assert captured["declared_inputs"] == [("perpetual_futures", "ETHUSDT", "1m")]
     from strategy_service.preflight import RuntimeSourceProfile
     assert captured["profile"] is RuntimeSourceProfile.TESTNET
 
@@ -753,7 +753,7 @@ def test_run_strategy_mode2_creates_subscriptions_from_required_streams(monkeypa
         mode=2,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -977,7 +977,7 @@ def test_run_live_skips_lease_management_when_disabled(monkeypatch):
         "sess-disabled",
         state,
         engine=object(),
-        declared_inputs=[StrategyInput("futures", "BTCUSDT", "1m")],
+        declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
         strategy_id=202,
     )
 
@@ -1027,7 +1027,7 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
 
     def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs):
         assert [(i.market, i.symbol, i.interval) for i in declared_inputs] == [
-            ("futures", "BTCUSDT", "1m"),
+            ("perpetual_futures", "BTCUSDT", "1m"),
         ]
         fake_user.on_order_callback()
         inner_state.transition("finished", bars=17)
@@ -1046,7 +1046,7 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
         mode=0,
         account_id=101,
         user_id=17,
-        declared_inputs=[StrategyInput("futures", "BTCUSDT", "1m")],
+        declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
         strategy_path="strategies.buy_once",
         strategy_id=202,
         strategy_code=None,
@@ -1101,7 +1101,7 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
 
     def fake_run_live(session_id, inner_state, engine, declared_inputs, strategy_id):
         assert [(i.market, i.symbol, i.interval) for i in declared_inputs] == [
-            ("futures", "BTCUSDT", "1m"),
+            ("perpetual_futures", "BTCUSDT", "1m"),
         ]
         assert strategy_id == 404
         inner_state.transition("stopped")
@@ -1120,7 +1120,7 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
         mode=1,
         account_id=303,
         user_id=17,
-        declared_inputs=[StrategyInput("futures", "BTCUSDT", "1m")],
+        declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
         strategy_path="strategies.buy_once",
         strategy_id=404,
         strategy_code=None,
@@ -1186,7 +1186,7 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
         mode=0,
         account_id=505,
         user_id=17,
-        declared_inputs=[StrategyInput("futures", "BTCUSDT", "1m")],
+        declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
         strategy_path="strategies.buy_once",
         strategy_id=606,
         strategy_code=None,
@@ -1269,7 +1269,7 @@ def test_run_strategy_maps_account_active_session_conflict(monkeypatch):
                 strategy_id=7,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="buy_once",
@@ -1767,7 +1767,7 @@ def test_live_stream_preflight_requires_running_live_and_fresh_streams():
         return stream
 
     result = live_stream_preflight(
-        [StrategyInput("futures", "BTCUSDT", "1m")],
+        [StrategyInput("binance", "futures", "BTCUSDT", "1m")],
         profile=RuntimeSourceProfile.TESTNET,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
@@ -1913,7 +1913,7 @@ def test_run_strategy_rejects_mode1_as_unsupported_profile(monkeypatch):
         mode=1,  # live
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -1941,7 +1941,7 @@ def test_run_strategy_persists_runtime_binding(monkeypatch):
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2241,7 +2241,7 @@ def test_proxy_only_backtest_runs_through_runtime_dataset_delivery():
         state,
         engine,
         SimpleNamespace(start_time_ms=1, end_time_ms=2),
-        [StrategyInput(market="futures", symbol="ETHUSDT", interval="1m")],
+        [StrategyInput(exchange="binance", market="futures", symbol="ETHUSDT", interval="1m")],
     )
 
     assert state.status == "finished"
@@ -2362,7 +2362,7 @@ def test_run_strategy_backtest_allows_empty_wallet_when_data_available(monkeypat
         mode=0,  # backtest
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2399,7 +2399,7 @@ def test_run_strategy_backtest_rejects_when_historical_data_missing(monkeypatch)
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "NOPEUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "NOPEUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2453,7 +2453,7 @@ def test_run_strategy_live_preflight_ignores_undeclared_wallet_holdings(monkeypa
         mode=2,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2496,7 +2496,7 @@ def test_run_strategy_live_preflight_ignores_undeclared_wallet_holdings(monkeypa
     assert resp.session_id != ""
     assert context.code is None
     # Only the declared input fed the preflight — USDC spot holding ignored.
-    assert captured["declared"] == [("futures", "ETHUSDT", "1m")]
+    assert captured["declared"] == [("perpetual_futures", "ETHUSDT", "1m")]
 
 
 def test_run_strategy_backtest_distinct_intervals_are_preserved(monkeypatch):
@@ -2512,8 +2512,8 @@ def test_run_strategy_backtest_distinct_intervals_are_preserved(monkeypatch):
         strategy_code=(
             "class MyStrategy:\n"
             "    INPUTS = [\n"
-            '        {"market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
-            '        {"market": "futures", "symbol": "BTCUSDT", "interval": "5m"},\n'
+            '        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
+            '        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "5m"},\n'
             "    ]\n"
             "    def on_market_data(self, data, wallet): return None\n"
         ),
@@ -2538,8 +2538,8 @@ def test_run_strategy_backtest_distinct_intervals_are_preserved(monkeypatch):
     servicer.RunStrategy(request, _FakeContext())
 
     assert captured["declared"] == [
-        ("futures", "BTCUSDT", "1m"),
-        ("futures", "BTCUSDT", "5m"),
+        ("perpetual_futures", "BTCUSDT", "1m"),
+        ("perpetual_futures", "BTCUSDT", "5m"),
     ]
 
 
@@ -2554,7 +2554,7 @@ def test_preview_run_strategy_reports_backtest_availability(monkeypatch):
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2605,7 +2605,7 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2645,7 +2645,7 @@ def test_preview_run_strategy_reports_unsupported_live_profile(monkeypatch):
         mode=1,  # live → unsupported
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2679,7 +2679,7 @@ def test_preview_run_strategy_mirrors_wallet_build_failure(monkeypatch):
         mode=2,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2716,7 +2716,7 @@ def test_preview_run_strategy_honours_preflight_enabled_bypass(monkeypatch):
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
         market_data_policy={"preflight_enabled": False},

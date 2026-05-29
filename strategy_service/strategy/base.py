@@ -310,7 +310,8 @@ class BaseStrategy:
         # preflight and stream-readiness entirely.
         if (sig_exchange, sig_market, sig_sym) not in self._order_universe:
             raise ValueError(
-                f"strategy attempted to place order target not declared in INPUTS: "
+                f"strategy attempted to place order outside declared universe; "
+                f"target not declared in INPUTS: "
                 f"signal=({sig_exchange}, {sig_market}, {sig_sym}), declared="
                 f"{sorted(self._order_universe)}"
             )

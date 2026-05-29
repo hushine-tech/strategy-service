@@ -18,7 +18,7 @@ from strategy_service.types import OrderDecision
 
 class MyStrategy:
     INPUTS = [
-        {"market": "futures", "symbol": "ETHUSDT", "interval": "1m"},
+        {"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"},
     ]
 
     _TRIGGER_PCT = 0.001          # 0.1%

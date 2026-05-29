@@ -39,7 +39,7 @@ def test_validator_accepts_public_hushine_strategy_import():
 from hushine_strategy import OrderDecision
 
 class MyStrategy:
-    INPUTS = [{"market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]
 
     def on_market_data(self, data, wallet):
         return None

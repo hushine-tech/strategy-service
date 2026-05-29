@@ -37,7 +37,7 @@ def test_self_notify_injected_into_user_strategy() -> None:
         notifier=StrategyNotifier(client),
         strategy_code="""
 class MyStrategy:
-    INPUTS = [{"market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
     def on_market_data(self, data, wallet):
         self.notify.warn("threshold reached", title="Risk")
         return None

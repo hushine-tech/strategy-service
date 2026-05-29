@@ -381,7 +381,7 @@ class DebugReplayRunner:
 def _with_debug_inputs_if_missing(code: str, *, market: str, symbol: str, interval: str) -> str:
     if _my_strategy_declares_inputs(code):
         return code
-    inputs = [{"market": market, "symbol": symbol, "interval": interval}]
+    inputs = [{"exchange": "binance", "market": market, "symbol": symbol, "interval": interval}]
     suffix = (
         "\n\n"
         "# Hushine debugger injects the page-selected dataset universe when the\n"

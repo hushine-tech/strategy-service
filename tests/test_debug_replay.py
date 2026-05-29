@@ -128,7 +128,7 @@ def test_debug_replay_rejects_concurrent_run(tmp_path):
 def test_debug_input_injection_preserves_declared_inputs():
     code = """
 class MyStrategy:
-    INPUTS = [{"market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]
     def on_market_data(self, data, wallet):
         return None
 """
