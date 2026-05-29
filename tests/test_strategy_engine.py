@@ -311,6 +311,22 @@ def test_unknown_symbol_market_is_dropped_by_router():
     wallet.on_market_data.assert_not_called()
 
 
+def test_strategy_can_access_wallet_by_exchange_market():
+    wallet = _wallet_with_futures_slot()
+    strategy_code = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
+        "    def on_market_data(self, data, wallet):\n"
+        '        futures_wallet = wallet.get("binance", "perpetual_futures")\n'
+        "        assert futures_wallet is not None\n"
+        "        return None\n"
+    )
+    svc = StrategyService()
+    svc.create_strategy("u1", "<db:wallet_get>", wallet, strategy_code=strategy_code)
+
+    svc.running_strategy(_md(symbol="TESTUSDT", market="futures", interval="1m"))
+
+
 def test_strategy_declared_symbols_route_even_without_wallet_slot():
     """Pre_C3 §2.2: wallet can be empty; declaration alone drives routing."""
     wallet = make_backtest_wallet(

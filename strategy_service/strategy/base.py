@@ -29,6 +29,42 @@ def _norm_market(market: str) -> str:
     return str(market).strip().lower()
 
 
+class VenueWalletView:
+    """User-facing wallet view keyed by route facts.
+
+    Phase 1 still uses a single runtime wallet internally. The view establishes
+    the public strategy API (`wallet.get(exchange, market)`) now, so later
+    multi-venue portfolio wallets can be introduced without changing user
+    strategy code again.
+    """
+
+    def __init__(self, default_wallet: WalletRuntime) -> None:
+        self._default_wallet = default_wallet
+
+    @staticmethod
+    def _normalize_market(market: str) -> str:
+        key = str(market or "").strip().lower()
+        aliases = {
+            "futures": "perpetual_futures",
+            "future": "perpetual_futures",
+            "usdm_futures": "perpetual_futures",
+            "perp": "perpetual_futures",
+        }
+        return aliases.get(key, key)
+
+    def get(self, exchange: str, market: str) -> WalletRuntime:
+        exchange_key = str(exchange or "").strip().lower()
+        market_key = self._normalize_market(market)
+        if exchange_key != "binance":
+            raise ValueError(f"wallet exchange is not available: {exchange!r}")
+        if market_key in {"spot", "perpetual_futures"}:
+            return self._default_wallet
+        raise ValueError(f"wallet market is not available: {market!r}")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._default_wallet, name)
+
+
 def _norm_interval(interval: str) -> str:
     return str(interval).strip()
 
@@ -234,7 +270,7 @@ class BaseStrategy:
 
         # Call user strategy with the view, not the raw tick.
         signal: OrderDecision | None = self._strategy_instance.on_market_data(
-            self._view, self.wallet
+            self._view, VenueWalletView(self.wallet)
         )
         if signal is None:
             return
