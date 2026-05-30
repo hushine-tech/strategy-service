@@ -18,10 +18,12 @@ from strategy_service.inputs import (
 )
 from strategy_service.notification import StrategyNotifier
 from strategy_service.order_client import OrderClient
-from strategy_service.types import MarketData, OrderDecision
+from strategy_service.types import MarketData, OrderDecision, OrderUpdateEvent
 from strategy_service.wallet.order_types import ExecutionFeedback, OrderResponse
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -230,6 +232,9 @@ class BaseStrategy:
         }
         self._view: InputView = InputView(self._inputs)
         self._blocked_order_keys: set[tuple[str, str, str]] = set()
+        self._order_event_cursor: int = 0
+        self._sync_settled_order_ids: set[str] = set()
+        self._initialize_order_event_cursor()
 
     @property
     def declared_inputs(self) -> list[StrategyInput]:
@@ -243,6 +248,110 @@ class BaseStrategy:
         fn = getattr(self._strategy_instance, "on_order_response", None)
         if callable(fn):
             fn(order_resp)
+
+    def _notify_order_update(self, event: OrderUpdateEvent) -> None:
+        fn = getattr(self._strategy_instance, "on_order_update", None)
+        if callable(fn):
+            fn(event, VenueWalletView(self.wallet))
+
+    def _initialize_order_event_cursor(self) -> None:
+        if not self._session_id or not hasattr(self._order_client, "list_order_lifecycle_events"):
+            return
+        cursor = 0
+        for _ in range(100):
+            try:
+                events = self._order_client.list_order_lifecycle_events(
+                    session_id=self._session_id,
+                    after_event_id=cursor,
+                    limit=500,
+                )
+            except Exception:
+                logger.warning("order lifecycle cursor initialization failed", exc_info=True)
+                break
+            if not events:
+                break
+            cursor = max(cursor, *(int(getattr(event, "event_id", 0) or 0) for event in events))
+            if len(events) < 500:
+                break
+        self._order_event_cursor = cursor
+
+    def _consume_order_updates(self) -> None:
+        if not self._session_id or not hasattr(self._order_client, "list_order_lifecycle_events"):
+            return
+        try:
+            events = self._order_client.list_order_lifecycle_events(
+                session_id=self._session_id,
+                after_event_id=self._order_event_cursor,
+                limit=100,
+            )
+        except Exception:
+            logger.warning("order lifecycle event fetch failed", exc_info=True)
+            return
+        for event in events:
+            event_id = int(getattr(event, "event_id", 0) or 0)
+            order_resp = None
+            wallet_updated = False
+            try:
+                order_resp = OrderClient.order_response_from_update(event)
+                if order_resp is not None:
+                    order_id = str(getattr(order_resp, "order_id", "") or "")
+                    if order_id not in self._sync_settled_order_ids:
+                        wallet_market = _wallet_market(event.market)
+                        self.wallet.on_order(order_resp.symbol, wallet_market, order_resp)
+                        if order_id:
+                            self._sync_settled_order_ids.add(order_id)
+                        wallet_updated = True
+                    if self._is_order_update_terminal(event, order_resp):
+                        self._blocked_order_keys.discard(self._blocked_key_for_event(event, order_resp))
+                elif self._is_order_update_terminal(event, None):
+                    self._blocked_order_keys.discard(self._blocked_key_for_event(event, None))
+            except Exception:
+                logger.warning(
+                    "order lifecycle event handling failed: session=%s event_id=%s",
+                    self._session_id,
+                    event_id,
+                    exc_info=True,
+                )
+            try:
+                self._notify_order_update(event)
+            except Exception:
+                logger.warning(
+                    "order lifecycle callback failed: session=%s event_id=%s",
+                    self._session_id,
+                    event_id,
+                    exc_info=True,
+                )
+            if wallet_updated and self.on_order_callback is not None:
+                try:
+                    self.on_order_callback()
+                except Exception:
+                    logger.warning("on_order_callback failed after lifecycle update", exc_info=True)
+            if event_id > self._order_event_cursor:
+                self._order_event_cursor = event_id
+
+    @staticmethod
+    def _is_order_update_terminal(event: OrderUpdateEvent, order_resp: OrderResponse | None) -> bool:
+        status = str(getattr(order_resp, "status", "") or getattr(event, "order_status", "") or "").strip().upper()
+        if status == "PARTIALLY_FILLED":
+            return False
+        if status in _TERMINAL_ORDER_STATUSES:
+            return True
+        if order_resp is not None and float(getattr(order_resp, "remaining_qty", 0.0) or 0.0) <= 0.0:
+            return True
+        return False
+
+    @staticmethod
+    def _blocked_key_for_event(event: OrderUpdateEvent, order_resp: OrderResponse | None) -> tuple[str, str, str]:
+        symbol = str(
+            getattr(order_resp, "symbol", "")
+            or getattr(getattr(event, "fill", None), "symbol", "")
+            or ""
+        )
+        return (
+            _norm_exchange(getattr(event, "exchange", "binance")),
+            _norm_market(getattr(event, "market", "perpetual_futures")),
+            _norm_symbol(symbol),
+        )
 
     @staticmethod
     def _coerce_execution_feedback(payload: Any) -> ExecutionFeedback:
@@ -289,6 +398,8 @@ class BaseStrategy:
             # rather than raise — the router gate above already screened.
             return
 
+        self._consume_order_updates()
+
         # Call user strategy with the view, not the raw tick.
         signal: OrderDecision | None = self._strategy_instance.on_market_data(
             self._view, VenueWalletView(self.wallet)
@@ -324,7 +435,8 @@ class BaseStrategy:
             )
             return
 
-        fill_price = float(signal.price) if signal.price is not None else float(market_data.price)
+        market_tick_price = float(market_data.price)
+        balance_check_price = float(signal.price) if signal.price is not None else market_tick_price
 
         # Look up a position/asset to get leverage for margin math.
         fw = getattr(self.wallet, "futures", None)
@@ -356,7 +468,7 @@ class BaseStrategy:
                     )
                     return
             else:
-                need = qty * fill_price
+                need = qty * balance_check_price
                 free = float(sw.free) if sw is not None else 0.0
                 if free < need:
                     logger.debug(
@@ -373,7 +485,7 @@ class BaseStrategy:
                     if qty <= abs(current_qty):
                         is_closing = True
             if not is_closing:
-                margin_needed = qty * fill_price / leverage
+                margin_needed = qty * balance_check_price / leverage
                 if hasattr(self.wallet, "get_available_balance"):
                     available_balance = float(self.wallet.get_available_balance())
                 else:
@@ -389,7 +501,7 @@ class BaseStrategy:
 
         intent_id = uuid.uuid4().hex
         feedback = self._coerce_execution_feedback(self._order_client.place_order(
-            self._account_id, signal, fill_price,
+            self._account_id, signal, market_tick_price,
             account_symbol=sig_sym,
             strategy_id=self._strategy_id,
             market=sig_market,
@@ -430,8 +542,14 @@ class BaseStrategy:
         if feedback.fill_events:
             for fill_event in feedback.fill_events:
                 self.wallet.on_order(sig_sym, sig_wallet_market, fill_event)
+                order_id = str(getattr(fill_event, "order_id", "") or "")
+                if order_id:
+                    self._sync_settled_order_ids.add(order_id)
         elif has_settleable_fill:
             self.wallet.on_order(sig_sym, sig_wallet_market, feedback.order)
+            order_id = str(getattr(feedback.order, "order_id", "") or "")
+            if order_id:
+                self._sync_settled_order_ids.add(order_id)
         else:
             self._notify_order_response(feedback)
             logger.warning(

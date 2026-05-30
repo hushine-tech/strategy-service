@@ -1,7 +1,14 @@
 from strategy_service.service import StrategyEngine, StrategyService
 from strategy_service.strategy.base import BaseStrategy
 from strategy_service.strategy.user import UserStrategy
-from strategy_service.types import ExecutionFeedback, MarketData, OrderDecision, OrderResponse
+from strategy_service.types import (
+    ExecutionFeedback,
+    MarketData,
+    OrderDecision,
+    OrderResponse,
+    OrderUpdateEvent,
+    OrderUpdateFill,
+)
 
 __all__ = [
     "BacktestDataLoop",
@@ -12,6 +19,8 @@ __all__ = [
     "MarketData",
     "OrderDecision",
     "OrderResponse",
+    "OrderUpdateEvent",
+    "OrderUpdateFill",
     "StrategyEngine",
     "StrategyService",
     "TimescaleConfig",
