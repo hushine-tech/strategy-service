@@ -169,6 +169,8 @@ class ProxyAccountClient:
         user_id: int = 0,
         required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+        session_id: str = "",
+        strategy_id: int = 0,
     ):
         try:
             from strategy_service.gen import account_service_pb2
@@ -176,6 +178,8 @@ class ProxyAccountClient:
             req = account_service_pb2.PreflightStrategySessionRequest(
                 account_id=int(account_id),
                 user_id=int(user_id),
+                session_id=str(session_id or ""),
+                strategy_id=int(strategy_id),
                 required_routes=[
                     account_service_pb2.RequiredRoute(
                         exchange=_exchange_enum(exchange),

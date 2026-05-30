@@ -119,3 +119,29 @@ def test_account_client_update_portfolio_snapshot_uses_portfolio_api():
     assert req.strategy_id == 22
     assert req.session_id == "sess-1"
     assert snapshot.account_id == 11
+
+
+def test_account_client_preflight_sends_session_metadata():
+    captured: dict[str, object] = {}
+
+    class FakeStub:
+        def PreflightStrategySession(self, req):
+            captured["req"] = req
+            return account_service_pb2.PreflightStrategySessionResponse(ok=True)
+
+    client = AccountClient("")
+    client._stub = FakeStub()
+
+    resp = client.preflight_strategy_session(
+        account_id=11,
+        user_id=5,
+        required_routes={("binance", "perpetual_futures")},
+        required_symbols={("binance", "perpetual_futures", "ethusdt")},
+        session_id="preflight-session-1",
+        strategy_id=22,
+    )
+
+    req = captured["req"]
+    assert resp.ok is True
+    assert req.session_id == "preflight-session-1"
+    assert req.strategy_id == 22

@@ -2386,6 +2386,41 @@ def test_run_strategy_persists_runtime_binding(monkeypatch):
     assert servicer._sessions.get(resp.session_id).runtime_id == "rt-hosted"
 
 
+def test_run_strategy_account_preflight_passes_persistence_session_id(monkeypatch):
+    calls: dict = {}
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        mode=0,
+        strategy_code=(
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
+            "    def on_market_data(self, data, wallet): return None\n"
+        ),
+        record_calls=calls,
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    request = SimpleNamespace(
+        account_id=501,
+        user_id=17,
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    resp = servicer.RunStrategy(request, context)
+
+    assert context.code is None
+    assert resp.session_id != ""
+    preflight = calls["account_preflight"][0]
+    assert preflight["session_id"]
+    assert preflight["session_id"] != resp.session_id
+    assert preflight["strategy_id"] == 42
+
+
 def test_run_strategy_rejects_runtime_id_mismatch_before_internal_calls(monkeypatch):
     calls = {"account_client": 0}
 
@@ -3001,6 +3036,44 @@ def test_preview_run_strategy_reports_backtest_availability(monkeypatch):
     assert resp.failures[0].input_key.interval == "1m"
     # required_streams is empty — backtest preflight never reports streams.
     assert list(resp.required_streams) == []
+
+
+def test_preview_run_strategy_account_preflight_does_not_persist_session(monkeypatch):
+    calls: dict = {}
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        mode=0,
+        strategy_code=(
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
+            "    def on_market_data(self, data, wallet): return None\n"
+        ),
+        record_calls=calls,
+    )
+
+    def fake_preflight(**kwargs):
+        from strategy_service.preflight import PreflightResult, RuntimeSourceProfile
+        return PreflightResult(profile=RuntimeSourceProfile.BACKTEST)
+
+    monkeypatch.setattr(servicer, "_run_profile_preflight", fake_preflight)
+
+    request = SimpleNamespace(
+        account_id=501,
+        user_id=17,
+        strategy_path="",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    resp = servicer.PreviewRunStrategy(request, context)
+
+    assert context.code is None
+    assert resp.ok is True
+    preflight = calls["account_preflight"][0]
+    assert preflight.get("session_id", "") == ""
+    assert preflight.get("strategy_id", 0) == 42
 
 
 def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):

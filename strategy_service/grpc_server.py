@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -612,6 +613,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             (entry.exchange, entry.market, entry.symbol)
             for entry in declarations.inputs
         } | set(declarations.order_target_keys)
+        preflight_session_id = uuid.uuid4().hex
 
         account_preflight = self._run_account_preflight(
             acct_client=acct_client,
@@ -619,6 +621,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
+            session_id=preflight_session_id,
+            strategy_id=strategy_id,
         )
         if account_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
@@ -868,6 +872,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         user_id: int,
         required_routes: set[tuple[str, str]],
         required_symbols: set[tuple[str, str, str]],
+        session_id: str = "",
+        strategy_id: int = 0,
     ) -> str | None:
         preflight = getattr(acct_client, "preflight_strategy_session", None)
         if not callable(preflight):
@@ -877,6 +883,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_id=user_id,
             required_routes=sorted(required_routes),
             required_symbols=sorted(required_symbols),
+            session_id=str(session_id or ""),
+            strategy_id=int(strategy_id),
         )
         if resp is None:
             return "account preflight unavailable: core-service did not return a result"
@@ -1835,6 +1843,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
+            strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
         )
         if account_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)

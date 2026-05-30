@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from strategy_service.gen import account_service_pb2, marketdata_service_pb2, order_service_pb2
 from strategy_service.platform_proxy import (
+    ACCOUNT_PREFLIGHT_STRATEGY_SESSION,
     ACCOUNT_GET_PORTFOLIO,
     ACCOUNT_SAVE_SESSION,
     ACCOUNT_UPDATE_PORTFOLIO,
@@ -75,6 +76,29 @@ def test_proxy_account_client_updates_portfolio_snapshot_over_runtime_channel():
     assert req.strategy_id == 9
     assert req.session_id == "sess-1"
     assert snapshot.account_id == 7
+
+
+def test_proxy_account_client_preflight_sends_session_metadata_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ACCOUNT_PREFLIGHT_STRATEGY_SESSION] = (
+        account_service_pb2.PreflightStrategySessionResponse(ok=True)
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    resp = proxy.account_client().preflight_strategy_session(
+        account_id=7,
+        user_id=3,
+        required_routes={("binance", "perpetual_futures")},
+        required_symbols={("binance", "perpetual_futures", "btcusdt")},
+        session_id="preflight-session-1",
+        strategy_id=9,
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == ACCOUNT_PREFLIGHT_STRATEGY_SESSION
+    assert resp.ok is True
+    assert req.session_id == "preflight-session-1"
+    assert req.strategy_id == 9
 
 
 def test_proxy_order_client_places_order_without_direct_stub():
