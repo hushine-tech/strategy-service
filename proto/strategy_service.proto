@@ -157,9 +157,24 @@ message PreviewRunStrategyResponse {
   // Populated after strategy INPUTS are parsed so gateway/UI can evaluate
   // mode=0 historical coverage without guessing the strategy's input universe.
   repeated LiveStreamBinding     declared_inputs  = 6;
+  // Strategy ORDER_TARGETS exactly as declared by user strategy code.
+  repeated StrategyOrderTargetBinding declared_order_targets = 7;
+  // Union of INPUTS and ORDER_TARGETS routes required by the account/session.
+  repeated StrategyRouteBinding required_routes = 8;
 }
 
 message GetLiveConsumptionDiagnosticsRequest {}
+
+message StrategyOrderTargetBinding {
+  string exchange = 1;
+  string market = 2;
+  string symbol = 3;
+}
+
+message StrategyRouteBinding {
+  string exchange = 1;
+  string market = 2;
+}
 
 message LiveStreamBinding {
   int64 stream_id = 1;

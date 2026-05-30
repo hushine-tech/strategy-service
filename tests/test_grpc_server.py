@@ -3159,7 +3159,7 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
         strategy_code=(
             "class MyStrategy:\n"
             '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
-            '    ORDER_TARGETS = []\n'
+            '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT"}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -3184,8 +3184,15 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
     assert resp.declared_inputs[0].exchange == "binance"
     assert resp.declared_inputs[0].kind == "kline"
     assert resp.declared_inputs[0].symbol == "ETHUSDT"
-    assert resp.declared_inputs[0].market == "futures"
+    assert resp.declared_inputs[0].market == "perpetual_futures"
     assert resp.declared_inputs[0].interval == "1m"
+    assert len(resp.declared_order_targets) == 1
+    assert resp.declared_order_targets[0].exchange == "binance"
+    assert resp.declared_order_targets[0].market == "perpetual_futures"
+    assert resp.declared_order_targets[0].symbol == "ETHUSDT"
+    assert {(r.exchange, r.market) for r in resp.required_routes} == {
+        ("binance", "perpetual_futures")
+    }
 
 
 def test_preview_run_strategy_reports_unsupported_live_profile(monkeypatch):

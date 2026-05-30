@@ -31,7 +31,7 @@ from strategy_service.notification import StrategyNotifier
 from strategy_service.order_client import OrderClient
 from strategy_service.service import StrategyEngine
 from strategy_service.session import SessionManager, SessionState, StreamBinding
-from strategy_service.inputs import StrategyDeclarationError, StrategyInput
+from strategy_service.inputs import StrategyDeclarationError, StrategyInput, StrategyOrderTarget
 from strategy_service.preflight import (
     SUPPORTED_PROFILES,
     PreflightResult,
@@ -1759,6 +1759,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         def _shape(
             preflight_result,
             declared: list[StrategyInput] | None = None,
+            order_targets: list[StrategyOrderTarget] | None = None,
+            required_routes: set[tuple[str, str]] | None = None,
         ) -> pb2.PreviewRunStrategyResponse:
             failures_proto: list[pb2.PreflightFailureProto] = []
             for f in preflight_result.failures:
@@ -1782,13 +1784,25 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             ]
             declared_inputs_proto = [
                 pb2.LiveStreamBinding(
-                    exchange="binance",
-                    market=_marketdata_market(inp.market),
+                    exchange=inp.exchange,
+                    market=inp.market,
                     kind="kline",
                     symbol=inp.symbol,
                     interval=inp.interval,
                 )
                 for inp in (declared or [])
+            ]
+            declared_order_targets_proto = [
+                pb2.StrategyOrderTargetBinding(
+                    exchange=target.exchange,
+                    market=target.market,
+                    symbol=target.symbol,
+                )
+                for target in (order_targets or [])
+            ]
+            required_routes_proto = [
+                pb2.StrategyRouteBinding(exchange=exchange, market=market)
+                for exchange, market in sorted(required_routes or set())
             ]
             return pb2.PreviewRunStrategyResponse(
                 profile=profile.value,
@@ -1797,6 +1811,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 failures=failures_proto,
                 required_streams=required_streams_proto,
                 declared_inputs=declared_inputs_proto,
+                declared_order_targets=declared_order_targets_proto,
+                required_routes=required_routes_proto,
             )
 
         # Profile support gate — same as RunStrategy's early check.
@@ -1883,7 +1899,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             end_ms=int(getattr(request, "end_time_ms", 0) or 0),
             require_readiness=self._preflight_enabled,
         )
-        return _shape(preflight, declared_inputs)
+        return _shape(
+            preflight,
+            declared_inputs,
+            list(declarations.order_targets),
+            required_routes,
+        )
 
     def GetLiveConsumptionDiagnostics(self, request, context):
         del request, context
