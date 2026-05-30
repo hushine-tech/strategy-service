@@ -86,6 +86,47 @@ class LifecycleOrderClient(FailingOrderClient):
         return [event for event in self.events if event.event_id > after_event_id]
 
 
+class RecoveringFirstOrderClient(StubOrderClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempted_routes: list[tuple[str, str, str]] = []
+
+    def place_order(
+        self,
+        _account_id: int,
+        decision: OrderDecision,
+        mark_price: float,
+        **kwargs: Any,
+    ) -> ExecutionFeedback:
+        self.orders.append((decision, mark_price, kwargs))
+        self.attempted_routes.append((decision.exchange, decision.market, decision.symbol))
+        if len(self.orders) == 1:
+            return ExecutionFeedback(
+                attempt_id="attempt-recovering",
+                attempt_status="RECOVERING",
+                error_message="fill details pending",
+                order=None,
+                fill_count=0,
+                delta_qty=0.0,
+            )
+        return ExecutionFeedback(
+            attempt_status="ACCEPTED",
+            order=OrderResponse(
+                symbol=decision.symbol,
+                side=decision.side,
+                qty=float(decision.qty),
+                fill_price=mark_price,
+                status="FILLED",
+                order_id=f"order-{len(self.orders)}",
+                orig_qty=float(decision.qty),
+                executed_qty=float(decision.qty),
+                remaining_qty=0.0,
+            ),
+            fill_count=1,
+            delta_qty=float(decision.qty),
+        )
+
+
 def _tick(
     *,
     exchange: str = Exchange.BINANCE,
@@ -219,6 +260,44 @@ def test_list_order_decisions_are_all_placed_independently() -> None:
         Market.PERPETUAL_FUTURES,
         Market.SPOT,
     ]
+
+
+def test_unresolved_order_blocks_only_same_account_route_symbol() -> None:
+    wallet = _portfolio(
+        (Exchange.BINANCE, Market.PERPETUAL_FUTURES),
+        (Exchange.BINANCE, Market.SPOT),
+    )
+    client = RecoveringFirstOrderClient()
+    code = (
+        "from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType\n"
+        "\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = [\n"
+        '        {"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT"},\n'
+        '        {"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "ETHUSDT"},\n'
+        '        {"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "BTCUSDT"},\n'
+        "    ]\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return [\n"
+        '            OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET),\n'
+        '            OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.02", order_type=OrderType.MARKET),\n'
+        '            OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET, price="2500"),\n'
+        '            OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="BTCUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET, price="50000"),\n'
+        "        ]\n"
+    )
+    svc = BaseStrategy("inline.py", wallet, client, account_id=1, strategy_code=code)
+
+    svc.running_strategy(_tick(price=2500.0))
+
+    assert client.attempted_routes == [
+        (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "ETHUSDT"),
+        (Exchange.BINANCE, Market.SPOT, "ETHUSDT"),
+        (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "BTCUSDT"),
+    ]
+    assert (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "ETHUSDT") in svc._blocked_order_keys
+    assert (Exchange.BINANCE, Market.SPOT, "ETHUSDT") not in svc._blocked_order_keys
+    assert (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "BTCUSDT") not in svc._blocked_order_keys
 
 
 def test_batch_decisions_are_validated_before_any_order_is_placed() -> None:
@@ -475,6 +554,66 @@ def test_lifecycle_fill_missing_route_does_not_update_wallet_or_unblock() -> Non
 
     assert wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES).orders == []
     assert blocked_key in svc._blocked_order_keys
+
+
+def test_lifecycle_updates_settle_into_matching_venue_wallets() -> None:
+    events = [
+        OrderUpdateEvent(
+            event_id=1,
+            session_id="session-1",
+            account_id=1,
+            venue_id=10,
+            exchange=Exchange.BINANCE,
+            market=Market.PERPETUAL_FUTURES,
+            side="BUY",
+            position_side="both",
+            event_type="fill",
+            order_status="FILLED",
+            order_id="perp-order",
+            fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.1, fill_price=2500.0),
+            orig_qty=0.1,
+            executed_qty=0.1,
+            remaining_qty=0.0,
+        ),
+        OrderUpdateEvent(
+            event_id=2,
+            session_id="session-1",
+            account_id=1,
+            venue_id=11,
+            exchange=Exchange.BINANCE,
+            market=Market.SPOT,
+            side="BUY",
+            position_side="both",
+            event_type="fill",
+            order_status="FILLED",
+            order_id="spot-order",
+            fill=OrderUpdateFill(symbol="ETHUSDT", qty=1.0, fill_price=2501.0),
+            orig_qty=1.0,
+            executed_qty=1.0,
+            remaining_qty=0.0,
+        ),
+    ]
+    wallet = _portfolio(
+        (Exchange.BINANCE, Market.PERPETUAL_FUTURES),
+        (Exchange.BINANCE, Market.SPOT),
+    )
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        LifecycleOrderClient(events),
+        account_id=1,
+        session_id="session-1",
+        strategy_code=_strategy("        return None\n", order_targets="[]"),
+    )
+
+    svc.running_strategy(_tick())
+
+    perp_wallet = wallet.wallets[(Exchange.BINANCE, Market.PERPETUAL_FUTURES, 10)]
+    spot_wallet = wallet.wallets[(Exchange.BINANCE, Market.SPOT, 11)]
+    assert [order.order_id for order in perp_wallet.orders] == ["perp-order"]
+    assert [order.order_id for order in spot_wallet.orders] == ["spot-order"]
+    assert perp_wallet.orders[0].qty == pytest.approx(0.1)
+    assert spot_wallet.orders[0].qty == pytest.approx(1.0)
 
 
 def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
