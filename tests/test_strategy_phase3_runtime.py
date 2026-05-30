@@ -61,6 +61,11 @@ class StubOrderClient:
         )
 
 
+class FailingOrderClient(StubOrderClient):
+    def place_order(self, *args: Any, **kwargs: Any) -> ExecutionFeedback:
+        raise AssertionError("invalid batch must not place any order")
+
+
 def _tick(
     *,
     exchange: str = Exchange.BINANCE,
@@ -104,6 +109,17 @@ def _strategy(body: str, *, order_targets: str | None = None) -> str:
     )
 
 
+def test_base_strategy_requires_portfolio_wallet_runtime() -> None:
+    with pytest.raises(TypeError, match="PortfolioWalletRuntime"):
+        BaseStrategy(
+            "inline.py",
+            RouteWallet(),  # type: ignore[arg-type]
+            StubOrderClient(),
+            account_id=1,
+            strategy_code=_strategy("        return None\n", order_targets="[]"),
+        )
+
+
 def test_order_targets_empty_but_strategy_returns_order_raises() -> None:
     wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
     client = StubOrderClient()
@@ -137,7 +153,7 @@ def test_list_order_decisions_are_all_placed_independently() -> None:
         strategy_code=_strategy(
             '        return [\n'
             '            OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET),\n'
-            '            OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET),\n'
+            '            OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET, price="2510"),\n'
             "        ]\n",
             order_targets=(
                 '[{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT"}, '
@@ -157,6 +173,81 @@ def test_list_order_decisions_are_all_placed_independently() -> None:
         Market.PERPETUAL_FUTURES,
         Market.SPOT,
     ]
+
+
+def test_batch_decisions_are_validated_before_any_order_is_placed() -> None:
+    wallet = _portfolio(
+        (Exchange.BINANCE, Market.PERPETUAL_FUTURES),
+        (Exchange.BINANCE, Market.SPOT),
+    )
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        FailingOrderClient(),
+        account_id=1,
+        strategy_code=_strategy(
+            '        return [\n'
+            '            OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET),\n'
+            '            OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET),\n'
+            "        ]\n",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="ORDER_TARGETS"):
+        svc.running_strategy(_tick(price=2500.0))
+
+
+def test_decision_for_other_route_uses_cached_route_mark_price() -> None:
+    wallet = _portfolio(
+        (Exchange.BINANCE, Market.PERPETUAL_FUTURES),
+        (Exchange.BINANCE, Market.SPOT),
+    )
+    client = StubOrderClient()
+    code = (
+        "from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType\n"
+        "\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [\n'
+        '        {"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT", "interval": "1m"},\n'
+        '        {"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "ETHUSDT", "interval": "1m"},\n'
+        "    ]\n"
+        '    ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "ETHUSDT"}]\n'
+        "    def on_market_data(self, data, wallet):\n"
+        "        if data.trigger.market == Market.SPOT:\n"
+        "            return None\n"
+        '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET)\n'
+    )
+    svc = BaseStrategy("inline.py", wallet, client, account_id=1, strategy_code=code)
+
+    svc.running_strategy(_tick(market=Market.SPOT, price=101.0))
+    svc.running_strategy(_tick(market=Market.PERPETUAL_FUTURES, price=2500.0))
+
+    assert len(client.orders) == 1
+    assert client.orders[0][1] == pytest.approx(101.0)
+    spot_wallet = wallet.get(Exchange.BINANCE, Market.SPOT)
+    assert spot_wallet.market_data[-1] == ("ETHUSDT", "spot", 101.0)
+    perp_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
+    assert perp_wallet.market_data == []
+
+
+def test_decision_without_route_tick_or_price_fails_before_order() -> None:
+    wallet = _portfolio(
+        (Exchange.BINANCE, Market.PERPETUAL_FUTURES),
+        (Exchange.BINANCE, Market.SPOT),
+    )
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        FailingOrderClient(),
+        account_id=1,
+        strategy_code=_strategy(
+            '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET)\n',
+            order_targets='[{"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "ETHUSDT"}]',
+        ),
+    )
+
+    with pytest.raises(ValueError, match="mark price"):
+        svc.running_strategy(_tick(market=Market.PERPETUAL_FUTURES, price=2500.0))
 
 
 def test_strategy_receives_portfolio_wallet_and_uses_get() -> None:
@@ -185,7 +276,7 @@ def test_strategy_receives_portfolio_wallet_and_uses_get() -> None:
     svc.running_strategy(_tick(price=2520.0))
 
     perp_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
-    assert perp_wallet.market_data == [("ETHUSDT", "futures", 2520.0)]
+    assert perp_wallet.market_data == []
     assert client.orders == []
 
 
@@ -242,6 +333,39 @@ def test_price_when_present_must_be_positive_decimal_string(price: object) -> No
     with pytest.raises(ValueError, match="OrderDecision.price"):
         svc.running_strategy(_tick())
     assert client.orders == []
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "1e999999"])
+def test_qty_and_price_must_be_finite_decimal_strings(value: str) -> None:
+    client = StubOrderClient()
+    svc = BaseStrategy(
+        "inline.py",
+        _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
+        client,
+        account_id=1,
+        strategy_code=_strategy(
+            f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty={value!r}, order_type=OrderType.MARKET)\n'
+        ),
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        svc.running_strategy(_tick())
+    assert client.orders == []
+
+    price_client = StubOrderClient()
+    price_svc = BaseStrategy(
+        "inline.py",
+        _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
+        price_client,
+        account_id=1,
+        strategy_code=_strategy(
+            f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.LIMIT, price={value!r})\n'
+        ),
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        price_svc.running_strategy(_tick())
+    assert price_client.orders == []
 
 
 def test_undeclared_order_target_fails_closed() -> None:

@@ -595,15 +595,21 @@ class ProxyOrderClient(OrderClient):
         *,
         account_symbol: str | None = None,
         strategy_id: int = 0,
-        market: str = "futures",
+        market: str | None = None,
         session_id: str = "",
         intent_id: str = "",
     ) -> ExecutionFeedback:
         symbol = account_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
-        effective_market = str(getattr(decision, "market", None) or market or "futures")
+        effective_market = str(getattr(decision, "market", None) or "").strip()
         exchange_code = self._exchange_code(getattr(decision, "exchange", None))
         market_code = self._market_code(effective_market)
+        if market is not None and str(market or "").strip():
+            market_arg_code = self._market_code(market)
+            if market_arg_code != market_code:
+                raise ValueError(
+                    f"market argument {market!r} does not match decision.market {effective_market!r}"
+                )
         position_side_code = self._position_side_code(getattr(decision, "position_side", None))
         try:
             from strategy_service.gen import order_service_pb2

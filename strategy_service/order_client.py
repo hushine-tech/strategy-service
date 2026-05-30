@@ -94,16 +94,22 @@ class OrderClient:
         *,
         account_symbol: str | None = None,
         strategy_id: int = 0,
-        market: str = "futures",
+        market: str | None = None,
         session_id: str = "",
         intent_id: str = "",
     ) -> ExecutionFeedback:
         """Place an order via order.v1 (or mock if not configured)."""
         symbol = account_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
-        effective_market = str(getattr(decision, "market", None) or market or "futures")
+        effective_market = str(getattr(decision, "market", None) or "").strip()
         exchange_code = self._exchange_code(getattr(decision, "exchange", None))
         market_code = self._market_code(effective_market)
+        if market is not None and str(market or "").strip():
+            market_arg_code = self._market_code(market)
+            if market_arg_code != market_code:
+                raise ValueError(
+                    f"market argument {market!r} does not match decision.market {effective_market!r}"
+                )
         position_side_code = self._position_side_code(getattr(decision, "position_side", None))
 
         if not self._stub:
@@ -193,14 +199,14 @@ class OrderClient:
 
     @staticmethod
     def _exchange_code(exchange: str | None) -> int:
-        key = str(exchange or "binance").strip().lower()
+        key = str(exchange or "").strip().lower()
         if key not in EXCHANGE_CODES:
             raise ValueError(f"unsupported exchange: {exchange!r}")
         return EXCHANGE_CODES[key]
 
     @staticmethod
     def _market_code(market: str | None) -> int:
-        key = str(market or "futures").strip().lower()
+        key = str(market or "").strip().lower()
         if key not in MARKET_CODES:
             raise ValueError(f"unsupported market: {market!r}")
         return MARKET_CODES[key]

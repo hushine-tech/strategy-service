@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
-
-from strategy_service.wallet.runtime import WalletRuntime
 
 from strategy_service.inputs import (
     InputView,
@@ -73,8 +72,19 @@ def _parse_positive_decimal(value: object, field: str) -> Decimal:
         parsed = Decimal(value.strip())
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"OrderDecision.{field} must be a decimal string") from exc
-    if parsed <= 0:
-        raise ValueError(f"OrderDecision.{field} must be > 0")
+    if not parsed.is_finite():
+        raise ValueError(f"OrderDecision.{field} must be finite")
+    try:
+        parsed_float = float(parsed)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError(f"OrderDecision.{field} must be finite") from exc
+    if not math.isfinite(parsed_float):
+        raise ValueError(f"OrderDecision.{field} must be finite")
+    try:
+        if parsed <= 0:
+            raise ValueError(f"OrderDecision.{field} must be > 0")
+    except InvalidOperation as exc:
+        raise ValueError(f"OrderDecision.{field} must be finite") from exc
     return parsed
 
 
@@ -90,6 +100,21 @@ def _normalize_order_type(order_type: object) -> str:
     if order_type_key not in {OrderType.MARKET, OrderType.LIMIT}:
         raise ValueError("OrderDecision.order_type must be MARKET or LIMIT")
     return order_type_key
+
+
+@dataclass(frozen=True)
+class _PreparedOrderDecision:
+    signal: OrderDecision
+    exchange: str
+    market: str
+    symbol: str
+    qty: Decimal
+    price: Decimal | None
+    side: str
+    order_type: str
+    mark_price: float
+    venue_id: int
+    route_wallet: Any
 
 
 def _load_strategy_instance(strategy_path: str, strategy_code: str | None = None) -> Any:
@@ -198,7 +223,7 @@ class BaseStrategy:
     def __init__(
         self,
         strategy_path: str,
-        wallet: WalletRuntime,
+        wallet: PortfolioWalletRuntime,
         order_client: OrderClient | None = None,
         account_id: int = 0,
         strategy_id: int = 0,
@@ -206,6 +231,8 @@ class BaseStrategy:
         strategy_code: str | None = None,
         notifier: StrategyNotifier | None = None,
     ) -> None:
+        if not isinstance(wallet, PortfolioWalletRuntime):
+            raise TypeError("BaseStrategy wallet must be PortfolioWalletRuntime")
         self.strategy_path = strategy_path
         self.wallet = wallet
         self.on_order_callback: Any | None = None
@@ -257,8 +284,6 @@ class BaseStrategy:
             fn(event, self.wallet)
 
     def _venue_id_for_route(self, exchange: str, market: str) -> int:
-        if not isinstance(self.wallet, PortfolioWalletRuntime):
-            return 0
         route = (_norm_exchange(exchange), _norm_market(market))
         matches = [
             venue_id
@@ -274,24 +299,6 @@ class BaseStrategy:
             )
         return matches[0]
 
-    def _route_wallet(self, exchange: str, market: str) -> Any:
-        if isinstance(self.wallet, PortfolioWalletRuntime):
-            return self.wallet.get(exchange, market)
-        return self.wallet
-
-    def _apply_market_data_to_wallet(
-        self,
-        exchange: str,
-        market: str,
-        symbol: str,
-        price: float,
-    ) -> None:
-        symbol_type = _wallet_market(market)
-        if isinstance(self.wallet, PortfolioWalletRuntime):
-            self.wallet.on_market_data(exchange, market, symbol, symbol_type, price)
-            return
-        self.wallet.on_market_data(symbol, symbol_type, price)
-
     def _apply_order_to_wallet(
         self,
         exchange: str,
@@ -302,11 +309,8 @@ class BaseStrategy:
         venue_id: int | None = None,
     ) -> None:
         symbol_type = _wallet_market(market)
-        if isinstance(self.wallet, PortfolioWalletRuntime):
-            route_venue_id = self._venue_id_for_route(exchange, market) if venue_id is None else int(venue_id)
-            self.wallet.on_order(exchange, market, route_venue_id, symbol, symbol_type, order_resp)
-            return
-        self.wallet.on_order(symbol, symbol_type, order_resp)
+        route_venue_id = self._venue_id_for_route(exchange, market) if venue_id is None else int(venue_id)
+        self.wallet.on_order(exchange, market, route_venue_id, symbol, symbol_type, order_resp)
 
     def _initialize_order_event_cursor(self) -> None:
         if not self._session_id or not hasattr(self._order_client, "list_order_lifecycle_events"):
@@ -449,9 +453,6 @@ class BaseStrategy:
         if key not in self._input_keys:
             return
 
-        # Refresh wallet mark price (wallet does not care about interval).
-        self._apply_market_data_to_wallet(exchange, market, sym, float(market_data.price))
-
         # Refresh the bound view with this tick.
         if not self._view.update(market_data):
             # Defensive: update() also enforces the declaration. Stay silent
@@ -464,10 +465,18 @@ class BaseStrategy:
         signals = _normalize_decisions(
             self._strategy_instance.on_market_data(self._view, self.wallet)
         )
-        for signal in signals:
-            self._process_order_decision(signal, market_data)
+        prepared = [
+            self._prepare_order_decision(signal, market_data)
+            for signal in signals
+        ]
+        for item in prepared:
+            self._execute_prepared_order(item)
 
-    def _process_order_decision(self, signal: OrderDecision, market_data: MarketData) -> None:
+    def _prepare_order_decision(
+        self,
+        signal: OrderDecision,
+        market_data: MarketData,
+    ) -> _PreparedOrderDecision:
         sig_exchange = _norm_exchange(signal.exchange)
         sig_market = _norm_market(signal.market)
         sig_sym = _norm_symbol(signal.symbol)
@@ -486,6 +495,79 @@ class BaseStrategy:
                 f"target=({sig_exchange}, {sig_market}, {sig_sym}), "
                 f"ORDER_TARGETS={sorted(self._order_target_keys)}"
             )
+        venue_id = self._venue_id_for_route(sig_exchange, sig_market)
+        route_wallet = self.wallet.get(sig_exchange, sig_market)
+        mark_price = self._resolve_mark_price(
+            exchange=sig_exchange,
+            market=sig_market,
+            symbol=sig_sym,
+            explicit_price=price_dec,
+            trigger=market_data,
+        )
+        normalized_signal = replace(
+            signal,
+            exchange=sig_exchange,
+            market=sig_market,
+            symbol=sig_sym,
+            side=side,
+            qty=str(signal.qty).strip(),
+            order_type=order_type,
+            price=str(signal.price).strip() if signal.price is not None else None,
+        )
+        return _PreparedOrderDecision(
+            signal=normalized_signal,
+            exchange=sig_exchange,
+            market=sig_market,
+            symbol=sig_sym,
+            qty=qty_dec,
+            price=price_dec,
+            side=side,
+            order_type=order_type,
+            mark_price=mark_price,
+            venue_id=venue_id,
+            route_wallet=route_wallet,
+        )
+
+    def _resolve_mark_price(
+        self,
+        *,
+        exchange: str,
+        market: str,
+        symbol: str,
+        explicit_price: Decimal | None,
+        trigger: MarketData,
+    ) -> float:
+        trigger_key = (
+            _norm_exchange(getattr(trigger, "exchange", "binance")),
+            _norm_market(trigger.market),
+            _norm_symbol(trigger.symbol),
+        )
+        target_key = (exchange, market, symbol)
+        if target_key == trigger_key:
+            return float(trigger.price)
+
+        matches = [
+            tick
+            for tick_key, tick in self._view._cache.items()
+            if tick_key[:3] == target_key
+        ]
+        if len(matches) == 1:
+            return float(matches[0].price)
+        if explicit_price is not None:
+            return float(explicit_price)
+        if not matches:
+            raise ValueError(
+                f"missing mark price for ORDER_TARGETS route: {exchange}/{market}/{symbol}"
+            )
+        raise ValueError(
+            f"ambiguous mark price for ORDER_TARGETS route: {exchange}/{market}/{symbol}"
+        )
+
+    def _execute_prepared_order(self, item: _PreparedOrderDecision) -> None:
+        sig_exchange = item.exchange
+        sig_market = item.market
+        sig_sym = item.symbol
+        signal = item.signal
         blocked_key = (sig_exchange, sig_market, sig_sym)
         if blocked_key in self._blocked_order_keys:
             logger.warning(
@@ -494,9 +576,8 @@ class BaseStrategy:
             )
             return
 
-        market_tick_price = float(market_data.price)
-        balance_check_price = float(price_dec) if price_dec is not None else market_tick_price
-        route_wallet = self._route_wallet(sig_exchange, sig_market)
+        balance_check_price = float(item.price) if item.price is not None else item.mark_price
+        route_wallet = item.route_wallet
 
         # Look up a position/asset to get leverage for margin math.
         fw = getattr(route_wallet, "futures", None)
@@ -509,8 +590,8 @@ class BaseStrategy:
             sw = getattr(route_wallet, "spot", None)
             pos = sw.assets.get(sig_sym) if sw is not None else None
         leverage = float(getattr(pos, "leverage", 1.0)) if pos else 1.0
-        qty = float(qty_dec)
-        side_upper = side
+        qty = float(item.qty)
+        side_upper = item.side
 
         # Balance guard: distinguish open/close, spot buy/sell.
         if sig_market == "spot" and hasattr(route_wallet, "spot"):
@@ -559,20 +640,16 @@ class BaseStrategy:
                     )
                     return
 
-        signal = replace(
-            signal,
-            exchange=sig_exchange,
-            market=sig_market,
-            symbol=sig_sym,
-            side=side,
-            qty=str(signal.qty).strip(),
-            order_type=order_type,
-            price=str(signal.price).strip() if signal.price is not None else None,
+        self.wallet.on_market_data(
+            sig_exchange,
+            sig_market,
+            sig_sym,
+            _wallet_market(sig_market),
+            item.mark_price,
         )
-
         intent_id = uuid.uuid4().hex
         feedback = self._coerce_execution_feedback(self._order_client.place_order(
-            self._account_id, signal, market_tick_price,
+            self._account_id, signal, item.mark_price,
             account_symbol=sig_sym,
             strategy_id=self._strategy_id,
             market=sig_market,
@@ -612,12 +689,12 @@ class BaseStrategy:
 
         if feedback.fill_events:
             for fill_event in feedback.fill_events:
-                self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, fill_event)
+                self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, fill_event, venue_id=item.venue_id)
                 order_id = str(getattr(fill_event, "order_id", "") or "")
                 if order_id:
                     self._sync_settled_order_ids.add(order_id)
         elif has_settleable_fill:
-            self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order)
+            self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order, venue_id=item.venue_id)
             order_id = str(getattr(feedback.order, "order_id", "") or "")
             if order_id:
                 self._sync_settled_order_ids.add(order_id)

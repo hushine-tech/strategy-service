@@ -36,6 +36,29 @@ class _Stub:
         return self.lifecycle_response
 
 
+def _decision(
+    *,
+    exchange: str = "binance",
+    market: str = "perpetual_futures",
+    symbol: str = "ethusdt",
+    side: str = "BUY",
+    qty: str = "0.05",
+    order_type: str = "MARKET",
+    price: str | None = None,
+    position_side: str | None = None,
+) -> OrderDecision:
+    return OrderDecision(
+        exchange=exchange,
+        market=market,
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        order_type=order_type,
+        price=price,
+        position_side=position_side,
+    )
+
+
 def test_place_order_uses_canonical_symbol_and_emits_fill_events():
     response = order_service_pb2.PlaceOrderResponse(
         intent_id="intent-1",
@@ -73,10 +96,10 @@ def test_place_order_uses_canonical_symbol_and_emits_fill_events():
 
     feedback = client.place_order(
         13,
-        OrderDecision(symbol="ethusdt", side="LONG", qty=0.05),
+        _decision(),
         51000.0,
         account_symbol="ETHUSDT",
-        market="futures",
+        market="perpetual_futures",
         intent_id="intent-1",
     )
 
@@ -133,10 +156,10 @@ def test_place_order_exception_triggers_resolve_unknown_attempt():
 
     feedback = client.place_order(
         13,
-        OrderDecision(symbol="ethusdt", side="LONG", qty=0.05),
+        _decision(),
         51000.0,
         account_symbol="ETHUSDT",
-        market="futures",
+        market="perpetual_futures",
         intent_id="intent-2",
     )
 
@@ -180,10 +203,10 @@ def test_fee_missing_fill_is_not_wallet_settleable():
 
     feedback = client.place_order(
         13,
-        OrderDecision(symbol="ethusdt", side="LONG", qty=0.05),
+        _decision(),
         51000.0,
         account_symbol="ETHUSDT",
-        market="futures",
+        market="perpetual_futures",
         intent_id="intent-3",
     )
 
@@ -206,17 +229,16 @@ def test_place_order_sends_explicit_venue_route_fields():
 
     feedback = client.place_order(
         13,
-        OrderDecision(
-            symbol="ETHUSDT",
-            side="SELL",
-            qty=0.05,
+        _decision(
             exchange="okx",
             market="delivery_futures",
+            symbol="ETHUSDT",
+            side="SELL",
             position_side="SHORT",
         ),
         51000.0,
         account_symbol="ETHUSDT",
-        market="spot",
+        market="delivery_futures",
         intent_id="intent-4",
     )
 
@@ -239,10 +261,10 @@ def test_place_order_sends_limit_gtc_when_price_is_set():
 
     client.place_order(
         13,
-        OrderDecision(symbol="ETHUSDT", side="BUY", qty=0.05, price=50000.0),
+        _decision(symbol="ETHUSDT", side="BUY", qty="0.05", price="50000", order_type="LIMIT"),
         51000.0,
         account_symbol="ETHUSDT",
-        market="futures",
+        market="perpetual_futures",
         intent_id="intent-limit",
     )
 
@@ -250,6 +272,13 @@ def test_place_order_sends_limit_gtc_when_price_is_set():
     assert stub.last_request.price == 50000.0
     assert stub.last_request.order_type == "LIMIT"
     assert stub.last_request.time_in_force == "GTC"
+
+
+def test_exchange_and_market_codes_do_not_default_missing_route() -> None:
+    with pytest.raises(ValueError, match="unsupported exchange"):
+        OrderClient._exchange_code(None)
+    with pytest.raises(ValueError, match="unsupported market"):
+        OrderClient._market_code(None)
 
 
 def test_list_order_lifecycle_events_maps_route_facts_and_fill():

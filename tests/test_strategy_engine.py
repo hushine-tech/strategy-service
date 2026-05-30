@@ -17,6 +17,24 @@ from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
+class _TestPortfolioWalletRuntime(PortfolioWalletRuntime):
+    def __init__(self, default_wallet, routes: set[tuple[str, str]] | None = None) -> None:
+        route_set = routes or {("binance", "perpetual_futures")}
+        wallets = {
+            (exchange, market, idx): default_wallet
+            for idx, (exchange, market) in enumerate(sorted(route_set), start=10)
+        }
+        super().__init__(1, route_set, wallets)
+        self._default_wallet = default_wallet
+
+    def __getattr__(self, name):
+        return getattr(self._default_wallet, name)
+
+
+def _portfolio_wallet(default_wallet, *routes: tuple[str, str]) -> _TestPortfolioWalletRuntime:
+    return _TestPortfolioWalletRuntime(default_wallet, set(routes) if routes else None)
+
+
 def _md(
     symbol: str = "TESTUSDT",
     price: float = 50_000.0,
@@ -95,21 +113,23 @@ def _wallet_with_futures_slot(
             },
         ]
 
-    return make_backtest_wallet(
+    wallet = make_backtest_wallet(
         margin_mode=margin_mode,
         position_mode=position_mode,
         wallet_balance=account_initial_balance,
         initial_balance=account_initial_balance,
         futures_positions=futures_positions,
     )
+    return _portfolio_wallet(wallet, ("binance", "perpetual_futures"), ("binance", "spot"))
 
 
 def _wallet_with_spot_slot(symbol: str = "TESTUSDT"):
     """Build a backtest wallet runtime with one spot asset slot preconfigured."""
-    return make_backtest_wallet(
+    wallet = make_backtest_wallet(
         margin_mode="isolated",
         spot_assets=[{"symbol": symbol.strip().upper()}],
     )
+    return _portfolio_wallet(wallet, ("binance", "perpetual_futures"), ("binance", "spot"))
 
 
 # Helper to build inline strategy code with INPUTS auto-inserted.
@@ -173,10 +193,10 @@ def test_running_strategy_with_signal_calls_on_order_and_prints(capsys):
     svc.running_strategy(_md(price=51_000.0))
     wallet.on_order.assert_called_once()
     args, _kwargs = wallet.on_order.call_args
-    assert args[0] == "TESTUSDT"
-    assert args[1] == "futures"
-    assert args[2].status.upper() == "FILLED"
-    assert args[2].fill_price == 51_000.0
+    assert args[3] == "TESTUSDT"
+    assert args[4] == "futures"
+    assert args[5].status.upper() == "FILLED"
+    assert args[5].fill_price == 51_000.0
 
 
 def test_on_order_response_called_when_defined():
@@ -249,10 +269,10 @@ def test_multiple_fill_events_are_applied_sequentially_to_wallet():
     assert wallet.on_order.call_count == 2
     args1, _ = wallet.on_order.call_args_list[0]
     args2, _ = wallet.on_order.call_args_list[1]
-    assert args1[2].status == "PARTIALLY_FILLED"
-    assert args1[2].qty == pytest.approx(0.02)
-    assert args2[2].status == "FILLED"
-    assert args2[2].qty == pytest.approx(0.03)
+    assert args1[5].status == "PARTIALLY_FILLED"
+    assert args1[5].qty == pytest.approx(0.02)
+    assert args2[5].status == "FILLED"
+    assert args2[5].qty == pytest.approx(0.03)
     assert wallet.futures.positions[("TESTUSDT", 0)].position_qty == pytest.approx(0.05)
     assert wallet.futures.positions[("TESTUSDT", 0)].entry_price == pytest.approx(51200.0)
     strat.on_order_callback.assert_called_once()
@@ -681,7 +701,8 @@ def test_order_decision_requires_declared_exchange_market_symbol():
 
 
 def test_order_decision_inherits_declared_exchange_before_place_order():
-    wallet = _wallet_with_futures_slot(symbol="ETHUSDT")
+    base_wallet = _wallet_with_futures_slot(symbol="ETHUSDT")._default_wallet
+    wallet = _portfolio_wallet(base_wallet, ("okx", "perpetual_futures"))
     strategy_code = (
         "from strategy_service.types import OrderDecision\n"
         "class MyStrategy:\n"
@@ -716,10 +737,10 @@ def test_order_decision_inherits_declared_exchange_before_place_order():
 
 def test_strategy_declared_symbols_route_even_without_wallet_slot():
     """Pre_C3 §2.2: wallet can be empty; declaration alone drives routing."""
-    wallet = make_backtest_wallet(
+    wallet = _portfolio_wallet(make_backtest_wallet(
         margin_mode="isolated",
         spot_assets=[{"symbol": "USDC", "qty": 1.0, "price": 1.0}],
-    )
+    ), ("binance", "perpetual_futures"))
     svc = StrategyService()
     strategy_code = _inline(
         body="    def on_market_data(self, data, wallet):\n        return None\n",
@@ -735,9 +756,7 @@ def test_strategy_declared_symbols_route_even_without_wallet_slot():
     assert ("binance", "perpetual_futures", "ETHUSDT", "1m") in svc.strategy_router
     svc.running_strategy(_md(symbol="ETHUSDT", market="perpetual_futures", interval="1m"))
 
-    wallet.on_market_data.assert_called_once()
-    assert wallet.on_market_data.call_args[0][0] == "ETHUSDT"
-    assert wallet.on_market_data.call_args[0][1] == "futures"
+    wallet.on_market_data.assert_not_called()
 
 
 def test_same_symbol_different_market_routes_correctly():
@@ -759,9 +778,7 @@ def test_same_symbol_different_market_routes_correctly():
     wallet.on_market_data = MagicMock(wraps=wallet.on_market_data)
     svc.running_strategy(_md(symbol="BTCUSDT", market="perpetual_futures"))
     svc.running_strategy(_md(symbol="BTCUSDT", market="spot"))
-    assert wallet.on_market_data.call_count == 2
-    assert wallet.on_market_data.call_args_list[0][0][1] == "futures"
-    assert wallet.on_market_data.call_args_list[1][0][1] == "spot"
+    wallet.on_market_data.assert_not_called()
 
 
 def test_user_strategy_uses_preconfigured_spot_slot():
@@ -783,7 +800,7 @@ def test_import_error_message():
 def test_empty_wallet_can_still_create_strategy():
     """Pre_C3 §2.2: an empty wallet is a valid starting state; strategy creation
     MUST succeed as long as the declaration is valid."""
-    wallet = make_backtest_wallet(margin_mode="isolated")
+    wallet = _portfolio_wallet(make_backtest_wallet(margin_mode="isolated"), ("binance", "perpetual_futures"))
     svc = StrategyService()
     strategy_code = _inline(
         body="    def on_market_data(self, data, wallet):\n        return None\n",
@@ -893,8 +910,8 @@ def test_spot_market_buy_updates_spot_wallet_only():
 
 def test_futures_open_precheck_uses_available_balance_not_wallet_balance():
     wallet = _wallet_with_futures_slot()
-    wallet.get_wallet_balance = MagicMock(return_value=10_000.0)
-    wallet.get_available_balance = MagicMock(return_value=100.0)
+    wallet._default_wallet.get_wallet_balance = MagicMock(return_value=10_000.0)
+    wallet._default_wallet.get_available_balance = MagicMock(return_value=100.0)
     wallet.on_order = MagicMock(wraps=wallet.on_order)
 
     svc = StrategyService()
@@ -1077,7 +1094,7 @@ def test_module_without_mystategy_raises():
 
 def test_multi_symbol_routes_to_same_strategy():
     """Strategy declaring multiple futures symbols → all route to the same instance."""
-    wallet = make_backtest_wallet(
+    wallet = _portfolio_wallet(make_backtest_wallet(
         margin_mode="isolated",
         position_mode="one_way",
         futures_positions=[
@@ -1102,7 +1119,7 @@ def test_multi_symbol_routes_to_same_strategy():
                 "margin_mode": "isolated",
             },
         ],
-    )
+    ), ("binance", "perpetual_futures"))
 
     svc = StrategyService()
     strategy_code = (
