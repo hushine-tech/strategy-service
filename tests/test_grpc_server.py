@@ -15,6 +15,7 @@ from strategy_service.gen import account_service_pb2
 from strategy_service.gen import strategy_service_pb2 as pb2
 from strategy_service.grpc_server import StrategyServiceServicer
 from strategy_service.session import SessionState, StreamBinding
+from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from strategy_service.wallet.order_types import OrderResponse
 from tests.helpers.wallet_fixtures import make_testnet_wallet
 from tests.helpers.wallet_fixtures import make_backtest_wallet
@@ -1946,7 +1947,7 @@ def test_stop_strategy_finish_persists_finished_and_halts_runtime(monkeypatch):
 
 
 def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypatch):
-    wallet = make_backtest_wallet(
+    route_wallet = make_backtest_wallet(
         futures_positions=[{
             "symbol": "ETHUSDT",
             "position_qty": 0.02,
@@ -1954,6 +1955,11 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             "mark_price": 2310.0,
             "margin_mode": "cross",
         }],
+    )
+    wallet = PortfolioWalletRuntime(
+        account_id=505,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
     )
     updates: list[tuple[str, str, int, str]] = []
     wallet_syncs: list[tuple[int, int, str]] = []
@@ -1983,6 +1989,9 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
     class FakeOrderClient:
         def place_order(self, account_id, decision, mark_price, *, account_symbol=None, strategy_id=0, market="futures", session_id="", intent_id=""):
             assert account_id == 505
+            assert decision.exchange == "binance"
+            assert decision.market == "perpetual_futures"
+            assert market == "perpetual_futures"
             assert decision.symbol == "ETHUSDT"
             assert decision.side == "SHORT"
             assert abs(float(decision.qty) - 0.02) < 1e-12
@@ -2016,14 +2025,14 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
     assert resp.stopped is True
     assert context.code is None
     assert state.status == "stopped"
-    assert abs(wallet.futures.positions[("ETHUSDT", 0)].position_qty) <= 1e-12
+    assert abs(route_wallet.futures.positions[("ETHUSDT", 0)].position_qty) <= 1e-12
     assert updates[0][1] == "stopping"
     assert updates[-1][1] == "stopped"
     assert wallet_syncs[-1] == (505, 1, session_id)
 
 
 def test_stop_strategy_stop_and_close_mode2_fails_closed_for_spot_exit(monkeypatch):
-    wallet = make_testnet_wallet(
+    route_wallet = make_testnet_wallet(
         spot_assets=[{
             "symbol": "BTC",
             "qty": 0.01,
@@ -2032,6 +2041,11 @@ def test_stop_strategy_stop_and_close_mode2_fails_closed_for_spot_exit(monkeypat
             "price": 71000.0,
         }],
         spot_free=1000.0,
+    )
+    wallet = PortfolioWalletRuntime(
+        account_id=707,
+        allowed_routes={("binance", "spot")},
+        wallets={("binance", "spot", 22): route_wallet},
     )
     updates: list[tuple[str, str, int, str]] = []
 

@@ -46,6 +46,7 @@ from strategy_service.preflight import (
 from strategy_service.strategy.base import extract_strategy_declarations
 from strategy_service.strategy_validator import validate_strategy_code
 from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
+from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ def _run_in_otel_context(parent_context, span_name: str, fn):
 
 @dataclass(frozen=True)
 class _StopOrder:
+    exchange: str
+    venue_id: int
     symbol: str
     account_symbol: str
     market: str
@@ -1570,7 +1573,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     f"{order.market}:{order.symbol}:{getattr(order_resp, 'status', '')}:"
                     f"{getattr(order_resp, 'error_message', '')}"
                 )
-            wallet.on_order(order.account_symbol, order.market, order_resp)
+            wallet.on_order(
+                order.exchange,
+                order.market,
+                order.venue_id,
+                order.account_symbol,
+                _marketdata_market(order.market),
+                order_resp,
+            )
             acct_client.update_portfolio_snapshot(
                 account_id=state.account_id,
                 user_id=state.user_id,
@@ -1589,7 +1599,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         from strategy_service.types import OrderDecision
 
         return OrderDecision(
-            exchange="binance",
+            exchange=order.exchange,
             market=order.market,
             symbol=order.symbol,
             side=order.side,
@@ -1598,8 +1608,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         )
 
     def _build_stop_and_close_orders(self, wallet: Any, state: SessionState) -> tuple[list[_StopOrder], str]:
-        futures_open_orders = len(getattr(wallet.futures, "open_orders", {}) or {})
-        spot_open_orders = len(getattr(wallet.spot, "open_orders", {}) or {})
+        if not isinstance(wallet, PortfolioWalletRuntime):
+            return [], "stop_and_close_failed:portfolio_wallet_required"
+
+        futures_open_orders = 0
+        spot_open_orders = 0
+        for (_exchange, market, _venue_id), route_wallet in wallet.wallets.items():
+            if market == "perpetual_futures":
+                futures_open_orders += len(getattr(route_wallet.futures, "open_orders", {}) or {})
+            elif market == "spot":
+                spot_open_orders += len(getattr(route_wallet.spot, "open_orders", {}) or {})
         if futures_open_orders or spot_open_orders:
             return [], (
                 "stop_and_close_failed:open_orders_present:"
@@ -1607,70 +1625,81 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             )
 
         orders: list[_StopOrder] = []
-        for pos in list(getattr(wallet.futures, "positions", {}).values()):
-            qty = abs(float(getattr(pos, "position_qty", 0.0) or 0.0))
-            if qty <= 1e-12:
-                continue
-            symbol = str(getattr(pos, "symbol", "") or "").strip().upper()
-            if not symbol:
-                return [], "stop_and_close_failed:invalid_futures_symbol"
-            side = "SHORT" if float(getattr(pos, "position_qty", 0.0) or 0.0) > 0 else "LONG"
-            mark_price = float(
-                getattr(pos, "mark_price", 0.0)
-                or getattr(pos, "entry_price", 0.0)
-                or 0.0
-            )
-            orders.append(_StopOrder(
-                symbol=symbol,
-                account_symbol=symbol,
-                market="futures",
-                side=side,
-                qty=qty,
-                mark_price=mark_price,
-            ))
-
-        for asset_symbol, asset in getattr(wallet.spot, "assets", {}).items():
-            sym = str(asset_symbol).strip().upper()
-            if sym == "USDT":
-                continue
-            qty = float(getattr(asset, "qty", 0.0) or 0.0) - float(getattr(asset, "locked", 0.0) or 0.0)
-            if qty <= 1e-12:
-                continue
-            if state.account_mode != 0:
-                return [], f"stop_and_close_failed:spot_liquidation_not_supported:{sym}"
-            mark_price = float(getattr(asset, "price", 0.0) or getattr(asset, "avg_entry_price", 0.0) or 0.0)
-            if mark_price <= 0.0:
-                return [], f"stop_and_close_failed:missing_spot_mark_price:{sym}"
-            orders.append(_StopOrder(
-                symbol=f"{sym}USDT",
-                account_symbol=sym,
-                market="spot",
-                side="SELL",
-                qty=qty,
-                mark_price=mark_price,
-            ))
+        for (exchange, market, venue_id), route_wallet in sorted(wallet.wallets.items()):
+            if market == "perpetual_futures":
+                for pos in list(getattr(route_wallet.futures, "positions", {}).values()):
+                    qty = abs(float(getattr(pos, "position_qty", 0.0) or 0.0))
+                    if qty <= 1e-12:
+                        continue
+                    symbol = str(getattr(pos, "symbol", "") or "").strip().upper()
+                    if not symbol:
+                        return [], "stop_and_close_failed:invalid_futures_symbol"
+                    side = "SHORT" if float(getattr(pos, "position_qty", 0.0) or 0.0) > 0 else "LONG"
+                    mark_price = float(
+                        getattr(pos, "mark_price", 0.0)
+                        or getattr(pos, "entry_price", 0.0)
+                        or 0.0
+                    )
+                    orders.append(_StopOrder(
+                        exchange=exchange,
+                        venue_id=venue_id,
+                        symbol=symbol,
+                        account_symbol=symbol,
+                        market=market,
+                        side=side,
+                        qty=qty,
+                        mark_price=mark_price,
+                    ))
+            elif market == "spot":
+                for asset_symbol, asset in getattr(route_wallet.spot, "assets", {}).items():
+                    sym = str(asset_symbol).strip().upper()
+                    if sym == "USDT":
+                        continue
+                    qty = float(getattr(asset, "qty", 0.0) or 0.0) - float(getattr(asset, "locked", 0.0) or 0.0)
+                    if qty <= 1e-12:
+                        continue
+                    if state.account_mode != 0:
+                        return [], f"stop_and_close_failed:spot_liquidation_not_supported:{sym}"
+                    mark_price = float(getattr(asset, "price", 0.0) or getattr(asset, "avg_entry_price", 0.0) or 0.0)
+                    if mark_price <= 0.0:
+                        return [], f"stop_and_close_failed:missing_spot_mark_price:{sym}"
+                    orders.append(_StopOrder(
+                        exchange=exchange,
+                        venue_id=venue_id,
+                        symbol=f"{sym}USDT",
+                        account_symbol=sym,
+                        market=market,
+                        side="SELL",
+                        qty=qty,
+                        mark_price=mark_price,
+                    ))
 
         return orders, ""
 
     @staticmethod
     def _account_is_flat(wallet: Any, state: SessionState) -> tuple[bool, str]:
-        for pos in getattr(wallet.futures, "positions", {}).values():
-            if abs(float(getattr(pos, "position_qty", 0.0) or 0.0)) > 1e-12:
-                return False, f"stop_and_close_failed:futures_not_flat:{getattr(pos, 'symbol', '')}"
-        for asset_symbol, asset in getattr(wallet.spot, "assets", {}).items():
-            sym = str(asset_symbol).strip().upper()
-            if sym == "USDT":
-                continue
-            qty = float(getattr(asset, "qty", 0.0) or 0.0)
-            locked = float(getattr(asset, "locked", 0.0) or 0.0)
-            if qty > 1e-12 or locked > 1e-12:
-                if state.account_mode == 0:
-                    return False, f"stop_and_close_failed:spot_not_flat:{sym}"
-                return False, f"stop_and_close_failed:spot_exit_unsupported:{sym}"
-        if getattr(wallet.futures, "open_orders", {}):
-            return False, "stop_and_close_failed:futures_open_orders_remaining"
-        if getattr(wallet.spot, "open_orders", {}):
-            return False, "stop_and_close_failed:spot_open_orders_remaining"
+        if not isinstance(wallet, PortfolioWalletRuntime):
+            return False, "stop_and_close_failed:portfolio_wallet_required"
+        for (_exchange, market, _venue_id), route_wallet in sorted(wallet.wallets.items()):
+            if market == "perpetual_futures":
+                for pos in getattr(route_wallet.futures, "positions", {}).values():
+                    if abs(float(getattr(pos, "position_qty", 0.0) or 0.0)) > 1e-12:
+                        return False, f"stop_and_close_failed:futures_not_flat:{getattr(pos, 'symbol', '')}"
+                if getattr(route_wallet.futures, "open_orders", {}):
+                    return False, "stop_and_close_failed:futures_open_orders_remaining"
+            elif market == "spot":
+                for asset_symbol, asset in getattr(route_wallet.spot, "assets", {}).items():
+                    sym = str(asset_symbol).strip().upper()
+                    if sym == "USDT":
+                        continue
+                    qty = float(getattr(asset, "qty", 0.0) or 0.0)
+                    locked = float(getattr(asset, "locked", 0.0) or 0.0)
+                    if qty > 1e-12 or locked > 1e-12:
+                        if state.account_mode == 0:
+                            return False, f"stop_and_close_failed:spot_not_flat:{sym}"
+                        return False, f"stop_and_close_failed:spot_exit_unsupported:{sym}"
+                if getattr(route_wallet.spot, "open_orders", {}):
+                    return False, "stop_and_close_failed:spot_open_orders_remaining"
         return True, ""
 
     # ── ValidateStrategyCode ─────────────────────────────────────────────────
