@@ -341,6 +341,42 @@ def test_futures_compact_position_without_full_wallet_fails_closed():
         )
 
 
+def test_spot_empty_compact_without_full_wallet_fails_closed():
+    snapshot = _snapshot(
+        _venue(
+            venue_id=10,
+            market=MARKET_SPOT,
+            total_value=0.0,
+            wallet_balance=0.0,
+            available_balance=0.0,
+        )
+    )
+
+    with pytest.raises(ValueError, match="spot.*full canonical wallet"):
+        build_portfolio_wallet_from_snapshot(
+            snapshot,
+            allowed_routes={("binance", "spot")},
+        )
+
+
+def test_futures_empty_compact_without_full_wallet_fails_closed():
+    snapshot = _snapshot(
+        _venue(
+            venue_id=11,
+            market=MARKET_PERPETUAL_FUTURES,
+            total_value=0.0,
+            wallet_balance=0.0,
+            available_balance=0.0,
+        )
+    )
+
+    with pytest.raises(ValueError, match="futures.*full canonical wallet"):
+        build_portfolio_wallet_from_snapshot(
+            snapshot,
+            allowed_routes={("binance", "perpetual_futures")},
+        )
+
+
 def test_spot_empty_full_wallet_with_compact_balances_fails_closed():
     snapshot = _snapshot(
         _venue(
@@ -413,8 +449,8 @@ def test_declared_route_missing_from_snapshot_fails_closed_on_get():
 
 def test_duplicate_route_keeps_portfolio_runtime_ambiguous_fail_closed():
     snapshot = _snapshot(
-        _venue(venue_id=10, market=MARKET_SPOT),
-        _venue(venue_id=11, market=MARKET_SPOT),
+        _venue(venue_id=10, market=MARKET_SPOT, wallet=_spot_wallet(free=1.0, locked=0.0)),
+        _venue(venue_id=11, market=MARKET_SPOT, wallet=_spot_wallet(free=2.0, locked=0.0)),
     )
 
     wallet = build_portfolio_wallet_from_snapshot(

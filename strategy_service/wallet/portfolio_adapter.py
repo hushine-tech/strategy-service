@@ -7,15 +7,6 @@ from typing import Any
 from strategy_service.inputs import _normalize_exchange, _normalize_market
 from strategy_service.wallet_adapter import proto_to_account_spec
 from strategy_service.wallet.binance import BinanceWalletRuntime
-from strategy_service.wallet.canonical import (
-    CanonicalAccountState,
-    CanonicalFuturesPositionState,
-    CanonicalFuturesState,
-    CanonicalSpotAssetState,
-    CanonicalSpotState,
-    derive_position_key,
-    norm_symbol,
-)
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 
@@ -66,116 +57,20 @@ def _venue_id(venue: Any) -> int:
     return venue_id
 
 
-def _build_spot_state(venue: Any) -> CanonicalSpotState:
-    balances = list(getattr(venue, "balances", []) or [])
-    free = 0.0
-    locked = 0.0
-    assets: list[CanonicalSpotAssetState] = []
-    for item in balances:
-        asset = str(getattr(item, "asset", "") or "").strip().upper()
-        if not asset:
-            raise ValueError("missing BalanceEntry.asset")
-        available_balance = _float_field(item, "available_balance")
-        item_locked = _float_field(item, "locked")
-        wallet_balance = _float_field(item, "wallet_balance")
-        if asset == "USDT":
-            free += available_balance
-            locked += item_locked
-            continue
-        assets.append(
-            CanonicalSpotAssetState(
-                symbol=asset,
-                qty=wallet_balance,
-                locked=item_locked,
-            )
-        )
-    return CanonicalSpotState(free=free, locked=locked, assets=assets)
-
-
-def _futures_margin_balance(venue: Any, positions: list[Any]) -> float:
-    explicit = sum(_float_field(pos, "margin_balance") for pos in positions)
-    if explicit != 0.0:
-        return explicit
-    wallet_balance = _float_field(venue, "wallet_balance")
-    unrealized_pnl = sum(_float_field(pos, "unrealized_pnl") for pos in positions)
-    return wallet_balance + unrealized_pnl
-
-
-def _build_futures_state(venue: Any) -> CanonicalFuturesState:
-    positions = list(getattr(venue, "positions", []) or [])
-    position_mode = "one_way"
-    margin_mode = "cross"
-    canonical_positions: list[CanonicalFuturesPositionState] = []
-    for pos in positions:
-        symbol = norm_symbol(getattr(pos, "symbol", ""))
-        if not symbol:
-            raise ValueError("missing PositionEntry.symbol")
-        position_side = str(getattr(pos, "position_side", "") or "BOTH").strip().upper()
-        position_qty = _float_field(pos, "qty")
-        canonical_positions.append(
-            CanonicalFuturesPositionState(
-                symbol=symbol,
-                direction_key=derive_position_key(
-                    position_mode=position_mode,
-                    position_side=position_side,
-                    position_qty=position_qty,
-                ),
-                mark_price=_float_field(pos, "mark_price") or None,
-                position_qty=position_qty,
-                entry_price=_float_field(pos, "entry_price"),
-                unrealized_pnl=_float_field(pos, "unrealized_pnl"),
-                position_side=position_side,
-                margin_mode=margin_mode,
-                liquidation_price=_float_field(pos, "liquidation_price"),
-            )
-        )
-
-    return CanonicalFuturesState(
-        margin_mode=margin_mode,
-        position_mode=position_mode,
-        positions=canonical_positions,
-        wallet_balance=_float_field(venue, "wallet_balance"),
-        available_balance=_float_field(venue, "available_balance"),
-        margin_balance=_futures_margin_balance(venue, positions),
-        unrealized_pnl=sum(_float_field(pos, "unrealized_pnl") for pos in positions),
-        total_cross_wallet_balance=_float_field(venue, "wallet_balance"),
-        total_cross_un_pnl=sum(_float_field(pos, "unrealized_pnl") for pos in positions),
-    )
-
-
 def _build_binance_wallet_from_venue_snapshot(
     venue: Any,
     *,
     market: str,
-    updated_at: Any,
 ) -> BinanceWalletRuntime:
     wallet = _validated_full_wallet_for_market(venue, market)
-    if wallet is not None:
-        return BinanceWalletRuntime.from_canonical(proto_to_account_spec(wallet))
     if market == "spot":
-        if _compact_spot_has_content(venue):
+        if wallet is None:
             raise ValueError("spot VenueSnapshot requires full canonical wallet")
-        state = CanonicalAccountState(
-            mode=2,
-            spot=_build_spot_state(venue),
-            total_value=_float_field(venue, "total_value"),
-            updated_at=updated_at,
-        )
-        return BinanceWalletRuntime.from_canonical(state)
+        return BinanceWalletRuntime.from_canonical(proto_to_account_spec(wallet))
     if market == "perpetual_futures":
-        if _compact_futures_has_content(venue):
-            raise ValueError(
-                "futures VenueSnapshot requires full canonical wallet"
-            )
-        futures_state = _build_futures_state(venue)
-        state = CanonicalAccountState(
-            mode=2,
-            futures=futures_state,
-            total_value=_float_field(venue, "total_value"),
-            futures_position_equity=futures_state.margin_balance,
-            updated_at=updated_at,
-        )
-        return BinanceWalletRuntime.from_canonical(state)
+        if wallet is None:
+            raise ValueError("futures VenueSnapshot requires full canonical wallet")
+        return BinanceWalletRuntime.from_canonical(proto_to_account_spec(wallet))
     raise ValueError(f"unsupported portfolio wallet market for binance: {market}")
 
 
@@ -245,18 +140,6 @@ def _futures_wallet_has_content(futures: Any) -> bool:
     )
 
 
-def _compact_spot_has_content(venue: Any) -> bool:
-    return bool(list(getattr(venue, "balances", []) or []))
-
-
-def _compact_futures_has_content(venue: Any) -> bool:
-    return (
-        bool(list(getattr(venue, "positions", []) or []))
-        or _float_field(venue, "wallet_balance") != 0.0
-        or _float_field(venue, "available_balance") != 0.0
-    )
-
-
 def build_portfolio_wallet_from_snapshot(
     snapshot: Any,
     allowed_routes: set[tuple[str, str]],
@@ -273,7 +156,6 @@ def build_portfolio_wallet_from_snapshot(
         wallets[(exchange, market, venue_id)] = _build_binance_wallet_from_venue_snapshot(
             venue,
             market=market,
-            updated_at=getattr(venue, "updated_at", None) or getattr(snapshot, "updated_at", None),
         )
 
     return PortfolioWalletRuntime(
