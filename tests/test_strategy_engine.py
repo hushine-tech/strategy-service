@@ -303,6 +303,146 @@ def test_order_update_event_updates_wallet_before_callback():
     assert client.place_calls == 0
 
 
+def test_async_order_update_unblocks_symbol_and_triggers_snapshot_callback():
+    wallet = _wallet_with_futures_slot()
+    code = _inline(
+        "    def __init__(self):\n"
+        "        self.market_calls = 0\n"
+        "    def on_order_update(self, event, wallet):\n"
+        "        pass\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        self.market_calls += 1\n"
+        "        return OrderDecision(symbol=\"TESTUSDT\", side=\"LONG\", qty=0.01, market=\"futures\")\n"
+    )
+
+    class FakeOrderClient:
+        def __init__(self):
+            self.place_calls = 0
+
+        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
+            if limit == 500:
+                return []
+            if after_event_id >= 1:
+                return []
+            return [
+                OrderUpdateEvent(
+                    event_id=1,
+                    session_id=session_id,
+                    account_id=1,
+                    venue_id=10,
+                    exchange="binance",
+                    market="perpetual_futures",
+                    side="BUY",
+                    position_side="both",
+                    event_type="fill",
+                    order_status="FILLED",
+                    order_id="order-async",
+                    fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+                    orig_qty=0.1,
+                    executed_qty=0.1,
+                    remaining_qty=0.0,
+                )
+            ]
+
+        def place_order(self, *_args, **_kwargs):
+            self.place_calls += 1
+            return ExecutionFeedback(
+                attempt_status="ACCEPTED",
+                order=OrderResponse(
+                    symbol="TESTUSDT",
+                    side="BUY",
+                    qty=0.01,
+                    fill_price=50_000.0,
+                    status="FILLED",
+                    order_id="order-new",
+                    orig_qty=0.01,
+                    executed_qty=0.01,
+                    remaining_qty=0.0,
+                ),
+                fill_count=1,
+                delta_qty=0.01,
+            )
+
+    client = FakeOrderClient()
+    svc = StrategyService()
+    strat = svc.create_strategy(
+        "u1",
+        "/workspace/strategy.py",
+        wallet,
+        order_client=client,
+        session_id="session-1",
+        strategy_code=code,
+    )
+    strat.on_order_callback = MagicMock()
+    blocked_key = ("binance", "perpetual_futures", "TESTUSDT")
+    strat._blocked_order_keys.add(blocked_key)
+
+    svc.running_strategy(_md(price=50_000.0))
+
+    assert blocked_key not in strat._blocked_order_keys
+    strat.on_order_callback.assert_called()
+    assert client.place_calls == 1
+
+
+def test_async_partial_order_update_keeps_symbol_blocked():
+    wallet = _wallet_with_futures_slot()
+    code = _inline(
+        "    def on_order_update(self, event, wallet):\n"
+        "        pass\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return OrderDecision(symbol=\"TESTUSDT\", side=\"LONG\", qty=0.01, market=\"futures\")\n"
+    )
+
+    class FakeOrderClient:
+        def __init__(self):
+            self.place_calls = 0
+
+        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
+            if limit == 500 or after_event_id >= 1:
+                return []
+            return [
+                OrderUpdateEvent(
+                    event_id=1,
+                    session_id=session_id,
+                    account_id=1,
+                    venue_id=10,
+                    exchange="binance",
+                    market="perpetual_futures",
+                    side="BUY",
+                    position_side="both",
+                    event_type="fill",
+                    order_status="PARTIALLY_FILLED",
+                    order_id="order-async",
+                    fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.04, fill_price=50_000.0),
+                    orig_qty=0.1,
+                    executed_qty=0.04,
+                    remaining_qty=0.06,
+                )
+            ]
+
+        def place_order(self, *_args, **_kwargs):
+            self.place_calls += 1
+            raise AssertionError("blocked symbol should not place a new order")
+
+    client = FakeOrderClient()
+    svc = StrategyService()
+    strat = svc.create_strategy(
+        "u1",
+        "/workspace/strategy.py",
+        wallet,
+        order_client=client,
+        session_id="session-1",
+        strategy_code=code,
+    )
+    blocked_key = ("binance", "perpetual_futures", "TESTUSDT")
+    strat._blocked_order_keys.add(blocked_key)
+
+    svc.running_strategy(_md(price=50_000.0))
+
+    assert blocked_key in strat._blocked_order_keys
+    assert client.place_calls == 0
+
+
 def test_order_update_callback_error_does_not_block_market_tick():
     wallet = _wallet_with_futures_slot()
     code = _inline(

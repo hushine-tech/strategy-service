@@ -23,6 +23,8 @@ from strategy_service.wallet.order_types import ExecutionFeedback, OrderResponse
 
 logger = logging.getLogger(__name__)
 
+_TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+
 
 def _norm_symbol(symbol: str) -> str:
     return str(symbol).strip().upper()
@@ -287,6 +289,8 @@ class BaseStrategy:
             return
         for event in events:
             event_id = int(getattr(event, "event_id", 0) or 0)
+            order_resp = None
+            wallet_updated = False
             try:
                 order_resp = OrderClient.order_response_from_update(event)
                 if order_resp is not None:
@@ -294,7 +298,13 @@ class BaseStrategy:
                     if order_id not in self._sync_settled_order_ids:
                         wallet_market = _wallet_market(event.market)
                         self.wallet.on_order(order_resp.symbol, wallet_market, order_resp)
-                self._notify_order_update(event)
+                        if order_id:
+                            self._sync_settled_order_ids.add(order_id)
+                        wallet_updated = True
+                    if self._is_order_update_terminal(event, order_resp):
+                        self._blocked_order_keys.discard(self._blocked_key_for_event(event, order_resp))
+                elif self._is_order_update_terminal(event, None):
+                    self._blocked_order_keys.discard(self._blocked_key_for_event(event, None))
             except Exception:
                 logger.warning(
                     "order lifecycle event handling failed: session=%s event_id=%s",
@@ -302,9 +312,46 @@ class BaseStrategy:
                     event_id,
                     exc_info=True,
                 )
-            finally:
-                if event_id > self._order_event_cursor:
-                    self._order_event_cursor = event_id
+            try:
+                self._notify_order_update(event)
+            except Exception:
+                logger.warning(
+                    "order lifecycle callback failed: session=%s event_id=%s",
+                    self._session_id,
+                    event_id,
+                    exc_info=True,
+                )
+            if wallet_updated and self.on_order_callback is not None:
+                try:
+                    self.on_order_callback()
+                except Exception:
+                    logger.warning("on_order_callback failed after lifecycle update", exc_info=True)
+            if event_id > self._order_event_cursor:
+                self._order_event_cursor = event_id
+
+    @staticmethod
+    def _is_order_update_terminal(event: OrderUpdateEvent, order_resp: OrderResponse | None) -> bool:
+        status = str(getattr(order_resp, "status", "") or getattr(event, "order_status", "") or "").strip().upper()
+        if status == "PARTIALLY_FILLED":
+            return False
+        if status in _TERMINAL_ORDER_STATUSES:
+            return True
+        if order_resp is not None and float(getattr(order_resp, "remaining_qty", 0.0) or 0.0) <= 0.0:
+            return True
+        return False
+
+    @staticmethod
+    def _blocked_key_for_event(event: OrderUpdateEvent, order_resp: OrderResponse | None) -> tuple[str, str, str]:
+        symbol = str(
+            getattr(order_resp, "symbol", "")
+            or getattr(getattr(event, "fill", None), "symbol", "")
+            or ""
+        )
+        return (
+            _norm_exchange(getattr(event, "exchange", "binance")),
+            _norm_market(getattr(event, "market", "perpetual_futures")),
+            _norm_symbol(symbol),
+        )
 
     @staticmethod
     def _coerce_execution_feedback(payload: Any) -> ExecutionFeedback:

@@ -248,6 +248,15 @@ class OrderClient:
         market = event.market or "perpetual_futures"
         side = event.side or ""
         wallet_qty = cls._wallet_qty(raw_qty, side, market)
+        orig_qty = abs(float(getattr(event, "orig_qty", 0.0) or 0.0))
+        executed_qty = abs(float(getattr(event, "executed_qty", 0.0) or 0.0))
+        remaining_qty = abs(float(getattr(event, "remaining_qty", 0.0) or 0.0))
+        if executed_qty <= 0.0:
+            executed_qty = raw_qty
+        if orig_qty <= 0.0:
+            orig_qty = executed_qty + remaining_qty if remaining_qty > 0.0 else raw_qty
+        if remaining_qty <= 0.0 and orig_qty > executed_qty:
+            remaining_qty = max(0.0, orig_qty - executed_qty)
         return OrderResponse(
             symbol=event.fill.symbol,
             side=side,
@@ -257,7 +266,10 @@ class OrderClient:
             fee=float(event.fill.fee or 0.0),
             order_id=event.order_id,
             position_side=event.position_side,
-            executed_qty=raw_qty,
+            orig_qty=orig_qty,
+            executed_qty=executed_qty,
+            remaining_qty=remaining_qty,
+            price=float(getattr(event, "avg_price", 0.0) or 0.0),
         )
 
     @staticmethod
@@ -274,6 +286,7 @@ class OrderClient:
                 exchange_trade_id=str(item.fill_delta.exchange_trade_id or ""),
                 exchange_order_id=str(item.fill_delta.exchange_order_id or ""),
             )
+        order_state = item.order_state if item.HasField("order_state") else None
         return OrderUpdateEvent(
             event_id=int(item.event_id),
             session_id=str(item.session_id or ""),
@@ -291,6 +304,10 @@ class OrderClient:
             exchange_order_id=str(item.exchange_order_id or ""),
             exchange_trade_id=str(item.exchange_trade_id or ""),
             fill=fill,
+            orig_qty=float(getattr(order_state, "orig_qty", 0.0) or 0.0),
+            executed_qty=float(getattr(order_state, "executed_qty", 0.0) or 0.0),
+            remaining_qty=float(getattr(order_state, "remaining_qty", 0.0) or 0.0),
+            avg_price=float(getattr(order_state, "avg_price", 0.0) or 0.0),
         )
 
     def _resolve_unknown_attempt(

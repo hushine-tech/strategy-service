@@ -300,6 +300,53 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
     assert order_response.qty == pytest.approx(0.1)
 
 
+def test_order_response_from_update_uses_lifecycle_order_state():
+    client = OrderClient("")
+    stub = _Stub(order_service_pb2.PlaceOrderResponse())
+    stub.lifecycle_response = order_service_pb2.ListOrderLifecycleEventsResponse(
+        events=[
+            order_service_pb2.OrderLifecycleEventEntry(
+                event_id=12,
+                session_id="session-1",
+                account_id=13,
+                venue_id=20,
+                exchange=1,
+                market=2,
+                position_side=0,
+                side="BUY",
+                event_type="fill",
+                order_status="PARTIALLY_FILLED",
+                order_id="order-1",
+                fill_delta=order_service_pb2.FillDeltaEntry(
+                    symbol="ETHUSDT",
+                    qty=0.02,
+                    fill_price=3000.0,
+                    fee=0.2,
+                ),
+                order_state=order_service_pb2.OrderStateEntry(
+                    symbol="ETHUSDT",
+                    status="PARTIALLY_FILLED",
+                    orig_qty=0.05,
+                    executed_qty=0.02,
+                    remaining_qty=0.03,
+                    avg_price=3000.0,
+                ),
+            )
+        ]
+    )
+    client._stub = stub
+
+    event = client.list_order_lifecycle_events(session_id="session-1")[0]
+    order_response = OrderClient.order_response_from_update(event)
+
+    assert order_response is not None
+    assert order_response.qty == pytest.approx(0.02)
+    assert order_response.orig_qty == pytest.approx(0.05)
+    assert order_response.executed_qty == pytest.approx(0.02)
+    assert order_response.remaining_qty == pytest.approx(0.03)
+    assert order_response.status == "PARTIALLY_FILLED"
+
+
 def test_wallet_qty_uses_market_enum_aliases():
     assert OrderClient._wallet_qty(1, "SELL", "spot") == 1
     assert OrderClient._wallet_qty(1, "SELL", "futures") == -1
