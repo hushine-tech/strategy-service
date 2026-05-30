@@ -14,7 +14,8 @@ class MyStrategy:
     Step 4: wallet.on_order         更新持仓
     """
 
-    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT"}]
 
     def __init__(self) -> None:
         self._counter: int = 0
@@ -24,7 +25,14 @@ class MyStrategy:
         # 每 100 根打印一次进度
         if self._counter % 100 == 1:
             print(f"  [bar {self._counter}] price={data.klines['close']}", flush=True)
-        return OrderDecision(symbol=data.symbol, side="LONG", qty=0.001)
+        return OrderDecision(
+            exchange="binance",
+            market="perpetual_futures",
+            symbol=data.symbol,
+            side="BUY",
+            qty="0.001",
+            order_type="MARKET",
+        )
 
     def on_order_response(self, order_resp) -> None:
         print(

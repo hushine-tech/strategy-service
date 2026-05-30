@@ -11,7 +11,8 @@ class MyStrategy:
     Computes RSI(14) and submits LONG when RSI < 30.
     """
 
-    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT"}]
 
     def __init__(self, rsi_period: int = 14, oversold: float = 30.0, qty: float = 0.01):
         self.rsi_period = rsi_period
@@ -52,7 +53,14 @@ class MyStrategy:
 
         if rsi_val < self.oversold and not self._ordered:
             self._ordered = True
-            return OrderDecision(symbol=data.symbol, side="LONG", qty=self.qty)
+            return OrderDecision(
+                exchange="binance",
+                market="perpetual_futures",
+                symbol=data.symbol,
+                side="BUY",
+                qty=str(self.qty),
+                order_type="MARKET",
+            )
         return None
 
     def on_order_response(self, order_resp) -> None:

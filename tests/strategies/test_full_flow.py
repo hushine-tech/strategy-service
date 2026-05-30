@@ -21,7 +21,8 @@ from strategy_service.types import OrderDecision
 
 class MyStrategy:
 
-    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT", "interval": "1m"}]
+    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT"}]
 
     def __init__(self):
         self._has_position = False
@@ -31,10 +32,24 @@ class MyStrategy:
 
         if not self._has_position and price < 120:
             self._has_position = True
-            return OrderDecision(symbol=data.symbol, side="LONG", qty=0.1)
+            return OrderDecision(
+                exchange="binance",
+                market="perpetual_futures",
+                symbol=data.symbol,
+                side="BUY",
+                qty="0.1",
+                order_type="MARKET",
+            )
 
         if self._has_position and price > 180:
             self._has_position = False
-            return OrderDecision(symbol=data.symbol, side="SHORT", qty=0.1)
+            return OrderDecision(
+                exchange="binance",
+                market="perpetual_futures",
+                symbol=data.symbol,
+                side="SELL",
+                qty="0.1",
+                order_type="MARKET",
+            )
 
         return None

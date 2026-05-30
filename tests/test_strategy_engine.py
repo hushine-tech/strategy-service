@@ -13,13 +13,14 @@ from strategy_service import (
 )
 from strategy_service.strategy.base import _load_strategy_instance
 from strategy_service.wallet import SpotAsset
+from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
 def _md(
     symbol: str = "TESTUSDT",
     price: float = 50_000.0,
-    market: str = "futures",
+    market: str = "perpetual_futures",
     interval: str = "1m",
     exchange: str = "binance",
 ) -> MarketData:
@@ -112,12 +113,29 @@ def _wallet_with_spot_slot(symbol: str = "TESTUSDT"):
 
 
 # Helper to build inline strategy code with INPUTS auto-inserted.
-def _inline(body: str, *, symbol: str = "TESTUSDT", market: str = "futures", interval: str = "1m") -> str:
+def _inline(body: str, *, symbol: str = "TESTUSDT", market: str = "perpetual_futures", interval: str = "1m") -> str:
     return (
-        "from strategy_service.types import OrderDecision\n"
+        "from strategy_service.types import OrderDecision as _OrderDecision\n"
+        "\n"
+        "def OrderDecision(symbol, side, qty, price=None, market=None, exchange=None, order_type=None, **kwargs):\n"
+        "    mapped_side = {\"LONG\": \"BUY\", \"SHORT\": \"SELL\"}.get(str(side).upper(), str(side).upper())\n"
+        f"    raw_market = market or \"{market}\"\n"
+        "    resolved_market = {\"futures\": \"perpetual_futures\"}.get(str(raw_market), str(raw_market))\n"
+        "    resolved_order_type = order_type or (\"LIMIT\" if price is not None else \"MARKET\")\n"
+        "    return _OrderDecision(\n"
+        "        exchange=exchange or \"binance\",\n"
+        "        market=resolved_market,\n"
+        "        symbol=symbol,\n"
+        "        side=mapped_side,\n"
+        "        qty=str(qty),\n"
+        "        order_type=resolved_order_type,\n"
+        "        price=str(price) if price is not None else None,\n"
+        "        **kwargs,\n"
+        "    )\n"
         "\n"
         "class MyStrategy:\n"
         f'    INPUTS = [{{"exchange": "binance", "market": "{market}", "symbol": "{symbol}", "interval": "{interval}"}}]\n'
+        f'    ORDER_TARGETS = [{{"exchange": "binance", "market": "{market}", "symbol": "{symbol}"}}]\n'
         + body
     )
 
@@ -125,7 +143,8 @@ def _inline(body: str, *, symbol: str = "TESTUSDT", market: str = "futures", int
 def test_inline_strategy_code_uses_strategy_path_as_python_filename():
     code = (
         "class MyStrategy:\n"
-        "    INPUTS = [{\"exchange\": \"binance\", \"market\": \"futures\", \"symbol\": \"TESTUSDT\", \"interval\": \"1m\"}]\n"
+        "    INPUTS = [{\"exchange\": \"binance\", \"market\": \"perpetual_futures\", \"symbol\": \"TESTUSDT\", \"interval\": \"1m\"}]\n"
+        "    ORDER_TARGETS = []\n"
         "    def on_market_data(self, data, wallet):\n"
         "        return None\n"
     )
@@ -623,10 +642,16 @@ def test_unknown_symbol_market_is_dropped_by_router():
 
 
 def test_strategy_can_access_wallet_by_exchange_market():
-    wallet = _wallet_with_futures_slot()
+    route_wallet = _wallet_with_futures_slot()
+    wallet = PortfolioWalletRuntime(
+        1,
+        {("binance", "perpetual_futures")},
+        {("binance", "perpetual_futures", 10): route_wallet},
+    )
     strategy_code = (
         "class MyStrategy:\n"
-        '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
         "    def on_market_data(self, data, wallet):\n"
         '        futures_wallet = wallet.get("binance", "perpetual_futures")\n'
         "        assert futures_wallet is not None\n"
@@ -635,7 +660,7 @@ def test_strategy_can_access_wallet_by_exchange_market():
     svc = StrategyService()
     svc.create_strategy("u1", "<db:wallet_get>", wallet, strategy_code=strategy_code)
 
-    svc.running_strategy(_md(symbol="TESTUSDT", market="futures", interval="1m"))
+    svc.running_strategy(_md(symbol="TESTUSDT", market="perpetual_futures", interval="1m"))
 
 
 def test_order_decision_requires_declared_exchange_market_symbol():
@@ -643,15 +668,16 @@ def test_order_decision_requires_declared_exchange_market_symbol():
     strategy_code = (
         "from strategy_service.types import OrderDecision\n"
         "class MyStrategy:\n"
-        '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT"}]\n'
         "    def on_market_data(self, data, wallet):\n"
-        "        return OrderDecision(symbol='ETHUSDT', side='LONG', qty=0.1, market='futures', exchange='okx')\n"
+        "        return OrderDecision(exchange='okx', market='perpetual_futures', symbol='ETHUSDT', side='BUY', qty='0.1', order_type='MARKET')\n"
     )
     svc = StrategyService()
     svc.create_strategy("u1", "<db:bad_exchange_target>", wallet, strategy_code=strategy_code)
 
-    with pytest.raises(ValueError, match="not declared in INPUTS"):
-        svc.running_strategy(_md(symbol="ETHUSDT", market="futures", interval="1m"))
+    with pytest.raises(ValueError, match="ORDER_TARGETS"):
+        svc.running_strategy(_md(symbol="ETHUSDT", market="perpetual_futures", interval="1m"))
 
 
 def test_order_decision_inherits_declared_exchange_before_place_order():
@@ -659,9 +685,10 @@ def test_order_decision_inherits_declared_exchange_before_place_order():
     strategy_code = (
         "from strategy_service.types import OrderDecision\n"
         "class MyStrategy:\n"
-        '    INPUTS = [{"exchange": "okx", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": "okx", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "okx", "market": "perpetual_futures", "symbol": "ETHUSDT"}]\n'
         "    def on_market_data(self, data, wallet):\n"
-        "        return OrderDecision(symbol=data.symbol, side='LONG', qty=0.1)\n"
+        "        return OrderDecision(exchange='okx', market='perpetual_futures', symbol=data.symbol, side='BUY', qty='0.1', order_type='MARKET')\n"
     )
 
     class CaptureOrderClient:
@@ -680,7 +707,7 @@ def test_order_decision_inherits_declared_exchange_before_place_order():
     svc = StrategyService()
     svc.create_strategy("u1", "<db:okx_inherited_exchange>", wallet, strategy_code=strategy_code, order_client=order_client)
 
-    svc.running_strategy(_md(symbol="ETHUSDT", market="futures", interval="1m", exchange="okx"))
+    svc.running_strategy(_md(symbol="ETHUSDT", market="perpetual_futures", interval="1m", exchange="okx"))
 
     assert order_client.decision is not None
     assert order_client.decision.exchange == "okx"
@@ -697,7 +724,7 @@ def test_strategy_declared_symbols_route_even_without_wallet_slot():
     strategy_code = _inline(
         body="    def on_market_data(self, data, wallet):\n        return None\n",
         symbol="ETHUSDT",
-        market="futures",
+        market="perpetual_futures",
         interval="1m",
     )
 
@@ -706,7 +733,7 @@ def test_strategy_declared_symbols_route_even_without_wallet_slot():
 
     # Router is keyed by the normalized 4-tuple from the declaration.
     assert ("binance", "perpetual_futures", "ETHUSDT", "1m") in svc.strategy_router
-    svc.running_strategy(_md(symbol="ETHUSDT", market="futures", interval="1m"))
+    svc.running_strategy(_md(symbol="ETHUSDT", market="perpetual_futures", interval="1m"))
 
     wallet.on_market_data.assert_called_once()
     assert wallet.on_market_data.call_args[0][0] == "ETHUSDT"
@@ -721,15 +748,16 @@ def test_same_symbol_different_market_routes_correctly():
     strategy_code = (
         "class MyStrategy:\n"
         '    INPUTS = [\n'
-        '        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
         '        {"exchange": "binance", "market": "spot",    "symbol": "BTCUSDT", "interval": "1m"},\n'
         '    ]\n'
+        "    ORDER_TARGETS = []\n"
         "    def on_market_data(self, data, wallet):\n"
         "        return None\n"
     )
     svc.create_strategy("u1", "<db:both_markets>", wallet, strategy_code=strategy_code)
     wallet.on_market_data = MagicMock(wraps=wallet.on_market_data)
-    svc.running_strategy(_md(symbol="BTCUSDT", market="futures"))
+    svc.running_strategy(_md(symbol="BTCUSDT", market="perpetual_futures"))
     svc.running_strategy(_md(symbol="BTCUSDT", market="spot"))
     assert wallet.on_market_data.call_count == 2
     assert wallet.on_market_data.call_args_list[0][0][1] == "futures"
@@ -806,10 +834,10 @@ def test_futures_short_signal_closes_one_way_position():
             "        price = float(data.klines['close'])\n"
             "        if not self._has_position and price < 120:\n"
             "            self._has_position = True\n"
-            "            return OrderDecision(symbol=data.symbol, side='LONG', qty=0.1)\n"
+            "            return OrderDecision(symbol=data.symbol, side='BUY', qty=0.1)\n"
             "        if self._has_position and price > 180:\n"
             "            self._has_position = False\n"
-            "            return OrderDecision(symbol=data.symbol, side='SHORT', qty=0.1)\n"
+            "            return OrderDecision(symbol=data.symbol, side='SELL', qty=0.1)\n"
             "        return None\n"
         ),
     )
@@ -819,7 +847,7 @@ def test_futures_short_signal_closes_one_way_position():
         symbol="TESTUSDT",
         price=100.0,
         timestamp=datetime.now(timezone.utc),
-        market="futures",
+        market="perpetual_futures",
         interval="1m",
         klines={"close": 100.0},
     ))
@@ -831,7 +859,7 @@ def test_futures_short_signal_closes_one_way_position():
         symbol="TESTUSDT",
         price=190.0,
         timestamp=datetime.now(timezone.utc),
-        market="futures",
+        market="perpetual_futures",
         interval="1m",
         klines={"close": 190.0},
     ))
@@ -848,7 +876,7 @@ def test_spot_market_buy_updates_spot_wallet_only():
     strategy_code = _inline(
         body=(
             "    def on_market_data(self, data, wallet):\n"
-            "        return OrderDecision(symbol=data.symbol, side='LONG', qty=0.1)\n"
+            "        return OrderDecision(symbol=data.symbol, side='BUY', qty=0.1)\n"
         ),
         market="spot",
     )
@@ -890,13 +918,13 @@ def test_limit_order_passes_market_tick_as_mark_price_not_limit_price():
 
     strategy_code = _inline(
         "    def on_market_data(self, data, wallet):\n"
-        "        tick = data.market[\"futures\"].symbol[\"TESTUSDT\"].interval[\"1m\"]\n"
+        "        tick = data.exchange[\"binance\"].market[\"perpetual_futures\"].symbol[\"TESTUSDT\"].interval[\"1m\"]\n"
         "        return OrderDecision(\n"
         "            symbol=\"TESTUSDT\",\n"
-        "            side=\"LONG\",\n"
-        "            qty=0.01,\n"
-        "            price=float(tick.price) * 0.5,\n"
-        "            market=\"futures\",\n"
+        "            side=\"BUY\",\n"
+        "            qty=\"0.01\",\n"
+        "            price=str(float(tick.price) * 0.5),\n"
+        "            market=\"perpetual_futures\",\n"
         "            exchange=\"binance\",\n"
         "            order_type=\"LIMIT\",\n"
         "            time_in_force=\"GTC\",\n"
@@ -983,7 +1011,7 @@ def test_spot_order_callbacks_run_after_wallet_update_in_order():
             "    def __init__(self):\n"
             "        self.last_resp = None\n"
             "    def on_market_data(self, data, wallet):\n"
-            "        return OrderDecision(symbol=data.symbol, side='LONG', qty=0.05)\n"
+            "        return OrderDecision(symbol=data.symbol, side='BUY', qty=0.05)\n"
             "    def on_order_response(self, order_resp):\n"
             "        self.last_resp = order_resp\n"
         ),
@@ -1024,7 +1052,7 @@ def test_zero_qty_rejected_before_wallet():
     svc = StrategyService()
     svc.create_strategy("u1", "strategies.zero_qty", wallet)
     wallet.on_order = MagicMock(wraps=wallet.on_order)
-    with pytest.raises(ValueError, match="OrderDecision.qty must be != 0"):
+    with pytest.raises(ValueError, match="OrderDecision.qty"):
         svc.running_strategy(_md())
     wallet.on_order.assert_not_called()
 
@@ -1033,9 +1061,7 @@ def test_invalid_futures_side_rejected_in_hedge_mode():
     wallet = _wallet_with_futures_slot(position_mode="hedge")
     svc = StrategyService()
     svc.create_strategy("u1", "strategies.bad_side", wallet)
-    # Error message changed in BinanceWalletRuntime (_position_key_from_order):
-    # "hedge-mode parity orders require explicit position_side".
-    with pytest.raises(ValueError, match="explicit position_side"):
+    with pytest.raises(ValueError, match="OrderDecision.side"):
         svc.running_strategy(_md())
 
 
@@ -1082,9 +1108,10 @@ def test_multi_symbol_routes_to_same_strategy():
     strategy_code = (
         "class MyStrategy:\n"
         '    INPUTS = [\n'
-        '        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
-        '        {"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"},\n'
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"},\n'
         '    ]\n'
+        "    ORDER_TARGETS = []\n"
         "    def on_market_data(self, data, wallet):\n"
         "        return None\n"
     )
