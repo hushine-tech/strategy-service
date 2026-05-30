@@ -1,10 +1,9 @@
-"""Strategy input declaration contract.
+"""Phase 3 strategy declaration contract.
 
 Strategies MUST declare the `(exchange, market, symbol, interval)` universe
-they consume via a class-level ``INPUTS`` attribute. The runtime parses and
-validates this declaration at strategy load time, then uses it as the
-authoritative input set for routing, wallet mark updates, and the
-``on_market_data`` callback view.
+they consume via class-level ``INPUTS`` and the `(exchange, market, symbol)`
+universe they can trade via class-level ``ORDER_TARGETS``. Declare
+``ORDER_TARGETS = []`` for read-only strategies.
 
 Accepted shape:
 
@@ -17,30 +16,46 @@ Accepted shape:
                 "interval": "1m",
             },
         ]
+        ORDER_TARGETS = [
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "ETHUSDT",
+            },
+        ]
 
 Normalization rules:
 
 - ``exchange`` lower-cased; MUST be in ``{"binance", "okx"}``
-- ``market`` lower-cased with aliases:
-  ``futures`` / ``future`` / ``usdm_futures`` / ``perp`` -> ``perpetual_futures``
 - ``market`` MUST be in ``{"spot", "perpetual_futures", "delivery_futures"}``
+- legacy aliases such as ``futures`` are not accepted
 - ``symbol`` upper-cased + stripped; MUST be non-empty
 - ``interval`` trimmed; MUST be non-empty
-- Duplicates are de-duplicated by the normalized 4-tuple
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable
+
+from hushine_strategy.inputs import (
+    StrategyInput,
+    StrategyOrderTarget,
+    parse_declared_inputs as _parse_declared_inputs,
+    parse_order_targets as _parse_order_targets,
+)
 
 from strategy_service.types import MarketData
 
 __all__ = [
     "StrategyInput",
+    "StrategyOrderTarget",
+    "StrategyDeclarations",
     "StrategyDeclarationError",
     "InputView",
     "parse_declared_inputs",
+    "parse_order_targets",
+    "extract_declarations",
     "_normalize_exchange",
     "_normalize_market",
 ]
@@ -48,36 +63,10 @@ __all__ = [
 
 SUPPORTED_EXCHANGES = frozenset({"binance", "okx"})
 SUPPORTED_MARKETS = frozenset({"spot", "perpetual_futures", "delivery_futures"})
-MARKET_ALIASES = {
-    "futures": "perpetual_futures",
-    "future": "perpetual_futures",
-    "usdm_futures": "perpetual_futures",
-    "perp": "perpetual_futures",
-}
 
 
 class StrategyDeclarationError(ValueError):
-    """Raised when a strategy's ``INPUTS`` declaration is missing or invalid."""
-
-
-@dataclass(frozen=True)
-class StrategyInput:
-    """Normalized ``(exchange, market, symbol, interval)`` input declaration."""
-
-    exchange: str
-    market: str
-    symbol: str
-    interval: str
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "exchange", _normalize_exchange(self.exchange))
-        object.__setattr__(self, "market", _normalize_market(self.market))
-        object.__setattr__(self, "symbol", _normalize_symbol(self.symbol))
-        object.__setattr__(self, "interval", _normalize_interval(self.interval))
-
-    @property
-    def key(self) -> tuple[str, str, str, str]:
-        return (self.exchange, self.market, self.symbol, self.interval)
+    pass
 
 
 def _normalize_exchange(value: Any) -> str:
@@ -91,7 +80,6 @@ def _normalize_exchange(value: Any) -> str:
 
 def _normalize_market(value: Any) -> str:
     market = str(value or "").strip().lower()
-    market = MARKET_ALIASES.get(market, market)
     if market not in SUPPORTED_MARKETS:
         raise StrategyDeclarationError(
             f"unsupported market: {market or '<empty>'}"
@@ -127,64 +115,48 @@ def _normalize_key(
     )
 
 
-def _coerce_entry(entry: Any) -> tuple[Any, Any, Any, Any]:
-    if isinstance(entry, StrategyInput):
-        return entry.exchange, entry.market, entry.symbol, entry.interval
-    if isinstance(entry, Mapping):
-        exchange = entry.get("exchange")
-        market = entry.get("market")
-        symbol = entry.get("symbol")
-        interval = entry.get("interval")
-        if exchange is None or market is None or symbol is None or interval is None:
-            raise StrategyDeclarationError(
-                "INPUTS exchange, market, symbol, and interval are required"
-            )
-        return exchange, market, symbol, interval
-    raise StrategyDeclarationError(
-        f"INPUTS entry has unsupported shape: {entry!r}. "
-        "Expected dict with exchange, market, symbol, and interval."
-    )
-
-
 def parse_declared_inputs(raw: Any) -> list[StrategyInput]:
-    """Parse and normalize a strategy's ``INPUTS`` declaration."""
-    if raw is None:
-        raise StrategyDeclarationError(
-            "strategy has no INPUTS declaration; strategies must declare their "
-            "(exchange, market, symbol, interval) universe."
-        )
-    if isinstance(raw, (str, bytes)) or isinstance(raw, Mapping):
-        raise StrategyDeclarationError(
-            "INPUTS must be an iterable of entries, not a single object."
-        )
-    if not isinstance(raw, Iterable):
-        raise StrategyDeclarationError(
-            f"INPUTS must be iterable, got {type(raw).__name__}."
-        )
+    try:
+        return _parse_declared_inputs(raw)
+    except ValueError as exc:
+        raise StrategyDeclarationError(str(exc)) from exc
 
-    seen: set[tuple[str, str, str, str]] = set()
-    out: list[StrategyInput] = []
-    for entry in raw:
-        key = _normalize_key(*_coerce_entry(entry))
-        if key in seen:
-            continue
-        seen.add(key)
-        exchange, market, symbol, interval = key
-        out.append(
-            StrategyInput(
-                exchange=exchange,
-                market=market,
-                symbol=symbol,
-                interval=interval,
-            )
-        )
 
-    if not out:
-        raise StrategyDeclarationError(
-            "INPUTS declaration resolved to an empty universe; strategies must "
-            "declare at least one (exchange, market, symbol, interval) entry."
-        )
-    return out
+def parse_order_targets(raw: Any) -> list[StrategyOrderTarget]:
+    try:
+        return _parse_order_targets(raw)
+    except ValueError as exc:
+        raise StrategyDeclarationError(str(exc)) from exc
+
+
+@dataclass(frozen=True)
+class StrategyDeclarations:
+    inputs: list[StrategyInput]
+    order_targets: list[StrategyOrderTarget]
+
+    @property
+    def input_keys(self) -> set[tuple[str, str, str, str]]:
+        return {entry.key for entry in self.inputs}
+
+    @property
+    def order_target_keys(self) -> set[tuple[str, str, str]]:
+        return {entry.key for entry in self.order_targets}
+
+    @property
+    def required_routes(self) -> set[tuple[str, str]]:
+        input_routes = {(entry.exchange, entry.market) for entry in self.inputs}
+        order_routes = {
+            (entry.exchange, entry.market) for entry in self.order_targets
+        }
+        return input_routes | order_routes
+
+
+def extract_declarations(strategy_instance: Any) -> StrategyDeclarations:
+    inputs = parse_declared_inputs(getattr(strategy_instance, "INPUTS", None))
+    order_targets = parse_order_targets(
+        getattr(strategy_instance, "ORDER_TARGETS", None)
+    )
+    return StrategyDeclarations(inputs=inputs, order_targets=order_targets)
 
 
 class InputView:
