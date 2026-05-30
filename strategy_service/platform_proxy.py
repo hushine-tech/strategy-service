@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 
 ACCOUNT_GET_ONLINE = "account.GetOnlineAccountInfo"
+ACCOUNT_GET_PORTFOLIO = "account.GetPortfolioSnapshot"
+ACCOUNT_UPDATE_PORTFOLIO = "account.UpdatePortfolioSnapshot"
 ACCOUNT_GET_ACTIVE_STRATEGY = "account.GetActiveStrategy"
 ACCOUNT_SAVE_SESSION = "account.SaveSession"
 ACCOUNT_UPDATE_SESSION = "account.UpdateSession"
@@ -98,6 +100,60 @@ class ProxyAccountClient:
         except Exception:
             logger.warning(
                 "Proxy GetOnlineAccountInfo failed for account_id=%s user_id=%s",
+                account_id,
+                user_id,
+                exc_info=True,
+            )
+            return None
+
+    def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+        try:
+            from strategy_service.gen import account_service_pb2
+
+            resp = self._proxy.invoke(
+                ACCOUNT_GET_PORTFOLIO,
+                account_service_pb2.GetPortfolioSnapshotRequest(
+                    account_id=int(account_id),
+                    user_id=int(user_id),
+                ),
+                account_service_pb2.GetPortfolioSnapshotResponse,
+            )
+            return resp.snapshot
+        except Exception:
+            logger.warning(
+                "Proxy GetPortfolioSnapshot failed for account_id=%s user_id=%s",
+                account_id,
+                user_id,
+                exc_info=True,
+            )
+            return None
+
+    def update_portfolio_snapshot(
+        self,
+        account_id: int,
+        user_id: int = 0,
+        snapshot_reason: int = 0,
+        strategy_id: int = 0,
+        session_id: str = "",
+    ):
+        try:
+            from strategy_service.gen import account_service_pb2
+
+            resp = self._proxy.invoke(
+                ACCOUNT_UPDATE_PORTFOLIO,
+                account_service_pb2.UpdatePortfolioSnapshotRequest(
+                    account_id=int(account_id),
+                    user_id=int(user_id),
+                    snapshot_reason=int(snapshot_reason),
+                    strategy_id=int(strategy_id),
+                    session_id=str(session_id or ""),
+                ),
+                account_service_pb2.UpdatePortfolioSnapshotResponse,
+            )
+            return resp.snapshot
+        except Exception:
+            logger.warning(
+                "Proxy UpdatePortfolioSnapshot failed for account_id=%s user_id=%s",
                 account_id,
                 user_id,
                 exc_info=True,

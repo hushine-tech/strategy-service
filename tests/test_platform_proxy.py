@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from strategy_service.gen import account_service_pb2, marketdata_service_pb2, order_service_pb2
 from strategy_service.platform_proxy import (
+    ACCOUNT_GET_PORTFOLIO,
     ACCOUNT_SAVE_SESSION,
+    ACCOUNT_UPDATE_PORTFOLIO,
     LOGS_EMIT,
     MARKETDATA_FETCH_KLINES,
     MARKETDATA_GET_STATUS,
@@ -34,6 +36,47 @@ def test_proxy_account_client_sends_save_session_over_runtime_channel():
     assert req.runtime_id == "runtime-1"
 
 
+def test_proxy_account_client_fetches_portfolio_snapshot_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ACCOUNT_GET_PORTFOLIO] = account_service_pb2.GetPortfolioSnapshotResponse(
+        snapshot=account_service_pb2.PortfolioSnapshot(account_id=7, user_id=3)
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    snapshot = proxy.account_client().get_portfolio_snapshot(account_id=7, user_id=3)
+
+    method, req = runtime.calls[-1]
+    assert method == ACCOUNT_GET_PORTFOLIO
+    assert req.account_id == 7
+    assert req.user_id == 3
+    assert snapshot.account_id == 7
+
+
+def test_proxy_account_client_updates_portfolio_snapshot_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ACCOUNT_UPDATE_PORTFOLIO] = account_service_pb2.UpdatePortfolioSnapshotResponse(
+        snapshot=account_service_pb2.PortfolioSnapshot(account_id=7, user_id=3)
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    snapshot = proxy.account_client().update_portfolio_snapshot(
+        account_id=7,
+        user_id=3,
+        snapshot_reason=2,
+        strategy_id=9,
+        session_id="sess-1",
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == ACCOUNT_UPDATE_PORTFOLIO
+    assert req.account_id == 7
+    assert req.user_id == 3
+    assert req.snapshot_reason == 2
+    assert req.strategy_id == 9
+    assert req.session_id == "sess-1"
+    assert snapshot.account_id == 7
+
+
 def test_proxy_order_client_places_order_without_direct_stub():
     runtime = _FakeRuntimeChannel()
     runtime.responses[ORDER_PLACE] = order_service_pb2.PlaceOrderResponse(
@@ -62,10 +105,16 @@ def test_proxy_order_client_places_order_without_direct_stub():
 
     feedback = proxy.order_client().place_order(
         7,
-        OrderDecision(symbol="ETHUSDT", side="BUY", qty=1),
+        OrderDecision(
+            exchange="binance",
+            market="perpetual_futures",
+            symbol="ETHUSDT",
+            side="BUY",
+            qty="1",
+            order_type="MARKET",
+        ),
         2000,
         strategy_id=9,
-        market="futures",
         session_id="sess-1",
     )
 

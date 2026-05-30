@@ -72,6 +72,60 @@ class AccountClient:
             )
             return None
 
+    def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+        """Fetch the account portfolio snapshot from core-service."""
+        if not self._stub:
+            return None
+        try:
+            from strategy_service.gen import account_service_pb2
+
+            req = account_service_pb2.GetPortfolioSnapshotRequest(
+                account_id=int(account_id),
+                user_id=int(user_id),
+            )
+            resp = self._stub.GetPortfolioSnapshot(req)
+            return resp.snapshot
+        except Exception:
+            logger.warning(
+                "GetPortfolioSnapshot failed for account_id=%s user_id=%s",
+                account_id,
+                user_id,
+                exc_info=True,
+            )
+            return None
+
+    def update_portfolio_snapshot(
+        self,
+        account_id: int,
+        user_id: int = 0,
+        snapshot_reason: int = 0,
+        strategy_id: int = 0,
+        session_id: str = "",
+    ):
+        """Refresh and persist a portfolio snapshot through core-service."""
+        if not self._stub:
+            return None
+        try:
+            from strategy_service.gen import account_service_pb2
+
+            req = account_service_pb2.UpdatePortfolioSnapshotRequest(
+                account_id=int(account_id),
+                user_id=int(user_id),
+                snapshot_reason=int(snapshot_reason),
+                strategy_id=int(strategy_id),
+                session_id=str(session_id or ""),
+            )
+            resp = self._stub.UpdatePortfolioSnapshot(req)
+            return resp.snapshot
+        except Exception:
+            logger.warning(
+                "UpdatePortfolioSnapshot failed for account_id=%s user_id=%s",
+                account_id,
+                user_id,
+                exc_info=True,
+            )
+            return None
+
     def get_active_strategy(self, account_id: int):
         """Fetch the active strategy for an account. Returns proto GetActiveStrategyResponse or None."""
         if not self._stub:

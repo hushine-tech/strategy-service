@@ -68,3 +68,54 @@ def test_account_client_list_running_sessions_filters_by_runtime():
     assert sessions == []
     req = captured["req"]
     assert req.runtime_id == "rt-1"
+
+
+def test_account_client_get_portfolio_snapshot_uses_portfolio_api():
+    captured: dict[str, object] = {}
+
+    class FakeStub:
+        def GetPortfolioSnapshot(self, req):
+            captured["req"] = req
+            return account_service_pb2.GetPortfolioSnapshotResponse(
+                snapshot=account_service_pb2.PortfolioSnapshot(account_id=11, user_id=5)
+            )
+
+    client = AccountClient("")
+    client._stub = FakeStub()
+
+    snapshot = client.get_portfolio_snapshot(account_id=11, user_id=5)
+
+    req = captured["req"]
+    assert req.account_id == 11
+    assert req.user_id == 5
+    assert snapshot.account_id == 11
+
+
+def test_account_client_update_portfolio_snapshot_uses_portfolio_api():
+    captured: dict[str, object] = {}
+
+    class FakeStub:
+        def UpdatePortfolioSnapshot(self, req):
+            captured["req"] = req
+            return account_service_pb2.UpdatePortfolioSnapshotResponse(
+                snapshot=account_service_pb2.PortfolioSnapshot(account_id=11, user_id=5)
+            )
+
+    client = AccountClient("")
+    client._stub = FakeStub()
+
+    snapshot = client.update_portfolio_snapshot(
+        account_id=11,
+        user_id=5,
+        snapshot_reason=2,
+        strategy_id=22,
+        session_id="sess-1",
+    )
+
+    req = captured["req"]
+    assert req.account_id == 11
+    assert req.user_id == 5
+    assert req.snapshot_reason == 2
+    assert req.strategy_id == 22
+    assert req.session_id == "sess-1"
+    assert snapshot.account_id == 11
