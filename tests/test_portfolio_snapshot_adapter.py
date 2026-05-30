@@ -72,6 +72,17 @@ def _futures_wallet(
     )
 
 
+def _spot_wallet(*, free: float = 90.0, locked: float = 10.0, assets=None):
+    return account_service_pb2.AccountWalletState(
+        mode=2,
+        spot=account_service_pb2.SpotWallet(
+            free=free,
+            locked=locked,
+            assets=list(assets or []),
+        ),
+    )
+
+
 def _futures_position(
     symbol: str = "ETHUSDT",
     position_side: str = "BOTH",
@@ -159,6 +170,17 @@ def test_build_portfolio_wallet_from_spot_and_futures_venues():
                 _balance("USDT", wallet_balance=100.0, available_balance=90.0, locked=10.0),
                 _balance("BTC", wallet_balance=0.5, available_balance=0.4, locked=0.1),
             ],
+            wallet=_spot_wallet(
+                free=90.0,
+                locked=10.0,
+                assets=[
+                    account_service_pb2.SpotAsset(
+                        symbol="BTC",
+                        qty=0.5,
+                        locked=0.1,
+                    )
+                ],
+            ),
         ),
         _venue(
             venue_id=11,
@@ -313,6 +335,43 @@ def test_futures_compact_position_without_full_wallet_fails_closed():
     )
 
     with pytest.raises(ValueError, match="full canonical wallet"):
+        build_portfolio_wallet_from_snapshot(
+            snapshot,
+            allowed_routes={("binance", "perpetual_futures")},
+        )
+
+
+def test_spot_empty_full_wallet_with_compact_balances_fails_closed():
+    snapshot = _snapshot(
+        _venue(
+            venue_id=10,
+            market=MARKET_SPOT,
+            balances=[
+                _balance("USDT", wallet_balance=100.0, available_balance=90.0, locked=10.0),
+                _balance("BTC", wallet_balance=0.5, available_balance=0.4, locked=0.1),
+            ],
+            wallet=account_service_pb2.AccountWalletState(mode=2),
+        )
+    )
+
+    with pytest.raises(ValueError, match="spot.*full canonical wallet"):
+        build_portfolio_wallet_from_snapshot(
+            snapshot,
+            allowed_routes={("binance", "spot")},
+        )
+
+
+def test_futures_empty_full_wallet_with_compact_positions_fails_closed():
+    snapshot = _snapshot(
+        _venue(
+            venue_id=11,
+            market=MARKET_PERPETUAL_FUTURES,
+            positions=[_position()],
+            wallet=account_service_pb2.AccountWalletState(mode=2),
+        )
+    )
+
+    with pytest.raises(ValueError, match="futures.*full canonical wallet"):
         build_portfolio_wallet_from_snapshot(
             snapshot,
             allowed_routes={("binance", "perpetual_futures")},

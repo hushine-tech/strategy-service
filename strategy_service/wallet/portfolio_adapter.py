@@ -149,10 +149,12 @@ def _build_binance_wallet_from_venue_snapshot(
     market: str,
     updated_at: Any,
 ) -> BinanceWalletRuntime:
-    wallet = getattr(venue, "wallet", None)
-    if _has_full_wallet(venue):
+    wallet = _validated_full_wallet_for_market(venue, market)
+    if wallet is not None:
         return BinanceWalletRuntime.from_canonical(proto_to_account_spec(wallet))
     if market == "spot":
+        if _compact_spot_has_content(venue):
+            raise ValueError("spot VenueSnapshot requires full canonical wallet")
         state = CanonicalAccountState(
             mode=2,
             spot=_build_spot_state(venue),
@@ -161,9 +163,9 @@ def _build_binance_wallet_from_venue_snapshot(
         )
         return BinanceWalletRuntime.from_canonical(state)
     if market == "perpetual_futures":
-        if list(getattr(venue, "positions", []) or []):
+        if _compact_futures_has_content(venue):
             raise ValueError(
-                "futures VenueSnapshot with positions requires full canonical wallet"
+                "futures VenueSnapshot requires full canonical wallet"
             )
         futures_state = _build_futures_state(venue)
         state = CanonicalAccountState(
@@ -177,14 +179,82 @@ def _build_binance_wallet_from_venue_snapshot(
     raise ValueError(f"unsupported portfolio wallet market for binance: {market}")
 
 
-def _has_full_wallet(venue: Any) -> bool:
-    has_field = getattr(venue, "HasField", None)
+def _has_message_field(message: Any, field_name: str) -> bool:
+    has_field = getattr(message, "HasField", None)
     if callable(has_field):
         try:
-            return bool(has_field("wallet"))
+            return bool(has_field(field_name))
         except ValueError:
             return False
-    return getattr(venue, "wallet", None) is not None
+    return getattr(message, field_name, None) is not None
+
+
+def _has_full_wallet(venue: Any) -> bool:
+    return _has_message_field(venue, "wallet")
+
+
+def _validated_full_wallet_for_market(venue: Any, market: str) -> Any | None:
+    if not _has_full_wallet(venue):
+        return None
+
+    wallet = getattr(venue, "wallet", None)
+    if market == "spot":
+        if not _spot_wallet_has_content(getattr(wallet, "spot", None)):
+            raise ValueError("spot VenueSnapshot requires non-empty full canonical wallet")
+        return wallet
+    if market == "perpetual_futures":
+        if not _futures_wallet_has_content(getattr(wallet, "futures", None)):
+            raise ValueError("futures VenueSnapshot requires non-empty full canonical wallet")
+        return wallet
+    return wallet
+
+
+def _spot_wallet_has_content(spot: Any) -> bool:
+    if spot is None:
+        return False
+    return (
+        _float_field(spot, "free") != 0.0
+        or _float_field(spot, "locked") != 0.0
+        or bool(list(getattr(spot, "assets", []) or []))
+    )
+
+
+def _futures_wallet_has_content(futures: Any) -> bool:
+    if futures is None:
+        return False
+    balance_fields = (
+        "initial_balance",
+        "deposit_sum",
+        "withdrawal_sum",
+        "wallet_balance",
+        "available_balance",
+        "total_unrealized_pnl",
+        "total_margin_balance",
+        "total_position_initial_margin",
+        "total_open_order_initial_margin",
+        "total_maint_margin",
+        "total_cross_wallet_balance",
+        "total_cross_un_pnl",
+        "margin_balance",
+        "unrealized_pnl",
+    )
+    return (
+        any(_float_field(futures, field_name) != 0.0 for field_name in balance_fields)
+        or bool(list(getattr(futures, "positions", []) or []))
+        or bool(list(getattr(futures, "risk_metadata", []) or []))
+    )
+
+
+def _compact_spot_has_content(venue: Any) -> bool:
+    return bool(list(getattr(venue, "balances", []) or []))
+
+
+def _compact_futures_has_content(venue: Any) -> bool:
+    return (
+        bool(list(getattr(venue, "positions", []) or []))
+        or _float_field(venue, "wallet_balance") != 0.0
+        or _float_field(venue, "available_balance") != 0.0
+    )
 
 
 def build_portfolio_wallet_from_snapshot(
