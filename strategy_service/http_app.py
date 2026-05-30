@@ -15,7 +15,9 @@ from strategy_service.account_client import AccountClient
 from strategy_service.data_loop import BacktestDataLoop
 from strategy_service.order_client import OrderClient
 from strategy_service.service import StrategyEngine
+from strategy_service.types import Exchange, Market
 from strategy_service.wallet_factory import build_wallet_from_account
+from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +102,8 @@ class BacktestRunRequest(BaseModel):
     user_id: str
     strategy_path: str
     symbol: str
-    symbol_type: str = "futures"
-    market: str = "futures"
+    symbol_type: str = "perpetual_futures"
+    market: str = "perpetual_futures"
     interval: str = "1m"
     start_time_ms: int
     end_time_ms: int
@@ -130,6 +132,13 @@ def _init_logger() -> Any:
         return init_log()
     except Exception:
         return None
+
+
+def _phase3_market(market: str) -> str:
+    market_key = str(market or "").strip().lower()
+    if market_key in ("", "futures", "future", "usdm_futures", "perp"):
+        return Market.PERPETUAL_FUTURES
+    return market_key
 
 
 def create_app() -> Any:
@@ -165,7 +174,9 @@ def create_app() -> Any:
     def run_backtest(req: BacktestRunRequest) -> BacktestRunResponse:
         try:
             wallet = build_wallet_from_account(req.account.model_dump())
-            if req.symbol_type.strip().lower() == "futures" and not wallet.futures.positions:
+            market = _phase3_market(req.market)
+            symbol_type = _phase3_market(req.symbol_type)
+            if symbol_type == Market.PERPETUAL_FUTURES and not wallet.futures.positions:
                 raise ValueError("account.futures.positions must define at least one futures slot")
 
             # --- legacy/admin-only FastAPI wrapper integration (optional) ---
@@ -181,10 +192,15 @@ def create_app() -> Any:
             order_client = OrderClient(req.order_service_address)
 
             engine = StrategyEngine()
+            portfolio_wallet = PortfolioWalletRuntime(
+                req.account_id,
+                {(Exchange.BINANCE, market)},
+                {(Exchange.BINANCE, market, 1001): wallet},
+            )
             user_strategy = engine.create_strategy(
                 user_id=req.user_id,
                 strategy_path=req.strategy_path,
-                wallet=wallet,
+                wallet=portfolio_wallet,
                 order_client=order_client,
                 account_id=req.account_id,
             )
@@ -208,7 +224,7 @@ def create_app() -> Any:
                 start_time_ms=req.start_time_ms,
                 end_time_ms=req.end_time_ms,
                 interval=req.interval,
-                market=req.market,
+                market=market,
             )
             return BacktestRunResponse(ok=True, bars_processed=n, message="completed")
         except Exception as ex:

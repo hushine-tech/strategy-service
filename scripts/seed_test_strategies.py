@@ -66,33 +66,35 @@ SPOT_ROUNDTRIP_CODE = textwrap.dedent('''\
     - 无持仓 + close < 120 → BUY  5 TESTUSDT
     - 持仓   + close > 180 → SELL 5 TESTUSDT
 
-    The strategy declares ``(spot, TESTUSDT, 1m)`` in ``INPUTS`` so the runtime
-    will only route spot-TESTUSDT 1m ticks here — no runtime ``data.market``
-    guard is needed, and a futures tick simply won't reach ``on_market_data``.
+    The strategy declares ``(binance, spot, TESTUSDT, 1m)`` in ``INPUTS`` so the
+    runtime will only route spot-TESTUSDT 1m ticks here.
     """
-    from strategy_service.types import OrderDecision
+    from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType
 
 
     class MyStrategy:
-        INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "TESTUSDT", "interval": "1m"}]
+        INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "TESTUSDT", "interval": "1m"}]
+        ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "TESTUSDT"}]
 
         def __init__(self):
             self._has_position = False
 
         def on_market_data(self, data, wallet):
-            tick = data.market["spot"].symbol["TESTUSDT"].interval["1m"]
+            tick = data.exchange[Exchange.BINANCE].market[Market.SPOT].symbol["TESTUSDT"].interval["1m"]
             if tick is None:
                 return None
             price = float(tick.price)
             if not self._has_position and price < 120.0:
                 self._has_position = True
                 return OrderDecision(
-                    symbol="TESTUSDT", side="BUY", qty=5.0, market="spot",
+                    exchange=Exchange.BINANCE, market=Market.SPOT, symbol="TESTUSDT",
+                    side=OrderSide.BUY, qty="5", order_type=OrderType.MARKET,
                 )
             if self._has_position and price > 180.0:
                 self._has_position = False
                 return OrderDecision(
-                    symbol="TESTUSDT", side="SELL", qty=5.0, market="spot",
+                    exchange=Exchange.BINANCE, market=Market.SPOT, symbol="TESTUSDT",
+                    side=OrderSide.SELL, qty="5", order_type=OrderType.MARKET,
                 )
             return None
 ''')
@@ -101,35 +103,40 @@ SPOT_ROUNDTRIP_CODE = textwrap.dedent('''\
 FUTURES_LONG_ROUNDTRIP_CODE = textwrap.dedent('''\
     """Futures LONG open + close on TESTUSDT.
 
-    - 无持仓 + close < 120 → LONG  0.1 (开多)
-    - 持仓   + close > 180 → SHORT 0.1 (平多;wallet 识别为反向平仓,释放保证金)
+    - 无持仓 + close < 120 → BUY  0.1 (开多)
+    - 持仓   + close > 180 → SELL 0.1 (平多;one-way 模式反向平仓)
 
-    The runtime only routes declared ``(futures, TESTUSDT, 1m)`` ticks here,
+    The runtime only routes declared ``(binance, perpetual_futures, TESTUSDT, 1m)`` ticks here,
     so ``on_market_data`` never sees other markets or intervals.
     """
-    from strategy_service.types import OrderDecision
+    from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType, PositionSide
 
 
     class MyStrategy:
-        INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+        INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "TESTUSDT", "interval": "1m"}]
+        ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "TESTUSDT"}]
 
         def __init__(self):
             self._has_position = False
 
         def on_market_data(self, data, wallet):
-            tick = data.market["futures"].symbol["TESTUSDT"].interval["1m"]
+            tick = data.exchange[Exchange.BINANCE].market[Market.PERPETUAL_FUTURES].symbol["TESTUSDT"].interval["1m"]
             if tick is None:
                 return None
             price = float(tick.price)
             if not self._has_position and price < 120.0:
                 self._has_position = True
                 return OrderDecision(
-                    symbol="TESTUSDT", side="LONG", qty=0.1, market="futures",
+                    exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="TESTUSDT",
+                    side=OrderSide.BUY, qty="0.1", order_type=OrderType.MARKET,
+                    position_side=PositionSide.BOTH,
                 )
             if self._has_position and price > 180.0:
                 self._has_position = False
                 return OrderDecision(
-                    symbol="TESTUSDT", side="SHORT", qty=0.1, market="futures",
+                    exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="TESTUSDT",
+                    side=OrderSide.SELL, qty="0.1", order_type=OrderType.MARKET,
+                    position_side=PositionSide.BOTH,
                 )
             return None
 ''')
@@ -138,32 +145,37 @@ FUTURES_LONG_ROUNDTRIP_CODE = textwrap.dedent('''\
 FUTURES_SHORT_ROUNDTRIP_CODE = textwrap.dedent('''\
     """Futures SHORT open + close on TESTUSDT.
 
-    - 无持仓 + close > 180 → SHORT 0.1 (开空)
-    - 持仓   + close < 120 → LONG  0.1 (平空;wallet 识别为反向平仓)
+    - 无持仓 + close > 180 → SELL 0.1 (开空)
+    - 持仓   + close < 120 → BUY  0.1 (平空;one-way 模式反向平仓)
     """
-    from strategy_service.types import OrderDecision
+    from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType, PositionSide
 
 
     class MyStrategy:
-        INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "TESTUSDT", "interval": "1m"}]
+        INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "TESTUSDT", "interval": "1m"}]
+        ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "TESTUSDT"}]
 
         def __init__(self):
             self._has_position = False
 
         def on_market_data(self, data, wallet):
-            tick = data.market["futures"].symbol["TESTUSDT"].interval["1m"]
+            tick = data.exchange[Exchange.BINANCE].market[Market.PERPETUAL_FUTURES].symbol["TESTUSDT"].interval["1m"]
             if tick is None:
                 return None
             price = float(tick.price)
             if not self._has_position and price > 180.0:
                 self._has_position = True
                 return OrderDecision(
-                    symbol="TESTUSDT", side="SHORT", qty=0.1, market="futures",
+                    exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="TESTUSDT",
+                    side=OrderSide.SELL, qty="0.1", order_type=OrderType.MARKET,
+                    position_side=PositionSide.BOTH,
                 )
             if self._has_position and price < 120.0:
                 self._has_position = False
                 return OrderDecision(
-                    symbol="TESTUSDT", side="LONG", qty=0.1, market="futures",
+                    exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="TESTUSDT",
+                    side=OrderSide.BUY, qty="0.1", order_type=OrderType.MARKET,
+                    position_side=PositionSide.BOTH,
                 )
             return None
 ''')

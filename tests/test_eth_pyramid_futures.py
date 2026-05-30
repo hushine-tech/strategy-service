@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from strategy_templates.eth_pyramid_futures import MyStrategy
 from strategy_service.inputs import InputView, parse_declared_inputs
-from strategy_service.types import MarketData, OrderDecision
+from strategy_service.types import (
+    Exchange,
+    Market,
+    MarketData,
+    OrderDecision,
+    OrderSide,
+    OrderType,
+    PositionSide,
+)
 
 
 class _StubFutures:
@@ -17,14 +25,28 @@ class _StubFutures:
 
 class _StubWallet:
     def __init__(self, margin_balance: float = 10_000.0) -> None:
-        self.futures = _StubFutures(margin_balance)
+        self._futures = _StubFutures(margin_balance)
 
-    def get_wallet_balance(self) -> float:
-        return float(self.futures.get_margin_balance())
+    def get(self, exchange: str, market: str):
+        assert exchange == Exchange.BINANCE
+        assert market == Market.PERPETUAL_FUTURES
+        return self._futures
 
 
-def _md(price: float, symbol: str = "ETHUSDT", market: str = "futures", interval: str = "1m") -> MarketData:
-    return MarketData(symbol=symbol, price=price, timestamp=0, market=market, interval=interval)
+def _md(
+    price: float,
+    symbol: str = "ETHUSDT",
+    market: str = Market.PERPETUAL_FUTURES,
+    interval: str = "1m",
+) -> MarketData:
+    return MarketData(
+        exchange=Exchange.BINANCE,
+        symbol=symbol,
+        price=price,
+        timestamp=0,
+        market=market,
+        interval=interval,
+    )
 
 
 def _make_view() -> InputView:
@@ -54,10 +76,13 @@ def test_rise_over_0_1pct_triggers_long_1pct_of_margin_balance():
     decision = _feed(strat, view, _md(3003.1), wallet)  # > +0.1%
 
     assert isinstance(decision, OrderDecision)
-    assert decision.side == "LONG"
-    assert decision.market == "futures"
+    assert decision.exchange == Exchange.BINANCE
+    assert decision.side == OrderSide.BUY
+    assert decision.market == Market.PERPETUAL_FUTURES
     assert decision.symbol == "ETHUSDT"
-    assert decision.qty == round(int((100.0 / 3003.1) / 0.001) * 0.001, 3)
+    assert decision.qty == str(round(int((100.0 / 3003.1) / 0.001) * 0.001, 3))
+    assert decision.order_type == OrderType.MARKET
+    assert decision.position_side == PositionSide.BOTH
 
 
 def test_drop_over_0_1pct_triggers_short_1pct_of_margin_balance():
@@ -69,10 +94,13 @@ def test_drop_over_0_1pct_triggers_short_1pct_of_margin_balance():
     decision = _feed(strat, view, _md(2996.9), wallet)  # < -0.1%
 
     assert isinstance(decision, OrderDecision)
-    assert decision.side == "SHORT"
-    assert decision.market == "futures"
+    assert decision.exchange == Exchange.BINANCE
+    assert decision.side == OrderSide.SELL
+    assert decision.market == Market.PERPETUAL_FUTURES
     assert decision.symbol == "ETHUSDT"
-    assert decision.qty == round(int((100.0 / 2996.9) / 0.001) * 0.001, 3)
+    assert decision.qty == str(round(int((100.0 / 2996.9) / 0.001) * 0.001, 3))
+    assert decision.order_type == OrderType.MARKET
+    assert decision.position_side == PositionSide.BOTH
 
 
 def test_reference_price_resets_after_each_trigger():
@@ -85,9 +113,9 @@ def test_reference_price_resets_after_each_trigger():
     d2 = _feed(strat, view, _md(3004.0), wallet)  # 相对 3003.1 不到 0.1%
     d3 = _feed(strat, view, _md(3006.2), wallet)  # 相对 3003.1 超过 0.1%
 
-    assert d1 is not None and d1.side == "LONG"
+    assert d1 is not None and d1.side == OrderSide.BUY
     assert d2 is None
-    assert d3 is not None and d3.side == "LONG"
+    assert d3 is not None and d3.side == OrderSide.BUY
 
 
 def test_low_margin_balance_blocks_orders_but_resets_reference():

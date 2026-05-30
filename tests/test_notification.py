@@ -8,12 +8,21 @@ from strategy_service.notification import (
     StrategyNotifier,
 )
 from strategy_service.strategy.base import BaseStrategy
-from strategy_service.types import MarketData
+from strategy_service.types import Exchange, Market, MarketData
+from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 
 class _Wallet:
     def on_market_data(self, symbol: str, market: str, price: float) -> None:
         self.last = (symbol, market, price)
+
+
+def _portfolio_wallet() -> PortfolioWalletRuntime:
+    return PortfolioWalletRuntime(
+        7,
+        {(Exchange.BINANCE, Market.PERPETUAL_FUTURES)},
+        {(Exchange.BINANCE, Market.PERPETUAL_FUTURES, 1001): _Wallet()},
+    )
 
 
 class _NotificationClient:
@@ -30,21 +39,34 @@ def test_self_notify_injected_into_user_strategy() -> None:
     client = _NotificationClient()
     strategy = BaseStrategy(
         "ignored",
-        _Wallet(),
+        _portfolio_wallet(),
         account_id=7,
         strategy_id=9,
         session_id="sess-1",
         notifier=StrategyNotifier(client),
         strategy_code="""
+from strategy_service.types import Exchange, Market
+
 class MyStrategy:
-    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT", "interval": "1m"}]
+    ORDER_TARGETS = []
+
     def on_market_data(self, data, wallet):
         self.notify.warn("threshold reached", title="Risk")
         return None
 """,
     )
 
-    strategy.running_strategy(MarketData(symbol="ETHUSDT", price=2500, timestamp=1, market="futures", interval="1m"))
+    strategy.running_strategy(
+        MarketData(
+            exchange=Exchange.BINANCE,
+            symbol="ETHUSDT",
+            price=2500,
+            timestamp=1,
+            market=Market.PERPETUAL_FUTURES,
+            interval="1m",
+        )
+    )
 
     assert len(client.calls) == 1
     assert client.calls[0]["severity"] == "warn"

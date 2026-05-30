@@ -13,12 +13,31 @@
 
 from __future__ import annotations
 
-from strategy_service.types import OrderDecision
+from strategy_service.types import (
+    Exchange,
+    Market,
+    OrderDecision,
+    OrderSide,
+    OrderType,
+    PositionSide,
+)
 
 
 class MyStrategy:
     INPUTS = [
-        {"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"},
+        {
+            "exchange": Exchange.BINANCE,
+            "market": Market.PERPETUAL_FUTURES,
+            "symbol": "ETHUSDT",
+            "interval": "1m",
+        },
+    ]
+    ORDER_TARGETS = [
+        {
+            "exchange": Exchange.BINANCE,
+            "market": Market.PERPETUAL_FUTURES,
+            "symbol": "ETHUSDT",
+        },
     ]
 
     _TRIGGER_PCT = 0.001          # 0.1%
@@ -30,11 +49,14 @@ class MyStrategy:
         self._ref_price: float | None = None
 
     def _get_margin_balance(self, wallet) -> float:
-        futures = getattr(wallet, "futures", None)
-        getter = getattr(futures, "get_margin_balance", None) if futures is not None else None
+        try:
+            futures = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
+        except Exception:
+            return 0.0
+        getter = getattr(futures, "get_margin_balance", None)
         if callable(getter):
             return float(getter())
-        fallback = getattr(wallet, "get_wallet_balance", None)
+        fallback = getattr(futures, "get_wallet_balance", None)
         if callable(fallback):
             return float(fallback())
         return 0.0
@@ -45,7 +67,12 @@ class MyStrategy:
         return round(floored, self._QTY_DECIMALS)
 
     def on_market_data(self, data, wallet) -> OrderDecision | None:
-        tick = data.market["futures"].symbol["ETHUSDT"].interval["1m"]
+        tick = (
+            data.exchange[Exchange.BINANCE]
+            .market[Market.PERPETUAL_FUTURES]
+            .symbol["ETHUSDT"]
+            .interval["1m"]
+        )
         if tick is None:
             return None
 
@@ -73,15 +100,21 @@ class MyStrategy:
 
         if change > 0:
             return OrderDecision(
+                exchange=Exchange.BINANCE,
+                market=Market.PERPETUAL_FUTURES,
                 symbol="ETHUSDT",
-                side="LONG",
-                qty=qty,
-                market="futures",
+                side=OrderSide.BUY,
+                qty=str(qty),
+                order_type=OrderType.MARKET,
+                position_side=PositionSide.BOTH,
             )
 
         return OrderDecision(
+            exchange=Exchange.BINANCE,
+            market=Market.PERPETUAL_FUTURES,
             symbol="ETHUSDT",
-            side="SHORT",
-            qty=qty,
-            market="futures",
+            side=OrderSide.SELL,
+            qty=str(qty),
+            order_type=OrderType.MARKET,
+            position_side=PositionSide.BOTH,
         )

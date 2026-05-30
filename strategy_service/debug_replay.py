@@ -21,8 +21,10 @@ from strategy_service.notification import StrategyNotifier
 from strategy_service.runtime_agent import DebugDataset, RuntimeBusyError
 from strategy_service.runtime_profile import RUNTIME_VERSION
 from strategy_service.service import StrategyEngine
+from strategy_service.types import Exchange, Market
 from strategy_service.wallet_adapter import proto_to_account_spec
 from strategy_service.wallet_factory import build_wallet_from_account
+from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,13 @@ SNAPSHOT_REASON_ORDER_FILL = 1
 SNAPSHOT_REASON_STRATEGY_START = 2
 SNAPSHOT_REASON_STRATEGY_END = 3
 _DEBUGPY_LISTEN_ENDPOINT: tuple[str, int] | None = None
+
+
+def _phase3_market(market: str | None) -> str:
+    market_key = str(market or "").strip().lower()
+    if market_key in ("", "futures", "future", "usdm_futures", "perp"):
+        return Market.PERPETUAL_FUTURES
+    return market_key
 
 
 @dataclass(frozen=True)
@@ -111,6 +120,12 @@ class DebugReplayRunner:
             if int(getattr(info, "mode", 0) or 0) != 0:
                 raise RuntimeError("debug replay only supports mode=0 accounts")
             wallet = build_wallet_from_account(proto_to_account_spec(info))
+            debug_market = _phase3_market(dataset.market)
+            portfolio_wallet = PortfolioWalletRuntime(
+                dataset.account_id,
+                {(Exchange.BINANCE, debug_market)},
+                {(Exchange.BINANCE, debug_market, 1001): wallet},
+            )
 
             strategy_code = self._read_strategy_code(dataset)
             self._save_debug_session(
@@ -134,7 +149,7 @@ class DebugReplayRunner:
             user_strategy = engine.create_strategy(
                 user_id=f"debug:{dataset.user_id}:session:{session_id}",
                 strategy_path=self._strategy_path(),
-                wallet=wallet,
+                wallet=portfolio_wallet,
                 order_client=order_client,
                 account_id=dataset.account_id,
                 strategy_id=0,
@@ -156,7 +171,7 @@ class DebugReplayRunner:
             user_strategy.on_order_callback = _on_order_sync
 
             for kline in dataset.klines:
-                engine.running_strategy(_adapt_kline(kline, getattr(kline, "market", None)))
+                engine.running_strategy(_adapt_kline(kline, _phase3_market(getattr(kline, "market", None))))
                 bars_processed += 1
                 if bars_processed % self._progress_every_bars == 0:
                     account_client.update_session(
@@ -269,7 +284,7 @@ class DebugReplayRunner:
             raise RuntimeError("debug strategy file is empty")
         return _with_debug_inputs_if_missing(
             code,
-            market=dataset.market,
+            market=_phase3_market(dataset.market),
             symbol=dataset.symbol,
             interval=dataset.interval,
         )
@@ -382,19 +397,29 @@ class DebugReplayRunner:
 
 
 def _with_debug_inputs_if_missing(code: str, *, market: str, symbol: str, interval: str) -> str:
-    if _my_strategy_declares_inputs(code):
+    has_inputs = _my_strategy_declares_inputs(code)
+    has_targets = _my_strategy_declares_order_targets(code)
+    if has_inputs and has_targets:
         return code
+    normalized_market = _phase3_market(market)
     inputs = [{"exchange": "binance", "market": market, "symbol": symbol, "interval": interval}]
-    suffix = (
-        "\n\n"
-        "# Hushine debugger injects the page-selected dataset universe when the\n"
-        "# scratch strategy does not declare INPUTS itself.\n"
-        "_hushine_debug_inputs = "
-        f"{json.dumps(inputs, separators=(',', ':'))}\n"
-        "if 'MyStrategy' in globals() and not hasattr(MyStrategy, 'INPUTS') "
-        "and not hasattr(MyStrategy, 'inputs') and not hasattr(MyStrategy, 'declared_inputs'):\n"
-        "    MyStrategy.INPUTS = _hushine_debug_inputs\n"
-    )
+    inputs[0]["market"] = normalized_market
+    suffix_parts = ["\n\n# Hushine debugger injects missing Phase 3 declarations for scratch strategies.\n"]
+    if not has_inputs:
+        suffix_parts.extend([
+            "_hushine_debug_inputs = ",
+            f"{json.dumps(inputs, separators=(',', ':'))}\n",
+            "if 'MyStrategy' in globals() and not hasattr(MyStrategy, 'INPUTS') "
+            "and not hasattr(MyStrategy, 'inputs') and not hasattr(MyStrategy, 'declared_inputs'):\n",
+            "    MyStrategy.INPUTS = _hushine_debug_inputs\n",
+        ])
+    if not has_targets:
+        suffix_parts.extend([
+            "if 'MyStrategy' in globals() and not hasattr(MyStrategy, 'ORDER_TARGETS') "
+            "and not hasattr(MyStrategy, 'order_targets'):\n",
+            "    MyStrategy.ORDER_TARGETS = []\n",
+        ])
+    suffix = "".join(suffix_parts)
     return code.rstrip() + suffix
 
 
@@ -419,5 +444,27 @@ def _my_strategy_declares_inputs(code: str) -> bool:
             if isinstance(child, ast.AnnAssign):
                 target = child.target
                 if isinstance(target, ast.Name) and target.id == "INPUTS":
+                    return True
+    return False
+
+
+def _my_strategy_declares_order_targets(code: str) -> bool:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != "MyStrategy":
+            continue
+        for child in node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == "order_targets":
+                return True
+            if isinstance(child, ast.Assign):
+                for target in child.targets:
+                    if isinstance(target, ast.Name) and target.id == "ORDER_TARGETS":
+                        return True
+            if isinstance(child, ast.AnnAssign):
+                target = child.target
+                if isinstance(target, ast.Name) and target.id == "ORDER_TARGETS":
                     return True
     return False

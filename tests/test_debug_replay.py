@@ -33,7 +33,7 @@ class MyStrategy:
         user_id=7,
         account_id=10,
         runtime_id="rt-debug",
-        market="futures",
+        market="perpetual_futures",
         symbol="ETHUSDT",
         interval="1m",
         start_time_ms=1000,
@@ -43,7 +43,7 @@ class MyStrategy:
             _kline_from_mapping({
                 "symbol": "ETHUSDT",
                 "interval": "1m",
-                "market": "futures",
+                    "market": "perpetual_futures",
                 "open_time_ms": 1000,
                 "close_time_ms": 60999,
                 "open": 100.0,
@@ -55,7 +55,7 @@ class MyStrategy:
             _kline_from_mapping({
                 "symbol": "ETHUSDT",
                 "interval": "1m",
-                "market": "futures",
+                    "market": "perpetual_futures",
                 "open_time_ms": 61000,
                 "close_time_ms": 120999,
                 "open": 100.5,
@@ -95,7 +95,7 @@ def test_debug_replay_rejects_concurrent_run(tmp_path):
         user_id=7,
         account_id=10,
         runtime_id="rt-debug",
-        market="futures",
+        market="perpetual_futures",
         symbol="ETHUSDT",
         interval="1m",
         start_time_ms=1000,
@@ -104,7 +104,7 @@ def test_debug_replay_rejects_concurrent_run(tmp_path):
         klines=[_kline_from_mapping({
             "symbol": "ETHUSDT",
             "interval": "1m",
-            "market": "futures",
+            "market": "perpetual_futures",
             "open_time_ms": 1000,
             "close_time_ms": 60999,
             "open": 100.0,
@@ -133,9 +133,11 @@ class MyStrategy:
         return None
 """
 
-    updated = _with_debug_inputs_if_missing(code, market="futures", symbol="ETHUSDT", interval="1m")
+    updated = _with_debug_inputs_if_missing(code, market="perpetual_futures", symbol="ETHUSDT", interval="1m")
 
-    assert updated == code
+    assert updated != code
+    assert "MyStrategy.INPUTS" not in updated
+    assert "MyStrategy.ORDER_TARGETS = []" in updated
 
 
 def test_activate_pycharm_debugger_uses_current_pydevd_keywords(monkeypatch):

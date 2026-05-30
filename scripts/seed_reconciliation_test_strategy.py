@@ -3,10 +3,10 @@
 
 ETHUSDT futures 1m 触发式对账压测策略:
 
-  - 声明输入: ``(futures, ETHUSDT, 1m)``
+  - 声明输入: ``(binance, perpetual_futures, ETHUSDT, 1m)``
   - 每 tick 计算和参考价的涨跌幅 Δ:
-      * Δ >= +0.1%  → SHORT  (做空) 1% 钱包余额的 ETH, 重置参考价
-      * Δ <= -0.1%  → LONG   (做多) 1% 钱包余额的 ETH, 重置参考价
+      * Δ >= +0.1%  → SELL  (做空) 1% 钱包余额的 ETH, 重置参考价
+      * Δ <= -0.1%  → BUY   (做多) 1% 钱包余额的 ETH, 重置参考价
       * 其它         → 不动作
   - 订单量 = wallet_balance × 1% / price, 向下取整到 0.001 ETH (Binance ETHUSDT 步长)
 
@@ -41,7 +41,7 @@ local wallet ↔ 交易所 wallet 的漂移会立刻出现在 reconciliation_run
   - futures 钱包里要有 ``ETHUSDT`` 的 position 槽位 (one-way 即可) +
     足够的 USDT 余额 (≥ 500 USDT 建议, 让 1% = 5 USDT 足够下单)
   - 要启动一条 live K-line 流 (``POST /api/market-data/requests``
-    symbol=ETHUSDT market=futures kind=kline interval=1m)
+    symbol=ETHUSDT market=perpetual_futures kind=kline interval=1m)
 """
 
 from __future__ import annotations
@@ -74,17 +74,18 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
     """ETHUSDT futures 对账压测策略.
 
     - 无持仓 + 第一 tick 只记录参考价
-    - 每 +0.1% → SHORT 1% 钱包; 每 -0.1% → LONG 1% 钱包
+    - 每 +0.1% → SELL 1% 钱包; 每 -0.1% → BUY 1% 钱包
     - 每次触发后重置参考价, 需要再一次 ±0.1% 才会再下单
 
-    INPUTS 声明决定运行时 router 只路由 (futures, ETHUSDT, 1m); 其它 ticks
+    INPUTS 声明决定运行时 router 只路由 (binance, perpetual_futures, ETHUSDT, 1m); 其它 ticks
     根本不会进入 on_market_data.
     """
-    from strategy_service.types import OrderDecision
+    from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType, PositionSide
 
 
     class MyStrategy:
-        INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+        INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT", "interval": "1m"}]
+        ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT"}]
 
         # 触发阈值: ±0.1% (千分之一).
         TRIGGER_PCT = 0.001
@@ -97,7 +98,7 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
             self._ref_price = None
 
         def on_market_data(self, data, wallet):
-            tick = data.market["futures"].symbol["ETHUSDT"].interval["1m"]
+            tick = data.exchange[Exchange.BINANCE].market[Market.PERPETUAL_FUTURES].symbol["ETHUSDT"].interval["1m"]
             if tick is None:
                 return None
             price = float(tick.price)
@@ -113,9 +114,10 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
             if abs(change) < self.TRIGGER_PCT:
                 return None
 
-            # 从钱包读余额; get_wallet_balance 在 BinanceWalletRuntime 上是标准 API.
+            # 从组合钱包读取目标 venue 的余额.
             try:
-                wallet_balance = float(wallet.futures.get_wallet_balance())
+                futures_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
+                wallet_balance = float(futures_wallet.get_wallet_balance())
             except Exception:
                 return None
             if wallet_balance <= 0:
@@ -136,12 +138,16 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
             if change > 0:
                 # 涨了 → 做空 1%
                 return OrderDecision(
-                    symbol="ETHUSDT", side="SHORT", qty=qty, market="futures",
+                    exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES,
+                    symbol="ETHUSDT", side=OrderSide.SELL, qty=str(qty),
+                    order_type=OrderType.MARKET, position_side=PositionSide.BOTH,
                 )
             else:
                 # 跌了 → 做多 1%
                 return OrderDecision(
-                    symbol="ETHUSDT", side="LONG", qty=qty, market="futures",
+                    exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES,
+                    symbol="ETHUSDT", side=OrderSide.BUY, qty=str(qty),
+                    order_type=OrderType.MARKET, position_side=PositionSide.BOTH,
                 )
 ''')
 

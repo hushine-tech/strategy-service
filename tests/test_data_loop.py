@@ -10,7 +10,8 @@ from strategy_service.data_loop import (
     LiveDataLoop,
     _adapt_kline,
 )
-from strategy_service.types import MarketData
+from strategy_service.types import Exchange, Market, MarketData
+from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
@@ -267,6 +268,15 @@ def _wallet_with_spot_slot(symbol: str = "BTCUSDT", *, spot_free: float = 0.0):
     )
 
 
+def _portfolio_wallet(default_wallet, *routes: tuple[str, str]) -> PortfolioWalletRuntime:
+    route_set = set(routes) or {(Exchange.BINANCE, Market.SPOT)}
+    wallets = {
+        (exchange, market, idx): default_wallet
+        for idx, (exchange, market) in enumerate(sorted(route_set), start=1001)
+    }
+    return PortfolioWalletRuntime(1, route_set, wallets)
+
+
 # ---------------------------------------------------------------------------
 # LiveDataLoop
 # ---------------------------------------------------------------------------
@@ -336,15 +346,21 @@ def test_live_loop_callback_replays_spot_kline_into_spot_strategy():
     wallet = _wallet_with_spot_slot(symbol="BTCUSDT", spot_free=1_000.0)
     service = StrategyService()
     strategy_code = (
-        "from strategy_service.types import OrderDecision\n"
+        "from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType\n"
         "\n"
         "class MyStrategy:\n"
-        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "BTCUSDT"}]\n'
         "\n"
         "    def on_market_data(self, data, wallet):\n"
-        "        return OrderDecision(symbol='BTCUSDT', side='LONG', qty=0.1, market='spot')\n"
+        "        return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol='BTCUSDT', side=OrderSide.BUY, qty='0.1', order_type=OrderType.MARKET)\n"
     )
-    service.create_strategy("u1", "<db:spot_live_replay>", wallet, strategy_code=strategy_code)
+    service.create_strategy(
+        "u1",
+        "<db:spot_live_replay>",
+        _portfolio_wallet(wallet, (Exchange.BINANCE, Market.SPOT)),
+        strategy_code=strategy_code,
+    )
 
     loop = LiveDataLoop(service=service, config=None, now_ms_fn=lambda: 60_000)
     kline = MarketKline(
