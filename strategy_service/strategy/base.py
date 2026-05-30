@@ -388,7 +388,8 @@ class BaseStrategy:
             )
             return
 
-        fill_price = float(signal.price) if signal.price is not None else float(market_data.price)
+        market_tick_price = float(market_data.price)
+        balance_check_price = float(signal.price) if signal.price is not None else market_tick_price
 
         # Look up a position/asset to get leverage for margin math.
         fw = getattr(self.wallet, "futures", None)
@@ -420,7 +421,7 @@ class BaseStrategy:
                     )
                     return
             else:
-                need = qty * fill_price
+                need = qty * balance_check_price
                 free = float(sw.free) if sw is not None else 0.0
                 if free < need:
                     logger.debug(
@@ -437,7 +438,7 @@ class BaseStrategy:
                     if qty <= abs(current_qty):
                         is_closing = True
             if not is_closing:
-                margin_needed = qty * fill_price / leverage
+                margin_needed = qty * balance_check_price / leverage
                 if hasattr(self.wallet, "get_available_balance"):
                     available_balance = float(self.wallet.get_available_balance())
                 else:
@@ -453,7 +454,7 @@ class BaseStrategy:
 
         intent_id = uuid.uuid4().hex
         feedback = self._coerce_execution_feedback(self._order_client.place_order(
-            self._account_id, signal, fill_price,
+            self._account_id, signal, market_tick_price,
             account_symbol=sig_sym,
             strategy_id=self._strategy_id,
             market=sig_market,

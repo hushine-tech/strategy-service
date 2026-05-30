@@ -736,6 +736,47 @@ def test_futures_open_precheck_uses_available_balance_not_wallet_balance():
     wallet.on_order.assert_not_called()
 
 
+def test_limit_order_passes_market_tick_as_mark_price_not_limit_price():
+    wallet = _wallet_with_futures_slot()
+    captured: dict[str, float] = {}
+
+    class FakeOrderClient:
+        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
+            return []
+
+        def place_order(self, _account_id, _decision, mark_price, **_kwargs):
+            captured["mark_price"] = mark_price
+            return ExecutionFeedback(attempt_status="FAILED", error_message="stop after capture")
+
+    strategy_code = _inline(
+        "    def on_market_data(self, data, wallet):\n"
+        "        tick = data.market[\"futures\"].symbol[\"TESTUSDT\"].interval[\"1m\"]\n"
+        "        return OrderDecision(\n"
+        "            symbol=\"TESTUSDT\",\n"
+        "            side=\"LONG\",\n"
+        "            qty=0.01,\n"
+        "            price=float(tick.price) * 0.5,\n"
+        "            market=\"futures\",\n"
+        "            exchange=\"binance\",\n"
+        "            order_type=\"LIMIT\",\n"
+        "            time_in_force=\"GTC\",\n"
+        "        )\n"
+    )
+
+    svc = StrategyService()
+    svc.create_strategy(
+        "u1",
+        "<db:limit_mark_price>",
+        wallet,
+        strategy_code=strategy_code,
+        order_client=FakeOrderClient(),
+        session_id="session-limit-mark",
+    )
+    svc.running_strategy(_md(price=50_000.0))
+
+    assert captured["mark_price"] == pytest.approx(50_000.0)
+
+
 def test_spot_sell_precheck_uses_unlocked_qty():
     wallet = _wallet_with_spot_slot()
     wallet.spot.assets["TESTUSDT"] = SpotAsset(qty=1.0, locked=0.8, avg_entry_price=90.0, price=100.0)
