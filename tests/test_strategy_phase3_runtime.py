@@ -19,6 +19,7 @@ from strategy_service.types import (
     OrderType,
 )
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
 class RouteWallet:
@@ -109,6 +110,32 @@ def _portfolio(*routes: tuple[str, str]) -> PortfolioWalletRuntime:
         for idx, (exchange, market) in enumerate(routes, start=10)
     }
     return PortfolioWalletRuntime(1, set(routes), wallets)
+
+
+def _real_futures_portfolio(symbol: str = "ETHUSDT") -> tuple[PortfolioWalletRuntime, Any]:
+    wallet = make_backtest_wallet(
+        margin_mode="isolated",
+        position_mode="one_way",
+        futures_positions=[
+            {
+                "symbol": symbol,
+                "position_side": "BOTH",
+                "position_qty": 0.0,
+                "entry_price": 0.0,
+                "mark_price": 0.0,
+                "leverage": 20,
+                "initial_balance": 10_000,
+                "fee_rate": 0.0,
+                "margin_mode": "isolated",
+            }
+        ],
+    )
+    portfolio = PortfolioWalletRuntime(
+        1,
+        {(Exchange.BINANCE, Market.PERPETUAL_FUTURES)},
+        {(Exchange.BINANCE, Market.PERPETUAL_FUTURES, 10): wallet},
+    )
+    return portfolio, wallet
 
 
 def _strategy(body: str, *, order_targets: str | None = None) -> str:
@@ -552,7 +579,7 @@ def test_lifecycle_replay_of_synchronous_fill_is_not_settled_twice() -> None:
             )
 
     client = SyncThenLifecycleClient()
-    wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
+    wallet, route_wallet = _real_futures_portfolio()
     svc = BaseStrategy(
         "inline.py",
         wallet,
@@ -570,8 +597,9 @@ def test_lifecycle_replay_of_synchronous_fill_is_not_settled_twice() -> None:
     svc.running_strategy(_tick())
     svc.running_strategy(_tick(price=2501.0))
 
-    route_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
-    assert [order.qty for order in route_wallet.orders] == [0.1]
+    pos = route_wallet.futures.positions[("ETHUSDT", 0)]
+    assert pos.position_qty == pytest.approx(0.1)
+    assert route_wallet.futures.open_orders == {}
     assert client.place_calls == 1
 
 
@@ -624,7 +652,7 @@ def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
             )
 
     client = PartialThenLifecycleClient()
-    wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
+    wallet, route_wallet = _real_futures_portfolio()
     svc = BaseStrategy(
         "inline.py",
         wallet,
@@ -642,9 +670,9 @@ def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
     svc.running_strategy(_tick())
     svc.running_strategy(_tick(price=2510.0))
 
-    route_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
-    assert [order.qty for order in route_wallet.orders] == pytest.approx([0.1, 0.1])
-    assert route_wallet.orders[-1].executed_qty == pytest.approx(0.1)
+    pos = route_wallet.futures.positions[("ETHUSDT", 0)]
+    assert pos.position_qty == pytest.approx(0.2)
+    assert route_wallet.futures.open_orders == {}
     assert client.place_calls == 1
 
 

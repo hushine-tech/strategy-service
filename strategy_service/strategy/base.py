@@ -356,15 +356,16 @@ class BaseStrategy:
                 order_resp = OrderClient.order_response_from_update(event)
                 if order_resp is not None:
                     if event_id <= 0 or event_id not in self._settled_lifecycle_event_ids:
-                        order_resp = self._adjust_lifecycle_order_response(order_resp)
+                        event_exchange = _norm_exchange(getattr(event, "exchange", ""))
+                        event_market = _norm_market(getattr(event, "market", ""))
+                        route_wallet = self.wallet.get(event_exchange, event_market)
+                        order_resp = self._adjust_lifecycle_order_response(order_resp, route_wallet)
                         if order_resp is None:
                             if event_id > 0:
                                 self._settled_lifecycle_event_ids.add(event_id)
                             if self._is_order_update_terminal(event, None):
                                 self._blocked_order_keys.discard(self._blocked_key_for_event(event, None))
                             continue
-                        event_exchange = _norm_exchange(getattr(event, "exchange", ""))
-                        event_market = _norm_market(getattr(event, "market", ""))
                         self._apply_order_to_wallet(
                             event_exchange,
                             event_market,
@@ -459,9 +460,25 @@ class BaseStrategy:
         if cumulative > current:
             self._sync_settled_order_quantities[order_id] = cumulative
 
+    @staticmethod
+    def _route_wallet_has_open_order(route_wallet: Any, order_id: str) -> bool:
+        if not order_id:
+            return False
+        candidates = [
+            route_wallet,
+            getattr(route_wallet, "futures", None),
+            getattr(route_wallet, "spot", None),
+        ]
+        for wallet_part in candidates:
+            open_orders = getattr(wallet_part, "open_orders", None)
+            if isinstance(open_orders, dict) and order_id in open_orders:
+                return True
+        return False
+
     def _adjust_lifecycle_order_response(
         self,
         order_resp: OrderResponse,
+        route_wallet: Any,
     ) -> OrderResponse | None:
         order_id = str(getattr(order_resp, "order_id", "") or "").strip()
         cumulative = self._order_cumulative_executed_qty(order_resp)
@@ -473,6 +490,8 @@ class BaseStrategy:
         if cumulative <= settled:
             self._sync_settled_order_quantities[order_id] = max(settled, cumulative)
             return None
+        if self._route_wallet_has_open_order(route_wallet, order_id):
+            return order_resp
         delta = cumulative - settled
         sign = -1.0 if float(getattr(order_resp, "qty", 0.0) or 0.0) < 0.0 else 1.0
         adjusted = replace(
