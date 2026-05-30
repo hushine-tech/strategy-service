@@ -180,6 +180,20 @@ def test_view_returns_latest_md_after_update():
     assert got is md
 
 
+def test_view_supports_exchange_market_shorthand_matching_strategy_library():
+    view = InputView([_perp_input()])
+    md = _md("ETHUSDT", Market.PERPETUAL_FUTURES, "1m", price=3000.0)
+    assert view.update(md) is True
+
+    got = (
+        view.exchange[Exchange.BINANCE][Market.PERPETUAL_FUTURES]
+        .symbol["ETHUSDT"]
+        .interval["1m"]
+    )
+
+    assert got is md
+
+
 def test_view_update_returns_false_for_undeclared_key():
     view = InputView([_perp_input()])
     assert view.update(_md("BTCUSDT", Market.PERPETUAL_FUTURES, "1m")) is False

@@ -252,6 +252,52 @@ def test_run_declared_accepts_strategyinput_like_objects():
     assert n == 2
 
 
+def test_run_declared_queries_futures_storage_but_dispatches_canonical_market():
+    from market_data.models import MarketKline
+
+    service = StrategyService()
+    dispatched: list[MarketData] = []
+    received_markets: list[str] = []
+
+    class DuckInput:
+        market = Market.PERPETUAL_FUTURES
+        symbol = "ETHUSDT"
+        interval = "1m"
+
+    class FakeDataSource:
+        def get_klines(self, symbol, interval, _st, _et, market="futures"):
+            received_markets.append(market)
+            return iter([MarketKline(
+                symbol=symbol,
+                interval=interval,
+                open_time=1000,
+                close_time=60000,
+                open=1.0,
+                high=2.0,
+                low=0.5,
+                close=1.5,
+                volume=1.0,
+                timestamp=60000,
+                market=market,
+            )])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    service.running_strategy = lambda md: dispatched.append(md)
+    loop = BacktestDataLoop(service=service, config=None)
+
+    with patch("strategy_service.data_loop.BacktestDataSource", return_value=FakeDataSource()):
+        n = loop.run_declared([DuckInput()], start_time=0, end_time=1_000_000)
+
+    assert n == 1
+    assert received_markets == ["futures"]
+    assert [md.market for md in dispatched] == [Market.PERPETUAL_FUTURES]
+
+
 def _wallet_with_spot_slot(symbol: str = "BTCUSDT", *, spot_free: float = 0.0):
     """Build a backtest wallet with one spot asset slot preconfigured.
 
@@ -334,6 +380,40 @@ def test_live_loop_callback_adapts_and_dispatches():
     assert dispatched[0].price == 50000.0
     assert dispatched[0].market == "futures"
     assert dispatched[0].klines["close"] == 50000.0
+
+
+def test_live_loop_can_dispatch_canonical_market_for_storage_market():
+    from market_data.models import MarketKline
+
+    service = StrategyService()
+    dispatched: list[MarketData] = []
+    service.running_strategy = dispatched.append
+
+    loop = LiveDataLoop(
+        service=service,
+        config=None,
+        now_ms_fn=lambda: 60_000,
+        canonical_markets={
+            ("futures", "ETHUSDT", "1m"): Market.PERPETUAL_FUTURES,
+        },
+    )
+    kline = MarketKline(
+        symbol="ETHUSDT",
+        interval="1m",
+        open_time=1000,
+        close_time=60000,
+        open=1.0,
+        high=2.0,
+        low=0.5,
+        close=1.5,
+        volume=10.0,
+        timestamp=60000,
+        market="futures",
+    )
+
+    loop._on_kline(kline)
+
+    assert [md.market for md in dispatched] == [Market.PERPETUAL_FUTURES]
 
 
 def test_live_loop_callback_replays_spot_kline_into_spot_strategy():

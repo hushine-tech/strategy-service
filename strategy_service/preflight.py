@@ -302,7 +302,7 @@ def _interval_seconds(interval: str) -> int:
     return value * multipliers.get(unit, 60)
 
 
-def _stream_to_binding(stream_proto: Any) -> StreamBinding:
+def _stream_to_binding(stream_proto: Any, *, canonical_market: str = "") -> StreamBinding:
     key = stream_proto.key
     return StreamBinding(
         stream_id=int(stream_proto.stream_id),
@@ -311,6 +311,7 @@ def _stream_to_binding(stream_proto: Any) -> StreamBinding:
         kind=str(key.kind or "kline").strip().lower(),
         symbol=str(key.symbol or "").strip().upper(),
         interval=str(key.interval or "").strip() or "1m",
+        canonical_market=str(canonical_market or "").strip().lower(),
     )
 
 
@@ -413,7 +414,7 @@ def live_stream_preflight(
         # downstream lease management can always rely on having bindings for
         # every declared input that passed structural validation. Readiness
         # checks below only affect ``result.failures``, not ``required_streams``.
-        result.required_streams.append(_stream_to_binding(stream))
+        result.required_streams.append(_stream_to_binding(stream, canonical_market=inp.market))
 
         actual_state = str(getattr(stream, "actual_state", "") or "").strip().lower()
         if actual_state != "running":

@@ -23,6 +23,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_LIVE_KLINE_MAX_AGE_MS = 60_000
 
 
+def _marketdata_market(market: str) -> str:
+    market_key = str(market or "").strip().lower()
+    if market_key == "perpetual_futures":
+        return "futures"
+    return market_key
+
+
+def _stream_key(market: object, symbol: object, interval: object) -> tuple[str, str, str]:
+    return (
+        str(market or "").strip().lower(),
+        str(symbol or "").strip().upper(),
+        str(interval or "").strip() or "1m",
+    )
+
+
 def _adapt_kline(kline: MarketKline, market: str | None = None) -> MarketData:
     """Map MarketKline from market_data to framework MarketData."""
     resolved_market = market
@@ -136,13 +151,15 @@ class BacktestDataLoop:
 
         n = 0
         with BacktestDataSource(self._config) as ds:
-            # heap entry: (open_time, idx, kline, market, iterator)
+            # heap entry: (open_time, idx, kline, canonical_market, iterator)
             heap: list[tuple[int, int, MarketKline, str, object]] = []
             iters: list[tuple] = []
             for idx, (market, symbol, interval) in enumerate(triples):
+                canonical_market = str(market or "").strip().lower()
+                storage_market = _marketdata_market(canonical_market)
                 try:
-                    it = ds.get_klines(symbol, interval, start_time, end_time, market=market)
-                    iters.append((it, idx, market))
+                    it = ds.get_klines(symbol, interval, start_time, end_time, market=storage_market)
+                    iters.append((it, idx, canonical_market))
                 except Exception:
                     # 表不存在等情况，跳过该条声明输入
                     continue
@@ -181,12 +198,14 @@ class LiveDataLoop:
         on_unroutable: Optional[Callable[[MarketKline], None]] = None,
         max_kline_age_ms: int = DEFAULT_LIVE_KLINE_MAX_AGE_MS,
         now_ms_fn: Optional[Callable[[], int]] = None,
+        canonical_markets: Optional[dict[tuple[str, str, str], str]] = None,
     ) -> None:
         self._service = service
         self._on_unroutable = on_unroutable
         self._live = LiveDataSource(config=config, logger=logger)
         self._max_kline_age_ms = int(max_kline_age_ms)
         self._now_ms = now_ms_fn or (lambda: int(time.time() * 1000))
+        self._canonical_markets = canonical_markets or {}
         self._live.on_kline(self._on_kline)
 
     def _is_stale_kline(self, kline: MarketKline) -> bool:
@@ -206,7 +225,14 @@ class LiveDataLoop:
                 self._max_kline_age_ms,
             )
             return
-        routed = self._service.running_strategy(_adapt_kline(kline))
+        canonical_market = self._canonical_markets.get(
+            _stream_key(
+                getattr(kline, "market", None),
+                getattr(kline, "symbol", None),
+                getattr(kline, "interval", None),
+            )
+        )
+        routed = self._service.running_strategy(_adapt_kline(kline, canonical_market))
         if routed is False and self._on_unroutable is not None:
             self._on_unroutable(kline)
 

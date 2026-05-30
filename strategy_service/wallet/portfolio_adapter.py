@@ -145,9 +145,15 @@ def build_portfolio_wallet_from_snapshot(
     allowed_routes: set[tuple[str, str]],
 ) -> PortfolioWalletRuntime:
     """Convert a core ``PortfolioSnapshot`` into a routed portfolio runtime."""
+    normalized_allowed_routes = {
+        _validate_route(exchange, market)
+        for exchange, market in allowed_routes
+    }
     wallets: dict[tuple[str, str, int], Any] = {}
     for venue in getattr(snapshot, "venues", []) or []:
         exchange, market = _venue_route(venue)
+        if (exchange, market) not in normalized_allowed_routes:
+            continue
         venue_id = _venue_id(venue)
         if exchange != "binance":
             raise ValueError(f"unsupported portfolio wallet exchange: {exchange}")
@@ -160,6 +166,6 @@ def build_portfolio_wallet_from_snapshot(
 
     return PortfolioWalletRuntime(
         account_id=int(getattr(snapshot, "account_id", 0) or 0),
-        allowed_routes=allowed_routes,
+        allowed_routes=normalized_allowed_routes,
         wallets=wallets,
     )

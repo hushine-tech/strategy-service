@@ -215,6 +215,38 @@ def test_build_portfolio_wallet_from_spot_and_futures_venues():
     assert futures.futures.oracle_available_balance == pytest.approx(800.0)
 
 
+def test_unrequested_venue_snapshot_is_ignored_before_wallet_validation():
+    snapshot = _snapshot(
+        _venue(
+            venue_id=10,
+            market=MARKET_SPOT,
+            total_value=0.0,
+            wallet_balance=0.0,
+            available_balance=0.0,
+            wallet=account_service_pb2.AccountWalletState(mode=2),
+        ),
+        _venue(
+            venue_id=11,
+            market=MARKET_PERPETUAL_FUTURES,
+            wallet=_futures_wallet(
+                wallet_balance=1000.0,
+                available_balance=800.0,
+                margin_balance=1025.0,
+                positions=[_futures_position()],
+            ),
+        ),
+    )
+
+    wallet = build_portfolio_wallet_from_snapshot(
+        snapshot,
+        allowed_routes={("binance", "perpetual_futures")},
+    )
+
+    assert wallet.get("binance", "perpetual_futures").get_wallet_balance() == pytest.approx(1000.0)
+    with pytest.raises(ValueError, match="wallet route binance/spot is not declared"):
+        wallet.get("binance", "spot")
+
+
 def test_futures_position_and_balance_fields_are_readable_after_mapping():
     snapshot = _snapshot(
         _venue(
@@ -425,9 +457,13 @@ def test_futures_empty_full_wallet_with_compact_positions_fails_closed():
 )
 def test_unsupported_exchange_or_market_fails_closed(exchange, market, message):
     snapshot = _snapshot(_venue(venue_id=11, exchange=exchange, market=market))
+    allowed_routes = {
+        (EXCHANGE_OKX, MARKET_SPOT): {("okx", "spot")},
+        (EXCHANGE_BINANCE, MARKET_DELIVERY_FUTURES): {("binance", "delivery_futures")},
+    }.get((exchange, market), {("binance", "spot")})
 
     with pytest.raises(ValueError, match=message):
-        build_portfolio_wallet_from_snapshot(snapshot, allowed_routes={("binance", "spot")})
+        build_portfolio_wallet_from_snapshot(snapshot, allowed_routes=allowed_routes)
 
 
 def test_missing_or_invalid_venue_id_fails_closed():

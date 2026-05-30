@@ -148,6 +148,32 @@ def _stream_label(binding: StreamBinding) -> str:
     return f"{binding.symbol} {binding.market} {binding.interval}"
 
 
+def _stream_key(market: Any, symbol: Any, interval: Any) -> tuple[str, str, str]:
+    return (
+        str(market or "").strip().lower(),
+        str(symbol or "").strip().upper(),
+        str(interval or "").strip() or "1m",
+    )
+
+
+def _canonical_market_for_kline(
+    kline: Any,
+    canonical_by_stream: dict[tuple[str, str, str], str],
+) -> str | None:
+    key = _stream_key(
+        getattr(kline, "market", None),
+        getattr(kline, "symbol", None),
+        getattr(kline, "interval", None),
+    )
+    canonical = canonical_by_stream.get(key)
+    if canonical:
+        return canonical
+    raw_market = getattr(kline, "market", None)
+    if isinstance(raw_market, str) and raw_market.strip():
+        return raw_market.strip().lower()
+    return None
+
+
 def _interval_ms(interval: str) -> int:
     raw = str(interval or "1m").strip()
     if len(raw) < 2:
@@ -1126,9 +1152,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 kind="kline",
                 symbol=inp.symbol,
                 interval=inp.interval,
+                canonical_market=inp.market,
             )
             for inp in declared_inputs
         ]
+        canonical_by_stream = {
+            _stream_key(stream.market, stream.symbol, stream.interval): (
+                stream.canonical_market or stream.market
+            )
+            for stream in required_streams
+        }
         data_source = self._runtime_data_source
         iter_dataset = getattr(data_source, "iter_dataset_klines", None)
         if not callable(iter_dataset):
@@ -1172,7 +1205,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         ):
             if state.status != "running" or stop_event.is_set():
                 break
-            engine.running_strategy(_adapt_kline(kline, getattr(kline, "market", None)))
+            engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
             n += 1
 
         if state.status == "running":
@@ -1261,6 +1294,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             service=engine,
             config=kafka_cfg,
             on_unroutable=lambda kline: self._record_unroutable_live_kline(session_id, state, kline),
+            canonical_markets={
+                _stream_key(_marketdata_market(inp.market), inp.symbol, inp.interval): inp.market
+                for inp in declared_inputs
+            },
         )
         self._sessions.set_live_loop(session_id, live_loop)
 
@@ -1303,6 +1340,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 "FetchKlines fallback is disabled for mode=2 live execution"
             )
         acct_client = self._account_client()
+        canonical_by_stream = {
+            _stream_key(stream.market, stream.symbol, stream.interval): (
+                stream.canonical_market or stream.market
+            )
+            for stream in state.required_streams
+        }
 
         for kline in iter_live(
             session_id=session_id,
@@ -1311,7 +1354,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         ):
             if state.status != "running" or stop_event.is_set():
                 break
-            routed = engine.running_strategy(_adapt_kline(kline, getattr(kline, "market", None)))
+            routed = engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
             if routed is False:
                 self._record_unroutable_live_kline(session_id, state, kline)
             with state._lock:

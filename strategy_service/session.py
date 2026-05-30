@@ -23,6 +23,7 @@ class StreamBinding:
     kind: str
     symbol: str
     interval: str
+    canonical_market: str = ""
 
 
 @dataclass

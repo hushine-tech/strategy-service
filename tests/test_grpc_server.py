@@ -717,7 +717,7 @@ def test_run_live_initializes_loop_with_parsed_brokers(monkeypatch):
     bound_loops: list[tuple[str, object]] = []
 
     class FakeLiveLoop:
-        def __init__(self, service, config, on_unroutable=None) -> None:
+        def __init__(self, service, config, on_unroutable=None, canonical_markets=None) -> None:
             events.append(
                 (
                     "init",
@@ -725,6 +725,7 @@ def test_run_live_initializes_loop_with_parsed_brokers(monkeypatch):
                     config.topics,
                     config.consumer_group,
                     on_unroutable is not None,
+                    canonical_markets,
                 )
             )
             self.service = service
@@ -842,6 +843,10 @@ def test_run_live_initializes_loop_with_parsed_brokers(monkeypatch):
             ["md.kline.binance.futures.1m", "md.kline.binance.spot.1m"],
             "strategy-session-77-sess-live-route",
             True,
+            {
+                ("futures", "BTCUSDT", "1m"): "perpetual_futures",
+                ("spot", "ETHUSDT", "1m"): "spot",
+            },
         ),
         ("start",),
         ("wait", 60),
@@ -1395,8 +1400,8 @@ def test_run_live_skips_lease_management_when_disabled(monkeypatch):
     events: list[tuple] = []
 
     class FakeLiveLoop:
-        def __init__(self, service, config, on_unroutable=None) -> None:
-            events.append(("init", config.consumer_group, on_unroutable is not None))
+        def __init__(self, service, config, on_unroutable=None, canonical_markets=None) -> None:
+            events.append(("init", config.consumer_group, on_unroutable is not None, canonical_markets))
 
         def start(self) -> None:
             events.append(("start",))
@@ -1465,7 +1470,12 @@ def test_run_live_skips_lease_management_when_disabled(monkeypatch):
     )
 
     assert events == [
-        ("init", "strategy-session-202-sess-disabled", True),
+        (
+            "init",
+            "strategy-session-202-sess-disabled",
+            True,
+            {("futures", "BTCUSDT", "1m"): "perpetual_futures"},
+        ),
         ("start",),
         ("wait", 60),
     ]
@@ -2734,6 +2744,7 @@ def test_proxy_only_backtest_runs_through_runtime_dataset_delivery():
             assert [(s.market, s.symbol, s.interval) for s in required_streams] == [
                 ("futures", "ETHUSDT", "1m")
             ]
+            assert [s.canonical_market for s in required_streams] == ["perpetual_futures"]
             yield MarketKline(
                 symbol="ETHUSDT",
                 interval="1m",
@@ -2776,12 +2787,13 @@ def test_proxy_only_backtest_runs_through_runtime_dataset_delivery():
         state,
         engine,
         SimpleNamespace(start_time_ms=1, end_time_ms=2),
-        [StrategyInput(exchange="binance", market="futures", symbol="ETHUSDT", interval="1m")],
+        [StrategyInput(exchange="binance", market="perpetual_futures", symbol="ETHUSDT", interval="1m")],
     )
 
     assert state.status == "finished"
     assert state.bars_processed == 1
     assert engine.rows[0].symbol == "ETHUSDT"
+    assert engine.rows[0].market == "perpetual_futures"
     assert proxy.marketdata.delivery_calls
     assert proxy.marketdata.delivery_calls[0]["session_id"] == "sess-1"
 
@@ -2863,7 +2875,17 @@ def test_proxy_only_mode2_live_uses_runtime_delivery_not_fetch_klines():
     state.configure_live_runtime(
         account_id=101,
         strategy_id=202,
-        required_streams=[StreamBinding(11, "binance", "futures", "kline", "BTCUSDT", "1m")],
+        required_streams=[
+            StreamBinding(
+                11,
+                "binance",
+                "futures",
+                "kline",
+                "BTCUSDT",
+                "1m",
+                canonical_market="perpetual_futures",
+            )
+        ],
         consumer_group="strategy-session-202-sess-live",
     )
     engine = FakeEngine()
@@ -2880,6 +2902,7 @@ def test_proxy_only_mode2_live_uses_runtime_delivery_not_fetch_klines():
         }
     ]
     assert [row.symbol for row in engine.rows] == ["BTCUSDT"]
+    assert [row.market for row in engine.rows] == ["perpetual_futures"]
     assert state.bars_processed == 1
     assert proxy.account.session_updates == [
         ("sess-live", "running", 1, "", "")

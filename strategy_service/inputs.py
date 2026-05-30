@@ -306,6 +306,9 @@ class _ExchangeSlice:
     def market(self) -> "_MarketAccessor":
         return _MarketAccessor(self._view, self._exchange)
 
+    def __getitem__(self, market: str) -> "_MarketSlice":
+        return self.market[market]
+
 
 class _MarketAccessor:
     __slots__ = ("_view", "_exchange")
