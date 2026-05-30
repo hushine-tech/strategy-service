@@ -80,6 +80,11 @@ class AccountServiceStub(object):
                 request_serializer=account__service__pb2.GetVenueRequest.SerializeToString,
                 response_deserializer=account__service__pb2.GetVenueResponse.FromString,
                 _registered_method=True)
+        self.GetVenueOnlineInfo = channel.unary_unary(
+                '/account.v1.AccountService/GetVenueOnlineInfo',
+                request_serializer=account__service__pb2.GetVenueOnlineInfoRequest.SerializeToString,
+                response_deserializer=account__service__pb2.GetVenueOnlineInfoResponse.FromString,
+                _registered_method=True)
         self.BindVenue = channel.unary_unary(
                 '/account.v1.AccountService/BindVenue',
                 request_serializer=account__service__pb2.BindVenueRequest.SerializeToString,
@@ -109,6 +114,16 @@ class AccountServiceStub(object):
                 '/account.v1.AccountService/GetOnlineAccountInfo',
                 request_serializer=account__service__pb2.GetOnlineAccountInfoRequest.SerializeToString,
                 response_deserializer=account__service__pb2.GetOnlineAccountInfoResponse.FromString,
+                _registered_method=True)
+        self.GetPortfolioSnapshot = channel.unary_unary(
+                '/account.v1.AccountService/GetPortfolioSnapshot',
+                request_serializer=account__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
+                response_deserializer=account__service__pb2.GetPortfolioSnapshotResponse.FromString,
+                _registered_method=True)
+        self.UpdatePortfolioSnapshot = channel.unary_unary(
+                '/account.v1.AccountService/UpdatePortfolioSnapshot',
+                request_serializer=account__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
+                response_deserializer=account__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
                 _registered_method=True)
         self.UpdateAccountWalletState = channel.unary_unary(
                 '/account.v1.AccountService/UpdateAccountWalletState',
@@ -318,6 +333,12 @@ class AccountServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetVenueOnlineInfo(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def BindVenue(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -350,6 +371,23 @@ class AccountServiceServicer(object):
 
     def GetOnlineAccountInfo(self, request, context):
         """Latest wallet state: mode=0 reads DB; mode=1/2 fetches from Binance (live/testnet) per account registration.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetPortfolioSnapshot(self, request, context):
+        """Phase 2 canonical portfolio snapshot API. It reads active account venues
+        through the exchange capability registry and returns account-level summary
+        plus per-venue balances/positions.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdatePortfolioSnapshot(self, request, context):
+        """Refresh and persist the current portfolio snapshot. Exchange-backed
+        accounts read from active venues; backtest accounts read local state.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -612,6 +650,11 @@ def add_AccountServiceServicer_to_server(servicer, server):
                     request_deserializer=account__service__pb2.GetVenueRequest.FromString,
                     response_serializer=account__service__pb2.GetVenueResponse.SerializeToString,
             ),
+            'GetVenueOnlineInfo': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetVenueOnlineInfo,
+                    request_deserializer=account__service__pb2.GetVenueOnlineInfoRequest.FromString,
+                    response_serializer=account__service__pb2.GetVenueOnlineInfoResponse.SerializeToString,
+            ),
             'BindVenue': grpc.unary_unary_rpc_method_handler(
                     servicer.BindVenue,
                     request_deserializer=account__service__pb2.BindVenueRequest.FromString,
@@ -641,6 +684,16 @@ def add_AccountServiceServicer_to_server(servicer, server):
                     servicer.GetOnlineAccountInfo,
                     request_deserializer=account__service__pb2.GetOnlineAccountInfoRequest.FromString,
                     response_serializer=account__service__pb2.GetOnlineAccountInfoResponse.SerializeToString,
+            ),
+            'GetPortfolioSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPortfolioSnapshot,
+                    request_deserializer=account__service__pb2.GetPortfolioSnapshotRequest.FromString,
+                    response_serializer=account__service__pb2.GetPortfolioSnapshotResponse.SerializeToString,
+            ),
+            'UpdatePortfolioSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdatePortfolioSnapshot,
+                    request_deserializer=account__service__pb2.UpdatePortfolioSnapshotRequest.FromString,
+                    response_serializer=account__service__pb2.UpdatePortfolioSnapshotResponse.SerializeToString,
             ),
             'UpdateAccountWalletState': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdateAccountWalletState,
@@ -1038,6 +1091,33 @@ class AccountService(object):
             _registered_method=True)
 
     @staticmethod
+    def GetVenueOnlineInfo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/GetVenueOnlineInfo',
+            account__service__pb2.GetVenueOnlineInfoRequest.SerializeToString,
+            account__service__pb2.GetVenueOnlineInfoResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def BindVenue(request,
             target,
             options=(),
@@ -1189,6 +1269,60 @@ class AccountService(object):
             '/account.v1.AccountService/GetOnlineAccountInfo',
             account__service__pb2.GetOnlineAccountInfoRequest.SerializeToString,
             account__service__pb2.GetOnlineAccountInfoResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetPortfolioSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/GetPortfolioSnapshot',
+            account__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
+            account__service__pb2.GetPortfolioSnapshotResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdatePortfolioSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/UpdatePortfolioSnapshot',
+            account__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
+            account__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
             options,
             channel_credentials,
             insecure,

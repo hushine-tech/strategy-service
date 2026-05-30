@@ -5,7 +5,13 @@ from __future__ import annotations
 import logging
 import uuid
 
-from strategy_service.types import ExecutionFeedback, OrderDecision, OrderResponse
+from strategy_service.types import (
+    ExecutionFeedback,
+    OrderDecision,
+    OrderResponse,
+    OrderUpdateEvent,
+    OrderUpdateFill,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +36,18 @@ POSITION_SIDE_CODES = {
     "both": 0,
     "long": 1,
     "short": 2,
+}
+
+EXCHANGE_NAMES = {v: k for k, v in EXCHANGE_CODES.items()}
+MARKET_NAMES = {
+    1: "spot",
+    2: "perpetual_futures",
+    3: "delivery_futures",
+}
+POSITION_SIDE_NAMES = {
+    0: "both",
+    1: "long",
+    2: "short",
 }
 
 
@@ -109,6 +127,13 @@ class OrderClient:
             )
             if decision.price is not None:
                 kwargs["price"] = float(decision.price)
+            order_type = str(getattr(decision, "order_type", None) or "").strip().upper()
+            if not order_type:
+                order_type = "LIMIT" if decision.price is not None else "MARKET"
+            kwargs["order_type"] = order_type
+            time_in_force = str(getattr(decision, "time_in_force", None) or "").strip().upper()
+            if order_type == "LIMIT":
+                kwargs["time_in_force"] = time_in_force or "GTC"
 
             req = order_service_pb2.PlaceOrderRequest(**kwargs)
             resp = self._stub.PlaceOrder(req)
@@ -186,6 +211,87 @@ class OrderClient:
         if key not in POSITION_SIDE_CODES:
             raise ValueError(f"unsupported position_side: {position_side!r}")
         return POSITION_SIDE_CODES[key]
+
+    def list_order_lifecycle_events(
+        self,
+        *,
+        session_id: str,
+        after_event_id: int = 0,
+        limit: int = 100,
+    ) -> list[OrderUpdateEvent]:
+        """Read normalized order lifecycle events after a session cursor."""
+        if not self._stub or not str(session_id or "").strip():
+            return []
+        try:
+            from strategy_service.gen import order_service_pb2
+
+            resp = self._stub.ListOrderLifecycleEvents(order_service_pb2.ListOrderLifecycleEventsRequest(
+                session_id=str(session_id).strip(),
+                after_event_id=int(after_event_id),
+                limit=int(limit),
+            ))
+        except Exception:
+            logger.warning("OrderClient.list_order_lifecycle_events failed for session=%s", session_id, exc_info=True)
+            return []
+        return [self._order_update_event_from_proto(item) for item in resp.events]
+
+    @classmethod
+    def order_response_from_update(cls, event: OrderUpdateEvent) -> OrderResponse | None:
+        """Convert a fill lifecycle event into the wallet-facing order delta."""
+        if str(event.event_type or "").strip().lower() != "fill" or event.fill is None:
+            return None
+        if event.fill.fee_missing:
+            return None
+        raw_qty = abs(float(event.fill.qty or 0.0))
+        if raw_qty <= 0.0:
+            return None
+        market = event.market or "perpetual_futures"
+        side = event.side or ""
+        wallet_qty = cls._wallet_qty(raw_qty, side, market)
+        return OrderResponse(
+            symbol=event.fill.symbol,
+            side=side,
+            qty=wallet_qty,
+            fill_price=float(event.fill.fill_price or 0.0),
+            status=event.order_status or "FILLED",
+            fee=float(event.fill.fee or 0.0),
+            order_id=event.order_id,
+            position_side=event.position_side,
+            executed_qty=raw_qty,
+        )
+
+    @staticmethod
+    def _order_update_event_from_proto(item) -> OrderUpdateEvent:
+        fill = None
+        if item.HasField("fill_delta"):
+            fill = OrderUpdateFill(
+                symbol=str(item.fill_delta.symbol or item.order_state.symbol or "").upper(),
+                qty=float(item.fill_delta.qty or 0.0),
+                fill_price=float(item.fill_delta.fill_price or item.order_state.avg_price or 0.0),
+                fee=float(item.fill_delta.fee or 0.0),
+                fee_asset=str(item.fill_delta.fee_asset or ""),
+                fee_missing=bool(item.fill_delta.fee_missing),
+                exchange_trade_id=str(item.fill_delta.exchange_trade_id or ""),
+                exchange_order_id=str(item.fill_delta.exchange_order_id or ""),
+            )
+        return OrderUpdateEvent(
+            event_id=int(item.event_id),
+            session_id=str(item.session_id or ""),
+            account_id=int(item.account_id),
+            venue_id=int(item.venue_id),
+            exchange=EXCHANGE_NAMES.get(int(item.exchange), f"exchange:{int(item.exchange)}"),
+            market=MARKET_NAMES.get(int(item.market), f"market:{int(item.market)}"),
+            side=str(item.side or ""),
+            position_side=POSITION_SIDE_NAMES.get(int(item.position_side), f"position_side:{int(item.position_side)}"),
+            event_type=str(item.event_type or ""),
+            order_status=str(item.order_status or ""),
+            intent_id=str(item.intent_id or ""),
+            attempt_id=str(item.attempt_id or ""),
+            order_id=str(item.order_id or ""),
+            exchange_order_id=str(item.exchange_order_id or ""),
+            exchange_trade_id=str(item.exchange_trade_id or ""),
+            fill=fill,
+        )
 
     def _resolve_unknown_attempt(
         self,

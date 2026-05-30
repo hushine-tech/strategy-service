@@ -3,7 +3,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from strategy_service import ExecutionFeedback, MarketData, OrderResponse, StrategyService
+from strategy_service import (
+    ExecutionFeedback,
+    MarketData,
+    OrderResponse,
+    OrderUpdateEvent,
+    OrderUpdateFill,
+    StrategyService,
+)
 from strategy_service.strategy.base import _load_strategy_instance
 from strategy_service.wallet import SpotAsset
 from tests.helpers.wallet_fixtures import make_backtest_wallet
@@ -230,6 +237,168 @@ def test_multiple_fill_events_are_applied_sequentially_to_wallet():
     assert wallet.futures.positions[("TESTUSDT", 0)].position_qty == pytest.approx(0.05)
     assert wallet.futures.positions[("TESTUSDT", 0)].entry_price == pytest.approx(51200.0)
     strat.on_order_callback.assert_called_once()
+
+
+def test_order_update_event_updates_wallet_before_callback():
+    wallet = _wallet_with_futures_slot()
+    code = _inline(
+        "    def __init__(self):\n"
+        "        self.events = []\n"
+        "        self.position_qty_seen = None\n"
+        "    def on_order_update(self, event, wallet):\n"
+        "        self.events.append(event)\n"
+        "        self.position_qty_seen = wallet.futures.positions[(\"TESTUSDT\", 0)].position_qty\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    class FakeOrderClient:
+        def __init__(self):
+            self.place_calls = 0
+
+        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
+            assert session_id == "session-1"
+            if limit == 500:
+                return []
+            if after_event_id >= 1:
+                return []
+            return [
+                OrderUpdateEvent(
+                    event_id=1,
+                    session_id="session-1",
+                    account_id=1,
+                    venue_id=10,
+                    exchange="binance",
+                    market="perpetual_futures",
+                    side="BUY",
+                    position_side="both",
+                    event_type="fill",
+                    order_status="FILLED",
+                    order_id="order-1",
+                    fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+                )
+            ]
+
+        def place_order(self, *_args, **_kwargs):
+            self.place_calls += 1
+            raise AssertionError("on_order_update return value must not place orders")
+
+    client = FakeOrderClient()
+    svc = StrategyService()
+    strat = svc.create_strategy(
+        "u1",
+        "/workspace/strategy.py",
+        wallet,
+        order_client=client,
+        session_id="session-1",
+        strategy_code=code,
+    )
+    wallet.on_order = MagicMock(wraps=wallet.on_order)
+
+    svc.running_strategy(_md(price=50_000.0))
+
+    wallet.on_order.assert_called_once()
+    assert strat._strategy_instance.events[0].order_id == "order-1"
+    assert strat._strategy_instance.position_qty_seen == pytest.approx(0.1)
+    assert client.place_calls == 0
+
+
+def test_order_update_callback_error_does_not_block_market_tick():
+    wallet = _wallet_with_futures_slot()
+    code = _inline(
+        "    def __init__(self):\n"
+        "        self.market_calls = 0\n"
+        "    def on_order_update(self, event, wallet):\n"
+        "        raise RuntimeError('callback failed')\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        self.market_calls += 1\n"
+        "        return None\n"
+    )
+
+    class FakeOrderClient:
+        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
+            if limit == 500:
+                return []
+            if after_event_id >= 1:
+                return []
+            return [
+                OrderUpdateEvent(
+                    event_id=1,
+                    session_id=session_id,
+                    account_id=1,
+                    venue_id=10,
+                    exchange="binance",
+                    market="perpetual_futures",
+                    side="BUY",
+                    position_side="both",
+                    event_type="fill",
+                    order_status="FILLED",
+                    order_id="order-1",
+                    fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+                )
+            ]
+
+    svc = StrategyService()
+    strat = svc.create_strategy(
+        "u1",
+        "/workspace/strategy.py",
+        wallet,
+        order_client=FakeOrderClient(),
+        session_id="session-1",
+        strategy_code=code,
+    )
+
+    svc.running_strategy(_md(price=50_000.0))
+
+    assert strat._strategy_instance.market_calls == 1
+
+
+def test_existing_order_events_seed_cursor_without_replaying_wallet():
+    wallet = _wallet_with_futures_slot()
+    code = _inline(
+        "    def __init__(self):\n"
+        "        self.events = []\n"
+        "    def on_order_update(self, event, wallet):\n"
+        "        self.events.append(event)\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+    old_event = OrderUpdateEvent(
+        event_id=7,
+        session_id="session-1",
+        account_id=1,
+        venue_id=10,
+        exchange="binance",
+        market="perpetual_futures",
+        side="BUY",
+        position_side="both",
+        event_type="fill",
+        order_status="FILLED",
+        order_id="order-old",
+        fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+    )
+
+    class FakeOrderClient:
+        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
+            if limit == 500 and after_event_id == 0:
+                return [old_event]
+            return []
+
+    svc = StrategyService()
+    strat = svc.create_strategy(
+        "u1",
+        "/workspace/strategy.py",
+        wallet,
+        order_client=FakeOrderClient(),
+        session_id="session-1",
+        strategy_code=code,
+    )
+    wallet.on_order = MagicMock(wraps=wallet.on_order)
+
+    svc.running_strategy(_md(price=50_000.0))
+
+    wallet.on_order.assert_not_called()
+    assert strat._strategy_instance.events == []
 
 
 def test_unknown_execution_blocks_same_symbol_from_repeat_orders():
