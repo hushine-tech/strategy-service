@@ -265,6 +265,7 @@ class BaseStrategy:
         self._blocked_order_keys: set[tuple[str, str, str]] = set()
         self._order_event_cursor: int = 0
         self._settled_lifecycle_event_ids: set[int] = set()
+        self._sync_settled_order_quantities: dict[str, float] = {}
         self._initialize_order_event_cursor()
 
     @property
@@ -355,6 +356,13 @@ class BaseStrategy:
                 order_resp = OrderClient.order_response_from_update(event)
                 if order_resp is not None:
                     if event_id <= 0 or event_id not in self._settled_lifecycle_event_ids:
+                        order_resp = self._adjust_lifecycle_order_response(order_resp)
+                        if order_resp is None:
+                            if event_id > 0:
+                                self._settled_lifecycle_event_ids.add(event_id)
+                            if self._is_order_update_terminal(event, None):
+                                self._blocked_order_keys.discard(self._blocked_key_for_event(event, None))
+                            continue
                         event_exchange = _norm_exchange(getattr(event, "exchange", ""))
                         event_market = _norm_market(getattr(event, "market", ""))
                         self._apply_order_to_wallet(
@@ -364,6 +372,7 @@ class BaseStrategy:
                             order_resp,
                             venue_id=getattr(event, "venue_id", None),
                         )
+                        self._record_order_settlement(order_resp)
                         if event_id > 0:
                             self._settled_lifecycle_event_ids.add(event_id)
                         wallet_updated = True
@@ -418,6 +427,63 @@ class BaseStrategy:
             _norm_market(getattr(event, "market", "")),
             _norm_symbol(symbol),
         )
+
+    @staticmethod
+    def _order_cumulative_executed_qty(order_resp: OrderResponse) -> float | None:
+        try:
+            executed_qty = abs(float(getattr(order_resp, "executed_qty", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            return None
+        if executed_qty > 0.0:
+            return executed_qty
+        return None
+
+    @staticmethod
+    def _order_delta_qty(order_resp: OrderResponse) -> float:
+        try:
+            return abs(float(getattr(order_resp, "qty", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _record_order_settlement(self, order_resp: OrderResponse) -> None:
+        order_id = str(getattr(order_resp, "order_id", "") or "").strip()
+        if not order_id:
+            return
+        current = self._sync_settled_order_quantities.get(order_id, 0.0)
+        cumulative = self._order_cumulative_executed_qty(order_resp)
+        if cumulative is None:
+            delta = self._order_delta_qty(order_resp)
+            if delta <= 0.0:
+                return
+            cumulative = current + delta
+        if cumulative > current:
+            self._sync_settled_order_quantities[order_id] = cumulative
+
+    def _adjust_lifecycle_order_response(
+        self,
+        order_resp: OrderResponse,
+    ) -> OrderResponse | None:
+        order_id = str(getattr(order_resp, "order_id", "") or "").strip()
+        cumulative = self._order_cumulative_executed_qty(order_resp)
+        if not order_id or cumulative is None:
+            return order_resp
+        settled = self._sync_settled_order_quantities.get(order_id)
+        if settled is None:
+            return order_resp
+        if cumulative <= settled:
+            self._sync_settled_order_quantities[order_id] = max(settled, cumulative)
+            return None
+        delta = cumulative - settled
+        sign = -1.0 if float(getattr(order_resp, "qty", 0.0) or 0.0) < 0.0 else 1.0
+        adjusted = replace(
+            order_resp,
+            qty=sign * delta,
+            orig_qty=delta,
+            executed_qty=delta,
+            remaining_qty=max(0.0, float(getattr(order_resp, "remaining_qty", 0.0) or 0.0)),
+        )
+        self._sync_settled_order_quantities[order_id] = cumulative
+        return adjusted
 
     @staticmethod
     def _coerce_execution_feedback(payload: Any) -> ExecutionFeedback:
@@ -691,8 +757,10 @@ class BaseStrategy:
         if feedback.fill_events:
             for fill_event in feedback.fill_events:
                 self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, fill_event, venue_id=item.venue_id)
+                self._record_order_settlement(fill_event)
         elif has_settleable_fill:
             self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order, venue_id=item.venue_id)
+            self._record_order_settlement(feedback.order)
         else:
             self._notify_order_response(feedback)
             logger.warning(

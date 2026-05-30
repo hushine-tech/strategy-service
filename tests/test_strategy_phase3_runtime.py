@@ -500,7 +500,152 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
     svc.running_strategy(_tick())
 
     route_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
-    assert [order.qty for order in route_wallet.orders] == [0.04, 0.06]
+    assert [order.qty for order in route_wallet.orders] == pytest.approx([0.04, 0.06])
+
+
+def test_lifecycle_replay_of_synchronous_fill_is_not_settled_twice() -> None:
+    event = OrderUpdateEvent(
+        event_id=1,
+        session_id="session-1",
+        account_id=1,
+        venue_id=10,
+        exchange=Exchange.BINANCE,
+        market=Market.PERPETUAL_FUTURES,
+        side="BUY",
+        position_side="both",
+        event_type="fill",
+        order_status="FILLED",
+        order_id="order-sync",
+        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.1, fill_price=2500.0),
+        orig_qty=0.1,
+        executed_qty=0.1,
+        remaining_qty=0.0,
+    )
+
+    class SyncThenLifecycleClient(LifecycleOrderClient):
+        def __init__(self) -> None:
+            super().__init__([event])
+            self.place_calls = 0
+
+        def list_order_lifecycle_events(self, *, session_id: str, after_event_id: int = 0, limit: int = 100) -> list[OrderUpdateEvent]:
+            if self.place_calls <= 0:
+                return []
+            return super().list_order_lifecycle_events(session_id=session_id, after_event_id=after_event_id, limit=limit)
+
+        def place_order(self, _account_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
+            self.place_calls += 1
+            return ExecutionFeedback(
+                attempt_status="ACCEPTED",
+                order=OrderResponse(
+                    symbol=decision.symbol,
+                    side=decision.side,
+                    qty=0.1,
+                    fill_price=mark_price,
+                    status="FILLED",
+                    order_id="order-sync",
+                    orig_qty=0.1,
+                    executed_qty=0.1,
+                    remaining_qty=0.0,
+                ),
+                fill_count=1,
+                delta_qty=0.1,
+            )
+
+    client = SyncThenLifecycleClient()
+    wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        client,
+        account_id=1,
+        session_id="session-1",
+        strategy_code=_strategy(
+            '        if not hasattr(self, "sent"):\n'
+            "            self.sent = True\n"
+            '            return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.1", order_type=OrderType.MARKET)\n'
+            "        return None\n",
+        ),
+    )
+
+    svc.running_strategy(_tick())
+    svc.running_strategy(_tick(price=2501.0))
+
+    route_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
+    assert [order.qty for order in route_wallet.orders] == [0.1]
+    assert client.place_calls == 1
+
+
+def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
+    event = OrderUpdateEvent(
+        event_id=1,
+        session_id="session-1",
+        account_id=1,
+        venue_id=10,
+        exchange=Exchange.BINANCE,
+        market=Market.PERPETUAL_FUTURES,
+        side="BUY",
+        position_side="both",
+        event_type="fill",
+        order_status="PARTIALLY_FILLED",
+        order_id="order-partial",
+        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.2, fill_price=2510.0),
+        orig_qty=0.2,
+        executed_qty=0.2,
+        remaining_qty=0.0,
+    )
+
+    class PartialThenLifecycleClient(LifecycleOrderClient):
+        def __init__(self) -> None:
+            super().__init__([event])
+            self.place_calls = 0
+
+        def list_order_lifecycle_events(self, *, session_id: str, after_event_id: int = 0, limit: int = 100) -> list[OrderUpdateEvent]:
+            if self.place_calls <= 0:
+                return []
+            return super().list_order_lifecycle_events(session_id=session_id, after_event_id=after_event_id, limit=limit)
+
+        def place_order(self, _account_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
+            self.place_calls += 1
+            return ExecutionFeedback(
+                attempt_status="ACCEPTED",
+                order=OrderResponse(
+                    symbol=decision.symbol,
+                    side=decision.side,
+                    qty=0.1,
+                    fill_price=mark_price,
+                    status="PARTIALLY_FILLED",
+                    order_id="order-partial",
+                    orig_qty=0.2,
+                    executed_qty=0.1,
+                    remaining_qty=0.1,
+                ),
+                fill_count=1,
+                delta_qty=0.1,
+            )
+
+    client = PartialThenLifecycleClient()
+    wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        client,
+        account_id=1,
+        session_id="session-1",
+        strategy_code=_strategy(
+            '        if not hasattr(self, "sent"):\n'
+            "            self.sent = True\n"
+            '            return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.2", order_type=OrderType.MARKET)\n'
+            "        return None\n",
+        ),
+    )
+
+    svc.running_strategy(_tick())
+    svc.running_strategy(_tick(price=2510.0))
+
+    route_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
+    assert [order.qty for order in route_wallet.orders] == pytest.approx([0.1, 0.1])
+    assert route_wallet.orders[-1].executed_qty == pytest.approx(0.1)
+    assert client.place_calls == 1
 
 
 def test_limit_order_with_ambiguous_cached_mark_price_fails_even_with_price() -> None:
