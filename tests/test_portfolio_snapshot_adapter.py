@@ -48,6 +48,55 @@ def _position(
     )
 
 
+def _futures_wallet(
+    *,
+    wallet_balance: float = 1000.0,
+    available_balance: float = 800.0,
+    margin_balance: float = 1025.0,
+    positions=None,
+    risk_metadata=None,
+):
+    return account_service_pb2.AccountWalletState(
+        mode=2,
+        futures=account_service_pb2.FuturesWallet(
+            margin_mode="cross",
+            position_mode="one_way",
+            wallet_balance=wallet_balance,
+            available_balance=available_balance,
+            margin_balance=margin_balance,
+            total_cross_wallet_balance=wallet_balance,
+            total_cross_un_pnl=margin_balance - wallet_balance,
+            positions=list(positions or []),
+            risk_metadata=list(risk_metadata or []),
+        ),
+    )
+
+
+def _futures_position(
+    symbol: str = "ETHUSDT",
+    position_side: str = "BOTH",
+    position_qty: float = 0.25,
+    entry_price: float = 3000.0,
+    mark_price: float = 3100.0,
+    unrealized_pnl: float = 25.0,
+    leverage: float = 20.0,
+    liquidation_price: float = 2200.0,
+):
+    return account_service_pb2.FuturesPosition(
+        symbol=symbol,
+        position_side=position_side,
+        position_qty=position_qty,
+        qty=position_qty,
+        entry_price=entry_price,
+        mark_price=mark_price,
+        unrealized_pnl=unrealized_pnl,
+        leverage=leverage,
+        margin_mode="cross",
+        margin_type="cross",
+        liquidation_price=liquidation_price,
+    )
+
+
 def _venue(
     *,
     venue_id: int,
@@ -58,6 +107,7 @@ def _venue(
     available_balance: float = 900.0,
     balances=None,
     positions=None,
+    wallet=None,
 ):
     if isinstance(exchange, str) or isinstance(market, str):
         return SimpleNamespace(
@@ -69,9 +119,10 @@ def _venue(
             available_balance=available_balance,
             balances=list(balances or []),
             positions=list(positions or []),
+            wallet=wallet,
         )
 
-    return account_service_pb2.VenueSnapshot(
+    venue = account_service_pb2.VenueSnapshot(
         venue_id=venue_id,
         exchange=exchange,
         market=market,
@@ -81,6 +132,9 @@ def _venue(
         balances=list(balances or []),
         positions=list(positions or []),
     )
+    if wallet is not None:
+        venue.wallet.CopyFrom(wallet)
+    return venue
 
 
 def _snapshot(*venues):
@@ -112,6 +166,12 @@ def test_build_portfolio_wallet_from_spot_and_futures_venues():
             wallet_balance=1000.0,
             available_balance=800.0,
             positions=[_position()],
+            wallet=_futures_wallet(
+                wallet_balance=1000.0,
+                available_balance=800.0,
+                margin_balance=1025.0,
+                positions=[_futures_position()],
+            ),
         ),
     )
 
@@ -151,6 +211,21 @@ def test_futures_position_and_balance_fields_are_readable_after_mapping():
                     liquidation_price=52000.0,
                 )
             ],
+            wallet=_futures_wallet(
+                wallet_balance=1000.0,
+                available_balance=700.0,
+                margin_balance=1200.0,
+                positions=[
+                    _futures_position(
+                        symbol="btcusdt",
+                        position_qty=-0.2,
+                        entry_price=45000.0,
+                        mark_price=44000.0,
+                        unrealized_pnl=200.0,
+                        liquidation_price=52000.0,
+                    )
+                ],
+            ),
         )
     )
 
@@ -167,6 +242,81 @@ def test_futures_position_and_balance_fields_are_readable_after_mapping():
     assert pos.oracle_liquidation_price == pytest.approx(52000.0)
     assert wallet.futures.oracle_available_balance == pytest.approx(700.0)
     assert wallet.futures.oracle_margin_balance == pytest.approx(1200.0)
+
+
+def test_futures_venue_uses_full_canonical_wallet_instead_of_compact_position_defaults():
+    full_wallet = account_service_pb2.AccountWalletState(
+        mode=2,
+        futures=account_service_pb2.FuturesWallet(
+            margin_mode="cross",
+            position_mode="one_way",
+            wallet_balance=1000.0,
+            available_balance=950.0,
+            margin_balance=1015.0,
+            total_cross_wallet_balance=1000.0,
+            total_cross_un_pnl=15.0,
+            risk_metadata=[
+                account_service_pb2.FuturesRiskMetadata(
+                    symbol="ETHUSDT",
+                    configured_leverage=20.0,
+                    configured_margin_mode="cross",
+                )
+            ],
+            positions=[
+                account_service_pb2.FuturesPosition(
+                    symbol="ETHUSDT",
+                    position_side="BOTH",
+                    position_qty=0.3,
+                    qty=0.3,
+                    entry_price=3000.0,
+                    mark_price=3050.0,
+                    unrealized_pnl=15.0,
+                    leverage=20.0,
+                    margin_mode="cross",
+                    margin_type="cross",
+                    initial_margin=45.75,
+                    position_initial_margin=45.75,
+                )
+            ],
+        ),
+    )
+    snapshot = _snapshot(
+        _venue(
+            venue_id=11,
+            market=MARKET_PERPETUAL_FUTURES,
+            wallet_balance=1000.0,
+            available_balance=400.0,
+            positions=[_position(qty=0.3, mark_price=3050.0)],
+            wallet=full_wallet,
+        )
+    )
+
+    wallet = build_portfolio_wallet_from_snapshot(
+        snapshot,
+        allowed_routes={("binance", "perpetual_futures")},
+    ).get("binance", "perpetual_futures")
+
+    pos = wallet.futures.positions[("ETHUSDT", 0)]
+    assert pos.leverage == pytest.approx(20.0)
+    assert wallet.futures.oracle_available_balance == pytest.approx(950.0)
+    assert wallet.get_available_balance() == pytest.approx(969.25)
+    assert wallet.futures.risk_metadata["ETHUSDT"].configured_leverage == pytest.approx(20.0)
+
+
+def test_futures_compact_position_without_full_wallet_fails_closed():
+    snapshot = _snapshot(
+        _venue(
+            venue_id=11,
+            market=MARKET_PERPETUAL_FUTURES,
+            positions=[_position()],
+        )
+    )
+
+    with pytest.raises(ValueError, match="full canonical wallet"):
+        build_portfolio_wallet_from_snapshot(
+            snapshot,
+            allowed_routes={("binance", "perpetual_futures")},
+        )
 
 
 @pytest.mark.parametrize(

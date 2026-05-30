@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from strategy_service.inputs import _normalize_exchange, _normalize_market
+from strategy_service.wallet_adapter import proto_to_account_spec
 from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.canonical import (
     CanonicalAccountState,
@@ -148,6 +149,9 @@ def _build_binance_wallet_from_venue_snapshot(
     market: str,
     updated_at: Any,
 ) -> BinanceWalletRuntime:
+    wallet = getattr(venue, "wallet", None)
+    if _has_full_wallet(venue):
+        return BinanceWalletRuntime.from_canonical(proto_to_account_spec(wallet))
     if market == "spot":
         state = CanonicalAccountState(
             mode=2,
@@ -157,6 +161,10 @@ def _build_binance_wallet_from_venue_snapshot(
         )
         return BinanceWalletRuntime.from_canonical(state)
     if market == "perpetual_futures":
+        if list(getattr(venue, "positions", []) or []):
+            raise ValueError(
+                "futures VenueSnapshot with positions requires full canonical wallet"
+            )
         futures_state = _build_futures_state(venue)
         state = CanonicalAccountState(
             mode=2,
@@ -167,6 +175,16 @@ def _build_binance_wallet_from_venue_snapshot(
         )
         return BinanceWalletRuntime.from_canonical(state)
     raise ValueError(f"unsupported portfolio wallet market for binance: {market}")
+
+
+def _has_full_wallet(venue: Any) -> bool:
+    has_field = getattr(venue, "HasField", None)
+    if callable(has_field):
+        try:
+            return bool(has_field("wallet"))
+        except ValueError:
+            return False
+    return getattr(venue, "wallet", None) is not None
 
 
 def build_portfolio_wallet_from_snapshot(
