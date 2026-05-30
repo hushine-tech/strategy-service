@@ -4,7 +4,7 @@ import pytest
 
 from strategy_service.gen import order_service_pb2
 from strategy_service.order_client import OrderClient
-from strategy_service.types import OrderDecision
+from strategy_service.types import OrderDecision, OrderUpdateEvent, OrderUpdateFill
 
 
 class _Stub:
@@ -279,6 +279,26 @@ def test_exchange_and_market_codes_do_not_default_missing_route() -> None:
         OrderClient._exchange_code(None)
     with pytest.raises(ValueError, match="unsupported market"):
         OrderClient._market_code(None)
+
+
+def test_order_response_from_update_rejects_missing_market_route() -> None:
+    event = OrderUpdateEvent(
+        event_id=1,
+        session_id="session-1",
+        account_id=13,
+        venue_id=20,
+        exchange="binance",
+        market="",
+        position_side="both",
+        side="BUY",
+        event_type="fill",
+        order_status="FILLED",
+        order_id="order-1",
+        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.1, fill_price=3000.0),
+    )
+
+    with pytest.raises(ValueError, match="unsupported market"):
+        OrderClient.order_response_from_update(event)
 
 
 def test_list_order_lifecycle_events_maps_route_facts_and_fill():

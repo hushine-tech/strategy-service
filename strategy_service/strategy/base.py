@@ -80,6 +80,8 @@ def _parse_positive_decimal(value: object, field: str) -> Decimal:
         raise ValueError(f"OrderDecision.{field} must be finite") from exc
     if not math.isfinite(parsed_float):
         raise ValueError(f"OrderDecision.{field} must be finite")
+    if parsed_float <= 0.0:
+        raise ValueError(f"OrderDecision.{field} must be finite")
     try:
         if parsed <= 0:
             raise ValueError(f"OrderDecision.{field} must be > 0")
@@ -262,7 +264,7 @@ class BaseStrategy:
         self._view: InputView = InputView(self._inputs)
         self._blocked_order_keys: set[tuple[str, str, str]] = set()
         self._order_event_cursor: int = 0
-        self._sync_settled_order_ids: set[str] = set()
+        self._settled_lifecycle_event_ids: set[int] = set()
         self._initialize_order_event_cursor()
 
     @property
@@ -352,10 +354,9 @@ class BaseStrategy:
             try:
                 order_resp = OrderClient.order_response_from_update(event)
                 if order_resp is not None:
-                    order_id = str(getattr(order_resp, "order_id", "") or "")
-                    if order_id not in self._sync_settled_order_ids:
-                        event_exchange = _norm_exchange(getattr(event, "exchange", "binance"))
-                        event_market = _norm_market(getattr(event, "market", "perpetual_futures"))
+                    if event_id <= 0 or event_id not in self._settled_lifecycle_event_ids:
+                        event_exchange = _norm_exchange(getattr(event, "exchange", ""))
+                        event_market = _norm_market(getattr(event, "market", ""))
                         self._apply_order_to_wallet(
                             event_exchange,
                             event_market,
@@ -363,8 +364,8 @@ class BaseStrategy:
                             order_resp,
                             venue_id=getattr(event, "venue_id", None),
                         )
-                        if order_id:
-                            self._sync_settled_order_ids.add(order_id)
+                        if event_id > 0:
+                            self._settled_lifecycle_event_ids.add(event_id)
                         wallet_updated = True
                     if self._is_order_update_terminal(event, order_resp):
                         self._blocked_order_keys.discard(self._blocked_key_for_event(event, order_resp))
@@ -413,8 +414,8 @@ class BaseStrategy:
             or ""
         )
         return (
-            _norm_exchange(getattr(event, "exchange", "binance")),
-            _norm_market(getattr(event, "market", "perpetual_futures")),
+            _norm_exchange(getattr(event, "exchange", "")),
+            _norm_market(getattr(event, "market", "")),
             _norm_symbol(symbol),
         )
 
@@ -551,14 +552,14 @@ class BaseStrategy:
             for tick_key, tick in self._view._cache.items()
             if tick_key[:3] == target_key
         ]
-        if len(matches) == 1:
-            return float(matches[0].price)
-        if explicit_price is not None:
-            return float(explicit_price)
         if not matches:
+            if explicit_price is not None:
+                return float(explicit_price)
             raise ValueError(
                 f"missing mark price for ORDER_TARGETS route: {exchange}/{market}/{symbol}"
             )
+        if len(matches) == 1:
+            return float(matches[0].price)
         raise ValueError(
             f"ambiguous mark price for ORDER_TARGETS route: {exchange}/{market}/{symbol}"
         )
@@ -690,14 +691,8 @@ class BaseStrategy:
         if feedback.fill_events:
             for fill_event in feedback.fill_events:
                 self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, fill_event, venue_id=item.venue_id)
-                order_id = str(getattr(fill_event, "order_id", "") or "")
-                if order_id:
-                    self._sync_settled_order_ids.add(order_id)
         elif has_settleable_fill:
             self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order, venue_id=item.venue_id)
-            order_id = str(getattr(feedback.order, "order_id", "") or "")
-            if order_id:
-                self._sync_settled_order_ids.add(order_id)
         else:
             self._notify_order_response(feedback)
             logger.warning(

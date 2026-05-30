@@ -251,7 +251,9 @@ class OrderClient:
         raw_qty = abs(float(event.fill.qty or 0.0))
         if raw_qty <= 0.0:
             return None
-        market = event.market or "perpetual_futures"
+        cls._exchange_code(event.exchange)
+        market = event.market
+        cls._market_code(market)
         side = event.side or ""
         wallet_qty = cls._wallet_qty(raw_qty, side, market)
         orig_qty = abs(float(getattr(event, "orig_qty", 0.0) or 0.0))

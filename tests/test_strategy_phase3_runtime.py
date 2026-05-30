@@ -13,6 +13,8 @@ from strategy_service.types import (
     MarketData,
     OrderDecision,
     OrderResponse,
+    OrderUpdateEvent,
+    OrderUpdateFill,
     OrderSide,
     OrderType,
 )
@@ -64,6 +66,23 @@ class StubOrderClient:
 class FailingOrderClient(StubOrderClient):
     def place_order(self, *args: Any, **kwargs: Any) -> ExecutionFeedback:
         raise AssertionError("invalid batch must not place any order")
+
+
+class LifecycleOrderClient(FailingOrderClient):
+    def __init__(self, events: list[OrderUpdateEvent]) -> None:
+        super().__init__()
+        self.events = events
+
+    def list_order_lifecycle_events(
+        self,
+        *,
+        session_id: str,
+        after_event_id: int = 0,
+        limit: int = 100,
+    ) -> list[OrderUpdateEvent]:
+        if limit == 500:
+            return []
+        return [event for event in self.events if event.event_id > after_event_id]
 
 
 def _tick(
@@ -366,6 +385,150 @@ def test_qty_and_price_must_be_finite_decimal_strings(value: str) -> None:
     with pytest.raises(ValueError, match="finite"):
         price_svc.running_strategy(_tick())
     assert price_client.orders == []
+
+
+@pytest.mark.parametrize("value", ["1e-324", "1e-999999"])
+def test_qty_and_price_must_not_underflow_to_zero(value: str) -> None:
+    qty_svc = BaseStrategy(
+        "inline.py",
+        _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
+        StubOrderClient(),
+        account_id=1,
+        strategy_code=_strategy(
+            f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty={value!r}, order_type=OrderType.MARKET)\n'
+        ),
+    )
+    with pytest.raises(ValueError, match="finite"):
+        qty_svc.running_strategy(_tick())
+
+    price_svc = BaseStrategy(
+        "inline.py",
+        _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
+        StubOrderClient(),
+        account_id=1,
+        strategy_code=_strategy(
+            f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.LIMIT, price={value!r})\n'
+        ),
+    )
+    with pytest.raises(ValueError, match="finite"):
+        price_svc.running_strategy(_tick())
+
+
+def test_lifecycle_fill_missing_route_does_not_update_wallet_or_unblock() -> None:
+    event = OrderUpdateEvent(
+        event_id=1,
+        session_id="session-1",
+        account_id=1,
+        venue_id=10,
+        exchange="",
+        market="",
+        side="BUY",
+        position_side="both",
+        event_type="fill",
+        order_status="FILLED",
+        order_id="order-1",
+        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.1, fill_price=2500.0),
+        orig_qty=0.1,
+        executed_qty=0.1,
+        remaining_qty=0.0,
+    )
+    wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        LifecycleOrderClient([event]),
+        account_id=1,
+        session_id="session-1",
+        strategy_code=_strategy("        return None\n", order_targets="[]"),
+    )
+    blocked_key = (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "ETHUSDT")
+    svc._blocked_order_keys.add(blocked_key)
+
+    svc.running_strategy(_tick())
+
+    assert wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES).orders == []
+    assert blocked_key in svc._blocked_order_keys
+
+
+def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
+    events = [
+        OrderUpdateEvent(
+            event_id=1,
+            session_id="session-1",
+            account_id=1,
+            venue_id=10,
+            exchange=Exchange.BINANCE,
+            market=Market.PERPETUAL_FUTURES,
+            side="BUY",
+            position_side="both",
+            event_type="fill",
+            order_status="PARTIALLY_FILLED",
+            order_id="order-1",
+            fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.04, fill_price=2500.0),
+            orig_qty=0.1,
+            executed_qty=0.04,
+            remaining_qty=0.06,
+        ),
+        OrderUpdateEvent(
+            event_id=2,
+            session_id="session-1",
+            account_id=1,
+            venue_id=10,
+            exchange=Exchange.BINANCE,
+            market=Market.PERPETUAL_FUTURES,
+            side="BUY",
+            position_side="both",
+            event_type="fill",
+            order_status="FILLED",
+            order_id="order-1",
+            fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.06, fill_price=2510.0),
+            orig_qty=0.1,
+            executed_qty=0.1,
+            remaining_qty=0.0,
+        ),
+    ]
+    wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        LifecycleOrderClient(events),
+        account_id=1,
+        session_id="session-1",
+        strategy_code=_strategy("        return None\n", order_targets="[]"),
+    )
+
+    svc.running_strategy(_tick())
+
+    route_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
+    assert [order.qty for order in route_wallet.orders] == [0.04, 0.06]
+
+
+def test_limit_order_with_ambiguous_cached_mark_price_fails_even_with_price() -> None:
+    wallet = _portfolio(
+        (Exchange.BINANCE, Market.PERPETUAL_FUTURES),
+        (Exchange.BINANCE, Market.SPOT),
+    )
+    code = (
+        "from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType\n"
+        "\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [\n'
+        '        {"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "ETHUSDT", "interval": "1m"},\n'
+        '        {"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "ETHUSDT", "interval": "5m"},\n'
+        '        {"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT", "interval": "1m"},\n'
+        "    ]\n"
+        '    ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "ETHUSDT"}]\n'
+        "    def on_market_data(self, data, wallet):\n"
+        "        if data.trigger.market == Market.SPOT:\n"
+        "            return None\n"
+        '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.LIMIT, price="99")\n'
+    )
+    svc = BaseStrategy("inline.py", wallet, FailingOrderClient(), account_id=1, strategy_code=code)
+    svc.running_strategy(_tick(market=Market.SPOT, interval="1m", price=100.0))
+    svc.running_strategy(_tick(market=Market.SPOT, interval="5m", price=101.0))
+
+    with pytest.raises(ValueError, match="ambiguous mark price"):
+        svc.running_strategy(_tick(market=Market.PERPETUAL_FUTURES, interval="1m", price=2500.0))
 
 
 def test_undeclared_order_target_fails_closed() -> None:
