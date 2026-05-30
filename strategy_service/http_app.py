@@ -168,10 +168,10 @@ def create_app() -> Any:
             if req.symbol_type.strip().lower() == "futures" and not wallet.futures.positions:
                 raise ValueError("account.futures.positions must define at least one futures slot")
 
-            # --- core-service integration (optional) ---
+            # --- legacy/admin-only FastAPI wrapper integration (optional) ---
             client = AccountClient(req.account_service_address)
             if req.account_id:
-                info = client.get_online_account_info(req.account_id, req.user_id)
+                info = client.get_online_account_info(req.account_id, req.user_id)  # legacy/admin-only
                 if info is not None:
                     logger.info(
                         "core-service calibration: account_id=%s mode=%s futures.wallet_balance=%.4f",
@@ -194,7 +194,7 @@ def create_app() -> Any:
                 _aid = req.account_id
 
                 def _on_order_sync(_aid=_aid) -> None:
-                    client.update_account_wallet_state(
+                    client.update_account_wallet_state(  # legacy/admin-only FastAPI wrapper
                         _aid, wallet.futures, wallet.spot,
                     )
                 user_strategy.on_order_callback = _on_order_sync

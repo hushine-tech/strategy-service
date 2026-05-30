@@ -62,17 +62,20 @@ class AccountClient:
             self._stub = None
 
     def get_online_account_info(self, account_id: int, user_id: int):
-        """Fetch wallet state from core-service. Returns proto AccountWalletState or None."""
+        """Legacy/admin-only helper.
+
+        Normal Phase 3 strategy sessions use ``get_portfolio_snapshot``.
+        """
         if not self._stub:
             return None
         try:
             from strategy_service.gen import account_service_pb2
 
-            req = account_service_pb2.GetOnlineAccountInfoRequest(
+            req = account_service_pb2.GetOnlineAccountInfoRequest(  # legacy/admin-only
                 account_id=int(account_id),
                 user_id=int(user_id),
             )
-            resp = self._stub.GetOnlineAccountInfo(req)
+            resp = self._stub.GetOnlineAccountInfo(req)  # legacy/admin-only
             return resp.wallet
         except Exception:
             logger.warning(
@@ -334,7 +337,7 @@ class AccountClient:
         strategy_id: int = 0,
         session_id: str = "",
     ):
-        """Push local wallet state to core-service. Returns proto AccountWalletState or None.
+        """Legacy/admin-only helper. Normal Phase 3 sessions use UpdatePortfolioSnapshot.
 
         snapshot_reason: 0=no snapshot, 1=order_fill, 2=strategy_start, 3=strategy_end, etc.
         """
@@ -343,7 +346,7 @@ class AccountClient:
         try:
             from strategy_service.gen import account_service_pb2
 
-            req = account_service_pb2.UpdateAccountWalletStateRequest(
+            req = account_service_pb2.UpdateAccountWalletStateRequest(  # legacy/admin-only
                 account_id=int(account_id),
                 futures=_serialize_future_wallet(future_wallet) if future_wallet else None,
                 spot=_serialize_spot_wallet(spot_wallet) if spot_wallet else None,
@@ -354,7 +357,7 @@ class AccountClient:
                 strategy_id=int(strategy_id),
                 session_id=session_id,
             )
-            resp = self._stub.UpdateAccountWalletState(req)
+            resp = self._stub.UpdateAccountWalletState(req)  # legacy/admin-only
             return resp.wallet
         except Exception:
             logger.warning("UpdateAccountWalletState failed for account_id=%s", account_id, exc_info=True)

@@ -52,29 +52,33 @@ def _wallet():
 
 
 class _RecordingAccountClient:
-    """Captures UpdateAccountWalletState calls so we can assert on PeriodicSample pushes."""
+    """Captures UpdatePortfolioSnapshot calls so PeriodicSample never uses legacy wallet RPCs."""
 
     def __init__(self, fail: bool = False) -> None:
         self.calls: list[dict[str, Any]] = []
         self._fail = fail
 
-    def update_account_wallet_state(
+    def update_portfolio_snapshot(
         self,
         account_id: int,
-        future_wallet: Any,
-        spot_wallet: Any,
+        user_id: int = 0,
         snapshot_reason: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
     ) -> None:
         self.calls.append({
             "account_id": account_id,
+            "user_id": user_id,
             "snapshot_reason": snapshot_reason,
             "strategy_id": strategy_id,
             "session_id": session_id,
         })
         if self._fail:
             raise RuntimeError("simulated transport failure")
+
+    def update_account_wallet_state(self, *args, **kwargs) -> None:
+        del args, kwargs
+        raise AssertionError("normal Phase 3 PeriodicSample must not call UpdateAccountWalletState")
 
 
 class _FakeClock:
@@ -101,7 +105,6 @@ def _install_and_get_engine(
     *,
     servicer: StrategyServiceServicer,
     account_client: _RecordingAccountClient,
-    wallet: Wallet,
     clock: _FakeClock,
     every_n_bars: int = DEFAULT_PERIODIC_SAMPLE_EVERY_BARS,
     max_idle_seconds: float = DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS,
@@ -119,8 +122,8 @@ def _install_and_get_engine(
 
     servicer._install_periodic_sample_trigger(
         engine=engine,
-        wallet=wallet,
         account_id=101,
+        user_id=17,
         strategy_id=202,
         session_id="sess-test",
         account_client=account_client,
@@ -143,14 +146,12 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
     """mode=2 path: 20 bars processed in <5min → trigger fires exactly once, counters reset."""
     servicer = _make_servicer()
     account_client = _RecordingAccountClient()
-    wallet = _wallet()
     clock = _FakeClock()
     original_calls: list[Any] = []
 
     engine = _install_and_get_engine(
         servicer=servicer,
         account_client=account_client,
-        wallet=wallet,
         clock=clock,
         original_calls=original_calls,
     )
@@ -167,6 +168,7 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
     call = account_client.calls[0]
     assert call["snapshot_reason"] == SNAPSHOT_REASON_PERIODIC_SAMPLE
     assert call["account_id"] == 101
+    assert call["user_id"] == 17
     assert call["strategy_id"] == 202
     assert call["session_id"] == "sess-test"
 
@@ -185,13 +187,11 @@ def test_periodic_sample_fires_after_idle_threshold_with_few_bars():
     """mode=2 path: 3 bars but 6 minutes elapse → trigger fires on the bar after the idle trip."""
     servicer = _make_servicer()
     account_client = _RecordingAccountClient()
-    wallet = _wallet()
     clock = _FakeClock()
 
     engine = _install_and_get_engine(
         servicer=servicer,
         account_client=account_client,
-        wallet=wallet,
         clock=clock,
     )
 
@@ -240,17 +240,18 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
         required_streams=[],
     )
     request = SimpleNamespace(interval="1m", start_time_ms=1, end_time_ms=2)
-    wallet_calls: list[tuple] = []
+    snapshot_calls: list[tuple] = []
 
     class FakeAccountClient:
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_account_wallet_state(
-            self, account_id, future_wallet, spot_wallet,
-            snapshot_reason=0, strategy_id=0, session_id="",
-        ):
-            wallet_calls.append(("wallet_sync", snapshot_reason))
+        def update_portfolio_snapshot(self, **kwargs):
+            snapshot_calls.append(("portfolio_sync", kwargs.get("snapshot_reason")))
+
+        def update_account_wallet_state(self, *args, **kwargs):
+            del args, kwargs
+            raise AssertionError("normal Phase 3 run must not call UpdateAccountWalletState")
 
         def update_session(self, **_kwargs) -> bool:
             return True
@@ -299,7 +300,7 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
 
     # No PeriodicSample (reason=6) ever pushed. strategy_end (reason=3) is expected
     # in the finally block, but never 6.
-    reasons = [r for _, r in wallet_calls]
+    reasons = [r for _, r in snapshot_calls]
     assert SNAPSHOT_REASON_PERIODIC_SAMPLE not in reasons
 
     # Sanity: the engine's running_strategy must be the raw class method (no closure
@@ -324,17 +325,18 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
         required_streams=[],
     )
     request = SimpleNamespace(interval="1m", start_time_ms=1, end_time_ms=2)
-    wallet_calls: list[tuple] = []
+    snapshot_calls: list[tuple] = []
 
     class FakeAccountClient:
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_account_wallet_state(
-            self, account_id, future_wallet, spot_wallet,
-            snapshot_reason=0, strategy_id=0, session_id="",
-        ):
-            wallet_calls.append(("wallet_sync", snapshot_reason))
+        def update_portfolio_snapshot(self, **kwargs):
+            snapshot_calls.append(("portfolio_sync", kwargs.get("snapshot_reason")))
+
+        def update_account_wallet_state(self, *args, **kwargs):
+            del args, kwargs
+            raise AssertionError("normal Phase 3 run must not call UpdateAccountWalletState")
 
         def update_session(self, **_kwargs) -> bool:
             return True
@@ -378,7 +380,7 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
         strategy_code=None,
     )
 
-    reasons = [r for _, r in wallet_calls]
+    reasons = [r for _, r in snapshot_calls]
     assert SNAPSHOT_REASON_PERIODIC_SAMPLE not in reasons
     assert captured_engine, "fake_run_live should have been called"
     eng = captured_engine[0]
@@ -389,14 +391,12 @@ def test_periodic_sample_push_failure_does_not_interrupt_strategy():
     """Push failure MUST be swallowed (logged as warn) and counters MUST still reset."""
     servicer = _make_servicer()
     account_client = _RecordingAccountClient(fail=True)
-    wallet = _wallet()
     clock = _FakeClock()
     original_calls: list[Any] = []
 
     engine = _install_and_get_engine(
         servicer=servicer,
         account_client=account_client,
-        wallet=wallet,
         clock=clock,
         original_calls=original_calls,
     )

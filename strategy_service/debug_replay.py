@@ -102,7 +102,10 @@ class DebugReplayRunner:
                         f"runtime={dataset.dataset_id} platform={start_resp.dataset.dataset_id}"
                     )
 
-            info = account_client.get_online_account_info(dataset.account_id, dataset.user_id)
+            info = account_client.get_online_account_info(  # legacy/admin-only debug replay path
+                dataset.account_id,
+                dataset.user_id,
+            )
             if info is None:
                 raise RuntimeError(f"account {dataset.account_id} not found or core-service unreachable")
             if int(getattr(info, "mode", 0) or 0) != 0:
@@ -116,7 +119,7 @@ class DebugReplayRunner:
                 session_id=session_id,
                 session_name=session_name,
             )
-            account_client.update_account_wallet_state(
+            account_client.update_account_wallet_state(  # legacy/admin-only debug replay path
                 dataset.account_id,
                 wallet.futures,
                 wallet.spot,
@@ -141,7 +144,7 @@ class DebugReplayRunner:
             )
 
             def _on_order_sync() -> None:
-                account_client.update_account_wallet_state(
+                account_client.update_account_wallet_state(  # legacy/admin-only debug replay path
                     dataset.account_id,
                     wallet.futures,
                     wallet.spot,
@@ -177,7 +180,7 @@ class DebugReplayRunner:
         finally:
             if session_id:
                 try:
-                    account_client.update_account_wallet_state(
+                    account_client.update_account_wallet_state(  # legacy/admin-only debug replay path
                         dataset.account_id,
                         getattr(locals().get("wallet", None), "futures", None),
                         getattr(locals().get("wallet", None), "spot", None),

@@ -44,7 +44,7 @@
 | --- | --- | --- |
 | 1 | Phase C 切分 | 分 `C1 / C2 / C3` 三段：先非破坏 reconciliation，再破坏性迁移，再全量验证。 |
 | 2 | Shadow compare 适用范围 | `C1` 只做 `mode=2`。`mode=1` 不参与，不打开。 |
-| 3 | 接口形态 | 复用 `UpdateAccountWalletState`；不改 proto。 |
+| 3 | 接口形态 | 当时复用旧钱包快照 RPC；不改 proto。Phase 3 正常 runtime 已迁到 portfolio snapshot。 |
 | 4 | 对账执行模型 | `core-service` 内独立协程 fire-and-forget；主流程立即返回。 |
 | 5 | exchange snapshot 来源 | 主流程只拉一次 exchange authoritative snapshot；协程直接复用主流程拿到的 authoritative payload，不再二次调用 Binance。 |
 | 6 | panic / timeout 处理 | 协程内 `defer recover()`；使用独立 timeout；任何错误只记 log / metrics。 |
@@ -107,9 +107,9 @@ C3  验证：全量回归 + 阈值校准 + 收尾归档              ~2-3 天
 strategy-service                           core-service
 ────────────────                           ───────────────
 
-wallet sync
+wallet sync（历史旧路径）
   │
-  └─ UpdateAccountWalletState(local wallet, snapshot_reason)
+  └─ 旧钱包快照 RPC(local wallet, snapshot_reason)
                                            │
                                            │ 主流程
                                            ├─ 1. 读取 account.mode
@@ -315,7 +315,7 @@ RUNTIME_REGISTRY = {
 目标：
 
 - 在 `core-service` 内新增 reconciliation 模块
-- 在 `UpdateAccountWalletState` mode=2 分支末尾 `LaunchAsync`
+- 在旧钱包快照 RPC 的 mode=2 分支末尾 `LaunchAsync`
 - 在 strategy session 增加 K 线 bar 计数与 `PeriodicSample`
 
 说明：
@@ -334,7 +334,7 @@ RUNTIME_REGISTRY = {
 - `pytest tests/` 全绿
 - 手动跑一个 `mode=0` backtest，数字与 `C1` 前完全一致
 - 手动跑一个 `mode=2` testnet smoke，主流程返回结果与 `C1` 前一致
-- 开/关 reconciliation 两种情况下，`UpdateAccountWalletState` P99 无明显差异
+- 开/关 reconciliation 两种情况下，旧钱包快照 RPC P99 无明显差异
 - 当前本地代码验证：`go test ./...` 全绿，`PYTHONPATH=.:../strategy-library pytest tests/ -q` 全绿
 - panic / timeout / DB 写失败注入后，主流程仍正常返回
 - testnet 5-10 笔 compare，log / DB / metrics 行为符合预期

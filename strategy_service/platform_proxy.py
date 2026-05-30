@@ -32,14 +32,12 @@ from strategy_service.types import ExecutionFeedback, OrderDecision
 logger = logging.getLogger(__name__)
 
 
-ACCOUNT_GET_ONLINE = "account.GetOnlineAccountInfo"
 ACCOUNT_GET_PORTFOLIO = "account.GetPortfolioSnapshot"
 ACCOUNT_UPDATE_PORTFOLIO = "account.UpdatePortfolioSnapshot"
 ACCOUNT_PREFLIGHT_STRATEGY_SESSION = "account.PreflightStrategySession"
 ACCOUNT_GET_ACTIVE_STRATEGY = "account.GetActiveStrategy"
 ACCOUNT_SAVE_SESSION = "account.SaveSession"
 ACCOUNT_UPDATE_SESSION = "account.UpdateSession"
-ACCOUNT_UPDATE_WALLET = "account.UpdateAccountWalletState"
 ORDER_PLACE = "order.PlaceOrder"
 ORDER_RESOLVE_ATTEMPT = "order.ResolveOrderAttempt"
 MARKETDATA_GET_STATUS = "marketdata.GetMarketDataStreamStatus"
@@ -88,16 +86,17 @@ class ProxyAccountClient:
         self._proxy = proxy
 
     def get_online_account_info(self, account_id: int, user_id: int):
+        """Legacy/admin-only helper. Normal Phase 3 sessions use get_portfolio_snapshot."""
         try:
             from strategy_service.gen import account_service_pb2
 
             resp = self._proxy.invoke(
-                ACCOUNT_GET_ONLINE,
-                account_service_pb2.GetOnlineAccountInfoRequest(
+                "account.GetOnlineAccountInfo",  # legacy/admin-only platform RPC
+                account_service_pb2.GetOnlineAccountInfoRequest(  # legacy/admin-only
                     account_id=int(account_id),
                     user_id=int(user_id),
                 ),
-                account_service_pb2.GetOnlineAccountInfoResponse,
+                account_service_pb2.GetOnlineAccountInfoResponse,  # legacy/admin-only
             )
             return resp.wallet
         except Exception:
@@ -336,10 +335,11 @@ class ProxyAccountClient:
         strategy_id: int = 0,
         session_id: str = "",
     ):
+        """Legacy/admin-only helper. Normal Phase 3 sessions use update_portfolio_snapshot."""
         try:
             from strategy_service.gen import account_service_pb2
 
-            req = account_service_pb2.UpdateAccountWalletStateRequest(
+            req = account_service_pb2.UpdateAccountWalletStateRequest(  # legacy/admin-only
                 account_id=int(account_id),
                 futures=_serialize_future_wallet(future_wallet) if future_wallet else None,
                 spot=_serialize_spot_wallet(spot_wallet) if spot_wallet else None,
@@ -351,9 +351,9 @@ class ProxyAccountClient:
                 session_id=session_id,
             )
             resp = self._proxy.invoke(
-                ACCOUNT_UPDATE_WALLET,
+                "account.UpdateAccountWalletState",  # legacy/admin-only platform RPC
                 req,
-                account_service_pb2.UpdateAccountWalletStateResponse,
+                account_service_pb2.UpdateAccountWalletStateResponse,  # legacy/admin-only
             )
             return resp.wallet
         except Exception:

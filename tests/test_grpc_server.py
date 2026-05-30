@@ -516,6 +516,82 @@ def test_run_session_order_callback_updates_portfolio_snapshot(monkeypatch):
     assert order_update["session_id"] == "sess-portfolio"
 
 
+def test_phase3_normal_run_never_updates_legacy_wallet_state(monkeypatch):
+    calls = {"legacy_update": 0, "portfolio_update": 0}
+    state = SessionState(account_mode=0, account_id=407, strategy_id=43, user_id=17)
+    snapshot = make_portfolio_snapshot_with_binance_perp_and_spot(407, user_id=17)
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def update_portfolio_snapshot(self, *args, **kwargs):
+            del args
+            calls["portfolio_update"] += 1
+            assert kwargs["account_id"] == 407
+            assert kwargs["user_id"] == 17
+            return None
+
+        def update_account_wallet_state(self, *args, **kwargs):
+            del args, kwargs
+            calls["legacy_update"] += 1
+            raise AssertionError("normal Phase 3 run must not call UpdateAccountWalletState")
+
+        def update_session(self, **_kwargs):
+            return True
+
+    class FakeStrategy:
+        def __init__(self) -> None:
+            self.on_order_callback = None
+
+    fake_strategy = FakeStrategy()
+
+    class FakeEngine:
+        def create_strategy(self, **_kwargs):
+            return fake_strategy
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+    monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+
+    def fake_run_backtest(*_args, **_kwargs):
+        assert fake_strategy.on_order_callback is not None
+        fake_strategy.on_order_callback()
+        state.transition("finished", bars=1)
+
+    monkeypatch.setattr(servicer, "_run_backtest", fake_run_backtest)
+
+    from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
+
+    wallet = build_portfolio_wallet_from_snapshot(
+        snapshot,
+        allowed_routes={("binance", "perpetual_futures"), ("binance", "spot")},
+    )
+    servicer._run_session(
+        "sess-no-legacy-wallet",
+        state,
+        SimpleNamespace(),
+        wallet,
+        0,
+        407,
+        17,
+        [],
+        "<db:phase3@v1>",
+        43,
+        _phase3_strategy_code(),
+    )
+
+    assert calls["legacy_update"] == 0
+    assert calls["portfolio_update"] >= 2
+
+
 def test_run_strategy_returns_internal_when_session_persist_fails(monkeypatch):
     # Test focuses on session-persist failure path. Disable preflight so we
     # don't also need to fake TimescaleDB for the backtest profile.
