@@ -289,6 +289,29 @@ def test_live_stream_preflight_passes_on_running_fresh_streams():
     ]
 
 
+def test_live_stream_preflight_fails_closed_for_unsupported_exchange():
+    declared = [StrategyInput("okx", "futures", "ETHUSDT", "1m")]
+    calls: list[tuple] = []
+
+    def lookup(*args):
+        calls.append(args)
+        return _make_stream(symbol="ETHUSDT")
+
+    result = live_stream_preflight(
+        declared,
+        profile=RuntimeSourceProfile.TESTNET,
+        lookup_stream=lookup,
+        freshness_grace_seconds=30,
+    )
+
+    assert not result.ok
+    assert calls == []
+    failure = result.failures[0]
+    assert failure.kind is PreflightFailureKind.STREAM
+    assert failure.input_key == ("futures", "ETHUSDT", "1m")
+    assert "okx" in failure.reason.lower()
+
+
 def test_live_stream_preflight_fails_when_stream_missing():
     declared = [StrategyInput("binance", "futures", "BTCUSDT", "1m")]
 

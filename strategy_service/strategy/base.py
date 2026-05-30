@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import logging
 import uuid
+from dataclasses import replace
 from typing import Any
 
 from strategy_service.wallet.runtime import WalletRuntime
@@ -383,6 +384,8 @@ class BaseStrategy:
                         margin_needed, available_balance,
                     )
                     return
+
+        signal = replace(signal, exchange=sig_exchange, market=sig_market)
 
         intent_id = uuid.uuid4().hex
         feedback = self._coerce_execution_feedback(self._order_client.place_order(

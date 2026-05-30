@@ -14,11 +14,13 @@ def _md(
     price: float = 50_000.0,
     market: str = "futures",
     interval: str = "1m",
+    exchange: str = "binance",
 ) -> MarketData:
     return MarketData(
         symbol=symbol,
         price=price,
         timestamp=datetime.now(timezone.utc),
+        exchange=exchange,
         market=market,
         interval=interval,
     )
@@ -341,6 +343,39 @@ def test_order_decision_requires_declared_exchange_market_symbol():
 
     with pytest.raises(ValueError, match="not declared in INPUTS"):
         svc.running_strategy(_md(symbol="ETHUSDT", market="futures", interval="1m"))
+
+
+def test_order_decision_inherits_declared_exchange_before_place_order():
+    wallet = _wallet_with_futures_slot(symbol="ETHUSDT")
+    strategy_code = (
+        "from strategy_service.types import OrderDecision\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "okx", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+        "    def on_market_data(self, data, wallet):\n"
+        "        return OrderDecision(symbol=data.symbol, side='LONG', qty=0.1)\n"
+    )
+
+    class CaptureOrderClient:
+        def __init__(self) -> None:
+            self.decision = None
+
+        def place_order(self, _account_id, decision, _mark_price, **_kwargs):
+            self.decision = decision
+            return ExecutionFeedback(
+                intent_id="intent-okx",
+                attempt_id="attempt-okx",
+                attempt_status="ACCEPTED",
+            )
+
+    order_client = CaptureOrderClient()
+    svc = StrategyService()
+    svc.create_strategy("u1", "<db:okx_inherited_exchange>", wallet, strategy_code=strategy_code, order_client=order_client)
+
+    svc.running_strategy(_md(symbol="ETHUSDT", market="futures", interval="1m", exchange="okx"))
+
+    assert order_client.decision is not None
+    assert order_client.decision.exchange == "okx"
+    assert order_client.decision.market == "perpetual_futures"
 
 
 def test_strategy_declared_symbols_route_even_without_wallet_slot():

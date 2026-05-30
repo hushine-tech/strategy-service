@@ -366,6 +366,18 @@ def live_stream_preflight(
             )
 
     for inp in declared:
+        if inp.exchange != exchange:
+            result.failures.append(
+                PreflightFailure(
+                    kind=PreflightFailureKind.STREAM,
+                    reason=(
+                        f"market-data exchange {inp.exchange!r} is not supported "
+                        f"for {profile.value} profile; supported exchange: {exchange}"
+                    ),
+                    input_key=_input_key(inp),
+                )
+            )
+            continue
         max_age_seconds = (_interval_seconds(inp.interval) * 2) + freshness_grace_seconds
         stream = None
         try:

@@ -439,6 +439,34 @@ def test_run_live_initializes_loop_with_parsed_brokers(monkeypatch):
     assert bound_loops[0][0] == "sess-live-route"
 
 
+def test_run_live_rejects_non_binance_declared_exchange_before_subscription(monkeypatch):
+    servicer = StrategyServiceServicer("", "", {}, "kafka-1:9092")
+    state = SessionState(account_mode=2)
+
+    class BadLiveKlineSubscription:
+        @classmethod
+        def from_declared_inputs(cls, *_args, **_kwargs):
+            raise AssertionError("non-binance inputs must fail before subscription construction")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "market_data.config",
+        types.SimpleNamespace(LiveKlineSubscription=BadLiveKlineSubscription),
+    )
+
+    from strategy_service.inputs import StrategyInput
+    servicer._run_live(
+        "sess-live-okx",
+        state,
+        engine=object(),
+        declared_inputs=[StrategyInput("okx", "futures", "ETHUSDT", "1m")],
+        strategy_id=77,
+    )
+
+    assert state.status == "failed"
+    assert "unsupported live market-data exchange" in state.error
+
+
 def test_run_strategy_rejects_strategy_missing_inputs_declaration(monkeypatch):
     """Pre_C3 contract: a strategy without a valid INPUTS declaration MUST
     be rejected at RPC entry, not deferred to a background session failure."""

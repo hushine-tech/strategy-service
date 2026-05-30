@@ -1095,6 +1095,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             self._run_live_via_platform_proxy(session_id, state, engine)
             return
 
+        unsupported_exchanges = sorted({inp.exchange for inp in declared_inputs if inp.exchange != "binance"})
+        if unsupported_exchanges:
+            state.transition(
+                "failed",
+                error=(
+                    "unsupported live market-data exchange(s): "
+                    + ", ".join(unsupported_exchanges)
+                ),
+            )
+            return
+
         import threading as _threading
         from market_data.config import KafkaBrokerConfig, KafkaConfig, LiveKlineSubscription
         from strategy_service.data_loop import LiveDataLoop
