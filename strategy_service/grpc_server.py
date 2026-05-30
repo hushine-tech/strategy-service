@@ -42,10 +42,9 @@ from strategy_service.preflight import (
     _marketdata_market,
     resolve_profile,
 )
-from strategy_service.strategy.base import extract_strategy_inputs
+from strategy_service.strategy.base import extract_strategy_declarations
 from strategy_service.strategy_validator import validate_strategy_code
-from strategy_service.wallet_adapter import proto_to_account_spec
-from strategy_service.wallet_factory import build_wallet_from_account
+from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +54,9 @@ logger = logging.getLogger(__name__)
 # whichever fires first. Both counters reset on fire.
 DEFAULT_PERIODIC_SAMPLE_EVERY_BARS = 20
 DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS = 300
+SNAPSHOT_REASON_EVENT = 1
+SNAPSHOT_REASON_STRATEGY_START = 2
+SNAPSHOT_REASON_STRATEGY_END = 3
 SNAPSHOT_REASON_PERIODIC_SAMPLE = 6
 DEFAULT_LEASE_HEARTBEAT_SECONDS = 30
 DEFAULT_LEASE_TTL_SECONDS = 90
@@ -131,7 +133,7 @@ def _periodic_sample_max_idle_seconds(request: Any) -> float:
 
 # Note: wallet-derived symbol inference was intentionally removed (pre_C3 §2.1/§2.2).
 # The authoritative universe is the strategy's ``INPUTS`` declaration, which is
-# resolved via ``extract_strategy_inputs`` at RPC entry.
+# resolved via ``extract_strategy_declarations`` at RPC entry.
 
 
 def _live_consumer_group(strategy_id: int, session_id: str) -> str:
@@ -169,6 +171,32 @@ def _resolve_stop_action(request: Any) -> int:
     if bool(getattr(request, "close_positions", False)):
         return pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS
     return pb2.STOP_ACTION_STOP_ONLY
+
+
+def _message_has_field(message: Any, field_name: str) -> bool:
+    has_field = getattr(message, "HasField", None)
+    if callable(has_field):
+        try:
+            return bool(has_field(field_name))
+        except ValueError:
+            return False
+    return getattr(message, field_name, None) is not None
+
+
+def _portfolio_snapshot_mode(snapshot: Any) -> int:
+    wallet = getattr(snapshot, "wallet", None)
+    if wallet is not None and _message_has_field(snapshot, "wallet"):
+        mode = int(getattr(wallet, "mode", 0) or 0)
+        if mode != 0:
+            return mode
+    for venue in getattr(snapshot, "venues", []) or []:
+        venue_wallet = getattr(venue, "wallet", None)
+        if venue_wallet is None or not _message_has_field(venue, "wallet"):
+            continue
+        mode = int(getattr(venue_wallet, "mode", 0) or 0)
+        if mode != 0:
+            return mode
+    return int(getattr(wallet, "mode", 0) or 0) if wallet is not None else 0
 
 
 class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
@@ -522,15 +550,15 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details("account_id is required")
             return pb2.RunStrategyResponse()
 
-        # 1. 从 core-service 获取帐号信息（mode + 钱包）
+        # 1. 从 core-service 获取组合快照（mode + 多 venue 钱包）
         acct_client = self._account_client()
-        info = acct_client.get_online_account_info(account_id, user_id)
-        if info is None:
+        snapshot = acct_client.get_portfolio_snapshot(account_id, user_id)
+        if snapshot is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"account {account_id} not found or core-service unreachable")
             return pb2.RunStrategyResponse()
 
-        mode = info.mode
+        mode = _portfolio_snapshot_mode(snapshot)
 
         # 2. Resolve the runtime source profile FIRST (pre_C3 gate 2 §4).
         # This is an internal runtime-source mapping, not a strategy/account
@@ -548,16 +576,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if not self._require_market_data_execution_path(context, "RunStrategy", profile):
             return pb2.RunStrategyResponse()
 
-        # 3. 将 proto wallet 转为内存 Wallet
-        account_spec = proto_to_account_spec(info)
-        try:
-            wallet = build_wallet_from_account(account_spec)
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(f"failed to build wallet: {e}")
-            return pb2.RunStrategyResponse()
-
-        # 4. 确定策略来源：优先 GetActiveStrategy（DB 存储），fallback strategy_path（开发/测试）
+        # 3. 确定策略来源：优先 GetActiveStrategy（DB 存储），fallback strategy_path（开发/测试）
         strategy_id = 0
         strategy_code: str | None = None
         strategy_path = request.strategy_path  # may be empty in production
@@ -578,7 +597,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         # declaration error surfaces as FAILED_PRECONDITION on the RPC itself,
         # never as a background-thread session failure.
         try:
-            declared_inputs = extract_strategy_inputs(strategy_path, strategy_code)
+            declarations = extract_strategy_declarations(strategy_path, strategy_code)
         except StrategyDeclarationError as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy input declaration invalid: {e}")
@@ -586,6 +605,34 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         except (ImportError, AttributeError) as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy could not be loaded: {e}")
+            return pb2.RunStrategyResponse()
+        declared_inputs = list(declarations.inputs)
+        required_routes = set(declarations.required_routes)
+        required_symbols = {
+            (entry.exchange, entry.market, entry.symbol)
+            for entry in declarations.inputs
+        } | set(declarations.order_target_keys)
+
+        account_preflight = self._run_account_preflight(
+            acct_client=acct_client,
+            account_id=account_id,
+            user_id=user_id,
+            required_routes=required_routes,
+            required_symbols=required_symbols,
+        )
+        if account_preflight is not None:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(account_preflight)
+            return pb2.RunStrategyResponse()
+
+        try:
+            wallet = build_portfolio_wallet_from_snapshot(
+                snapshot,
+                allowed_routes=required_routes,
+            )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(f"failed to build wallet: {e}")
             return pb2.RunStrategyResponse()
 
         # The declared 3-tuple universe is threaded straight through to the
@@ -680,10 +727,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             self._sessions.discard(session_id)
             return pb2.RunStrategyResponse()
 
-        # 写 strategy_start 快照
-        acct_client.update_account_wallet_state(
-            account_id, wallet.futures, wallet.spot,
-            snapshot_reason=2,  # strategy_start
+        # 写 strategy_start 组合快照
+        acct_client.update_portfolio_snapshot(
+            account_id=account_id,
+            user_id=user_id,
+            snapshot_reason=SNAPSHOT_REASON_STRATEGY_START,
             strategy_id=strategy_id,
             session_id=session_id,
         )
@@ -744,9 +792,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             acct_client = self._account_client()
 
             def _on_order_sync() -> None:
-                acct_client.update_account_wallet_state(
-                    account_id, wallet.futures, wallet.spot,
-                    snapshot_reason=1,  # order_fill
+                acct_client.update_portfolio_snapshot(
+                    account_id=account_id,
+                    user_id=user_id,
+                    snapshot_reason=SNAPSHOT_REASON_EVENT,
                     strategy_id=strategy_id,
                     session_id=session_id,
                 )
@@ -760,8 +809,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if mode == 2:
                 self._install_periodic_sample_trigger(
                     engine=engine,
-                    wallet=wallet,
                     account_id=account_id,
+                    user_id=user_id,
                     strategy_id=strategy_id,
                     session_id=session_id,
                     account_client=acct_client,
@@ -772,9 +821,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if mode == 0:
                 self._run_backtest(session_id, state, engine, request, declared_inputs)
             elif mode in (1, 2):
-                # mode=1 is Phase C fail-closed: build_wallet_from_account
-                # above already rejects it via the registry miss, so we never
-                # actually reach here. Explicit allowlist instead of `else`
+                # mode=1 is Phase C fail-closed via the profile gate above, so
+                # we never actually reach here. Explicit allowlist instead of `else`
                 # prevents new/unknown modes from silently borrowing the
                 # live path as defense-in-depth.
                 self._run_live(session_id, state, engine, declared_inputs, strategy_id)
@@ -794,9 +842,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             self._release_session_market_data_subscriptions(session_id, state)
             try:
                 acct_client = self._account_client()
-                acct_client.update_account_wallet_state(
-                    account_id, wallet.futures, wallet.spot,
-                    snapshot_reason=3,  # strategy_end
+                acct_client.update_portfolio_snapshot(
+                    account_id=account_id,
+                    user_id=user_id,
+                    snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
                     strategy_id=strategy_id,
                     session_id=session_id,
                 )
@@ -810,6 +859,43 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 self._sessions.mark_terminal(session_id)
             except Exception:
                 logger.warning("session %s: failed to finalize", session_id, exc_info=True)
+
+    @staticmethod
+    def _run_account_preflight(
+        *,
+        acct_client: Any,
+        account_id: int,
+        user_id: int,
+        required_routes: set[tuple[str, str]],
+        required_symbols: set[tuple[str, str, str]],
+    ) -> str | None:
+        preflight = getattr(acct_client, "preflight_strategy_session", None)
+        if not callable(preflight):
+            return "account preflight unavailable: client does not support PreflightStrategySession"
+        resp = preflight(
+            account_id=account_id,
+            user_id=user_id,
+            required_routes=sorted(required_routes),
+            required_symbols=sorted(required_symbols),
+        )
+        if resp is None:
+            return "account preflight unavailable: core-service did not return a result"
+        if bool(getattr(resp, "ok", False)):
+            return None
+        issue_messages: list[str] = []
+        for issue in getattr(resp, "issues", []) or []:
+            code = str(getattr(issue, "code", "") or "preflight_failed")
+            message = str(getattr(issue, "message", "") or "").strip()
+            exchange = getattr(issue, "exchange", 0)
+            market = getattr(issue, "market", 0)
+            symbol = str(getattr(issue, "symbol", "") or "").strip()
+            route = f" exchange={exchange} market={market}"
+            if symbol:
+                route = f"{route} symbol={symbol}"
+            issue_messages.append(f"{code}: {message}{route}".strip())
+        if issue_messages:
+            return "account preflight failed: " + "; ".join(issue_messages)
+        return "account preflight failed"
 
     def _run_profile_preflight(
         self,
@@ -904,8 +990,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self,
         *,
         engine: StrategyEngine,
-        wallet: Any,
         account_id: int,
+        user_id: int,
         strategy_id: int,
         session_id: str,
         account_client: AccountClient,
@@ -939,8 +1025,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             state["bars_since_last_compare"] = 0
             state["last_compare_at"] = now
             try:
-                account_client.update_account_wallet_state(
-                    account_id, wallet.futures, wallet.spot,
+                account_client.update_portfolio_snapshot(
+                    account_id=account_id,
+                    user_id=user_id,
                     snapshot_reason=SNAPSHOT_REASON_PERIODIC_SAMPLE,
                     strategy_id=strategy_id,
                     session_id=session_id,
@@ -1476,11 +1563,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     f"{getattr(order_resp, 'error_message', '')}"
                 )
             wallet.on_order(order.account_symbol, order.market, order_resp)
-            acct_client.update_account_wallet_state(
-                state.account_id,
-                wallet.futures,
-                wallet.spot,
-                snapshot_reason=1,
+            acct_client.update_portfolio_snapshot(
+                account_id=state.account_id,
+                user_id=state.user_id,
+                snapshot_reason=SNAPSHOT_REASON_EVENT,
                 strategy_id=state.strategy_id,
                 session_id=session_id,
             )
@@ -1495,10 +1581,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         from strategy_service.types import OrderDecision
 
         return OrderDecision(
+            exchange="binance",
+            market=order.market,
             symbol=order.symbol,
             side=order.side,
-            qty=order.qty,
-            market=order.market,
+            qty=str(order.qty),
+            order_type="MARKET",
         )
 
     def _build_stop_and_close_orders(self, wallet: Any, state: SessionState) -> tuple[list[_StopOrder], str]:
@@ -1617,7 +1705,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         so UI readiness never drifts from actual-start behaviour:
 
           1. validate request args
-          2. fetch account info → mode
+          2. fetch portfolio snapshot → mode
           3. resolve profile + gate support
           4. build wallet (same failure modes as RunStrategy — mode=2
              metadata rejection, unsupported margin mode, etc.)
@@ -1650,13 +1738,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.PreviewRunStrategyResponse()
 
         acct_client = self._account_client()
-        info = acct_client.get_online_account_info(account_id, user_id)
-        if info is None:
+        snapshot = acct_client.get_portfolio_snapshot(account_id, user_id)
+        if snapshot is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"account {account_id} not found or core-service unreachable")
             return pb2.PreviewRunStrategyResponse()
 
-        mode = int(getattr(info, "mode", 0) or 0)
+        mode = _portfolio_snapshot_mode(snapshot)
         profile = resolve_profile(mode)
 
         # Helper to shape a PreflightResult into the proto response.
@@ -1710,18 +1798,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if not self._require_market_data_execution_path(context, "PreviewRunStrategy", profile):
             return pb2.PreviewRunStrategyResponse()
 
-        # Wallet build — same error contract as RunStrategy. If Preview
-        # skipped this, UI could mark an account "ready" while the actual
-        # RunStrategy immediately fails at the wallet-factory stage (e.g.
-        # a Binance testnet account stored as multi_assets_mode).
-        account_spec = proto_to_account_spec(info)
-        try:
-            build_wallet_from_account(account_spec)
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(f"failed to build wallet: {e}")
-            return pb2.PreviewRunStrategyResponse()
-
         # Strategy source resolution (same as RunStrategy).
         strategy_code: str | None = None
         strategy_path = getattr(request, "strategy_path", "") or ""
@@ -1737,7 +1813,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.PreviewRunStrategyResponse()
 
         try:
-            declared_inputs = extract_strategy_inputs(strategy_path, strategy_code)
+            declarations = extract_strategy_declarations(strategy_path, strategy_code)
         except StrategyDeclarationError as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy input declaration invalid: {e}")
@@ -1745,6 +1821,34 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         except (ImportError, AttributeError) as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy could not be loaded: {e}")
+            return pb2.PreviewRunStrategyResponse()
+        declared_inputs = list(declarations.inputs)
+        required_routes = set(declarations.required_routes)
+        required_symbols = {
+            (entry.exchange, entry.market, entry.symbol)
+            for entry in declarations.inputs
+        } | set(declarations.order_target_keys)
+
+        account_preflight = self._run_account_preflight(
+            acct_client=acct_client,
+            account_id=account_id,
+            user_id=user_id,
+            required_routes=required_routes,
+            required_symbols=required_symbols,
+        )
+        if account_preflight is not None:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(account_preflight)
+            return pb2.PreviewRunStrategyResponse()
+
+        try:
+            build_portfolio_wallet_from_snapshot(
+                snapshot,
+                allowed_routes=required_routes,
+            )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(f"failed to build wallet: {e}")
             return pb2.PreviewRunStrategyResponse()
 
         # Mirror RunStrategy's preflight call: readiness gating follows

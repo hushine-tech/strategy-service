@@ -7,6 +7,17 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+_EXCHANGE_ENUMS = {
+    "binance": 1,
+    "okx": 2,
+}
+
+_MARKET_ENUMS = {
+    "spot": 1,
+    "perpetual_futures": 2,
+    "delivery_futures": 3,
+}
+
 
 class AccountClient:
     """Thin wrapper around core-service gRPC stubs.
@@ -120,6 +131,48 @@ class AccountClient:
         except Exception:
             logger.warning(
                 "UpdatePortfolioSnapshot failed for account_id=%s user_id=%s",
+                account_id,
+                user_id,
+                exc_info=True,
+            )
+            return None
+
+    def preflight_strategy_session(
+        self,
+        account_id: int,
+        user_id: int = 0,
+        required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
+        required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+    ):
+        """Validate venue route/symbol availability before strategy runtime creation."""
+        if not self._stub:
+            return None
+        try:
+            from strategy_service.gen import account_service_pb2
+
+            req = account_service_pb2.PreflightStrategySessionRequest(
+                account_id=int(account_id),
+                user_id=int(user_id),
+                required_routes=[
+                    account_service_pb2.RequiredRoute(
+                        exchange=_exchange_enum(exchange),
+                        market=_market_enum(market),
+                    )
+                    for exchange, market in sorted(required_routes or [])
+                ],
+                required_symbols=[
+                    account_service_pb2.RequiredSymbol(
+                        exchange=_exchange_enum(exchange),
+                        market=_market_enum(market),
+                        symbol=str(symbol or "").strip().upper(),
+                    )
+                    for exchange, market, symbol in sorted(required_symbols or [])
+                ],
+            )
+            return self._stub.PreflightStrategySession(req)
+        except Exception:
+            logger.warning(
+                "PreflightStrategySession failed for account_id=%s user_id=%s",
                 account_id,
                 user_id,
                 exc_info=True,
@@ -302,6 +355,20 @@ class AccountClient:
         except Exception:
             logger.warning("UpdateAccountWalletState failed for account_id=%s", account_id, exc_info=True)
             return None
+
+
+def _exchange_enum(exchange: str) -> int:
+    key = str(exchange or "").strip().lower()
+    if key not in _EXCHANGE_ENUMS:
+        raise ValueError(f"unsupported exchange for preflight: {exchange!r}")
+    return _EXCHANGE_ENUMS[key]
+
+
+def _market_enum(market: str) -> int:
+    key = str(market or "").strip().lower()
+    if key not in _MARKET_ENUMS:
+        raise ValueError(f"unsupported market for preflight: {market!r}")
+    return _MARKET_ENUMS[key]
 
 
 def _get_wallet_balance(fw: Any) -> float:

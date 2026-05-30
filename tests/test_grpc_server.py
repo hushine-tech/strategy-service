@@ -11,6 +11,7 @@ import pytest
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from strategy_service import grpc_server
+from strategy_service.gen import account_service_pb2
 from strategy_service.gen import strategy_service_pb2 as pb2
 from strategy_service.grpc_server import StrategyServiceServicer
 from strategy_service.session import SessionState, StreamBinding
@@ -48,6 +49,105 @@ def _current_timestamp() -> Timestamp:
     ts = Timestamp()
     ts.FromDatetime(datetime.now(timezone.utc))
     return ts
+
+
+def make_portfolio_snapshot_with_binance_perp_and_spot(
+    account_id: int,
+    *,
+    user_id: int = 17,
+    mode: int = 0,
+):
+    futures_wallet = account_service_pb2.AccountWalletState(
+        mode=mode,
+        total_value=1000.0,
+        futures=account_service_pb2.FuturesWallet(
+            margin_mode="cross",
+            position_mode="one_way",
+            initial_balance=1000.0,
+            wallet_balance=1000.0,
+            available_balance=900.0,
+            total_margin_balance=1000.0,
+            margin_balance=1000.0,
+            positions=[
+                account_service_pb2.FuturesPosition(
+                    symbol="BTCUSDT",
+                    position_side="BOTH",
+                    position_qty=0.0,
+                    qty=0.0,
+                    entry_price=0.0,
+                    mark_price=50_000.0,
+                    leverage=20.0,
+                    margin_mode="cross",
+                    margin_type="cross",
+                )
+            ],
+        ),
+    )
+    spot_wallet = account_service_pb2.AccountWalletState(
+        mode=mode,
+        total_value=1000.0,
+        spot=account_service_pb2.SpotWallet(
+            free=900.0,
+            locked=100.0,
+            assets=[
+                account_service_pb2.SpotAsset(
+                    symbol="ETH",
+                    qty=1.0,
+                    locked=0.0,
+                    avg_entry_price=2000.0,
+                    price=2000.0,
+                )
+            ],
+        ),
+    )
+    perp_venue = account_service_pb2.VenueSnapshot(
+        venue_id=1001,
+        exchange=1,
+        environment=0,
+        market=2,
+        total_value=1000.0,
+        wallet_balance=1000.0,
+        available_balance=900.0,
+    )
+    perp_venue.wallet.CopyFrom(futures_wallet)
+    spot_venue = account_service_pb2.VenueSnapshot(
+        venue_id=1002,
+        exchange=1,
+        environment=0,
+        market=1,
+        total_value=1000.0,
+        wallet_balance=1000.0,
+        available_balance=900.0,
+        balances=[
+            account_service_pb2.BalanceEntry(
+                asset="USDT",
+                wallet_balance=1000.0,
+                available_balance=900.0,
+                locked=100.0,
+            ),
+        ],
+    )
+    spot_venue.wallet.CopyFrom(spot_wallet)
+    snapshot = account_service_pb2.PortfolioSnapshot(
+        account_id=account_id,
+        user_id=user_id,
+        total_value=2000.0,
+        wallet_balance=2000.0,
+        available_balance=1800.0,
+        venues=[perp_venue, spot_venue],
+    )
+    snapshot.wallet.CopyFrom(futures_wallet)
+    return snapshot
+
+
+def _phase3_strategy_code() -> str:
+    return (
+        "from strategy_service.types import OrderDecision, OrderSide\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "spot", "symbol": "ETH"}]\n'
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
 
 
 def test_session_thread_otel_context_is_inherited_for_platform_proxy_calls():
@@ -129,7 +229,7 @@ def test_run_strategy_returns_not_found_when_account_lookup_fails(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 101
             assert user_id == 17
             return None
@@ -162,17 +262,27 @@ def test_run_strategy_rejects_wallet_schema_mismatch(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 202
             assert user_id == 17
-            return SimpleNamespace(mode=0)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def preflight_strategy_session(self, **_kwargs):
+            return SimpleNamespace(ok=True, issues=[])
+
+        def get_active_strategy(self, _account_id: int):
+            return SimpleNamespace(
+                strategy_id=7,
+                code=_phase3_strategy_code(),
+                name="phase3",
+                version="v1",
+            )
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
     monkeypatch.setattr(
         grpc_server,
-        "build_wallet_from_account",
-        lambda _spec: (_ for _ in ()).throw(ValueError("schema mismatch: invalid margin_mode")),
+        "build_portfolio_wallet_from_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("schema mismatch: invalid margin_mode")),
     )
 
     resp = servicer.RunStrategy(request, context)
@@ -180,6 +290,230 @@ def test_run_strategy_rejects_wallet_schema_mismatch(monkeypatch):
     assert resp.session_id == ""
     assert context.code == grpc.StatusCode.INVALID_ARGUMENT
     assert "schema mismatch" in context.details
+
+
+def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
+    calls = {"portfolio": 0, "online": 0, "preflight": 0}
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+            calls["portfolio"] += 1
+            assert account_id == 404
+            assert user_id == 17
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def get_online_account_info(self, account_id: int, user_id: int = 0):
+            calls["online"] += 1
+            raise AssertionError("normal Phase 3 run must not call GetOnlineAccountInfo")
+
+        def preflight_strategy_session(self, **_kwargs):
+            calls["preflight"] += 1
+            return SimpleNamespace(ok=True, issues=[])
+
+        def get_active_strategy(self, _account_id: int):
+            return SimpleNamespace(
+                strategy_id=42,
+                code=_phase3_strategy_code(),
+                name="phase3",
+                version="v1",
+            )
+
+        def save_session(self, **_kwargs) -> bool:
+            return True
+
+        def update_portfolio_snapshot(self, *_args, **_kwargs):
+            return None
+
+        def update_account_wallet_state(self, *_args, **_kwargs):
+            raise AssertionError("normal Phase 3 run must not call UpdateAccountWalletState")
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None) -> None:
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        market_data_policy={"preflight_enabled": False},
+        runtime_id="rt-test",
+        restore_running_sessions=False,
+    )
+    request = SimpleNamespace(
+        account_id=404,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    resp = servicer.RunStrategy(request, context)
+
+    assert resp.session_id != ""
+    assert context.code is None
+    assert calls["portfolio"] == 1
+    assert calls["online"] == 0
+
+
+def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def get_online_account_info(self, *_args, **_kwargs):
+            raise AssertionError("normal Phase 3 run must not call GetOnlineAccountInfo")
+
+        def preflight_strategy_session(self, **kwargs):
+            captured["preflight"] = kwargs
+            return SimpleNamespace(ok=True, issues=[])
+
+        def get_active_strategy(self, _account_id: int):
+            return SimpleNamespace(
+                strategy_id=42,
+                code=_phase3_strategy_code(),
+                name="phase3",
+                version="v1",
+            )
+
+        def save_session(self, **_kwargs) -> bool:
+            return True
+
+        def update_portfolio_snapshot(self, *_args, **_kwargs):
+            return None
+
+        def update_account_wallet_state(self, *_args, **_kwargs):
+            raise AssertionError("normal Phase 3 run must not call UpdateAccountWalletState")
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        market_data_policy={"preflight_enabled": False},
+        runtime_id="rt-test",
+        restore_running_sessions=False,
+    )
+    context = _FakeContext()
+
+    resp = servicer.RunStrategy(SimpleNamespace(
+        account_id=405,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    ), context)
+
+    assert resp.session_id != ""
+    assert context.code is None
+    req = captured["preflight"]
+    assert set(req["required_routes"]) == {
+        ("binance", "perpetual_futures"),
+        ("binance", "spot"),
+    }
+    assert set(req["required_symbols"]) == {
+        ("binance", "perpetual_futures", "BTCUSDT"),
+        ("binance", "spot", "ETH"),
+    }
+
+
+def test_run_session_order_callback_updates_portfolio_snapshot(monkeypatch):
+    calls = {"portfolio_update": 0, "old_wallet_update": 0}
+    captured: list[dict[str, object]] = []
+    state = SessionState(account_mode=0, account_id=406, strategy_id=42)
+    wallet = make_portfolio_snapshot_with_binance_perp_and_spot(406)
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def update_portfolio_snapshot(self, **kwargs):
+            calls["portfolio_update"] += 1
+            captured.append(kwargs)
+            return None
+
+        def update_account_wallet_state(self, *_args, **_kwargs):
+            calls["old_wallet_update"] += 1
+            raise AssertionError("normal Phase 3 run must not call UpdateAccountWalletState")
+
+        def update_session(self, **_kwargs):
+            return True
+
+    class FakeStrategy:
+        def __init__(self) -> None:
+            self.on_order_callback = None
+
+    fake_strategy = FakeStrategy()
+
+    class FakeEngine:
+        def create_strategy(self, **_kwargs):
+            return fake_strategy
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+    monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+
+    def fake_run_backtest(*_args, **_kwargs):
+        assert fake_strategy.on_order_callback is not None
+        fake_strategy.on_order_callback()
+        state.transition("stopped", bars=1)
+
+    monkeypatch.setattr(servicer, "_run_backtest", fake_run_backtest)
+
+    from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
+
+    portfolio_wallet = build_portfolio_wallet_from_snapshot(
+        wallet,
+        allowed_routes={("binance", "perpetual_futures"), ("binance", "spot")},
+    )
+    servicer._run_session(
+        "sess-portfolio",
+        state,
+        SimpleNamespace(),
+        portfolio_wallet,
+        0,
+        406,
+        17,
+        [],
+        "<db:phase3@v1>",
+        42,
+        _phase3_strategy_code(),
+    )
+
+    assert calls["portfolio_update"] >= 1
+    assert calls["old_wallet_update"] == 0
+    order_update = next(item for item in captured if item["snapshot_reason"] == 1)
+    assert order_update["account_id"] == 406
+    assert order_update["user_id"] == 17
+    assert order_update["strategy_id"] == 42
+    assert order_update["session_id"] == "sess-portfolio"
 
 
 def test_run_strategy_returns_internal_when_session_persist_fails(monkeypatch):
@@ -200,16 +534,18 @@ def test_run_strategy_returns_internal_when_session_persist_fails(monkeypatch):
         runtime_id="rt-test",
     )
     context = _FakeContext()
-    wallet = _wallet_with_futures_slot()
 
     class FakeAccountClient:
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 303
             assert user_id == 17
-            return SimpleNamespace(mode=0)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def preflight_strategy_session(self, **_kwargs):
+            return SimpleNamespace(ok=True, issues=[])
 
         def get_active_strategy(self, account_id: int):
             assert account_id == 303
@@ -217,7 +553,8 @@ def test_run_strategy_returns_internal_when_session_persist_fails(monkeypatch):
                 strategy_id=7,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    ORDER_TARGETS = []\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="buy_once",
@@ -228,8 +565,6 @@ def test_run_strategy_returns_internal_when_session_persist_fails(monkeypatch):
             return False
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", lambda _spec: wallet)
 
     resp = servicer.RunStrategy(request, context)
 
@@ -253,24 +588,27 @@ def test_run_strategy_rejects_empty_runtime_binding_before_persist(monkeypatch):
         end_time_ms=2,
     )
     context = _FakeContext()
-    wallet = _wallet_with_futures_slot()
     calls = {"save_session": 0}
 
     class FakeAccountClient:
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 303
             assert user_id == 17
-            return SimpleNamespace(mode=0)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def preflight_strategy_session(self, **_kwargs):
+            return SimpleNamespace(ok=True, issues=[])
 
         def get_active_strategy(self, _account_id: int):
             return SimpleNamespace(
                 strategy_id=7,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    ORDER_TARGETS = []\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="buy_once",
@@ -282,9 +620,6 @@ def test_run_strategy_rejects_empty_runtime_binding_before_persist(monkeypatch):
             return True
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", lambda _spec: wallet)
-
     resp = servicer.RunStrategy(request, context)
 
     assert resp.session_id == ""
@@ -410,7 +745,7 @@ def test_run_live_initializes_loop_with_parsed_brokers(monkeypatch):
         state,
         engine=object(),
         declared_inputs=[
-            StrategyInput("binance", "futures", "BTCUSDT", "1m"),
+            StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m"),
             StrategyInput("binance", "spot", "ETHUSDT", "1m"),
         ],
         strategy_id=77,
@@ -481,7 +816,6 @@ def test_run_strategy_rejects_strategy_missing_inputs_declaration(monkeypatch):
         runtime_id="rt-test",
     )
     context = _FakeContext()
-    wallet = _wallet_with_futures_slot()
     calls = {"save_session": 0}
 
     bad_code = (
@@ -498,8 +832,8 @@ def test_run_strategy_rejects_strategy_missing_inputs_declaration(monkeypatch):
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_online_account_info(self, account_id: int, user_id: int):
-            return SimpleNamespace(mode=0)
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
 
         def get_active_strategy(self, account_id: int):
             return SimpleNamespace(strategy_id=5, code=bad_code, name="bad", version="v1")
@@ -509,9 +843,6 @@ def test_run_strategy_rejects_strategy_missing_inputs_declaration(monkeypatch):
             return True
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", lambda _spec: wallet)
-
     resp = servicer.RunStrategy(request, context)
 
     # No session created, no save_session call, RPC returns FAILED_PRECONDITION.
@@ -534,7 +865,6 @@ def test_run_strategy_mode2_preflight_rejects_before_session_creation(monkeypatc
         runtime_id="rt-test",
     )
     context = _FakeContext()
-    wallet = _wallet_with_futures_slot()
     calls = {"save_session": 0}
 
     class FakeAccountClient:
@@ -544,10 +874,13 @@ def test_run_strategy_mode2_preflight_rejects_before_session_creation(monkeypatc
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 404
             assert user_id == 17
-            return SimpleNamespace(mode=2)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id, mode=2)
+
+        def preflight_strategy_session(self, **_kwargs):
+            return SimpleNamespace(ok=True, issues=[])
 
         def get_active_strategy(self, account_id: int):
             assert account_id == 404
@@ -555,7 +888,8 @@ def test_run_strategy_mode2_preflight_rejects_before_session_creation(monkeypatc
                 strategy_id=8,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    ORDER_TARGETS = []\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="live_ready",
@@ -578,9 +912,6 @@ def test_run_strategy_mode2_preflight_rejects_before_session_creation(monkeypatc
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
     monkeypatch.setattr(grpc_server, "MarketDataClient", FakeMarketDataClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", lambda _spec: wallet)
-
     resp = servicer.RunStrategy(request, context)
 
     assert resp.session_id == ""
@@ -615,7 +946,6 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
         runtime_id="rt-test",
     )
     context = _FakeContext()
-    wallet = _wallet_with_futures_slot()
     calls = {"save_session": 0}
 
     class FakeAccountClient:
@@ -625,10 +955,13 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 405
             assert user_id == 17
-            return SimpleNamespace(mode=2)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id, mode=2)
+
+        def preflight_strategy_session(self, **_kwargs):
+            return SimpleNamespace(ok=True, issues=[])
 
         def get_active_strategy(self, account_id: int):
             assert account_id == 405
@@ -636,7 +969,8 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
                 strategy_id=9,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    ORDER_TARGETS = []\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="live_skip_preflight",
@@ -647,7 +981,7 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
             calls["save_session"] += 1
             return True
 
-        def update_account_wallet_state(self, *args, **kwargs):
+        def update_portfolio_snapshot(self, *args, **kwargs):
             return None
 
     class FakeThread:
@@ -691,8 +1025,6 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
     monkeypatch.setattr(grpc_server, "MarketDataClient", FakeMarketDataClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", lambda _spec: wallet)
     monkeypatch.setattr(grpc_server, "_live_consumer_group", lambda strategy_id, session_id: f"cg-{strategy_id}-{session_id}")
     monkeypatch.setattr(threading, "Thread", FakeThread)
     monkeypatch.setattr(servicer, "_run_profile_preflight", capturing_preflight)
@@ -726,15 +1058,11 @@ def test_run_strategy_mode2_uses_strategy_declared_symbols_for_preflight(monkeyp
         runtime_id="rt-test",
     )
     context = _FakeContext()
-    wallet = make_testnet_wallet(
-        margin_mode="cross",
-        spot_assets=[{"symbol": "USDC", "qty": 5_000.0, "price": 1.0}],
-        spot_free=5_000.0,
-    )
     captured: dict[str, list[tuple[str, str]]] = {}
     strategy_code = """
 class MyStrategy:
-    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]
+    ORDER_TARGETS = []
 
     def on_market_data(self, data, wallet):
         return None
@@ -747,10 +1075,13 @@ class MyStrategy:
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 406
             assert user_id == 17
-            return SimpleNamespace(mode=2)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id, mode=2)
+
+        def preflight_strategy_session(self, **_kwargs):
+            return SimpleNamespace(ok=True, issues=[])
 
         def get_active_strategy(self, account_id: int):
             assert account_id == 406
@@ -764,7 +1095,7 @@ class MyStrategy:
         def save_session(self, **_kwargs) -> bool:
             return True
 
-        def update_account_wallet_state(self, *args, **kwargs):
+        def update_portfolio_snapshot(self, *args, **kwargs):
             return None
 
     class FakeThread:
@@ -806,8 +1137,6 @@ class MyStrategy:
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
     monkeypatch.setattr(grpc_server, "MarketDataClient", FakeMarketDataClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", lambda _spec: wallet)
     monkeypatch.setattr(servicer, "_run_profile_preflight", fake_preflight)
     monkeypatch.setattr(threading, "Thread", FakeThread)
 
@@ -829,7 +1158,8 @@ def test_run_strategy_mode2_creates_subscriptions_from_required_streams(monkeypa
         mode=2,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -1053,7 +1383,7 @@ def test_run_live_skips_lease_management_when_disabled(monkeypatch):
         "sess-disabled",
         state,
         engine=object(),
-        declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
+        declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
         strategy_id=202,
     )
 
@@ -1075,11 +1405,10 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_account_wallet_state(
+        def update_portfolio_snapshot(
             self,
             account_id,
-            future_wallet,
-            spot_wallet,
+            user_id=0,
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
@@ -1122,7 +1451,7 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
         mode=0,
         account_id=101,
         user_id=17,
-        declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
+        declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
         strategy_path="strategies.buy_once",
         strategy_id=202,
         strategy_code=None,
@@ -1146,11 +1475,10 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_account_wallet_state(
+        def update_portfolio_snapshot(
             self,
             account_id,
-            future_wallet,
-            spot_wallet,
+            user_id=0,
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
@@ -1196,7 +1524,7 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
         mode=1,
         account_id=303,
         user_id=17,
-        declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
+        declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
         strategy_path="strategies.buy_once",
         strategy_id=404,
         strategy_code=None,
@@ -1219,11 +1547,10 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_account_wallet_state(
+        def update_portfolio_snapshot(
             self,
             account_id,
-            future_wallet,
-            spot_wallet,
+            user_id=0,
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
@@ -1262,7 +1589,7 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
         mode=0,
         account_id=505,
         user_id=17,
-        declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
+        declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
         strategy_path="strategies.buy_once",
         strategy_id=606,
         strategy_code=None,
@@ -1313,7 +1640,6 @@ def test_run_strategy_maps_account_active_session_conflict(monkeypatch):
         restore_running_sessions=False,
         runtime_id="rt-test",
     )
-    wallet = make_backtest_wallet()
     request = SimpleNamespace(
         account_id=303,
         user_id=17,
@@ -1335,17 +1661,21 @@ def test_run_strategy_maps_account_active_session_conflict(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 303
             assert user_id == 17
-            return SimpleNamespace(mode=0)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def preflight_strategy_session(self, **_kwargs):
+            return SimpleNamespace(ok=True, issues=[])
 
         def get_active_strategy(self, _account_id: int):
             return SimpleNamespace(
                 strategy_id=7,
                 code=(
                     "class MyStrategy:\n"
-                    '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+                    '    ORDER_TARGETS = []\n'
                     "    def on_market_data(self, data, wallet): return None\n"
                 ),
                 name="buy_once",
@@ -1356,8 +1686,6 @@ def test_run_strategy_maps_account_active_session_conflict(monkeypatch):
             raise ActiveSessionRpcError()
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", lambda _spec: wallet)
 
     resp = servicer.RunStrategy(request, context)
 
@@ -1565,11 +1893,10 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             updates.append((session_id, status, bars_processed, error))
             return True
 
-        def update_account_wallet_state(
+        def update_portfolio_snapshot(
             self,
             account_id: int,
-            futures,
-            spot,
+            user_id: int = 0,
             snapshot_reason: int = 0,
             strategy_id: int = 0,
             session_id: str = "",
@@ -1582,11 +1909,11 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             assert account_id == 505
             assert decision.symbol == "ETHUSDT"
             assert decision.side == "SHORT"
-            assert abs(decision.qty - 0.02) < 1e-12
+            assert abs(float(decision.qty) - 0.02) < 1e-12
             return OrderResponse(
                 symbol=account_symbol or decision.symbol,
                 side="SELL",
-                qty=decision.qty,
+                qty=float(decision.qty),
                 fill_price=mark_price,
                 status="FILLED",
                 order_id="close-1",
@@ -1843,7 +2170,7 @@ def test_live_stream_preflight_requires_running_live_and_fresh_streams():
         return stream
 
     result = live_stream_preflight(
-        [StrategyInput("binance", "futures", "BTCUSDT", "1m")],
+        [StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
         profile=RuntimeSourceProfile.TESTNET,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
@@ -1890,7 +2217,7 @@ def _build_servicer_with_faked_preflight_deps(
 ):
     """Shared scaffolding for RunStrategy integration tests.
 
-    Wires FakeAccountClient / build_wallet_from_account / Thread so the
+    Wires FakeAccountClient / portfolio snapshot runtime / Thread so the
     tests only need to vary the bits that matter (strategy INPUTS, stream
     readiness, time range, etc.).
     """
@@ -1898,8 +2225,7 @@ def _build_servicer_with_faked_preflight_deps(
     calls.setdefault("save_session", 0)
     calls.setdefault("save_kwargs", [])
     calls.setdefault("update_wallet", 0)
-
-    wallet = _wallet_with_futures_slot()
+    calls.setdefault("update_portfolio", 0)
 
     class FakeAccountClient:
         def __init__(self, _addr: str) -> None:
@@ -1908,8 +2234,16 @@ def _build_servicer_with_faked_preflight_deps(
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_online_account_info(self, _account_id: int, _user_id: int):
-            return SimpleNamespace(mode=mode)
+        def get_portfolio_snapshot(self, _account_id: int, _user_id: int):
+            return make_portfolio_snapshot_with_binance_perp_and_spot(
+                _account_id,
+                user_id=_user_id,
+                mode=mode,
+            )
+
+        def preflight_strategy_session(self, **kwargs):
+            calls.setdefault("account_preflight", []).append(dict(kwargs))
+            return SimpleNamespace(ok=True, issues=[])
 
         def get_active_strategy(self, _account_id: int):
             if strategy_code is None:
@@ -1926,8 +2260,8 @@ def _build_servicer_with_faked_preflight_deps(
             calls["save_kwargs"].append(dict(_kwargs))
             return save_session_ok
 
-        def update_account_wallet_state(self, *_args, **_kwargs):
-            calls["update_wallet"] += 1
+        def update_portfolio_snapshot(self, *_args, **_kwargs):
+            calls["update_portfolio"] += 1
             return None
 
     # Phase D2: GetMarketDataStreamStatus moved out of AccountClient. Default
@@ -1965,8 +2299,6 @@ def _build_servicer_with_faked_preflight_deps(
 
     monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
     monkeypatch.setattr(grpc_server, "MarketDataClient", FakeMarketDataClient)
-    monkeypatch.setattr(grpc_server, "proto_to_account_spec", lambda info: info)
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", lambda _spec: wallet)
     monkeypatch.setattr(threading, "Thread", FakeThread)
 
     servicer = StrategyServiceServicer(
@@ -1989,7 +2321,8 @@ def test_run_strategy_rejects_mode1_as_unsupported_profile(monkeypatch):
         mode=1,  # live
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2017,7 +2350,8 @@ def test_run_strategy_persists_runtime_binding(monkeypatch):
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2159,10 +2493,10 @@ def test_proxy_only_uses_platform_proxy_client_factories():
 
 def test_proxy_only_with_proxy_fails_closed_before_market_data_direct_access():
     class FakeAccountClient:
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 201
             assert user_id == 17
-            return SimpleNamespace(mode=0)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
 
     class FakeProxy:
         def account_client(self):
@@ -2204,10 +2538,10 @@ def test_proxy_only_with_proxy_fails_closed_before_market_data_direct_access():
 
 def test_proxy_only_mode2_without_live_delivery_fails_closed_before_session():
     class FakeAccountClient:
-        def get_online_account_info(self, account_id: int, user_id: int):
+        def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 201
             assert user_id == 17
-            return SimpleNamespace(mode=2)
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id, mode=2)
 
     class FakeProxy:
         def account_client(self):
@@ -2438,7 +2772,8 @@ def test_run_strategy_backtest_allows_empty_wallet_when_data_available(monkeypat
         mode=0,  # backtest
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2475,7 +2810,8 @@ def test_run_strategy_backtest_rejects_when_historical_data_missing(monkeypatch)
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "NOPEUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "NOPEUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2529,19 +2865,9 @@ def test_run_strategy_live_preflight_ignores_undeclared_wallet_holdings(monkeypa
         mode=2,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
-        ),
-    )
-
-    # Replace wallet to expose USDC holding (which MUST be ignored).
-    monkeypatch.setattr(
-        grpc_server,
-        "build_wallet_from_account",
-        lambda _spec: make_testnet_wallet(
-            margin_mode="cross",
-            spot_assets=[{"symbol": "USDC", "qty": 5_000.0, "price": 1.0}],
-            spot_free=5_000.0,
         ),
     )
 
@@ -2588,9 +2914,10 @@ def test_run_strategy_backtest_distinct_intervals_are_preserved(monkeypatch):
         strategy_code=(
             "class MyStrategy:\n"
             "    INPUTS = [\n"
-            '        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
-            '        {"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "5m"},\n'
+            '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"},\n'
+            '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "5m"},\n'
             "    ]\n"
+            "    ORDER_TARGETS = []\n"
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2630,7 +2957,8 @@ def test_preview_run_strategy_reports_backtest_availability(monkeypatch):
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2681,7 +3009,8 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2721,7 +3050,8 @@ def test_preview_run_strategy_reports_unsupported_live_profile(monkeypatch):
         mode=1,  # live → unsupported
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -2743,7 +3073,7 @@ def test_preview_run_strategy_reports_unsupported_live_profile(monkeypatch):
 
 
 def test_preview_run_strategy_mirrors_wallet_build_failure(monkeypatch):
-    """Review finding #3: Preview must also run ``build_wallet_from_account``.
+    """Review finding #3: Preview must also build the same portfolio wallet.
 
     Before this fix, a mode=2 account stored with ``multi_assets_mode=True``
     would make ``RunStrategy`` fail (``INVALID_ARGUMENT: failed to build wallet``)
@@ -2755,16 +3085,17 @@ def test_preview_run_strategy_mirrors_wallet_build_failure(monkeypatch):
         mode=2,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
 
-    # Wallet builder raises the same way it would for multi_assets_mode=True.
-    def fail_wallet(_spec):
+    # Wallet builder raises the same way it would for an unsupported portfolio snapshot.
+    def fail_wallet(*_args, **_kwargs):
         raise ValueError("unsupported wallet state: multi-assets mode is disabled in Phase B3")
 
-    monkeypatch.setattr(grpc_server, "build_wallet_from_account", fail_wallet)
+    monkeypatch.setattr(grpc_server, "build_portfolio_wallet_from_snapshot", fail_wallet)
 
     request = SimpleNamespace(
         account_id=401, user_id=17,
@@ -2792,7 +3123,8 @@ def test_preview_run_strategy_honours_preflight_enabled_bypass(monkeypatch):
         mode=0,
         strategy_code=(
             "class MyStrategy:\n"
-            '    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
         market_data_policy={"preflight_enabled": False},

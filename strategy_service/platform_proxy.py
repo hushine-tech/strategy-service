@@ -19,8 +19,10 @@ from google.protobuf.struct_pb2 import Struct
 
 from strategy_service.account_client import (
     _compute_total_value,
+    _exchange_enum,
     _get_available_balance,
     _get_wallet_balance,
+    _market_enum,
     _serialize_future_wallet,
     _serialize_spot_wallet,
 )
@@ -33,6 +35,7 @@ logger = logging.getLogger(__name__)
 ACCOUNT_GET_ONLINE = "account.GetOnlineAccountInfo"
 ACCOUNT_GET_PORTFOLIO = "account.GetPortfolioSnapshot"
 ACCOUNT_UPDATE_PORTFOLIO = "account.UpdatePortfolioSnapshot"
+ACCOUNT_PREFLIGHT_STRATEGY_SESSION = "account.PreflightStrategySession"
 ACCOUNT_GET_ACTIVE_STRATEGY = "account.GetActiveStrategy"
 ACCOUNT_SAVE_SESSION = "account.SaveSession"
 ACCOUNT_UPDATE_SESSION = "account.UpdateSession"
@@ -154,6 +157,49 @@ class ProxyAccountClient:
         except Exception:
             logger.warning(
                 "Proxy UpdatePortfolioSnapshot failed for account_id=%s user_id=%s",
+                account_id,
+                user_id,
+                exc_info=True,
+            )
+            return None
+
+    def preflight_strategy_session(
+        self,
+        account_id: int,
+        user_id: int = 0,
+        required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
+        required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+    ):
+        try:
+            from strategy_service.gen import account_service_pb2
+
+            req = account_service_pb2.PreflightStrategySessionRequest(
+                account_id=int(account_id),
+                user_id=int(user_id),
+                required_routes=[
+                    account_service_pb2.RequiredRoute(
+                        exchange=_exchange_enum(exchange),
+                        market=_market_enum(market),
+                    )
+                    for exchange, market in sorted(required_routes or [])
+                ],
+                required_symbols=[
+                    account_service_pb2.RequiredSymbol(
+                        exchange=_exchange_enum(exchange),
+                        market=_market_enum(market),
+                        symbol=str(symbol or "").strip().upper(),
+                    )
+                    for exchange, market, symbol in sorted(required_symbols or [])
+                ],
+            )
+            return self._proxy.invoke(
+                ACCOUNT_PREFLIGHT_STRATEGY_SESSION,
+                req,
+                account_service_pb2.PreflightStrategySessionResponse,
+            )
+        except Exception:
+            logger.warning(
+                "Proxy PreflightStrategySession failed for account_id=%s user_id=%s",
                 account_id,
                 user_id,
                 exc_info=True,

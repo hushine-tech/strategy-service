@@ -10,6 +10,7 @@ from typing import Any
 
 from strategy_service.inputs import (
     InputView,
+    StrategyDeclarations,
     StrategyDeclarationError,
     StrategyInput,
     _normalize_exchange,
@@ -186,6 +187,15 @@ def extract_strategy_inputs(
     """
     strategy = _load_strategy_instance(strategy_path, strategy_code)
     return _read_declared_inputs(strategy)
+
+
+def extract_strategy_declarations(
+    strategy_path: str,
+    strategy_code: str | None = None,
+) -> StrategyDeclarations:
+    """Load a strategy and return normalized INPUTS + ORDER_TARGETS."""
+    strategy = _load_strategy_instance(strategy_path, strategy_code)
+    return extract_declarations(strategy)
 
 
 def flatten_declared_inputs_to_symbols(
