@@ -335,11 +335,11 @@ class ProxyAccountClient:
         strategy_id: int = 0,
         session_id: str = "",
     ):
-        """Legacy/admin-only helper. Normal Phase 3 sessions use update_portfolio_snapshot."""
+        """Persist strategy-computed wallet state for backtest sessions."""
         try:
             from strategy_service.gen import account_service_pb2
 
-            req = account_service_pb2.UpdateAccountWalletStateRequest(  # legacy/admin-only
+            req = account_service_pb2.UpdateAccountWalletStateRequest(
                 account_id=int(account_id),
                 futures=_serialize_future_wallet(future_wallet) if future_wallet else None,
                 spot=_serialize_spot_wallet(spot_wallet) if spot_wallet else None,
@@ -351,9 +351,9 @@ class ProxyAccountClient:
                 session_id=session_id,
             )
             resp = self._proxy.invoke(
-                "account.UpdateAccountWalletState",  # legacy/admin-only platform RPC
+                "account.UpdateAccountWalletState",
                 req,
-                account_service_pb2.UpdateAccountWalletStateResponse,  # legacy/admin-only
+                account_service_pb2.UpdateAccountWalletStateResponse,
             )
             return resp.wallet
         except Exception:

@@ -38,6 +38,9 @@ def test_validate_strategy_code_returns_runtime_profile():
 import math
 
 class MyStrategy:
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = []
+
     def on_market_data(self, data, wallet):
         return None
 """,

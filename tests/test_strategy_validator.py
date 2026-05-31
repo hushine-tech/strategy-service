@@ -9,6 +9,9 @@ import pandas as pd
 from typing import Any
 
 class MyStrategy:
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = []
+
     def on_market_data(self, data, wallet):
         return None
 """
@@ -21,11 +24,14 @@ class MyStrategy:
 def test_validator_allows_public_platform_strategy_types():
     result = validate_strategy_code(
         """
-from strategy_service.types import OrderDecision
+from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType
 
 class MyStrategy:
+    INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "BTCUSDT"}]
+
     def on_market_data(self, data, wallet):
-        return OrderDecision(symbol=data.symbol, side="LONG", qty=0.1)
+        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="BTCUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET)
 """
     )
 
@@ -36,13 +42,14 @@ class MyStrategy:
 def test_validator_accepts_public_hushine_strategy_import():
     result = validate_strategy_code(
         """
-from hushine_strategy import OrderDecision
+from hushine_strategy import Exchange, Market, OrderDecision, OrderSide, OrderType
 
 class MyStrategy:
-    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]
+    INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "BTCUSDT"}]
 
     def on_market_data(self, data, wallet):
-        return None
+        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="BTCUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET)
 """
     )
 
@@ -103,3 +110,53 @@ def test_validator_reports_syntax_error_without_executing_code():
 
     assert result.ok is False
     assert result.issues[0].code == "syntax_error"
+
+
+def test_validator_rejects_missing_phase3_declarations():
+    result = validate_strategy_code(
+        """
+class MyStrategy:
+    def on_market_data(self, data, wallet):
+        return None
+"""
+    )
+
+    assert result.ok is False
+    codes = {issue.code for issue in result.issues}
+    assert "missing_inputs" in codes
+    assert "missing_order_targets" in codes
+
+
+def test_validator_rejects_legacy_market_alias():
+    result = validate_strategy_code(
+        """
+class MyStrategy:
+    INPUTS = [{"exchange": "binance", "market": "futures", "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = []
+
+    def on_market_data(self, data, wallet):
+        return None
+"""
+    )
+
+    assert result.ok is False
+    assert any(issue.code == "invalid_inputs" and "unsupported market" in issue.message for issue in result.issues)
+
+
+def test_validator_rejects_legacy_order_decision_shape():
+    result = validate_strategy_code(
+        """
+from hushine_strategy import Exchange, Market, OrderDecision
+
+class MyStrategy:
+    INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "BTCUSDT"}]
+
+    def on_market_data(self, data, wallet):
+        return OrderDecision(symbol="BTCUSDT", side="BUY", qty=0.01, market=Market.PERPETUAL_FUTURES)
+"""
+    )
+
+    assert result.ok is False
+    codes = {issue.code for issue in result.issues}
+    assert "invalid_order_decision" in codes

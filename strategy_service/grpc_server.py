@@ -135,6 +135,60 @@ def _periodic_sample_max_idle_seconds(request: Any) -> float:
     return t if t > 0 else float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS)
 
 
+def _wallet_parts_for_backtest_sync(wallet: Any) -> tuple[Any | None, Any | None]:
+    futures_wallet = None
+    spot_wallet = None
+    if isinstance(wallet, PortfolioWalletRuntime):
+        for (_exchange, market, _venue_id), route_wallet in wallet.wallets.items():
+            if market == "spot" and spot_wallet is None:
+                spot_wallet = getattr(route_wallet, "spot", None)
+            elif market in {"perpetual_futures", "delivery_futures"} and futures_wallet is None:
+                futures_wallet = getattr(route_wallet, "futures", None)
+        return futures_wallet, spot_wallet if _spot_wallet_has_state(spot_wallet) else None
+    spot_wallet = getattr(wallet, "spot", None)
+    return getattr(wallet, "futures", None), spot_wallet if _spot_wallet_has_state(spot_wallet) else None
+
+
+def _spot_wallet_has_state(spot_wallet: Any) -> bool:
+    if spot_wallet is None:
+        return False
+    if float(getattr(spot_wallet, "free", 0.0) or 0.0) != 0.0:
+        return True
+    if float(getattr(spot_wallet, "locked", 0.0) or 0.0) != 0.0:
+        return True
+    return bool(getattr(spot_wallet, "assets", {}) or {})
+
+
+def _sync_strategy_snapshot(
+    account_client: Any,
+    *,
+    account_id: int,
+    user_id: int,
+    mode: int,
+    wallet: Any,
+    snapshot_reason: int,
+    strategy_id: int,
+    session_id: str,
+) -> Any:
+    if int(mode) == 0:
+        future_wallet, spot_wallet = _wallet_parts_for_backtest_sync(wallet)
+        return account_client.update_account_wallet_state(
+            account_id=account_id,
+            future_wallet=future_wallet,
+            spot_wallet=spot_wallet,
+            snapshot_reason=snapshot_reason,
+            strategy_id=strategy_id,
+            session_id=session_id,
+        )
+    return account_client.update_portfolio_snapshot(
+        account_id=account_id,
+        user_id=user_id,
+        snapshot_reason=snapshot_reason,
+        strategy_id=strategy_id,
+        session_id=session_id,
+    )
+
+
 # Note: wallet-derived symbol inference was intentionally removed (pre_C3 §2.1/§2.2).
 # The authoritative universe is the strategy's ``INPUTS`` declaration, which is
 # resolved via ``extract_strategy_declarations`` at RPC entry.
@@ -655,7 +709,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         )
         if account_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(account_preflight)
+            try:
+                context.set_trailing_metadata((("preflight-session-id", preflight_session_id),))
+            except Exception:  # noqa: BLE001
+                logger.debug("context does not support trailing metadata for preflight failure")
+            context.set_details(f"{account_preflight}; preflight_session_id={preflight_session_id}")
             return pb2.RunStrategyResponse()
 
         try:
@@ -761,9 +819,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.RunStrategyResponse()
 
         # 写 strategy_start 组合快照
-        acct_client.update_portfolio_snapshot(
+        _sync_strategy_snapshot(
+            acct_client,
             account_id=account_id,
             user_id=user_id,
+            mode=mode,
+            wallet=wallet,
             snapshot_reason=SNAPSHOT_REASON_STRATEGY_START,
             strategy_id=strategy_id,
             session_id=session_id,
@@ -825,9 +886,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             acct_client = self._account_client()
 
             def _on_order_sync() -> None:
-                acct_client.update_portfolio_snapshot(
+                _sync_strategy_snapshot(
+                    acct_client,
                     account_id=account_id,
                     user_id=user_id,
+                    mode=mode,
+                    wallet=wallet,
                     snapshot_reason=SNAPSHOT_REASON_EVENT,
                     strategy_id=strategy_id,
                     session_id=session_id,
@@ -875,9 +939,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             self._release_session_market_data_subscriptions(session_id, state)
             try:
                 acct_client = self._account_client()
-                acct_client.update_portfolio_snapshot(
+                _sync_strategy_snapshot(
+                    acct_client,
                     account_id=account_id,
                     user_id=user_id,
+                    mode=mode,
+                    wallet=wallet,
                     snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
                     strategy_id=strategy_id,
                     session_id=session_id,
@@ -1624,9 +1691,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 _marketdata_market(order.market),
                 order_resp,
             )
-            acct_client.update_portfolio_snapshot(
+            _sync_strategy_snapshot(
+                acct_client,
                 account_id=state.account_id,
                 user_id=state.user_id,
+                mode=state.account_mode,
+                wallet=wallet,
                 snapshot_reason=SNAPSHOT_REASON_EVENT,
                 strategy_id=state.strategy_id,
                 session_id=session_id,

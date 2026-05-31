@@ -337,7 +337,7 @@ class AccountClient:
         strategy_id: int = 0,
         session_id: str = "",
     ):
-        """Legacy/admin-only helper. Normal Phase 3 sessions use UpdatePortfolioSnapshot.
+        """Persist strategy-computed wallet state for backtest sessions.
 
         snapshot_reason: 0=no snapshot, 1=order_fill, 2=strategy_start, 3=strategy_end, etc.
         """
