@@ -117,8 +117,8 @@ class DebugReplayRunner:
             )
             if info is None:
                 raise RuntimeError(f"account {dataset.account_id} not found or core-service unreachable")
-            if int(getattr(info, "mode", 0) or 0) != 0:
-                raise RuntimeError("debug replay only supports mode=0 accounts")
+            if int(getattr(info, "environment", 0) or 0) != 0:
+                raise RuntimeError("debug replay only supports backtest accounts")
             wallet = build_wallet_from_account(proto_to_account_spec(info))
             debug_market = _phase3_market(dataset.market)
             portfolio_wallet = PortfolioWalletRuntime(
@@ -258,7 +258,7 @@ class DebugReplayRunner:
             session_id=session_id,
             account_id=dataset.account_id,
             strategy_id=0,
-            mode=0,
+            environment=0,
             interval=dataset.interval,
             start_time_ms=dataset.start_time_ms,
             end_time_ms=dataset.end_time_ms,

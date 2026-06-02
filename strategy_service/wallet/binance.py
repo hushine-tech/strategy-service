@@ -1,4 +1,4 @@
-"""Binance testnet parity wallet runtime."""
+"""Binance demo/live parity wallet runtime."""
 
 from __future__ import annotations
 
@@ -203,7 +203,7 @@ class BinancePosition:
         if abs(qty) <= _QTY_EPS:
             return 0.0
         # Binance does not publish the complete breakEvenPrice formula. This
-        # runtime keeps the observable form inferred from mode=2 testnet
+        # runtime keeps the observable form inferred from Binance demo
         # samples: carry_cost is the cumulative cost allocated to the remaining
         # open position, so break_even_price is the price where that remaining
         # position earns back carry_cost. Partial-close allocation is handled in
@@ -770,7 +770,7 @@ class BinanceFuturesBook:
         # Cost-basis model for Binance-style break-even:
         # break_even_price = entry_price + sign(qty) * carry_cost / abs(qty).
         # The exact Binance formula is not published. The partial-close rule
-        # below is inferred from mode=2 testnet samples where exchange
+        # below is inferred from Binance demo samples where exchange
         # breakEvenPrice retained realized PnL + commission impact in the
         # remaining position instead of proportionally shrinking old costs.
         fill_sign = _sign(fill_qty)
@@ -895,8 +895,8 @@ class BinanceWalletRuntime:
     """Binance-parity wallet runtime.
 
     Implements the :class:`ExchangeWalletRuntime` protocol. Used by:
-      - mode=2 Binance testnet (authoritative exchange hydration)
-      - mode=0 backtest (after C2a cutover — treats canonical state as
+      - Binance demo (authoritative exchange hydration)
+      - backtest (treats canonical state as
         its own source of truth, no exchange snapshot available)
 
     ``provider`` and ``environment`` are class attributes describing the
@@ -904,13 +904,12 @@ class BinanceWalletRuntime:
     key that ``wallet_factory.RUNTIME_REGISTRY`` uses to route by
     ``(provider, environment)``.
 
-    ``mode`` is per-instance because it reflects the **session** mode, not
-    the runtime class. A mode=0 session routed through this runtime still
-    serializes ``mode=0`` back out of ``to_canonical_state()``.
+    ``environment_code`` is per-instance because it reflects the session
+    environment, not the runtime class.
     """
 
     provider = "binance"
-    environment = "testnet"
+    environment = "demo"
 
     def __init__(
         self,
@@ -918,11 +917,11 @@ class BinanceWalletRuntime:
         futures: BinanceFuturesBook,
         spot: SpotWallet,
         source_state: CanonicalAccountState,
-        mode: int = 2,
+        environment_code: int = 1,
     ) -> None:
         self.futures = futures
         self.spot = spot
-        self.mode = int(mode)
+        self.environment_code = int(environment_code)
         self._source_state = source_state
 
     @classmethod
@@ -931,7 +930,7 @@ class BinanceWalletRuntime:
             futures=BinanceFuturesBook(state.futures),
             spot=_build_spot_wallet(state.spot),
             source_state=state,
-            mode=int(state.mode),
+            environment_code=int(state.environment),
         )
 
     def get_total_value(self) -> float:
@@ -989,7 +988,7 @@ class BinanceWalletRuntime:
 
     def to_canonical_state(self) -> CanonicalAccountState:
         return CanonicalAccountState(
-            mode=self.mode,
+            environment=self.environment_code,
             futures=self.futures.to_canonical(),
             spot=CanonicalSpotState(
                 free=float(self.spot.free),

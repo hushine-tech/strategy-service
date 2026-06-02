@@ -149,7 +149,7 @@ class CanonicalAccountState:
     **Runtime-authoritative** (strategy engine / precheck / reconciliation
     read these directly):
 
-    - ``mode`` — account mode (backtest / live / testnet)
+    - ``environment`` — account environment (backtest / demo / live)
     - ``futures`` — canonical futures state (single-asset USDT@-M)
     - ``spot``   — canonical spot state (USDT-mediated)
     - ``updated_at`` — snapshot time
@@ -167,7 +167,7 @@ class CanonicalAccountState:
     - ``metrics_authoritative`` — provider flag for gateway recompute-or-trust
     """
 
-    mode: int = 0
+    environment: int = 0
     futures: CanonicalFuturesState = field(default_factory=CanonicalFuturesState)
     spot: CanonicalSpotState = field(default_factory=CanonicalSpotState)
     # Runtime-authoritative.

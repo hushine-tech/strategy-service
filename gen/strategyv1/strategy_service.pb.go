@@ -81,7 +81,7 @@ type RunStrategyRequest struct {
 	AccountId    int64                  `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
 	StrategyPath string                 `protobuf:"bytes,2,opt,name=strategy_path,json=strategyPath,proto3" json:"strategy_path,omitempty"` // Python import path (Phase 2 后由 active strategy 替代)
 	Interval     string                 `protobuf:"bytes,5,opt,name=interval,proto3" json:"interval,omitempty"`                             // "1m", "5m", "15m", "1h", "4h", "1d"
-	// Backtest only (used when account mode=0; ignored for mode=1/2)
+	// Backtest only (used when account environment=0; ignored for demo/live)
 	StartTimeMs   int64  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"`
 	EndTimeMs     int64  `protobuf:"varint,7,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
 	UserId        int64  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -669,7 +669,7 @@ type PreviewRunStrategyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AccountId     int64                  `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
 	StrategyPath  string                 `protobuf:"bytes,2,opt,name=strategy_path,json=strategyPath,proto3" json:"strategy_path,omitempty"` // same semantics as RunStrategy (may be empty)
-	StartTimeMs   int64                  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"` // backtest-only; ignored for live/testnet
+	StartTimeMs   int64                  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"` // backtest-only; ignored for demo/live
 	EndTimeMs     int64                  `protobuf:"varint,7,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
 	UserId        int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	RuntimeId     string                 `protobuf:"bytes,101,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
@@ -816,7 +816,7 @@ type PreflightFailureProto struct {
 	//	"profile"          — runtime source profile is not wired up
 	//	"invalid_request"  — e.g. backtest missing a valid time range
 	//	"historical_data"  — no usable historical rows in requested range
-	//	"stream"           — live/testnet stream missing / not running / stale
+	//	"stream"           — demo/live stream missing / not running / stale
 	//	"declaration"      — reserved; declaration errors surface via RPC status
 	Kind string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
 	// Human-readable reason, safe to display in UI.
@@ -881,7 +881,7 @@ func (x *PreflightFailureProto) GetInputKey() *PreflightInputKey {
 
 type PreviewRunStrategyResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Conceptual profile: "backtest" / "live" / "testnet" / "unknown".
+	// Conceptual profile: "backtest" / "demo" / "live" / "unknown".
 	Profile string `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
 	// Whether the resolved profile has a wired runtime today.
 	Supported bool `protobuf:"varint,2,opt,name=supported,proto3" json:"supported,omitempty"`
@@ -889,11 +889,11 @@ type PreviewRunStrategyResponse struct {
 	// passed the profile-specific preflight.
 	Ok       bool                     `protobuf:"varint,3,opt,name=ok,proto3" json:"ok,omitempty"`
 	Failures []*PreflightFailureProto `protobuf:"bytes,4,rep,name=failures,proto3" json:"failures,omitempty"`
-	// Populated on success for live/testnet profiles — informs the UI what
+	// Populated on success for demo/live profiles — informs the UI what
 	// stream bindings will be subscribed to.
 	RequiredStreams []*LiveStreamBinding `protobuf:"bytes,5,rep,name=required_streams,json=requiredStreams,proto3" json:"required_streams,omitempty"`
 	// Populated after strategy INPUTS are parsed so gateway/UI can evaluate
-	// mode=0 historical coverage without guessing the strategy's input universe.
+	// backtest historical coverage without guessing the strategy's input universe.
 	DeclaredInputs []*LiveStreamBinding `protobuf:"bytes,6,rep,name=declared_inputs,json=declaredInputs,proto3" json:"declared_inputs,omitempty"`
 	// Strategy ORDER_TARGETS exactly as declared by user strategy code.
 	DeclaredOrderTargets []*StrategyOrderTargetBinding `protobuf:"bytes,7,rep,name=declared_order_targets,json=declaredOrderTargets,proto3" json:"declared_order_targets,omitempty"`
@@ -1227,7 +1227,7 @@ type LiveSessionDiagnostic struct {
 	UserId                 int64                  `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	AccountId              int64                  `protobuf:"varint,3,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
 	StrategyId             int64                  `protobuf:"varint,4,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
-	AccountMode            int32                  `protobuf:"varint,5,opt,name=account_mode,json=accountMode,proto3" json:"account_mode,omitempty"`
+	AccountEnvironment     int32                  `protobuf:"varint,5,opt,name=account_environment,json=accountEnvironment,proto3" json:"account_environment,omitempty"`
 	Status                 string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
 	BarsProcessed          int32                  `protobuf:"varint,7,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
 	Error                  string                 `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
@@ -1299,9 +1299,9 @@ func (x *LiveSessionDiagnostic) GetStrategyId() int64 {
 	return 0
 }
 
-func (x *LiveSessionDiagnostic) GetAccountMode() int32 {
+func (x *LiveSessionDiagnostic) GetAccountEnvironment() int32 {
 	if x != nil {
-		return x.AccountMode
+		return x.AccountEnvironment
 	}
 	return 0
 }
@@ -1508,7 +1508,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06market\x18\x03 \x01(\tR\x06market\x12\x12\n" +
 	"\x04kind\x18\x04 \x01(\tR\x04kind\x12\x16\n" +
 	"\x06symbol\x18\x05 \x01(\tR\x06symbol\x12\x1a\n" +
-	"\binterval\x18\x06 \x01(\tR\binterval\"\xba\x04\n" +
+	"\binterval\x18\x06 \x01(\tR\binterval\"\xc8\x04\n" +
 	"\x15LiveSessionDiagnostic\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
@@ -1516,8 +1516,8 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\n" +
 	"account_id\x18\x03 \x01(\x03R\taccountId\x12\x1f\n" +
 	"\vstrategy_id\x18\x04 \x01(\x03R\n" +
-	"strategyId\x12!\n" +
-	"\faccount_mode\x18\x05 \x01(\x05R\vaccountMode\x12\x16\n" +
+	"strategyId\x12/\n" +
+	"\x13account_environment\x18\x05 \x01(\x05R\x12accountEnvironment\x12\x16\n" +
 	"\x06status\x18\x06 \x01(\tR\x06status\x12%\n" +
 	"\x0ebars_processed\x18\a \x01(\x05R\rbarsProcessed\x12\x14\n" +
 	"\x05error\x18\b \x01(\tR\x05error\x12%\n" +

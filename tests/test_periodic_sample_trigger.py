@@ -1,9 +1,9 @@
 """Tests for Phase C hybrid PeriodicSample trigger in strategy-service.
 
 Covers:
-- mode=2 fires after N bars (bar-count threshold)
-- mode=2 fires after wall-clock idle (time threshold) even with few bars
-- mode=0 NEVER fires regardless of bar count or elapsed time
+- environment=1 fires after N bars (bar-count threshold)
+- environment=1 fires after wall-clock idle (time threshold) even with few bars
+- environment=0 NEVER fires regardless of bar count or elapsed time
 - counter reset semantics after fire
 - failures in the wallet push MUST NOT interrupt strategy execution
 """
@@ -25,13 +25,13 @@ from tests.helpers.wallet_fixtures import make_testnet_wallet
 
 
 def _wallet():
-    """Build a mode=2 testnet wallet with one isolated BTCUSDT position slot.
+    """Build a environment=1 testnet wallet with one isolated BTCUSDT position slot.
 
-    The periodic-sample trigger is a Phase C `mode=2` feature; returning a
-    mode=2-tagged runtime keeps ``wallet.mode`` aligned with the scenario
-    being tested. For tests that simulate mode=0 / mode=1 paths the trigger
+    The periodic-sample trigger is a Phase C `environment=1` feature; returning a
+    environment=1-tagged runtime keeps ``wallet.environment_code`` aligned with the scenario
+    being tested. For tests that simulate environment=0 / environment=2 paths the trigger
     installation is gated on ``account_mode`` (a separate test parameter),
-    not on ``wallet.mode``, so this wallet instance is fine across all cases.
+    not on ``wallet.environment_code``, so this wallet instance is fine across all cases.
     """
     return make_testnet_wallet(
         margin_mode="isolated",
@@ -52,7 +52,7 @@ def _wallet():
 
 
 class _RecordingAccountClient:
-    """Captures UpdatePortfolioSnapshot calls so PeriodicSample never uses legacy wallet RPCs."""
+    """Captures PeriodicSample wallet sync calls."""
 
     def __init__(self, fail: bool = False) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -67,6 +67,7 @@ class _RecordingAccountClient:
         session_id: str = "",
     ) -> None:
         self.calls.append({
+            "kind": "portfolio",
             "account_id": account_id,
             "user_id": user_id,
             "snapshot_reason": snapshot_reason,
@@ -76,9 +77,26 @@ class _RecordingAccountClient:
         if self._fail:
             raise RuntimeError("simulated transport failure")
 
-    def update_account_wallet_state(self, *args, **kwargs) -> None:
-        del args, kwargs
-        raise AssertionError("normal Phase 3 PeriodicSample must not call UpdateAccountWalletState")
+    def update_account_wallet_state(
+        self,
+        account_id: int,
+        future_wallet: Any | None = None,
+        spot_wallet: Any | None = None,
+        snapshot_reason: int = 0,
+        strategy_id: int = 0,
+        session_id: str = "",
+    ) -> None:
+        self.calls.append({
+            "kind": "wallet",
+            "account_id": account_id,
+            "future_wallet": future_wallet,
+            "spot_wallet": spot_wallet,
+            "snapshot_reason": snapshot_reason,
+            "strategy_id": strategy_id,
+            "session_id": session_id,
+        })
+        if self._fail:
+            raise RuntimeError("simulated transport failure")
 
 
 class _FakeClock:
@@ -126,6 +144,7 @@ def _install_and_get_engine(
         user_id=17,
         strategy_id=202,
         session_id="sess-test",
+        wallet=_wallet(),
         account_client=account_client,
         every_n_bars=every_n_bars,
         max_idle_seconds=max_idle_seconds,
@@ -143,7 +162,7 @@ def _fake_md(i: int = 0) -> Any:
 
 
 def test_periodic_sample_fires_after_n_bars_under_time_limit():
-    """mode=2 path: 20 bars processed in <5min → trigger fires exactly once, counters reset."""
+    """environment=1 path: 20 bars processed in <5min → trigger fires exactly once, counters reset."""
     servicer = _make_servicer()
     account_client = _RecordingAccountClient()
     clock = _FakeClock()
@@ -166,9 +185,10 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
     # Exactly one PeriodicSample push.
     assert len(account_client.calls) == 1
     call = account_client.calls[0]
+    assert call["kind"] == "wallet"
     assert call["snapshot_reason"] == SNAPSHOT_REASON_PERIODIC_SAMPLE
     assert call["account_id"] == 101
-    assert call["user_id"] == 17
+    assert call["future_wallet"] is not None
     assert call["strategy_id"] == 202
     assert call["session_id"] == "sess-test"
 
@@ -184,7 +204,7 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
 
 
 def test_periodic_sample_fires_after_idle_threshold_with_few_bars():
-    """mode=2 path: 3 bars but 6 minutes elapse → trigger fires on the bar after the idle trip."""
+    """environment=1 path: 3 bars but 6 minutes elapse → trigger fires on the bar after the idle trip."""
     servicer = _make_servicer()
     account_client = _RecordingAccountClient()
     clock = _FakeClock()
@@ -218,22 +238,22 @@ def test_periodic_sample_fires_after_idle_threshold_with_few_bars():
 
 
 def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
-    """mode=0 backtest MUST NOT trigger PeriodicSample under any bar count or elapsed time.
+    """environment=0 backtest MUST NOT trigger PeriodicSample under any bar count or elapsed time.
 
     Wiring this check at `_run_session` level means the trigger installer is never
-    invoked for mode=0 — we verify by running a fake backtest path and confirming
+    invoked for environment=0 — we verify by running a fake backtest path and confirming
     zero PeriodicSample pushes regardless of bars or time.
     """
     wallet = _wallet()
     servicer = _make_servicer()
     state = SimpleNamespace(
-        account_mode=0,
+        environment=0,
         status="running",
         bars_processed=0,
         error="",
         transition=lambda status, bars=None, error=None: True,
         configure_stop_runtime=lambda **_kwargs: None,
-        # New fields added for mode=2 lease management; mode=0/1 don't use them
+        # New fields added for environment=1 lease management; environment=0/1 don't use them
         # but _run_session's finally block reads lease_stop_event / required_streams
         # unconditionally, so the stub must have them present.
         lease_stop_event=None,
@@ -289,7 +309,7 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
         state=state,
         request=request,
         wallet=wallet,
-        mode=0,
+        environment=0,
         account_id=101,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
@@ -304,18 +324,18 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
     assert SNAPSHOT_REASON_PERIODIC_SAMPLE not in reasons
 
     # Sanity: the engine's running_strategy must be the raw class method (no closure
-    # wrapper installed for mode=0).
+    # wrapper installed for environment=0).
     assert captured_engine, "fake_run_backtest should have been called"
     eng = captured_engine[0]
     assert eng.running_strategy.__name__ != "wrapped"
 
 
 def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
-    """mode=1 remains fail-closed in Phase C and MUST NOT install PeriodicSample."""
+    """environment=2 remains fail-closed in Phase C and MUST NOT install PeriodicSample."""
     wallet = _wallet()
     servicer = _make_servicer()
     state = SimpleNamespace(
-        account_mode=1,
+        environment=2,
         status="running",
         bars_processed=0,
         error="",
@@ -371,7 +391,7 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
         state=state,
         request=request,
         wallet=wallet,
-        mode=1,
+        environment=2,
         account_id=101,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
@@ -382,9 +402,7 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
 
     reasons = [r for _, r in snapshot_calls]
     assert SNAPSHOT_REASON_PERIODIC_SAMPLE not in reasons
-    assert captured_engine, "fake_run_live should have been called"
-    eng = captured_engine[0]
-    assert eng.running_strategy.__name__ != "wrapped"
+    assert not captured_engine, "live environment is fail-closed and must not enter _run_live"
 
 
 def test_periodic_sample_push_failure_does_not_interrupt_strategy():

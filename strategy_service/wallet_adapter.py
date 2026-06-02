@@ -173,7 +173,7 @@ def proto_to_account_spec(wallet_proto: Any) -> CanonicalAccountState:
         )
 
     return CanonicalAccountState(
-        mode=int(wallet_proto.mode),
+        environment=int(wallet_proto.environment),
         futures=futures_state,
         spot=spot_state,
         total_value=float(wallet_proto.total_value or 0.0),

@@ -22,9 +22,9 @@ def _break_even_from_carry(entry_price: float, position_qty: float, carry_cost: 
     return float(entry_price) + direction * float(carry_cost) / abs(float(position_qty))
 
 
-def _wallet_proto(*, mode: int) -> account_service_pb2.AccountWalletState:
+def _wallet_proto(*, environment: int) -> account_service_pb2.AccountWalletState:
     return account_service_pb2.AccountWalletState(
-        mode=mode,
+        environment=environment,
         total_value=1_010.0,
         spot_estimated_value=9.0,
         futures_position_equity=1_001.0,
@@ -75,7 +75,7 @@ def _wallet_proto(*, mode: int) -> account_service_pb2.AccountWalletState:
 
 def _isolated_wallet_proto_with_metadata() -> account_service_pb2.AccountWalletState:
     return account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=9.0,
         spot_estimated_value=0.0,
         futures_position_equity=9.0,
@@ -151,9 +151,9 @@ def _isolated_wallet_proto_with_metadata() -> account_service_pb2.AccountWalletS
 
 
 def test_proto_to_account_spec_requires_canonical_fields():
-    state = proto_to_account_spec(_wallet_proto(mode=2))
+    state = proto_to_account_spec(_wallet_proto(environment=1))
 
-    assert state.mode == 2
+    assert state.environment == 1
     assert state.total_value == pytest.approx(1010.0)
     assert state.futures_position_equity == pytest.approx(1001.0)
     assert state.futures.margin_balance == pytest.approx(1001.0)
@@ -166,7 +166,7 @@ def test_proto_to_account_spec_requires_canonical_fields():
 
 
 def test_proto_to_account_spec_rejects_qty_alias_without_position_qty():
-    wallet = _wallet_proto(mode=2)
+    wallet = _wallet_proto(environment=1)
     wallet.futures.positions[0].position_qty = 0.0
 
     with pytest.raises(ValueError, match="position_qty"):
@@ -174,7 +174,7 @@ def test_proto_to_account_spec_rejects_qty_alias_without_position_qty():
 
 
 def test_proto_to_account_spec_rejects_margin_type_alias_without_margin_mode():
-    wallet = _wallet_proto(mode=2)
+    wallet = _wallet_proto(environment=1)
     wallet.futures.positions[0].margin_mode = ""
 
     with pytest.raises(ValueError, match="margin_mode"):
@@ -182,15 +182,15 @@ def test_proto_to_account_spec_rejects_margin_type_alias_without_margin_mode():
 
 
 def test_build_wallet_from_account_mode0_uses_binance_parity_runtime_after_c2a():
-    """C2a cutover: mode=0 backtest now routes to BinanceWalletRuntime.
+    """C2a cutover: environment=0 backtest now routes to BinanceWalletRuntime.
     Position hydration (qty / entry / mark) must still work via the parity
     runtime's canonical ingestion path.
     """
-    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=0)))
+    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=0)))
 
     assert isinstance(wallet, BinanceWalletRuntime)
     # mode must reflect the SESSION mode (0), not the runtime's default class value.
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
     # Futures book in parity runtime is keyed by derive_position_key; for
     # one-way positions that's (symbol, 0).
     pos = wallet.futures.positions[("BTCUSDT", 0)]
@@ -218,7 +218,7 @@ def test_build_wallet_from_http_backtest_dict_uses_binance_runtime_after_c2a():
     })
 
     assert isinstance(wallet, BinanceWalletRuntime)
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
     assert ("BTCUSDT", 0) in wallet.futures.positions
 
 
@@ -229,7 +229,7 @@ def test_binance_parity_runtime_preserves_flat_isolated_seed_balances_on_mode0()
     lifecycle events have fired.
     """
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=0,
+        environment=0,
         total_value=8_000.0,
         spot_estimated_value=0.0,
         futures_position_equity=8_000.0,
@@ -249,7 +249,7 @@ def test_binance_parity_runtime_preserves_flat_isolated_seed_balances_on_mode0()
     wallet = build_wallet_from_account(proto_to_account_spec(wallet_proto))
 
     assert isinstance(wallet, BinanceWalletRuntime)
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
     assert wallet.get_wallet_balance() == pytest.approx(8_000.0)
     # available_balance from parity's cross/isolated computed path; with no
     # open positions and isolated margin_mode, it collapses to margin_balance.
@@ -260,7 +260,7 @@ def test_binance_parity_runtime_preserves_flat_isolated_seed_balances_on_mode0()
 
 
 def test_build_wallet_from_account_selects_binance_parity_for_mode2():
-    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=2)))
+    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=1)))
 
     assert isinstance(wallet, BinanceWalletRuntime)
     pos = wallet.futures.positions[("BTCUSDT", 0)]
@@ -275,7 +275,7 @@ def test_build_wallet_from_account_selects_binance_parity_for_mode2():
 
 def test_binance_parity_wallet_bootstraps_cross_wallet_balance_from_seed():
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=10_000.0,
         spot_estimated_value=0.0,
         futures_position_equity=10_000.0,
@@ -302,7 +302,7 @@ def test_binance_parity_wallet_bootstraps_cross_wallet_balance_from_seed():
 
 def test_binance_parity_wallet_bootstraps_isolated_wallet_balance_from_position_seeds():
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=8_000.0,
         spot_estimated_value=0.0,
         futures_position_equity=8_000.0,
@@ -351,7 +351,7 @@ def test_resolve_target_mode_0_returns_local_backtest():
 
 
 def test_resolve_target_mode_1_returns_binance_live_not_registered():
-    target = resolve_target(1)
+    target = resolve_target(2)
     assert target == ("binance", "live")
 
     _populate_runtime_registry()
@@ -359,24 +359,24 @@ def test_resolve_target_mode_1_returns_binance_live_not_registered():
 
 
 def test_resolve_target_mode_2_returns_binance_testnet():
-    assert resolve_target(2) == ("binance", "testnet")
+    assert resolve_target(1) == ("binance", "demo")
 
 
 def test_resolve_target_unsupported_mode_raises():
-    with pytest.raises(ValueError, match="unsupported account mode"):
+    with pytest.raises(ValueError, match="unsupported account environment"):
         resolve_target(9)
 
 
 def test_build_wallet_mode_0_uses_binance_parity_after_c2a():
-    """mode=0 backtest is routed to BinanceWalletRuntime."""
-    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=0)))
+    """environment=0 backtest is routed to BinanceWalletRuntime."""
+    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=0)))
 
     assert isinstance(wallet, BinanceWalletRuntime)
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
 
 
 def test_build_wallet_mode_2_uses_binance_runtime():
-    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=2)))
+    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=1)))
 
     assert isinstance(wallet, BinanceWalletRuntime)
     # Alias preserved for one phase (C1), remove in C2b.
@@ -384,17 +384,17 @@ def test_build_wallet_mode_2_uses_binance_runtime():
 
 
 def test_build_wallet_mode_1_fails_closed():
-    with pytest.raises(ValueError, match=r"mode=1 is not enabled"):
-        build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=1)))
+    with pytest.raises(ValueError, match=r"environment=2 is not enabled"):
+        build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=2)))
 
 
 def test_build_wallet_from_account_rejects_unsupported_mode():
-    with pytest.raises(ValueError, match="unsupported account mode"):
-        build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=9)))
+    with pytest.raises(ValueError, match="unsupported account environment"):
+        build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=9)))
 
 
 def test_binance_parity_wallet_updates_first_batch_formulas_after_fill():
-    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=2)))
+    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=1)))
     pos = wallet.futures.positions[("BTCUSDT", 0)]
 
     class Fill:
@@ -436,7 +436,7 @@ def test_binance_parity_wallet_uses_risk_metadata_for_maint_margin_and_liquidati
 
 def test_cross_long_liquidation_clamps_to_zero_when_wallet_balance_covers_position():
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=4_996.83849157684,
         spot_estimated_value=0.0,
         futures_position_equity=4_996.83849157684,
@@ -507,7 +507,7 @@ def test_cross_long_liquidation_clamps_to_zero_when_wallet_balance_covers_positi
 
 
 def test_binance_parity_wallet_preserves_exchange_authoritative_open_order_and_oracle_risk_when_metadata_missing():
-    wallet_proto = _wallet_proto(mode=2)
+    wallet_proto = _wallet_proto(environment=1)
     wallet_proto.futures.positions[0].open_order_initial_margin = 0.25
     wallet_proto.futures.total_open_order_initial_margin = 0.25
 
@@ -544,7 +544,7 @@ def test_binance_wallet_ignores_provider_display_spot_estimate_when_prices_missi
     back to the canonical cash position (``free + locked``).
     """
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         # Provider display totals supplied on ingress — must be IGNORED.
         total_value=1_055.0,
         spot_estimated_value=55.0,
@@ -588,7 +588,7 @@ def test_binance_wallet_ignores_provider_display_spot_estimate_when_prices_missi
 
 
 def test_binance_parity_wallet_tracks_open_order_margin_lifecycle_and_total_im():
-    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=2)))
+    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=1)))
     pos = wallet.futures.positions[("BTCUSDT", 0)]
 
     class NewOrder:
@@ -644,7 +644,7 @@ def test_binance_parity_wallet_tracks_open_order_margin_lifecycle_and_total_im()
 
 
 def test_binance_parity_wallet_rejects_lifecycle_events_without_order_id():
-    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=2)))
+    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=1)))
 
     class NewOrder:
         status = "NEW"
@@ -659,7 +659,7 @@ def test_binance_parity_wallet_rejects_lifecycle_events_without_order_id():
 
 
 def test_binance_parity_wallet_reduce_only_order_does_not_consume_opening_margin():
-    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(mode=2)))
+    wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=1)))
     pos = wallet.futures.positions[("BTCUSDT", 0)]
 
     class ReduceOnly:
@@ -746,7 +746,7 @@ def test_serialize_future_wallet_one_way_long_and_short_export_both():
 
 def test_new_position_uses_configured_leverage_for_initial_margin_after_fill():
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=5_000.0,
         spot_estimated_value=0.0,
         futures_position_equity=5_000.0,
@@ -814,7 +814,7 @@ def _mode2_eth_snapshot_without_position_leverage(*, include_risk_metadata: bool
             ),
         ]
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=14_996.18,
         spot_estimated_value=9_997.9,
         futures_position_equity=4_998.28,
@@ -1217,7 +1217,7 @@ def test_hedge_mode_full_lifecycle_long_and_short_sides_independent():
     B1 regression tests.
     """
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=10_000.0,
         spot_estimated_value=0.0,
         futures_position_equity=10_000.0,
@@ -1321,7 +1321,7 @@ def test_hedge_mode_ledger_event_without_position_side_does_not_crash():
     position_side is absent in hedge mode.
     """
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=10_000.0,
         spot_estimated_value=0.0,
         futures_position_equity=10_000.0,
@@ -1371,7 +1371,7 @@ def test_hedge_mode_ledger_event_with_explicit_position_side_still_routes():
     carry an explicit LONG/SHORT, the per-position update still fires as
     before — ensures the fix didn't regress the happy path."""
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=10_000.0,
         spot_estimated_value=0.0,
         futures_position_equity=10_000.0,
@@ -1419,7 +1419,7 @@ def test_hedge_mode_ledger_event_with_explicit_position_side_still_routes():
 
 def test_binance_parity_wallet_spot_lock_lifecycle_tracks_buy_and_sell_orders():
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=1_200.0,
         spot_estimated_value=200.0,
         futures_position_equity=1_000.0,
@@ -1534,7 +1534,7 @@ def test_binance_parity_wallet_spot_lock_lifecycle_tracks_buy_and_sell_orders():
 
 def test_binance_parity_wallet_spot_lifecycle_requires_order_id():
     wallet_proto = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         total_value=1_000.0,
         spot_estimated_value=0.0,
         futures_position_equity=1_000.0,
@@ -1574,7 +1574,7 @@ def test_binance_parity_wallet_spot_lifecycle_requires_order_id():
     ],
 )
 def test_build_wallet_from_account_rejects_unsupported_binance_margin_modes(field_name, message):
-    wallet = _wallet_proto(mode=2)
+    wallet = _wallet_proto(environment=1)
     setattr(wallet.futures, field_name, True)
 
     with pytest.raises(ValueError, match=message):

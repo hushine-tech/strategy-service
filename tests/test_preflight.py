@@ -28,8 +28,8 @@ from strategy_service.preflight import (
 
 def test_resolve_profile_maps_modes_to_profiles():
     assert resolve_profile(0) is RuntimeSourceProfile.BACKTEST
-    assert resolve_profile(1) is RuntimeSourceProfile.LIVE
-    assert resolve_profile(2) is RuntimeSourceProfile.TESTNET
+    assert resolve_profile(1) is RuntimeSourceProfile.DEMO
+    assert resolve_profile(2) is RuntimeSourceProfile.LIVE
 
 
 def test_resolve_profile_returns_unknown_for_unexpected_modes():
@@ -38,9 +38,9 @@ def test_resolve_profile_returns_unknown_for_unexpected_modes():
 
 
 def test_supported_profiles_include_backtest_and_testnet_only():
-    # Gate 2: live (mode=1) must remain unsupported until Phase C+ wiring lands.
+    # Gate 2: live (environment=2) must remain unsupported until Phase C+ wiring lands.
     assert RuntimeSourceProfile.BACKTEST in SUPPORTED_PROFILES
-    assert RuntimeSourceProfile.TESTNET in SUPPORTED_PROFILES
+    assert RuntimeSourceProfile.DEMO in SUPPORTED_PROFILES
     assert RuntimeSourceProfile.LIVE not in SUPPORTED_PROFILES
     assert RuntimeSourceProfile.UNKNOWN not in SUPPORTED_PROFILES
 
@@ -279,7 +279,7 @@ def test_live_stream_preflight_passes_on_running_fresh_streams():
 
     result = live_stream_preflight(
         declared,
-        profile=RuntimeSourceProfile.TESTNET,
+        profile=RuntimeSourceProfile.DEMO,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
     )
@@ -299,7 +299,7 @@ def test_live_stream_preflight_fails_closed_for_unsupported_exchange():
 
     result = live_stream_preflight(
         declared,
-        profile=RuntimeSourceProfile.TESTNET,
+        profile=RuntimeSourceProfile.DEMO,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
     )
@@ -320,7 +320,7 @@ def test_live_stream_preflight_fails_when_stream_missing():
 
     result = live_stream_preflight(
         declared,
-        profile=RuntimeSourceProfile.TESTNET,
+        profile=RuntimeSourceProfile.DEMO,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
     )
@@ -339,7 +339,7 @@ def test_live_stream_preflight_fails_when_state_not_running():
 
     result = live_stream_preflight(
         declared,
-        profile=RuntimeSourceProfile.TESTNET,
+        profile=RuntimeSourceProfile.DEMO,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
     )
@@ -356,7 +356,7 @@ def test_live_stream_preflight_fails_when_delivery_disabled():
 
     result = live_stream_preflight(
         declared,
-        profile=RuntimeSourceProfile.TESTNET,
+        profile=RuntimeSourceProfile.DEMO,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
     )
@@ -377,7 +377,7 @@ def test_live_stream_preflight_fails_when_stream_stale():
 
     result = live_stream_preflight(
         declared,
-        profile=RuntimeSourceProfile.TESTNET,
+        profile=RuntimeSourceProfile.DEMO,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
         now_ms=lambda: now_ms,
@@ -402,7 +402,7 @@ def test_live_stream_preflight_honours_per_input_interval():
 
     live_stream_preflight(
         declared,
-        profile=RuntimeSourceProfile.TESTNET,
+        profile=RuntimeSourceProfile.DEMO,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
     )
@@ -425,7 +425,7 @@ def test_live_stream_preflight_aggregates_multiple_failures():
 
     result = live_stream_preflight(
         declared,
-        profile=RuntimeSourceProfile.TESTNET,
+        profile=RuntimeSourceProfile.DEMO,
         lookup_stream=lookup,
         freshness_grace_seconds=30,
     )

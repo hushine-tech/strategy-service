@@ -333,7 +333,7 @@ class ControlPanelServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def LoadDebugDataset(self, request, context):
-        """LoadDebugDataset validates mode=0 historical data and sends it to the
+        """LoadDebugDataset validates backtest historical data and sends it to the
         selected debugger runtime. This stores metadata only in control-plane DB.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)

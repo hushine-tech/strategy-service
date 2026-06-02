@@ -32,11 +32,11 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StrategyServiceClient interface {
 	// RunStrategy starts strategy execution. Returns immediately with a session_id.
-	// Data source is determined by account mode (fetched from core-service):
+	// Data source is determined by account environment (fetched from core-service):
 	//
-	//	mode=0 (backtest) → BacktestDataLoop (TimescaleDB)
-	//	mode=1 (live)     → LiveDataLoop (Kafka)
-	//	mode=2 (testnet)  → LiveDataLoop (Kafka)
+	//	environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
+	//	environment=1 (demo)     → LiveDataLoop (Kafka)
+	//	environment=2 (live)     → LiveDataLoop (Kafka; currently fail-closed)
 	RunStrategy(ctx context.Context, in *RunStrategyRequest, opts ...grpc.CallOption) (*RunStrategyResponse, error)
 	// PreviewRunStrategy runs the same profile-specific preflight as RunStrategy
 	// but does NOT create a session, persist state, or start a background worker.
@@ -49,7 +49,7 @@ type StrategyServiceClient interface {
 	GetStrategyStatus(ctx context.Context, in *GetStrategyStatusRequest, opts ...grpc.CallOption) (*GetStrategyStatusResponse, error)
 	// StopStrategy stops a running strategy session.
 	StopStrategy(ctx context.Context, in *StopStrategyRequest, opts ...grpc.CallOption) (*StopStrategyResponse, error)
-	// GetLiveConsumptionDiagnostics returns active mode=2 session bindings and
+	// GetLiveConsumptionDiagnostics returns active demo session bindings and
 	// anomaly counters for operator diagnostics.
 	GetLiveConsumptionDiagnostics(ctx context.Context, in *GetLiveConsumptionDiagnosticsRequest, opts ...grpc.CallOption) (*GetLiveConsumptionDiagnosticsResponse, error)
 	// ValidateStrategyCode statically checks saved strategy source against the
@@ -130,11 +130,11 @@ func (c *strategyServiceClient) ValidateStrategyCode(ctx context.Context, in *Va
 // for forward compatibility.
 type StrategyServiceServer interface {
 	// RunStrategy starts strategy execution. Returns immediately with a session_id.
-	// Data source is determined by account mode (fetched from core-service):
+	// Data source is determined by account environment (fetched from core-service):
 	//
-	//	mode=0 (backtest) → BacktestDataLoop (TimescaleDB)
-	//	mode=1 (live)     → LiveDataLoop (Kafka)
-	//	mode=2 (testnet)  → LiveDataLoop (Kafka)
+	//	environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
+	//	environment=1 (demo)     → LiveDataLoop (Kafka)
+	//	environment=2 (live)     → LiveDataLoop (Kafka; currently fail-closed)
 	RunStrategy(context.Context, *RunStrategyRequest) (*RunStrategyResponse, error)
 	// PreviewRunStrategy runs the same profile-specific preflight as RunStrategy
 	// but does NOT create a session, persist state, or start a background worker.
@@ -147,7 +147,7 @@ type StrategyServiceServer interface {
 	GetStrategyStatus(context.Context, *GetStrategyStatusRequest) (*GetStrategyStatusResponse, error)
 	// StopStrategy stops a running strategy session.
 	StopStrategy(context.Context, *StopStrategyRequest) (*StopStrategyResponse, error)
-	// GetLiveConsumptionDiagnostics returns active mode=2 session bindings and
+	// GetLiveConsumptionDiagnostics returns active demo session bindings and
 	// anomaly counters for operator diagnostics.
 	GetLiveConsumptionDiagnostics(context.Context, *GetLiveConsumptionDiagnosticsRequest) (*GetLiveConsumptionDiagnosticsResponse, error)
 	// ValidateStrategyCode statically checks saved strategy source against the

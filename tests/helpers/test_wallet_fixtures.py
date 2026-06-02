@@ -17,13 +17,13 @@ from tests.helpers.wallet_fixtures import make_backtest_wallet, make_testnet_wal
 def test_make_backtest_wallet_returns_binance_runtime_with_mode_0():
     wallet = make_backtest_wallet()
     assert isinstance(wallet, BinanceWalletRuntime)
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
 
 
 def test_make_testnet_wallet_returns_binance_runtime_with_mode_2():
     wallet = make_testnet_wallet()
     assert isinstance(wallet, BinanceWalletRuntime)
-    assert wallet.mode == 2
+    assert wallet.environment_code == 1
 
 
 def test_helper_default_account_is_usable():

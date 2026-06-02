@@ -8,8 +8,8 @@ extend that set.
 
 This module is the single source of truth for:
 
-- ``RuntimeSourceProfile`` — conceptual runtime source (backtest / live /
-  testnet). This is **not** a strategy-vs-account compatibility condition;
+- ``RuntimeSourceProfile`` — conceptual runtime source (backtest / demo /
+  live). This is **not** a strategy-vs-account compatibility condition;
   it only decides which data sources and which preflight to run.
 - ``SUPPORTED_PROFILES`` — profiles currently wired up in strategy-service.
   Mirrors the ``wallet_factory.RUNTIME_REGISTRY`` allowlist. LIVE is
@@ -19,7 +19,7 @@ This module is the single source of truth for:
 - ``backtest_preflight`` — per-declared-input historical-data availability
   check for the backtest profile. Does NOT query stream readiness.
 - ``live_stream_preflight`` — per-declared-input stream readiness check for
-  the live/testnet profile. Uses each declared input's own interval, not
+  the demo/live profile. Uses each declared input's own interval, not
   a single request-level interval.
 """
 
@@ -44,39 +44,39 @@ class RuntimeSourceProfile(Enum):
     """Conceptual source of truth for a strategy session's data/order/wallet wiring.
 
     - ``BACKTEST`` — historical TimescaleDB replay; wallet mutates locally
+    - ``DEMO`` — exchange demo data + demo order flow (exchange-parity wallet)
     - ``LIVE`` — real Binance (or other exchange) live data + real order flow
-    - ``TESTNET`` — testnet data + testnet order flow (exchange-parity wallet)
-    - ``UNKNOWN`` — unrecognised ``account.mode`` (guardrail)
+    - ``UNKNOWN`` — unrecognised account environment (guardrail)
     """
 
     BACKTEST = "backtest"
+    DEMO = "demo"
     LIVE = "live"
-    TESTNET = "testnet"
     UNKNOWN = "unknown"
 
 
 # Profiles that have a wired runtime in strategy-service today. Mirror
 # ``strategy_service.wallet_factory.RUNTIME_REGISTRY``: both ``BACKTEST`` and
-# ``TESTNET`` route through ``BinanceWalletRuntime``; ``LIVE`` stays excluded
-# until Phase C+ (fail-closed, no silent fallback to testnet).
+# ``DEMO`` route through ``BinanceWalletRuntime``; ``LIVE`` stays excluded
+# until Phase C+ (fail-closed, no silent fallback to demo).
 SUPPORTED_PROFILES: frozenset[RuntimeSourceProfile] = frozenset({
     RuntimeSourceProfile.BACKTEST,
-    RuntimeSourceProfile.TESTNET,
+    RuntimeSourceProfile.DEMO,
 })
 
 
-def resolve_profile(mode: int) -> RuntimeSourceProfile:
-    """Map the numeric ``account.mode`` to a runtime source profile.
+def resolve_profile(environment: int) -> RuntimeSourceProfile:
+    """Map the numeric account environment to a runtime source profile.
 
     This is a pure translation — it does NOT decide whether the profile is
     supported. Use ``SUPPORTED_PROFILES`` for that check.
     """
-    if mode == 0:
+    if environment == 0:
         return RuntimeSourceProfile.BACKTEST
-    if mode == 1:
+    if environment == 1:
+        return RuntimeSourceProfile.DEMO
+    if environment == 2:
         return RuntimeSourceProfile.LIVE
-    if mode == 2:
-        return RuntimeSourceProfile.TESTNET
     return RuntimeSourceProfile.UNKNOWN
 
 
@@ -87,10 +87,10 @@ class PreflightFailureKind(Enum):
     """Typed reason a preflight evaluator rejected a startup attempt."""
 
     DECLARATION = "declaration"       # (reserved — RunStrategy surfaces declaration errors directly)
-    PROFILE = "profile"               # unsupported runtime profile (e.g. live mode=1 today)
+    PROFILE = "profile"               # unsupported runtime profile (e.g. live environment today)
     INVALID_REQUEST = "invalid_request"  # backtest missing time range etc.
     HISTORICAL_DATA = "historical_data"  # backtest: no usable rows in requested range
-    STREAM = "stream"                 # live/testnet: stream missing / not running / stale / delivery off
+    STREAM = "stream"                 # demo/live: stream missing / not running / stale / delivery off
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ class PreflightFailure:
 class PreflightResult:
     """Outcome of a profile-specific preflight evaluation.
 
-    ``required_streams`` is populated by the live/testnet evaluator so the
+    ``required_streams`` is populated by the demo/live evaluator so the
     caller can set up Kafka subscriptions + market-data leases on success;
     backtest preflights leave it empty.
     """
@@ -147,13 +147,13 @@ def check_profile_supported(profile: RuntimeSourceProfile) -> PreflightResult:
 
     Callers typically short-circuit on this before dispatching to backtest or
     live preflight: an unsupported profile must NOT fall back to a neighbouring
-    preflight (e.g. live must not silently run against testnet data).
+    preflight (e.g. live must not silently run against demo data).
     """
     result = PreflightResult(profile=profile)
     if profile in SUPPORTED_PROFILES:
         return result
     if profile is RuntimeSourceProfile.UNKNOWN:
-        reason = "account mode does not map to a known runtime source profile"
+        reason = "account environment does not map to a known runtime source profile"
     else:
         reason = (
             f"runtime source profile {profile.value!r} is not yet wired up in "
@@ -277,7 +277,7 @@ def default_backtest_availability(
     return _check
 
 
-# ── Live / testnet profile: stream readiness per declared input ────────────
+# ── Demo / live profile: stream readiness per declared input ───────────────
 
 
 def _interval_seconds(interval: str) -> int:
@@ -343,7 +343,7 @@ def live_stream_preflight(
        delivery flag, freshness. When ``require_readiness=False`` these
        checks are skipped and the binding is still emitted; this is how
        ``market_data_policy.preflight_enabled=false`` disables readiness
-       without breaking lease management on mode=2.
+       without breaking lease management for demo sessions.
 
     For ``require_readiness=True`` each declared input must additionally pass:
     - ``actual_state == "running"``

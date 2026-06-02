@@ -9,7 +9,7 @@ from .canonical import CanonicalAccountState
 
 @runtime_checkable
 class WalletRuntime(Protocol):
-    mode: int
+    environment_code: int
     futures: object
     spot: object
 
@@ -33,7 +33,7 @@ class ExchangeWalletRuntime(WalletRuntime, Protocol):
     """Wallet runtime bound to a concrete exchange provider + environment.
 
     Concrete implementations MUST set the class attributes ``provider`` (e.g.
-    ``"binance"``, ``"okx"``) and ``environment`` (e.g. ``"testnet"``,
+    ``"binance"``, ``"okx"``) and ``environment`` (e.g. ``"demo"``,
     ``"live"``, ``"backtest"``). These identifiers are the lookup key used by
     ``wallet_factory.RUNTIME_REGISTRY`` to route canonical account state to the
     right runtime class.

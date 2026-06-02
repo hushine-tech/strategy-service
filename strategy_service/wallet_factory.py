@@ -37,8 +37,8 @@ def account_dict_to_canonical_state(account: dict[str, Any]) -> CanonicalAccount
     """Convert the HTTP/backtest request body to strict canonical state.
 
     The HTTP API is a backtest-only entrypoint, so dict payloads are treated as
-    ``mode=0`` and routed through the same Binance runtime used by gRPC mode=0
-    cutover. This keeps mode=0 behavior consistent across entrypoints.
+    ``environment=backtest`` and routed through the same Binance runtime used
+    by the gRPC backtest path.
     """
     fa = account.get("futures") or {}
     margin_mode = str(fa.get("margin_mode", "isolated")).strip().lower()
@@ -96,7 +96,7 @@ def account_dict_to_canonical_state(account: dict[str, Any]) -> CanonicalAccount
     futures_equity = _bootstrap_futures_equity(futures_state)
     spot_value = _estimate_spot_value(spot_state)
     return CanonicalAccountState(
-        mode=0,
+        environment=0,
         futures=futures_state,
         spot=spot_state,
         total_value=futures_equity + spot_value,
@@ -128,29 +128,29 @@ def _populate_runtime_registry() -> None:
     from strategy_service.wallet.binance import BinanceWalletRuntime
 
     RUNTIME_REGISTRY[("local", "backtest")] = BinanceWalletRuntime
-    RUNTIME_REGISTRY[("binance", "testnet")] = BinanceWalletRuntime
+    RUNTIME_REGISTRY[("binance", "demo")] = BinanceWalletRuntime
 
 
-def resolve_target(mode: int) -> tuple[str, str]:
-    """Map a numeric account mode to a ``(provider, environment)`` registry key.
+def resolve_target(environment: int) -> tuple[str, str]:
+    """Map a numeric account environment to a ``(provider, environment)`` registry key.
 
-    - ``0`` -> ``("local", "backtest")`` — Binance backtest runtime
-    - ``1`` -> ``("binance", "live")`` — resolves but is NOT registered;
+    - ``0`` -> ``("local", "backtest")`` — backtest runtime
+    - ``1`` -> ``("binance", "demo")`` — exchange demo runtime
+    - ``2`` -> ``("binance", "live")`` — resolves but is NOT registered;
       this produces a fail-closed registry miss in Phase B/C1
-    - ``2`` -> ``("binance", "testnet")`` — exchange-parity runtime
     """
-    if mode == 0:
+    if environment == 0:
         return ("local", "backtest")
-    if mode == 1:
+    if environment == 1:
+        return ("binance", "demo")
+    if environment == 2:
         return ("binance", "live")
-    if mode == 2:
-        return ("binance", "testnet")
-    raise ValueError(f"unsupported account mode: {mode}")
+    raise ValueError(f"unsupported account environment: {environment}")
 
 
 def _validate_exchange_leverage_contract(account: CanonicalAccountState) -> None:
     """Exchange-backed runtime must receive explicit leverage facts."""
-    if int(account.mode) != 2:
+    if int(account.environment) != 1:
         return
 
     configured_by_symbol = {
@@ -180,18 +180,18 @@ def build_wallet_from_account(account: dict[str, Any] | CanonicalAccountState):
 
     - ``dict`` input is normalized to canonical backtest state first
     - ``CanonicalAccountState`` input resolves ``(provider, environment)`` from
-      ``account.mode`` and dispatches through ``RUNTIME_REGISTRY``
+      ``account.environment`` and dispatches through ``RUNTIME_REGISTRY``
     """
     if not isinstance(account, CanonicalAccountState):
         account = account_dict_to_canonical_state(account)
 
     _populate_runtime_registry()
-    provider, environment = resolve_target(int(account.mode))
-    runtime_cls = RUNTIME_REGISTRY.get((provider, environment))
+    provider, environment_name = resolve_target(int(account.environment))
+    runtime_cls = RUNTIME_REGISTRY.get((provider, environment_name))
     if runtime_cls is None:
         raise ValueError(
-            f"no wallet runtime registered for ({provider!r}, {environment!r}); "
-            f"mode={account.mode} is not enabled"
+            f"no wallet runtime registered for ({provider!r}, {environment_name!r}); "
+            f"environment={account.environment} is not enabled"
         )
 
     # Canonical runtime is intentionally constrained to single-asset USDT@-M
@@ -200,8 +200,8 @@ def build_wallet_from_account(account: dict[str, Any] | CanonicalAccountState):
     # shape — multi-asset collateral, portfolio-margin cross-risk — is a
     # *provider* capability, NOT a canonical runtime capability. Supporting
     # those would require a new runtime model, not a silent expansion of the
-    # canonical contract. Fail-closed for every mode that routes through
-    # BinanceWalletRuntime (both mode=0 backtest and mode=2 testnet today).
+    # canonical contract. Fail-closed for every environment that routes through
+    # BinanceWalletRuntime (both backtest and demo today).
     from strategy_service.wallet.binance import BinanceWalletRuntime
 
     if runtime_cls is BinanceWalletRuntime or issubclass(runtime_cls, BinanceWalletRuntime):

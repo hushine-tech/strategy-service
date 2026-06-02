@@ -71,10 +71,10 @@ class StrategyServiceServicer(object):
 
     def RunStrategy(self, request, context):
         """RunStrategy starts strategy execution. Returns immediately with a session_id.
-        Data source is determined by account mode (fetched from core-service):
-        mode=0 (backtest) → BacktestDataLoop (TimescaleDB)
-        mode=1 (live)     → LiveDataLoop (Kafka)
-        mode=2 (testnet)  → LiveDataLoop (Kafka)
+        Data source is determined by account environment (fetched from core-service):
+        environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
+        environment=1 (demo)     → LiveDataLoop (Kafka)
+        environment=2 (live)     → LiveDataLoop (Kafka; currently fail-closed)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -107,7 +107,7 @@ class StrategyServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def GetLiveConsumptionDiagnostics(self, request, context):
-        """GetLiveConsumptionDiagnostics returns active mode=2 session bindings and
+        """GetLiveConsumptionDiagnostics returns active demo session bindings and
         anomaly counters for operator diagnostics.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)

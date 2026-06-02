@@ -57,7 +57,7 @@ def _futures_wallet(
     risk_metadata=None,
 ):
     return account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         futures=account_service_pb2.FuturesWallet(
             margin_mode="cross",
             position_mode="one_way",
@@ -74,7 +74,7 @@ def _futures_wallet(
 
 def _spot_wallet(*, free: float = 90.0, locked: float = 10.0, assets=None):
     return account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         spot=account_service_pb2.SpotWallet(
             free=free,
             locked=locked,
@@ -223,7 +223,7 @@ def test_unrequested_venue_snapshot_is_ignored_before_wallet_validation():
             total_value=0.0,
             wallet_balance=0.0,
             available_balance=0.0,
-            wallet=account_service_pb2.AccountWalletState(mode=2),
+            wallet=account_service_pb2.AccountWalletState(environment=1),
         ),
         _venue(
             venue_id=11,
@@ -300,7 +300,7 @@ def test_futures_position_and_balance_fields_are_readable_after_mapping():
 
 def test_futures_venue_uses_full_canonical_wallet_instead_of_compact_position_defaults():
     full_wallet = account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         futures=account_service_pb2.FuturesWallet(
             margin_mode="cross",
             position_mode="one_way",
@@ -418,7 +418,7 @@ def test_spot_empty_full_wallet_with_compact_balances_fails_closed():
                 _balance("USDT", wallet_balance=100.0, available_balance=90.0, locked=10.0),
                 _balance("BTC", wallet_balance=0.5, available_balance=0.4, locked=0.1),
             ],
-            wallet=account_service_pb2.AccountWalletState(mode=2),
+            wallet=account_service_pb2.AccountWalletState(environment=1),
         )
     )
 
@@ -435,7 +435,7 @@ def test_futures_empty_full_wallet_with_compact_positions_fails_closed():
             venue_id=11,
             market=MARKET_PERPETUAL_FUTURES,
             positions=[_position()],
-            wallet=account_service_pb2.AccountWalletState(mode=2),
+            wallet=account_service_pb2.AccountWalletState(environment=1),
         )
     )
 

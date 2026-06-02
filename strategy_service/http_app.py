@@ -185,8 +185,8 @@ def create_app() -> Any:
                 info = client.get_online_account_info(req.account_id, req.user_id)  # legacy/admin-only
                 if info is not None:
                     logger.info(
-                        "core-service calibration: account_id=%s mode=%s futures.wallet_balance=%.4f",
-                        req.account_id, info.mode, info.futures.wallet_balance if info.futures else 0.0,
+                        "core-service calibration: account_id=%s environment=%s futures.wallet_balance=%.4f",
+                        req.account_id, info.environment, info.futures.wallet_balance if info.futures else 0.0,
                     )
 
             order_client = OrderClient(req.order_service_address)

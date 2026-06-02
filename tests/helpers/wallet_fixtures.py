@@ -5,8 +5,8 @@ same path production code uses: a proto ``AccountWalletState`` →
 ``proto_to_account_spec`` → ``build_wallet_from_account`` →
 ``BinanceWalletRuntime``. This module exposes two convenience constructors:
 
-- ``make_backtest_wallet(...)``  mode=0 — routes through ``("local",   "backtest")``
-- ``make_testnet_wallet(...)``   mode=2 — routes through ``("binance", "testnet")``
+- ``make_backtest_wallet(...)``  environment=0 — routes through ``("local", "backtest")``
+- ``make_demo_wallet(...)``      environment=1 — routes through ``("binance", "demo")``
 
 Both return a ``BinanceWalletRuntime``. Tests SHOULD NOT construct wallet
 objects by hand — the helper keeps test behavior aligned with the production
@@ -104,7 +104,7 @@ def _apply_spot_asset(
 
 def _build_wallet_proto(
     *,
-    mode: int,
+    environment: int,
     margin_mode: str,
     position_mode: str,
     wallet_balance: float,
@@ -142,7 +142,7 @@ def _build_wallet_proto(
         _apply_spot_asset(spot, **asset)
 
     return account_service_pb2.AccountWalletState(
-        mode=mode,
+        environment=environment,
         total_value=wallet_balance,
         spot_estimated_value=0.0,
         futures_position_equity=wallet_balance,
@@ -165,7 +165,7 @@ def make_backtest_wallet(
     spot_free: float = 0.0,
     spot_locked: float = 0.0,
 ) -> BinanceWalletRuntime:
-    """Build a mode=0 backtest wallet runtime via the canonical path.
+    """Build a environment=0 backtest wallet runtime via the canonical path.
 
     Defaults produce a $10k cross-margin one-way account with no open
     positions and no spot assets — the simplest viable starting state. All
@@ -175,13 +175,13 @@ def make_backtest_wallet(
     ``_apply_futures_position`` (see that function for the keys).
     ``spot_assets`` is a list of dicts forwarded to ``_apply_spot_asset``.
     """
-    # For mode=0 the bootstrap formula reads `initial_balance` (cross) or the
+    # For environment=0 the bootstrap formula reads `initial_balance` (cross) or the
     # per-position `initial_balance` (isolated) — we wire `wallet_balance` by
     # default into `initial_balance` so the hydrated runtime matches the
     # caller's intuition of "I asked for $10k; wallet_balance = $10k".
     seed = wallet_balance if initial_balance is None else initial_balance
     wallet_proto = _build_wallet_proto(
-        mode=0,
+        environment=0,
         margin_mode=margin_mode,
         position_mode=position_mode,
         wallet_balance=wallet_balance,
@@ -197,7 +197,7 @@ def make_backtest_wallet(
     return build_wallet_from_account(proto_to_account_spec(wallet_proto))
 
 
-def make_testnet_wallet(
+def make_demo_wallet(
     *,
     margin_mode: str = "cross",
     position_mode: str = "one_way",
@@ -211,14 +211,14 @@ def make_testnet_wallet(
     spot_free: float = 0.0,
     spot_locked: float = 0.0,
 ) -> BinanceWalletRuntime:
-    """Build a mode=2 testnet wallet runtime via the canonical path.
+    """Build an environment=1 demo wallet runtime via the canonical path.
 
     Same defaults and kwargs as ``make_backtest_wallet`` — the only
-    difference is ``mode=2`` so the registry resolves to ``("binance","testnet")``.
+    difference is ``environment=1`` so the registry resolves to ``("binance","demo")``.
     """
     seed = wallet_balance if initial_balance is None else initial_balance
     wallet_proto = _build_wallet_proto(
-        mode=2,
+        environment=1,
         margin_mode=margin_mode,
         position_mode=position_mode,
         wallet_balance=wallet_balance,
@@ -232,3 +232,6 @@ def make_testnet_wallet(
         spot_locked=spot_locked,
     )
     return build_wallet_from_account(proto_to_account_spec(wallet_proto))
+
+
+make_testnet_wallet = make_demo_wallet

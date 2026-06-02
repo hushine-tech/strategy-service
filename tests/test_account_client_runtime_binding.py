@@ -19,7 +19,7 @@ def test_account_client_save_session_sends_runtime_binding():
         session_id="sess-1",
         account_id=11,
         strategy_id=22,
-        mode=2,
+        environment=1,
         runtime_id="rt-1",
         runtime_source="hosted",
         runtime_name="default",

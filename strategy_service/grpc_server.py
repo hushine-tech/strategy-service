@@ -1,4 +1,4 @@
-"""strategy-service gRPC servicer：统一 RunStrategy 入口，按 account mode 路由数据源。"""
+"""strategy-service gRPC servicer：统一 RunStrategy 入口，按 account environment 路由数据源。"""
 
 from __future__ import annotations
 
@@ -135,7 +135,7 @@ def _periodic_sample_max_idle_seconds(request: Any) -> float:
     return t if t > 0 else float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS)
 
 
-def _wallet_parts_for_backtest_sync(wallet: Any) -> tuple[Any | None, Any | None]:
+def _wallet_parts_for_account_sync(wallet: Any) -> tuple[Any | None, Any | None]:
     futures_wallet = None
     spot_wallet = None
     if isinstance(wallet, PortfolioWalletRuntime):
@@ -164,14 +164,14 @@ def _sync_strategy_snapshot(
     *,
     account_id: int,
     user_id: int,
-    mode: int,
+    environment: int,
     wallet: Any,
     snapshot_reason: int,
     strategy_id: int,
     session_id: str,
 ) -> Any:
-    if int(mode) == 0:
-        future_wallet, spot_wallet = _wallet_parts_for_backtest_sync(wallet)
+    if int(environment) in {0, 1}:
+        future_wallet, spot_wallet = _wallet_parts_for_account_sync(wallet)
         return account_client.update_account_wallet_state(
             account_id=account_id,
             future_wallet=future_wallet,
@@ -267,20 +267,20 @@ def _message_has_field(message: Any, field_name: str) -> bool:
     return getattr(message, field_name, None) is not None
 
 
-def _portfolio_snapshot_mode(snapshot: Any) -> int:
+def _portfolio_snapshot_environment(snapshot: Any) -> int:
     wallet = getattr(snapshot, "wallet", None)
     if wallet is not None and _message_has_field(snapshot, "wallet"):
-        mode = int(getattr(wallet, "mode", 0) or 0)
-        if mode != 0:
-            return mode
+        environment = int(getattr(wallet, "environment", 0) or 0)
+        if environment != 0:
+            return environment
     for venue in getattr(snapshot, "venues", []) or []:
         venue_wallet = getattr(venue, "wallet", None)
         if venue_wallet is None or not _message_has_field(venue, "wallet"):
             continue
-        mode = int(getattr(venue_wallet, "mode", 0) or 0)
-        if mode != 0:
-            return mode
-    return int(getattr(wallet, "mode", 0) or 0) if wallet is not None else 0
+        environment = int(getattr(venue_wallet, "environment", 0) or 0)
+        if environment != 0:
+            return environment
+    return int(getattr(wallet, "environment", 0) or 0) if wallet is not None else 0
 
 
 class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
@@ -313,7 +313,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         # Phase D1 hosted runtime: when registered with control-panel,
         # the runtime is bound to one user_id at registration time. All
         # inbound strategy RPCs MUST carry that user_id; mismatch is a
-        # PermissionDenied. 0 = legacy / unregistered mode (skip check).
+        # PermissionDenied. 0 = unregistered runtime (skip check).
         self._bound_user_id = int(bound_user_id or 0)
         self._runtime_id = str(runtime_id or "").strip()
         self._runtime_source = str(runtime_source or "").strip()
@@ -573,14 +573,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     def _require_market_data_execution_path(self, context, operation: str, profile: RuntimeSourceProfile) -> bool:
         if self._platform_access_mode != PLATFORM_ACCESS_PROXY_ONLY:
             return True
-        if profile in (RuntimeSourceProfile.TESTNET, RuntimeSourceProfile.LIVE):
+        if profile in (RuntimeSourceProfile.DEMO, RuntimeSourceProfile.LIVE):
             if callable(getattr(self._runtime_data_source, "iter_live_klines", None)):
                 return True
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(
                 f"{operation} unavailable in self-hosted proxy-only runtime for "
                 f"profile={profile.value}: platform live delivery is not configured; "
-                "FetchKlines fallback is disabled for mode=2 live execution"
+                "FetchKlines fallback is disabled for demo/live execution"
             )
             return False
         if profile is RuntimeSourceProfile.BACKTEST:
@@ -590,7 +590,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details(
                 f"{operation} unavailable in self-hosted proxy-only runtime for "
                 f"profile={profile.value}: chunked dataset delivery is not configured; "
-                "FetchKlines fallback is disabled for mode=0 backtest execution"
+                "FetchKlines fallback is disabled for backtest execution"
             )
             return False
         if self._platform_proxy is not None:
@@ -634,7 +634,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details("account_id is required")
             return pb2.RunStrategyResponse()
 
-        # 1. 从 core-service 获取组合快照（mode + 多 venue 钱包）
+        # 1. 从 core-service 获取组合快照（environment + 多 venue 钱包）
         acct_client = self._account_client()
         snapshot = acct_client.get_portfolio_snapshot(account_id, user_id)
         if snapshot is None:
@@ -642,16 +642,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details(f"account {account_id} not found or core-service unreachable")
             return pb2.RunStrategyResponse()
 
-        mode = _portfolio_snapshot_mode(snapshot)
+        environment = _portfolio_snapshot_environment(snapshot)
 
         # 2. Resolve the runtime source profile FIRST (pre_C3 gate 2 §4).
         # This is an internal runtime-source mapping, not a strategy/account
-        # compatibility signal. Unsupported profiles (today: live=mode 1)
+        # compatibility signal. Unsupported profiles (today: live environment)
         # fail-fast here with a structured PROFILE failure, *before* we try
         # to build a wallet or load a strategy — so the error surfaces the
         # actual reason (profile not wired up) instead of a downstream
         # wallet-registry miss or strategy-mismatch message.
-        profile = resolve_profile(mode)
+        profile = resolve_profile(environment)
         profile_gate = check_profile_supported(profile)
         if not profile_gate.ok:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
@@ -735,7 +735,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
         # Preflight is split into two concerns:
         #
-        # 1. Stream binding (always runs for live/testnet profiles) — resolves
+        # 1. Stream binding (always runs for demo/live profiles) — resolves
         #    declared inputs → ``StreamBinding`` list so lease management can
         #    identify which market-data streams this session depends on.
         #    Without these bindings the control plane has no idea the session
@@ -770,14 +770,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details("runtime_id is required to start a strategy session")
             return pb2.RunStrategyResponse()
         session_id, state = self._sessions.create(
-            account_mode=mode,
+            environment=environment,
             user_id=user_id,
             account_id=account_id,
             runtime_id=runtime_id,
             runtime_source=runtime_source,
             runtime_name=runtime_name,
         )
-        if mode == 2:
+        if environment == 1:
             state.configure_live_runtime(
                 account_id=account_id,
                 strategy_id=strategy_id,
@@ -792,7 +792,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 self._sessions.discard(session_id)
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details(
-                    "failed to create required live delivery subscriptions for mode=2 session"
+                    "failed to create required live delivery subscriptions for demo session"
                 )
                 return pb2.RunStrategyResponse()
         else:
@@ -805,7 +805,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             session_id=session_id,
             account_id=account_id,
             strategy_id=strategy_id,
-            mode=mode,
+            environment=environment,
             interval=request.interval or "1m",
             start_time_ms=request.start_time_ms,
             end_time_ms=request.end_time_ms,
@@ -813,7 +813,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             runtime_source=runtime_source,
             runtime_name=runtime_name,
         ):
-            if mode == 2:
+            if environment == 1:
                 self._release_session_market_data_subscriptions(session_id, state)
             self._sessions.discard(session_id)
             return pb2.RunStrategyResponse()
@@ -823,7 +823,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             acct_client,
             account_id=account_id,
             user_id=user_id,
-            mode=mode,
+            environment=environment,
             wallet=wallet,
             snapshot_reason=SNAPSHOT_REASON_STRATEGY_START,
             strategy_id=strategy_id,
@@ -838,7 +838,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 otel_parent_context,
                 f"StrategySession/{session_id}",
                 lambda: self._run_session(
-                    session_id, state, request, wallet, mode, account_id, user_id,
+                    session_id, state, request, wallet, environment, account_id, user_id,
                     declared_inputs, strategy_path, strategy_id, strategy_code,
                 ),
             )
@@ -858,7 +858,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         state: SessionState,
         request: Any,
         wallet: Any,
-        mode: int,
+        environment: int,
         account_id: int,
         user_id: int,
         declared_inputs: list[StrategyInput],
@@ -890,7 +890,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     acct_client,
                     account_id=account_id,
                     user_id=user_id,
-                    mode=mode,
+                    environment=environment,
                     wallet=wallet,
                     snapshot_reason=SNAPSHOT_REASON_EVENT,
                     strategy_id=strategy_id,
@@ -900,31 +900,27 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_strategy.on_order_callback = _on_order_sync
             state.configure_stop_runtime(wallet=wallet, order_client=order_client)
 
-            # Phase C PeriodicSample hybrid trigger — only for mode=2 testnet.
-            # Wrapping the engine keeps this out of BaseStrategy. mode=0 has no
-            # external oracle and mode=1 remains fail-closed in Phase C.
-            if mode == 2:
+            # Phase C PeriodicSample hybrid trigger — only for demo sessions.
+            # Backtest has no external oracle and live remains fail-closed here.
+            if environment == 1:
                 self._install_periodic_sample_trigger(
                     engine=engine,
                     account_id=account_id,
                     user_id=user_id,
                     strategy_id=strategy_id,
                     session_id=session_id,
+                    wallet=wallet,
                     account_client=acct_client,
                     every_n_bars=_periodic_sample_every_bars(request),
                     max_idle_seconds=_periodic_sample_max_idle_seconds(request),
                 )
 
-            if mode == 0:
+            if environment == 0:
                 self._run_backtest(session_id, state, engine, request, declared_inputs)
-            elif mode in (1, 2):
-                # mode=1 is Phase C fail-closed via the profile gate above, so
-                # we never actually reach here. Explicit allowlist instead of `else`
-                # prevents new/unknown modes from silently borrowing the
-                # live path as defense-in-depth.
+            elif environment == 1:
                 self._run_live(session_id, state, engine, declared_inputs, strategy_id)
             else:
-                raise ValueError(f"unsupported account mode: {mode}")
+                raise ValueError(f"unsupported account environment: {environment}")
 
         except Exception as e:
             logger.exception("session %s failed", session_id)
@@ -943,7 +939,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     acct_client,
                     account_id=account_id,
                     user_id=user_id,
-                    mode=mode,
+                    environment=environment,
                     wallet=wallet,
                     snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
                     strategy_id=strategy_id,
@@ -1014,10 +1010,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         """Dispatch to the profile-specific preflight evaluator.
 
         Backtest profile → historical-data availability for each declared input.
-        Live / testnet profile → stream binding for each declared input, with
+        Demo / live profile → stream binding for each declared input, with
         optional readiness gating. ``require_readiness=False`` disables the
         state/delivery/freshness checks but still resolves bindings — this is
-        essential for mode=2 lease management when ``preflight_enabled=False``.
+        essential for demo lease management when ``preflight_enabled=False``.
         Unsupported profiles SHOULD have been caught earlier via
         ``check_profile_supported``; if we still land here for one, surface it
         as a profile failure rather than silently running the wrong evaluator.
@@ -1041,7 +1037,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 end_ms=end_ms,
                 availability_fn=default_backtest_availability(self._ts_config),
             )
-        if profile in (RuntimeSourceProfile.TESTNET, RuntimeSourceProfile.LIVE):
+        if profile in (RuntimeSourceProfile.DEMO, RuntimeSourceProfile.LIVE):
             return live_stream_preflight(
                 declared_inputs,
                 profile=profile,
@@ -1098,6 +1094,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         user_id: int,
         strategy_id: int,
         session_id: str,
+        wallet: Any,
         account_client: AccountClient,
         every_n_bars: int,
         max_idle_seconds: float,
@@ -1129,9 +1126,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             state["bars_since_last_compare"] = 0
             state["last_compare_at"] = now
             try:
-                account_client.update_portfolio_snapshot(
+                _sync_strategy_snapshot(
+                    account_client,
                     account_id=account_id,
                     user_id=user_id,
+                    environment=1,
+                    wallet=wallet,
                     snapshot_reason=SNAPSHOT_REASON_PERIODIC_SAMPLE,
                     strategy_id=strategy_id,
                     session_id=session_id,
@@ -1236,7 +1236,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 "failed",
                 error=(
                     "chunked dataset delivery is not configured; "
-                    "FetchKlines fallback is disabled for mode=0 backtest execution"
+                    "FetchKlines fallback is disabled for backtest execution"
                 ),
             )
             return
@@ -1260,7 +1260,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         ):
             state.transition(
                 "failed",
-                error="failed to request platform dataset delivery for mode=0 backtest execution",
+                error="failed to request platform dataset delivery for backtest execution",
             )
             return
         stop_event = threading.Event()
@@ -1346,9 +1346,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             subscription,
             brokers=broker_list,
         )
-        if state.account_mode == 2 and self._lease_management_enabled:
+        if state.environment == 1 and self._lease_management_enabled:
             if not self._renew_stream_leases_once(session_id, state):
-                raise RuntimeError("failed to create required market-data leases for mode=2 session")
+                raise RuntimeError("failed to create required market-data leases for demo session")
             lease_stop_event = _threading.Event()
             lease_thread = _threading.Thread(
                 target=self._lease_heartbeat_loop,
@@ -1385,9 +1385,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         import threading as _threading
         from strategy_service.data_loop import _adapt_kline
 
-        if state.account_mode == 2 and self._lease_management_enabled:
+        if state.environment == 1 and self._lease_management_enabled:
             if not self._renew_stream_leases_once(session_id, state):
-                raise RuntimeError("failed to create required market-data leases for mode=2 session")
+                raise RuntimeError("failed to create required market-data leases for demo session")
             lease_stop_event = _threading.Event()
             lease_thread = _threading.Thread(
                 target=self._lease_heartbeat_loop,
@@ -1404,7 +1404,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if not callable(iter_live):
             raise RuntimeError(
                 "platform live delivery is not configured; "
-                "FetchKlines fallback is disabled for mode=2 live execution"
+                "FetchKlines fallback is disabled for demo/live execution"
             )
         acct_client = self._account_client()
         canonical_by_stream = {
@@ -1444,7 +1444,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 logger.warning("session %s: failed to update live progress", session_id, exc_info=True)
 
     def _renew_stream_leases_once(self, session_id: str, state: SessionState) -> bool:
-        if state.account_mode != 2 or not state.required_streams:
+        if state.environment != 1 or not state.required_streams:
             return True
         marketdata_client = self._marketdata_client()
         for binding in state.required_streams:
@@ -1472,7 +1472,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         state: SessionState,
         user_id: int,
     ) -> bool:
-        if state.account_mode != 2:
+        if state.environment != 1:
             return True
         if not state.required_streams:
             logger.warning("session %s: no required live streams to subscribe", session_id)
@@ -1486,7 +1486,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_id=user_id,
             session_id=session_id,
             runtime_id=state.runtime_id,
-            mode=state.account_mode,
+            environment=state.environment,
             streams=state.required_streams,
         )
         if not ok:
@@ -1494,7 +1494,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         return bool(ok)
 
     def _release_session_market_data_subscriptions(self, session_id: str, state: SessionState) -> None:
-        if state.account_mode != 2:
+        if state.environment != 1:
             return
         marketdata_client = self._marketdata_client()
         release = getattr(marketdata_client, "release_session_market_data_subscriptions", None)
@@ -1517,7 +1517,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     def _release_stream_leases(self, session_id: str, state: SessionState) -> None:
         if not self._lease_management_enabled:
             return
-        if state.account_mode != 2 or not state.required_streams:
+        if state.environment != 1 or not state.required_streams:
             return
         marketdata_client = self._marketdata_client()
         for binding in state.required_streams:
@@ -1695,7 +1695,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 acct_client,
                 account_id=state.account_id,
                 user_id=state.user_id,
-                mode=state.account_mode,
+                environment=state.environment,
                 wallet=wallet,
                 snapshot_reason=SNAPSHOT_REASON_EVENT,
                 strategy_id=state.strategy_id,
@@ -1771,7 +1771,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     qty = float(getattr(asset, "qty", 0.0) or 0.0) - float(getattr(asset, "locked", 0.0) or 0.0)
                     if qty <= 1e-12:
                         continue
-                    if state.account_mode != 0:
+                    if state.environment != 0:
                         return [], f"stop_and_close_failed:spot_liquidation_not_supported:{sym}"
                     mark_price = float(getattr(asset, "price", 0.0) or getattr(asset, "avg_entry_price", 0.0) or 0.0)
                     if mark_price <= 0.0:
@@ -1808,7 +1808,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     qty = float(getattr(asset, "qty", 0.0) or 0.0)
                     locked = float(getattr(asset, "locked", 0.0) or 0.0)
                     if qty > 1e-12 or locked > 1e-12:
-                        if state.account_mode == 0:
+                        if state.environment == 0:
                             return False, f"stop_and_close_failed:spot_not_flat:{sym}"
                         return False, f"stop_and_close_failed:spot_exit_unsupported:{sym}"
                 if getattr(route_wallet.spot, "open_orders", {}):
@@ -1855,9 +1855,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         so UI readiness never drifts from actual-start behaviour:
 
           1. validate request args
-          2. fetch portfolio snapshot → mode
+          2. fetch portfolio snapshot → environment
           3. resolve profile + gate support
-          4. build wallet (same failure modes as RunStrategy — mode=2
+          4. build wallet (same failure modes as RunStrategy — demo
              metadata rejection, unsupported margin mode, etc.)
           5. resolve active strategy source
           6. parse declared inputs
@@ -1894,8 +1894,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details(f"account {account_id} not found or core-service unreachable")
             return pb2.PreviewRunStrategyResponse()
 
-        mode = _portfolio_snapshot_mode(snapshot)
-        profile = resolve_profile(mode)
+        environment = _portfolio_snapshot_environment(snapshot)
+        profile = resolve_profile(environment)
 
         # Helper to shape a PreflightResult into the proto response.
         def _shape(
@@ -2058,7 +2058,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     user_id=state.user_id,
                     account_id=state.account_id,
                     strategy_id=state.strategy_id,
-                    account_mode=state.account_mode,
+                    account_environment=state.environment,
                     status=state.status,
                     bars_processed=state.bars_processed,
                     error=state.error,

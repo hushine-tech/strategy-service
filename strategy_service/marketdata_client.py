@@ -146,7 +146,7 @@ class MarketDataClient:
         user_id: int,
         session_id: str,
         runtime_id: str,
-        mode: int,
+        environment: int,
         streams,
     ) -> bool:
         if not self._stub:
@@ -158,7 +158,7 @@ class MarketDataClient:
                 user_id=int(user_id),
                 session_id=session_id,
                 runtime_id=runtime_id,
-                mode=int(mode),
+                environment=int(environment),
             )
             for stream in streams:
                 req.keys.append(marketdata_service_pb2.StreamKey(

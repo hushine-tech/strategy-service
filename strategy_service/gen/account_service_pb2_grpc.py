@@ -370,7 +370,7 @@ class AccountServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def GetOnlineAccountInfo(self, request, context):
-        """Latest wallet state: mode=0 reads DB; mode=1/2 fetches from Binance (live/testnet) per account registration.
+        """Latest wallet state: backtest reads DB; demo/live fetch from exchange venues per account registration.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -395,9 +395,9 @@ class AccountServiceServicer(object):
 
     def UpdateAccountWalletState(self, request, context):
         """Bidirectional wallet sync. Routing uses only account_id: look up the account's registered
-        mode (backtest vs live/testnet). strategy-service does not send a mode.
+        environment and venues. strategy-service does not send routing hints.
         Backtest: request wallet is authoritative — persisted and returned.
-        Live/testnet: exchange is authoritative — request wallet is ignored for persistence; fetched state is stored and returned.
+        Demo/live: exchange is authoritative — request wallet is ignored for persistence; fetched state is stored and returned.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

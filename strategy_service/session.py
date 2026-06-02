@@ -31,7 +31,7 @@ class SessionState:
     status: str = "running"          # running / stopping / recoverable / finished / stopped / failed / stop_failed
     bars_processed: int = 0
     error: str = ""
-    account_mode: int = 0
+    environment: int = 0
     user_id: int = 0
     account_id: int = 0
     strategy_id: int = 0
@@ -39,7 +39,7 @@ class SessionState:
     runtime_source: str = ""
     runtime_name: str = ""
     thread: threading.Thread | None = None
-    live_loop: "LiveDataLoop | None" = None  # 仅 mode=1/2，用于 StopStrategy
+    live_loop: "LiveDataLoop | None" = None  # demo/live session stop hook
     required_streams: list[StreamBinding] = field(default_factory=list)
     live_consumer_group: str = ""
     lease_thread: threading.Thread | None = None
@@ -138,7 +138,7 @@ class SessionManager:
 
     def create(
         self,
-        account_mode: int = 0,
+        environment: int = 0,
         user_id: int = 0,
         account_id: int = 0,
         runtime_id: str = "",
@@ -147,7 +147,7 @@ class SessionManager:
     ) -> tuple[str, SessionState]:
         session_id = uuid.uuid4().hex
         state = SessionState(
-            account_mode=account_mode,
+            environment=environment,
             user_id=user_id,
             account_id=account_id,
             runtime_id=str(runtime_id or ""),
@@ -198,7 +198,7 @@ class SessionManager:
             return [
                 (session_id, state)
                 for session_id, state in self._sessions.items()
-                if state.account_mode == 2 and state.status == "running"
+                if state.environment == 1 and state.status == "running"
             ]
 
     def mark_terminal(self, session_id: str) -> None:

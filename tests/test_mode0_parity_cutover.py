@@ -1,4 +1,4 @@
-"""C2a cutover smoke tests: mode=0 backtest routed through BinanceWalletRuntime.
+"""C2a cutover smoke tests: environment=0 backtest routed through BinanceWalletRuntime.
 
 These tests drive the registry-based path (canonical state → build_wallet_from_account)
 which is what RunStrategy actually uses in production. The legacy-backed
@@ -28,7 +28,7 @@ def _canonical_mode0(
     initial_balance: float = 10_000.0,
     positions: list | None = None,
 ):
-    """Build a canonical AccountWalletState proto representing a mode=0 account."""
+    """Build a canonical AccountWalletState proto representing a environment=0 account."""
     futures = account_service_pb2.FuturesWallet(
         margin_mode=margin_mode,
         position_mode=position_mode,
@@ -53,7 +53,7 @@ def _canonical_mode0(
             fp.margin_mode = p.get("margin_mode", margin_mode)
             fp.margin_type = fp.margin_mode
     return account_service_pb2.AccountWalletState(
-        mode=0,
+        environment=0,
         total_value=wallet_balance,
         spot_estimated_value=0.0,
         futures_position_equity=wallet_balance,
@@ -67,13 +67,13 @@ def _canonical_mode0(
 def test_mode0_cross_routes_to_binance_runtime():
     wallet = build_wallet_from_account(proto_to_account_spec(_canonical_mode0(margin_mode="cross")))
     assert isinstance(wallet, BinanceWalletRuntime)
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
 
 
 def test_mode0_isolated_routes_to_binance_runtime():
     wallet = build_wallet_from_account(proto_to_account_spec(_canonical_mode0(margin_mode="isolated")))
     assert isinstance(wallet, BinanceWalletRuntime)
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
     assert wallet.futures.margin_mode == "isolated"
 
 
@@ -82,7 +82,7 @@ def test_mode0_hedge_routes_to_binance_runtime():
         proto_to_account_spec(_canonical_mode0(position_mode="hedge"))
     )
     assert isinstance(wallet, BinanceWalletRuntime)
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
     assert wallet.futures.position_mode == "hedge"
 
 
@@ -131,7 +131,7 @@ def test_mode0_position_hydration_through_canonical_ingress():
             )
         )
     )
-    assert wallet.mode == 0
+    assert wallet.environment_code == 0
     # Keyed by (symbol, direction_key) — for one-way, direction_key == 0.
     pos = wallet.futures.positions[("BTCUSDT", 0)]
     assert pos.position_qty == pytest.approx(0.1)

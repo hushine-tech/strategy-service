@@ -24,7 +24,7 @@ def test_proxy_account_client_sends_save_session_over_runtime_channel():
         session_id="sess-1",
         account_id=7,
         strategy_id=9,
-        mode=2,
+        environment=1,
         runtime_id="runtime-1",
         runtime_source="self_hosted",
         runtime_name="desk",

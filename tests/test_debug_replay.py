@@ -348,7 +348,7 @@ class _FakeAccountClient:
         assert account_id == 10
         assert user_id == 7
         return _build_wallet_proto(
-            mode=0,
+            environment=0,
             margin_mode="cross",
             position_mode="one_way",
             wallet_balance=10_000.0,

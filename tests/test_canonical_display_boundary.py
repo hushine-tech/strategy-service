@@ -33,7 +33,7 @@ def _wallet_proto(
     two calls can only be attributed to a display-field mutation.
     """
     return account_service_pb2.AccountWalletState(
-        mode=2,
+        environment=1,
         # Display fields (the surface under test).
         total_value=total_value,
         spot_estimated_value=spot_estimated_value,
@@ -175,7 +175,7 @@ def test_session_restore_cleanup_does_not_consume_wallet_fields():
                     status="running",
                     bars_processed=42,
                     error="",
-                    mode=2,
+                    environment=1,
                     user_id=7,
                     account_id=101,
                     strategy_id=33,

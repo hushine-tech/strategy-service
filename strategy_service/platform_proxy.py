@@ -227,7 +227,7 @@ class ProxyAccountClient:
         session_id: str,
         account_id: int,
         strategy_id: int,
-        mode: int,
+        environment: int,
         interval: str = "1m",
         start_time_ms: int = 0,
         end_time_ms: int = 0,
@@ -243,7 +243,7 @@ class ProxyAccountClient:
                 session_id=session_id,
                 account_id=account_id,
                 strategy_id=strategy_id,
-                mode=mode,
+                environment=environment,
                 interval=interval,
                 start_time_ms=start_time_ms,
                 end_time_ms=end_time_ms,
@@ -264,7 +264,7 @@ class ProxyAccountClient:
         session_id: str,
         account_id: int,
         strategy_id: int,
-        mode: int,
+        environment: int,
         interval: str = "1m",
         start_time_ms: int = 0,
         end_time_ms: int = 0,
@@ -281,7 +281,7 @@ class ProxyAccountClient:
             session_id=session_id,
             account_id=int(account_id),
             strategy_id=int(strategy_id),
-            mode=int(mode),
+            environment=int(environment),
             interval=interval,
             start_time_ms=int(start_time_ms),
             end_time_ms=int(end_time_ms),
@@ -447,7 +447,7 @@ class ProxyMarketDataClient:
         user_id: int,
         session_id: str,
         runtime_id: str,
-        mode: int,
+        environment: int,
         streams,
     ) -> bool:
         try:
@@ -457,7 +457,7 @@ class ProxyMarketDataClient:
                 user_id=int(user_id),
                 session_id=session_id,
                 runtime_id=runtime_id,
-                mode=int(mode),
+                environment=int(environment),
             )
             for stream in streams:
                 req.keys.append(marketdata_service_pb2.StreamKey(
