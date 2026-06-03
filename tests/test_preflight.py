@@ -32,12 +32,12 @@ def test_resolve_profile_maps_modes_to_profiles():
     assert resolve_profile(2) is RuntimeSourceProfile.LIVE
 
 
-def test_resolve_profile_returns_unknown_for_unexpected_modes():
+def test_resolve_profile_returns_unknown_for_unexpected_environments():
     assert resolve_profile(99) is RuntimeSourceProfile.UNKNOWN
     assert resolve_profile(-1) is RuntimeSourceProfile.UNKNOWN
 
 
-def test_supported_profiles_include_backtest_and_testnet_only():
+def test_supported_profiles_include_backtest_and_demo_only():
     # Gate 2: live (environment=2) must remain unsupported until Phase C+ wiring lands.
     assert RuntimeSourceProfile.BACKTEST in SUPPORTED_PROFILES
     assert RuntimeSourceProfile.DEMO in SUPPORTED_PROFILES
@@ -63,7 +63,7 @@ def test_check_profile_supported_fails_live_with_profile_reason():
     assert "live" in failure.reason.lower()
 
 
-def test_check_profile_supported_fails_unknown_mode():
+def test_check_profile_supported_fails_unknown_environment():
     result = check_profile_supported(RuntimeSourceProfile.UNKNOWN)
     assert not result.ok
     assert result.failures[0].kind is PreflightFailureKind.PROFILE

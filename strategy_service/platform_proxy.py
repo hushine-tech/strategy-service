@@ -26,7 +26,7 @@ from strategy_service.account_client import (
     _serialize_future_wallet,
     _serialize_spot_wallet,
 )
-from strategy_service.order_client import OrderClient
+from strategy_service.order_client import OrderClient, _market_time_to_proto
 from strategy_service.types import ExecutionFeedback, OrderDecision
 
 logger = logging.getLogger(__name__)
@@ -137,19 +137,24 @@ class ProxyAccountClient:
         snapshot_reason: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
+        snapshot_time: object | None = None,
     ):
         try:
             from strategy_service.gen import account_service_pb2
 
+            kwargs = {
+                "account_id": int(account_id),
+                "user_id": int(user_id),
+                "snapshot_reason": int(snapshot_reason),
+                "strategy_id": int(strategy_id),
+                "session_id": str(session_id or ""),
+            }
+            snapshot_time_pb = _market_time_to_proto(snapshot_time)
+            if snapshot_time_pb is not None:
+                kwargs["snapshot_time"] = snapshot_time_pb
             resp = self._proxy.invoke(
                 ACCOUNT_UPDATE_PORTFOLIO,
-                account_service_pb2.UpdatePortfolioSnapshotRequest(
-                    account_id=int(account_id),
-                    user_id=int(user_id),
-                    snapshot_reason=int(snapshot_reason),
-                    strategy_id=int(strategy_id),
-                    session_id=str(session_id or ""),
-                ),
+                account_service_pb2.UpdatePortfolioSnapshotRequest(**kwargs),
                 account_service_pb2.UpdatePortfolioSnapshotResponse,
             )
             return resp.snapshot
@@ -334,22 +339,27 @@ class ProxyAccountClient:
         snapshot_reason: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
+        snapshot_time: object | None = None,
     ):
         """Persist strategy-computed wallet state for backtest sessions."""
         try:
             from strategy_service.gen import account_service_pb2
 
-            req = account_service_pb2.UpdateAccountWalletStateRequest(
-                account_id=int(account_id),
-                futures=_serialize_future_wallet(future_wallet) if future_wallet else None,
-                spot=_serialize_spot_wallet(spot_wallet) if spot_wallet else None,
-                total_value=_compute_total_value(future_wallet, spot_wallet),
-                wallet_balance=_get_wallet_balance(future_wallet),
-                available_balance=_get_available_balance(future_wallet),
-                snapshot_reason=int(snapshot_reason),
-                strategy_id=int(strategy_id),
-                session_id=session_id,
-            )
+            kwargs = {
+                "account_id": int(account_id),
+                "futures": _serialize_future_wallet(future_wallet) if future_wallet else None,
+                "spot": _serialize_spot_wallet(spot_wallet) if spot_wallet else None,
+                "total_value": _compute_total_value(future_wallet, spot_wallet),
+                "wallet_balance": _get_wallet_balance(future_wallet),
+                "available_balance": _get_available_balance(future_wallet),
+                "snapshot_reason": int(snapshot_reason),
+                "strategy_id": int(strategy_id),
+                "session_id": str(session_id or ""),
+            }
+            snapshot_time_pb = _market_time_to_proto(snapshot_time)
+            if snapshot_time_pb is not None:
+                kwargs["snapshot_time"] = snapshot_time_pb
+            req = account_service_pb2.UpdateAccountWalletStateRequest(**kwargs)
             resp = self._proxy.invoke(
                 "account.UpdateAccountWalletState",
                 req,
@@ -648,6 +658,7 @@ class ProxyOrderClient(OrderClient):
         market: str | None = None,
         session_id: str = "",
         intent_id: str = "",
+        market_time: object | None = None,
     ) -> ExecutionFeedback:
         symbol = account_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
@@ -679,6 +690,9 @@ class ProxyOrderClient(OrderClient):
             )
             if decision.price is not None:
                 kwargs["price"] = float(decision.price)
+            market_time_pb = _market_time_to_proto(market_time)
+            if market_time_pb is not None:
+                kwargs["market_time"] = market_time_pb
             resp = self._proxy.invoke(
                 ORDER_PLACE,
                 order_service_pb2.PlaceOrderRequest(**kwargs),

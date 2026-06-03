@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from strategy_service.order_client import _market_time_to_proto
+
 logger = logging.getLogger(__name__)
 
 _EXCHANGE_ENUMS = {
@@ -115,6 +117,7 @@ class AccountClient:
         snapshot_reason: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
+        snapshot_time: object | None = None,
     ):
         """Refresh and persist a portfolio snapshot through core-service."""
         if not self._stub:
@@ -122,13 +125,17 @@ class AccountClient:
         try:
             from strategy_service.gen import account_service_pb2
 
-            req = account_service_pb2.UpdatePortfolioSnapshotRequest(
-                account_id=int(account_id),
-                user_id=int(user_id),
-                snapshot_reason=int(snapshot_reason),
-                strategy_id=int(strategy_id),
-                session_id=str(session_id or ""),
-            )
+            kwargs = {
+                "account_id": int(account_id),
+                "user_id": int(user_id),
+                "snapshot_reason": int(snapshot_reason),
+                "strategy_id": int(strategy_id),
+                "session_id": str(session_id or ""),
+            }
+            snapshot_time_pb = _market_time_to_proto(snapshot_time)
+            if snapshot_time_pb is not None:
+                kwargs["snapshot_time"] = snapshot_time_pb
+            req = account_service_pb2.UpdatePortfolioSnapshotRequest(**kwargs)
             resp = self._stub.UpdatePortfolioSnapshot(req)
             return resp.snapshot
         except Exception:
@@ -336,6 +343,7 @@ class AccountClient:
         snapshot_reason: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
+        snapshot_time: object | None = None,
     ):
         """Persist strategy-computed wallet state for backtest sessions.
 
@@ -346,17 +354,21 @@ class AccountClient:
         try:
             from strategy_service.gen import account_service_pb2
 
-            req = account_service_pb2.UpdateAccountWalletStateRequest(  # legacy/admin-only
-                account_id=int(account_id),
-                futures=_serialize_future_wallet(future_wallet) if future_wallet else None,
-                spot=_serialize_spot_wallet(spot_wallet) if spot_wallet else None,
-                total_value=_compute_total_value(future_wallet, spot_wallet),
-                wallet_balance=_get_wallet_balance(future_wallet),
-                available_balance=_get_available_balance(future_wallet),
-                snapshot_reason=snapshot_reason,
-                strategy_id=int(strategy_id),
-                session_id=session_id,
-            )
+            kwargs = {
+                "account_id": int(account_id),
+                "futures": _serialize_future_wallet(future_wallet) if future_wallet else None,
+                "spot": _serialize_spot_wallet(spot_wallet) if spot_wallet else None,
+                "total_value": _compute_total_value(future_wallet, spot_wallet),
+                "wallet_balance": _get_wallet_balance(future_wallet),
+                "available_balance": _get_available_balance(future_wallet),
+                "snapshot_reason": int(snapshot_reason),
+                "strategy_id": int(strategy_id),
+                "session_id": str(session_id or ""),
+            }
+            snapshot_time_pb = _market_time_to_proto(snapshot_time)
+            if snapshot_time_pb is not None:
+                kwargs["snapshot_time"] = snapshot_time_pb
+            req = account_service_pb2.UpdateAccountWalletStateRequest(**kwargs)  # legacy/admin-only
             resp = self._stub.UpdateAccountWalletState(req)  # legacy/admin-only
             return resp.wallet
         except Exception:

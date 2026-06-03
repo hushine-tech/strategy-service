@@ -373,6 +373,32 @@ def test_futures_compact_position_without_full_wallet_fails_closed():
         )
 
 
+def test_futures_zero_wallet_with_route_metadata_is_accepted():
+    snapshot = _snapshot(
+        _venue(
+            venue_id=11,
+            market=MARKET_PERPETUAL_FUTURES,
+            wallet=_futures_wallet(
+                wallet_balance=0.0,
+                available_balance=0.0,
+                margin_balance=0.0,
+                positions=[],
+            ),
+            total_value=0.0,
+            wallet_balance=0.0,
+            available_balance=0.0,
+        )
+    )
+
+    wallet = build_portfolio_wallet_from_snapshot(
+        snapshot,
+        allowed_routes={("binance", "perpetual_futures")},
+    ).get("binance", "perpetual_futures")
+
+    assert wallet.get_wallet_balance() == 0.0
+    assert wallet.get_available_balance() == 0.0
+
+
 def test_spot_empty_compact_without_full_wallet_fails_closed():
     snapshot = _snapshot(
         _venue(

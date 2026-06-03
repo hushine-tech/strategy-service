@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 from strategy_service.gen import account_service_pb2, marketdata_service_pb2, order_service_pb2
 from strategy_service.platform_proxy import (
     ACCOUNT_PREFLIGHT_STRATEGY_SESSION,
@@ -66,6 +69,7 @@ def test_proxy_account_client_updates_portfolio_snapshot_over_runtime_channel():
         snapshot_reason=2,
         strategy_id=9,
         session_id="sess-1",
+        snapshot_time=1780274580000,
     )
 
     method, req = runtime.calls[-1]
@@ -73,9 +77,44 @@ def test_proxy_account_client_updates_portfolio_snapshot_over_runtime_channel():
     assert req.account_id == 7
     assert req.user_id == 3
     assert req.snapshot_reason == 2
+    assert req.snapshot_time.ToDatetime(tzinfo=timezone.utc) == datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
     assert req.strategy_id == 9
     assert req.session_id == "sess-1"
     assert snapshot.account_id == 7
+
+
+def test_proxy_account_client_updates_wallet_state_with_snapshot_time_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses["account.UpdateAccountWalletState"] = account_service_pb2.UpdateAccountWalletStateResponse(
+        wallet=account_service_pb2.AccountWalletState()
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+    future_wallet = SimpleNamespace(
+        margin_mode="cross",
+        position_mode="one_way",
+        initial_balance=1000.0,
+        wallet_balance=994.506,
+        available_balance=983.5434,
+        positions={},
+    )
+
+    wallet = proxy.account_client().update_account_wallet_state(
+        account_id=7,
+        future_wallet=future_wallet,
+        snapshot_reason=1,
+        strategy_id=9,
+        session_id="sess-1",
+        snapshot_time=datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc),
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == "account.UpdateAccountWalletState"
+    assert req.account_id == 7
+    assert req.snapshot_reason == 1
+    assert req.strategy_id == 9
+    assert req.session_id == "sess-1"
+    assert req.snapshot_time.ToDatetime(tzinfo=timezone.utc) == datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
+    assert wallet is not None
 
 
 def test_proxy_account_client_preflight_sends_session_metadata_over_runtime_channel():

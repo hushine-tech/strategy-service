@@ -117,6 +117,12 @@ def _spot_wallet_has_content(spot: Any) -> bool:
 def _futures_wallet_has_content(futures: Any) -> bool:
     if futures is None:
         return False
+
+    if str(getattr(futures, "margin_mode", "") or "").strip():
+        return True
+    if str(getattr(futures, "position_mode", "") or "").strip():
+        return True
+
     balance_fields = (
         "initial_balance",
         "deposit_sum",

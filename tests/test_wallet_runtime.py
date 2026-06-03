@@ -189,7 +189,7 @@ def test_build_wallet_from_account_mode0_uses_binance_parity_runtime_after_c2a()
     wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=0)))
 
     assert isinstance(wallet, BinanceWalletRuntime)
-    # mode must reflect the SESSION mode (0), not the runtime's default class value.
+    # Environment code must reflect the session environment, not the runtime class default.
     assert wallet.environment_code == 0
     # Futures book in parity runtime is keyed by derive_position_key; for
     # one-way positions that's (symbol, 0).
@@ -358,16 +358,16 @@ def test_resolve_target_mode_1_returns_binance_live_not_registered():
     assert target not in RUNTIME_REGISTRY
 
 
-def test_resolve_target_mode_2_returns_binance_testnet():
+def test_resolve_target_demo_environment_returns_binance_demo():
     assert resolve_target(1) == ("binance", "demo")
 
 
-def test_resolve_target_unsupported_mode_raises():
+def test_resolve_target_unsupported_environment_raises():
     with pytest.raises(ValueError, match="unsupported account environment"):
         resolve_target(9)
 
 
-def test_build_wallet_mode_0_uses_binance_parity_after_c2a():
+def test_build_wallet_backtest_environment_uses_binance_parity_after_c2a():
     """environment=0 backtest is routed to BinanceWalletRuntime."""
     wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=0)))
 
@@ -375,7 +375,7 @@ def test_build_wallet_mode_0_uses_binance_parity_after_c2a():
     assert wallet.environment_code == 0
 
 
-def test_build_wallet_mode_2_uses_binance_runtime():
+def test_build_wallet_demo_environment_uses_binance_runtime():
     wallet = build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=1)))
 
     assert isinstance(wallet, BinanceWalletRuntime)
@@ -383,12 +383,12 @@ def test_build_wallet_mode_2_uses_binance_runtime():
     assert isinstance(wallet, BinanceWalletRuntime)
 
 
-def test_build_wallet_mode_1_fails_closed():
+def test_build_wallet_live_environment_fails_closed():
     with pytest.raises(ValueError, match=r"environment=2 is not enabled"):
         build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=2)))
 
 
-def test_build_wallet_from_account_rejects_unsupported_mode():
+def test_build_wallet_from_account_rejects_unsupported_environment():
     with pytest.raises(ValueError, match="unsupported account environment"):
         build_wallet_from_account(proto_to_account_spec(_wallet_proto(environment=9)))
 

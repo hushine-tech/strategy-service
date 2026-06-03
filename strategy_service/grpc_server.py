@@ -169,24 +169,35 @@ def _sync_strategy_snapshot(
     snapshot_reason: int,
     strategy_id: int,
     session_id: str,
+    snapshot_time: object | None = None,
 ) -> Any:
+    kwargs = {
+        "account_id": account_id,
+        "snapshot_reason": snapshot_reason,
+        "strategy_id": strategy_id,
+        "session_id": session_id,
+    }
+    if _snapshot_time_present(snapshot_time):
+        kwargs["snapshot_time"] = snapshot_time
     if int(environment) in {0, 1}:
         future_wallet, spot_wallet = _wallet_parts_for_account_sync(wallet)
+        kwargs["future_wallet"] = future_wallet
+        kwargs["spot_wallet"] = spot_wallet
         return account_client.update_account_wallet_state(
-            account_id=account_id,
-            future_wallet=future_wallet,
-            spot_wallet=spot_wallet,
-            snapshot_reason=snapshot_reason,
-            strategy_id=strategy_id,
-            session_id=session_id,
+            **kwargs,
         )
+    kwargs["user_id"] = user_id
     return account_client.update_portfolio_snapshot(
-        account_id=account_id,
-        user_id=user_id,
-        snapshot_reason=snapshot_reason,
-        strategy_id=strategy_id,
-        session_id=session_id,
+        **kwargs,
     )
+
+
+def _snapshot_time_present(value: object | None) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return float(value) > 0.0
+    return True
 
 
 # Note: wallet-derived symbol inference was intentionally removed (pre_C3 §2.1/§2.2).
@@ -463,7 +474,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         rejected. Caller MUST return immediately on False.
         """
         if self._bound_user_id <= 0:
-            # Legacy / unregistered mode — control-plane attestation is
+            # Legacy / unregistered runtime — control-plane attestation is
             # absent so cross-check has no anchor. Accept and rely on
             # the legacy direct-dial trust model.
             return True
@@ -828,6 +839,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             snapshot_reason=SNAPSHOT_REASON_STRATEGY_START,
             strategy_id=strategy_id,
             session_id=session_id,
+            snapshot_time=getattr(request, "start_time_ms", None),
         )
 
         # 5. 启动后台线程
@@ -866,6 +878,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         strategy_id: int,
         strategy_code: str | None,
     ) -> None:
+        user_strategy: Any | None = None
         try:
             order_client = self._order_client()
             engine = StrategyEngine()
@@ -895,6 +908,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     snapshot_reason=SNAPSHOT_REASON_EVENT,
                     strategy_id=strategy_id,
                     session_id=session_id,
+                    snapshot_time=getattr(user_strategy, "last_market_time", None),
                 )
 
             user_strategy.on_order_callback = _on_order_sync
@@ -944,6 +958,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
                     strategy_id=strategy_id,
                     session_id=session_id,
+                    snapshot_time=(
+                        (getattr(user_strategy, "last_market_time", None) if user_strategy is not None else None)
+                        or getattr(request, "end_time_ms", None)
+                    ),
                 )
                 acct_client.update_session(
                     session_id=session_id,

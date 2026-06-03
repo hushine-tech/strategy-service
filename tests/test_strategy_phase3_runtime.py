@@ -352,7 +352,7 @@ def test_decision_for_other_route_uses_cached_route_mark_price() -> None:
     spot_wallet = wallet.get(Exchange.BINANCE, Market.SPOT)
     assert spot_wallet.market_data[-1] == ("ETHUSDT", "spot", 101.0)
     perp_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
-    assert perp_wallet.market_data == []
+    assert perp_wallet.market_data == [("ETHUSDT", "futures", 2500.0)]
 
 
 def test_decision_without_route_tick_or_price_fails_before_order() -> None:
@@ -401,7 +401,7 @@ def test_strategy_receives_portfolio_wallet_and_uses_get() -> None:
     svc.running_strategy(_tick(price=2520.0))
 
     perp_wallet = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)
-    assert perp_wallet.market_data == []
+    assert perp_wallet.market_data == [("ETHUSDT", "futures", 2520.0)]
     assert client.orders == []
 
 

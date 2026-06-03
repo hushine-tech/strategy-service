@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
 import logging
 import uuid
 
@@ -51,6 +52,33 @@ POSITION_SIDE_NAMES = {
 }
 
 
+def _market_time_to_proto(value: object | None):
+    if value is None:
+        return None
+    from google.protobuf.timestamp_pb2 import Timestamp
+
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, date):
+        dt = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    elif isinstance(value, (int, float)):
+        raw = float(value)
+        if raw <= 0.0:
+            return None
+        seconds = raw / 1000.0 if raw >= 100_000_000_000 else raw
+        dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    else:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    out = Timestamp()
+    out.FromDatetime(dt)
+    return out
+
+
 class OrderClient:
     """Thin wrapper around order.v1 gRPC stubs.
 
@@ -97,6 +125,7 @@ class OrderClient:
         market: str | None = None,
         session_id: str = "",
         intent_id: str = "",
+        market_time: object | None = None,
     ) -> ExecutionFeedback:
         """Place an order via order.v1 (or mock if not configured)."""
         symbol = account_symbol or decision.symbol
@@ -140,6 +169,9 @@ class OrderClient:
             time_in_force = str(getattr(decision, "time_in_force", None) or "").strip().upper()
             if order_type == "LIMIT":
                 kwargs["time_in_force"] = time_in_force or "GTC"
+            market_time_pb = _market_time_to_proto(market_time)
+            if market_time_pb is not None:
+                kwargs["market_time"] = market_time_pb
 
             req = order_service_pb2.PlaceOrderRequest(**kwargs)
             resp = self._stub.PlaceOrder(req)

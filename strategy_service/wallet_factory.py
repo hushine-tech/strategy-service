@@ -108,8 +108,8 @@ def account_dict_to_canonical_state(account: dict[str, Any]) -> CanonicalAccount
 # Provider + environment registry for canonical account state.
 #
 # Keys are ``(provider, environment)`` tuples; values are runtime classes that
-# expose a ``from_canonical`` classmethod. Mode=1 ``("binance", "live")`` is
-# intentionally NOT registered in Phase B/C1: live runtime remains disabled
+# expose a ``from_canonical`` classmethod. The live registry target is
+# intentionally NOT registered: live runtime remains disabled
 # and the registry miss is how we fail closed. Additional exchanges (OKX etc.)
 # plug in here without touching ``build_wallet_from_account``.
 #

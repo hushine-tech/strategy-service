@@ -1497,6 +1497,7 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
     servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092", restore_running_sessions=False)
     state = SessionState(environment=0)
     request = SimpleNamespace(interval="1m", start_time_ms=1, end_time_ms=2)
+    snapshot_time = 1780274580000
     events: list[tuple] = []
 
     class FakeAccountClient:
@@ -1510,8 +1511,9 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
+            snapshot_time=None,
         ):
-            events.append(("wallet_sync", snapshot_reason, strategy_id, session_id, account_id))
+            events.append(("wallet_sync", snapshot_reason, strategy_id, session_id, account_id, snapshot_time))
             return None
 
         def update_account_wallet_state(
@@ -1522,6 +1524,7 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
+            snapshot_time=None,
         ):
             events.append((
                 "wallet_state_sync",
@@ -1531,6 +1534,7 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
                 account_id,
                 future_wallet is not None,
                 spot_wallet is not None,
+                snapshot_time,
             ))
             return None
 
@@ -1552,6 +1556,7 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
         assert [(i.market, i.symbol, i.interval) for i in declared_inputs] == [
             ("perpetual_futures", "BTCUSDT", "1m"),
         ]
+        fake_user.last_market_time = snapshot_time
         fake_user.on_order_callback()
         inner_state.transition("finished", bars=17)
 
@@ -1576,8 +1581,8 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
     )
 
     assert events == [
-        ("wallet_state_sync", 1, 202, "sess-backtest", 101, True, False),
-        ("wallet_state_sync", 3, 202, "sess-backtest", 101, True, False),
+        ("wallet_state_sync", 1, 202, "sess-backtest", 101, True, False, snapshot_time),
+        ("wallet_state_sync", 3, 202, "sess-backtest", 101, True, False, snapshot_time),
         ("session_update", "finished", 17, "", "sess-backtest"),
     ]
 
@@ -1600,7 +1605,9 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
+            snapshot_time=None,
         ):
+            del snapshot_time
             events.append(("wallet_sync", snapshot_reason, strategy_id, session_id, account_id))
             return None
 
@@ -1612,8 +1619,9 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
+            snapshot_time=None,
         ):
-            del future_wallet, spot_wallet
+            del future_wallet, spot_wallet, snapshot_time
             events.append(("wallet_state_sync", snapshot_reason, strategy_id, session_id, account_id))
             return None
 
@@ -1685,7 +1693,9 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
+            snapshot_time=None,
         ):
+            del snapshot_time
             events.append(("wallet_sync", snapshot_reason, strategy_id, session_id, account_id))
             return None
 
@@ -1697,8 +1707,9 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
+            snapshot_time=None,
         ):
-            del future_wallet, spot_wallet
+            del future_wallet, spot_wallet, snapshot_time
             events.append(("wallet_state_sync", snapshot_reason, strategy_id, session_id, account_id))
             return None
 
@@ -2049,7 +2060,9 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             snapshot_reason: int = 0,
             strategy_id: int = 0,
             session_id: str = "",
+            snapshot_time=None,
         ) -> bool:
+            del snapshot_time
             wallet_syncs.append((account_id, snapshot_reason, session_id))
             return True
 
@@ -2061,13 +2074,27 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             snapshot_reason: int = 0,
             strategy_id: int = 0,
             session_id: str = "",
+            snapshot_time=None,
         ) -> bool:
-            del future_wallet, spot_wallet, strategy_id
+            del future_wallet, spot_wallet, strategy_id, snapshot_time
             wallet_syncs.append((account_id, snapshot_reason, session_id))
             return True
 
     class FakeOrderClient:
-        def place_order(self, account_id, decision, mark_price, *, account_symbol=None, strategy_id=0, market="futures", session_id="", intent_id=""):
+        def place_order(
+            self,
+            account_id,
+            decision,
+            mark_price,
+            *,
+            account_symbol=None,
+            strategy_id=0,
+            market="futures",
+            session_id="",
+            intent_id="",
+            market_time=None,
+        ):
+            del market_time
             assert account_id == 505
             assert decision.exchange == "binance"
             assert decision.market == "perpetual_futures"

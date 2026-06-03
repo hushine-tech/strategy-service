@@ -41,11 +41,12 @@ def _md(
     market: str = "perpetual_futures",
     interval: str = "1m",
     exchange: str = "binance",
+    timestamp: datetime | None = None,
 ) -> MarketData:
     return MarketData(
         symbol=symbol,
         price=price,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=timestamp or datetime.now(timezone.utc),
         exchange=exchange,
         market=market,
         interval=interval,
@@ -662,7 +663,7 @@ def test_unknown_symbol_market_is_dropped_by_router():
 
 
 def test_strategy_can_access_wallet_by_exchange_market():
-    route_wallet = _wallet_with_futures_slot()
+    route_wallet = _wallet_with_futures_slot()._default_wallet
     wallet = PortfolioWalletRuntime(
         1,
         {("binance", "perpetual_futures")},
@@ -756,7 +757,9 @@ def test_strategy_declared_symbols_route_even_without_wallet_slot():
     assert ("binance", "perpetual_futures", "ETHUSDT", "1m") in svc.strategy_router
     svc.running_strategy(_md(symbol="ETHUSDT", market="perpetual_futures", interval="1m"))
 
-    wallet.on_market_data.assert_not_called()
+    wallet.on_market_data.assert_called_once_with(
+        "binance", "perpetual_futures", "ETHUSDT", "futures", 50_000.0
+    )
 
 
 def test_same_symbol_different_market_routes_correctly():
@@ -778,7 +781,13 @@ def test_same_symbol_different_market_routes_correctly():
     wallet.on_market_data = MagicMock(wraps=wallet.on_market_data)
     svc.running_strategy(_md(symbol="BTCUSDT", market="perpetual_futures"))
     svc.running_strategy(_md(symbol="BTCUSDT", market="spot"))
-    wallet.on_market_data.assert_not_called()
+    assert wallet.on_market_data.call_count == 2
+    wallet.on_market_data.assert_any_call(
+        "binance", "perpetual_futures", "BTCUSDT", "futures", 50_000.0
+    )
+    wallet.on_market_data.assert_any_call(
+        "binance", "spot", "BTCUSDT", "spot", 50_000.0
+    )
 
 
 def test_user_strategy_uses_preconfigured_spot_slot():
@@ -838,6 +847,40 @@ def test_full_flow_mark_then_order_and_open_position():
     # attribute (sum of position_initial_margin + open_order_initial_margin).
     assert pos.initial_margin > 0
     assert pos.get_unrealized_pnl() == 0.0
+
+
+def test_declared_tick_refreshes_mark_price_without_new_order():
+    wallet = _wallet_with_futures_slot()
+    svc = StrategyService()
+    strategy_code = _inline(
+        "    def __init__(self):\n"
+        "        self.done = False\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        if self.done:\n"
+        "            return None\n"
+        "        self.done = True\n"
+        "        return OrderDecision(symbol=data.symbol, side='BUY', qty='0.1')\n"
+    )
+    svc.create_strategy("u1", "<db:buy_once_inline>", wallet, strategy_code=strategy_code)
+
+    svc.running_strategy(_md(price=50_000.0))
+    svc.running_strategy(_md(price=50_100.0))
+
+    pos = wallet.futures.positions[("TESTUSDT", 0)]
+    assert pos.position_qty == pytest.approx(0.1)
+    assert pos.mark_price == pytest.approx(50_100.0)
+    assert pos.get_unrealized_pnl() == pytest.approx(10.0)
+
+
+def test_running_strategy_records_last_market_time():
+    wallet = _wallet_with_futures_slot()
+    svc = StrategyService()
+    strat = svc.create_strategy("u1", "strategies.noop", wallet)
+    ts = datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
+
+    svc.running_strategy(_md(price=50_000.0, timestamp=ts))
+
+    assert strat.last_market_time == ts
 
 
 def test_futures_short_signal_closes_one_way_position():

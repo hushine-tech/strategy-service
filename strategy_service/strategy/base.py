@@ -116,6 +116,8 @@ class _PreparedOrderDecision:
     side: str
     order_type: str
     mark_price: float
+    market_time: Any
+    mark_price_refreshed: bool
     venue_id: int
     route_wallet: Any
 
@@ -276,12 +278,17 @@ class BaseStrategy:
         self._order_event_cursor: int = 0
         self._settled_lifecycle_event_ids: set[int] = set()
         self._sync_settled_order_quantities: dict[str, float] = {}
+        self._last_market_time: Any | None = None
         self._initialize_order_event_cursor()
 
     @property
     def declared_inputs(self) -> list[StrategyInput]:
         """Read-only snapshot of the strategy's declared universe."""
         return list(self._inputs)
+
+    @property
+    def last_market_time(self) -> Any | None:
+        return self._last_market_time
 
     def _get_strategy(self) -> Any:
         return self._strategy_instance
@@ -555,6 +562,14 @@ class BaseStrategy:
             # rather than raise — the router gate above already screened.
             return
 
+        self._last_market_time = getattr(market_data, "timestamp", None)
+        self.wallet.on_market_data(
+            exchange,
+            market,
+            sym,
+            _wallet_market(market),
+            float(market_data.price),
+        )
         self._consume_order_updates()
 
         # Call user strategy with the view, not the raw tick.
@@ -610,6 +625,11 @@ class BaseStrategy:
             order_type=order_type,
             price=str(signal.price).strip() if signal.price is not None else None,
         )
+        trigger_key = (
+            _norm_exchange(getattr(market_data, "exchange", "binance")),
+            _norm_market(market_data.market),
+            _norm_symbol(market_data.symbol),
+        )
         return _PreparedOrderDecision(
             signal=normalized_signal,
             exchange=sig_exchange,
@@ -620,6 +640,8 @@ class BaseStrategy:
             side=side,
             order_type=order_type,
             mark_price=mark_price,
+            market_time=getattr(market_data, "timestamp", None),
+            mark_price_refreshed=(sig_exchange, sig_market, sig_sym) == trigger_key,
             venue_id=venue_id,
             route_wallet=route_wallet,
         )
@@ -736,13 +758,14 @@ class BaseStrategy:
                     )
                     return
 
-        self.wallet.on_market_data(
-            sig_exchange,
-            sig_market,
-            sig_sym,
-            _wallet_market(sig_market),
-            item.mark_price,
-        )
+        if not item.mark_price_refreshed:
+            self.wallet.on_market_data(
+                sig_exchange,
+                sig_market,
+                sig_sym,
+                _wallet_market(sig_market),
+                item.mark_price,
+            )
         intent_id = uuid.uuid4().hex
         feedback = self._coerce_execution_feedback(self._order_client.place_order(
             self._account_id, signal, item.mark_price,
@@ -751,6 +774,7 @@ class BaseStrategy:
             market=sig_market,
             session_id=self._session_id,
             intent_id=intent_id,
+            market_time=item.market_time,
         ))
         has_settleable_fill = bool(feedback.fill_events) or (
             int(getattr(feedback, "fill_count", 0) or 0) > 0

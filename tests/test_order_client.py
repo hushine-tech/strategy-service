@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from strategy_service.gen import order_service_pb2
@@ -121,6 +123,32 @@ def test_place_order_uses_canonical_symbol_and_emits_fill_events():
     assert feedback.fill_events[1].status == "FILLED"
     assert feedback.fill_events[1].executed_qty == pytest.approx(0.05)
     assert feedback.fill_events[1].remaining_qty == pytest.approx(0.0)
+
+
+def test_place_order_passes_market_time_to_order_service():
+    response = order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-1",
+        attempt_id="attempt-1",
+        attempt_status="ACCEPTED",
+    )
+    client = OrderClient("")
+    stub = _Stub(response)
+    client._stub = stub
+    market_time = datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
+
+    client.place_order(
+        13,
+        _decision(),
+        51000.0,
+        account_symbol="ETHUSDT",
+        market="perpetual_futures",
+        intent_id="intent-1",
+        market_time=market_time,
+    )
+
+    assert stub.last_request is not None
+    assert stub.last_request.HasField("market_time")
+    assert stub.last_request.market_time.ToDatetime(tzinfo=timezone.utc) == market_time
 
 
 def test_place_order_exception_triggers_resolve_unknown_attempt():

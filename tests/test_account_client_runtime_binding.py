@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 from strategy_service.account_client import AccountClient
 from strategy_service.gen import account_service_pb2
 
@@ -110,6 +113,7 @@ def test_account_client_update_portfolio_snapshot_uses_portfolio_api():
         snapshot_reason=2,
         strategy_id=22,
         session_id="sess-1",
+        snapshot_time=datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc),
     )
 
     req = captured["req"]
@@ -118,7 +122,47 @@ def test_account_client_update_portfolio_snapshot_uses_portfolio_api():
     assert req.snapshot_reason == 2
     assert req.strategy_id == 22
     assert req.session_id == "sess-1"
+    assert req.snapshot_time.ToDatetime(tzinfo=timezone.utc) == datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
     assert snapshot.account_id == 11
+
+
+def test_account_client_update_wallet_state_sends_snapshot_time():
+    captured: dict[str, object] = {}
+
+    class FakeStub:
+        def UpdateAccountWalletState(self, req):
+            captured["req"] = req
+            return account_service_pb2.UpdateAccountWalletStateResponse(
+                wallet=account_service_pb2.AccountWalletState()
+            )
+
+    future_wallet = SimpleNamespace(
+        margin_mode="cross",
+        position_mode="one_way",
+        initial_balance=1000.0,
+        wallet_balance=994.506,
+        available_balance=983.5434,
+        positions={},
+    )
+    client = AccountClient("")
+    client._stub = FakeStub()
+
+    wallet = client.update_account_wallet_state(
+        account_id=11,
+        future_wallet=future_wallet,
+        snapshot_reason=1,
+        strategy_id=22,
+        session_id="sess-1",
+        snapshot_time=1780274580000,
+    )
+
+    req = captured["req"]
+    assert req.account_id == 11
+    assert req.snapshot_reason == 1
+    assert req.strategy_id == 22
+    assert req.session_id == "sess-1"
+    assert req.snapshot_time.ToDatetime(tzinfo=timezone.utc) == datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
+    assert wallet is not None
 
 
 def test_account_client_preflight_sends_session_metadata():
