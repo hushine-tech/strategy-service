@@ -111,12 +111,13 @@ class DebugReplayRunner:
                         f"runtime={dataset.dataset_id} platform={start_resp.dataset.dataset_id}"
                     )
 
-            info = account_client.get_online_account_info(  # legacy/admin-only debug replay path
+            snapshot = account_client.get_portfolio_snapshot(
                 dataset.account_id,
                 dataset.user_id,
             )
-            if info is None:
+            if snapshot is None or getattr(snapshot, "wallet", None) is None:
                 raise RuntimeError(f"account {dataset.account_id} not found or core-service unreachable")
+            info = snapshot.wallet
             if int(getattr(info, "environment", 0) or 0) != 0:
                 raise RuntimeError("debug replay only supports backtest accounts")
             wallet = build_wallet_from_account(proto_to_account_spec(info))
@@ -134,10 +135,9 @@ class DebugReplayRunner:
                 session_id=session_id,
                 session_name=session_name,
             )
-            account_client.update_account_wallet_state(  # legacy/admin-only debug replay path
-                dataset.account_id,
-                wallet.futures,
-                wallet.spot,
+            account_client.update_portfolio_snapshot(
+                account_id=dataset.account_id,
+                user_id=dataset.user_id,
                 snapshot_reason=SNAPSHOT_REASON_STRATEGY_START,
                 strategy_id=0,
                 session_id=session_id,
@@ -159,10 +159,9 @@ class DebugReplayRunner:
             )
 
             def _on_order_sync() -> None:
-                account_client.update_account_wallet_state(  # legacy/admin-only debug replay path
-                    dataset.account_id,
-                    wallet.futures,
-                    wallet.spot,
+                account_client.update_portfolio_snapshot(
+                    account_id=dataset.account_id,
+                    user_id=dataset.user_id,
                     snapshot_reason=SNAPSHOT_REASON_ORDER_FILL,
                     strategy_id=0,
                     session_id=session_id,
@@ -195,10 +194,9 @@ class DebugReplayRunner:
         finally:
             if session_id:
                 try:
-                    account_client.update_account_wallet_state(  # legacy/admin-only debug replay path
-                        dataset.account_id,
-                        getattr(locals().get("wallet", None), "futures", None),
-                        getattr(locals().get("wallet", None), "spot", None),
+                    account_client.update_portfolio_snapshot(
+                        account_id=dataset.account_id,
+                        user_id=dataset.user_id,
                         snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
                         strategy_id=0,
                         session_id=session_id,

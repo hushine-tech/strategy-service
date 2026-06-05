@@ -81,8 +81,8 @@ class MyStrategy:
     assert account.saved["strategy_id"] == 0
     assert account.saved["session_name"] == "manual-debug"
     final_session_idx = account.events.index(("session", "finished"))
-    final_wallet_idx = account.events.index(("wallet", 3))
-    assert final_wallet_idx < final_session_idx
+    final_portfolio_idx = account.events.index(("portfolio", 3))
+    assert final_portfolio_idx < final_session_idx
     assert account.updates[-1]["status"] == "finished"
     assert account.updates[-1]["bars_processed"] == 2
     assert proxy.invocations[0].method == "debug.StartDebugReplay"
@@ -341,34 +341,38 @@ class _FakeAccountClient:
     def __init__(self) -> None:
         self.saved = {}
         self.updates = []
-        self.wallet_updates = []
+        self.portfolio_updates = []
         self.events = []
 
-    def get_online_account_info(self, account_id: int, user_id: int):
+    def get_portfolio_snapshot(self, account_id: int, user_id: int):
         assert account_id == 10
         assert user_id == 7
-        return _build_wallet_proto(
-            environment=0,
-            margin_mode="cross",
-            position_mode="one_way",
-            wallet_balance=10_000.0,
-            available_balance=None,
-            initial_balance=10_000.0,
-            deposit_sum=0.0,
-            withdrawal_sum=0.0,
-            futures_positions=[
-                {
-                    "symbol": "ETHUSDT",
-                    "position_qty": 0.0,
-                    "entry_price": 0.0,
-                    "mark_price": 100.0,
-                    "leverage": 10.0,
-                    "margin_mode": "cross",
-                },
-            ],
-            spot_assets=None,
-            spot_free=0.0,
-            spot_locked=0.0,
+        return account_service_pb2.PortfolioSnapshot(
+            account_id=account_id,
+            user_id=user_id,
+            wallet=_build_wallet_proto(
+                environment=0,
+                margin_mode="cross",
+                position_mode="one_way",
+                wallet_balance=10_000.0,
+                available_balance=None,
+                initial_balance=10_000.0,
+                deposit_sum=0.0,
+                withdrawal_sum=0.0,
+                futures_positions=[
+                    {
+                        "symbol": "ETHUSDT",
+                        "position_qty": 0.0,
+                        "entry_price": 0.0,
+                        "mark_price": 100.0,
+                        "leverage": 10.0,
+                        "margin_mode": "cross",
+                    },
+                ],
+                spot_assets=None,
+                spot_free=0.0,
+                spot_locked=0.0,
+            ),
         )
 
     def require_save_session(self, **kwargs):
@@ -380,9 +384,9 @@ class _FakeAccountClient:
         self.events.append(("session", kwargs.get("status")))
         return True
 
-    def update_account_wallet_state(self, *args, **kwargs):
-        self.wallet_updates.append((args, kwargs))
-        self.events.append(("wallet", kwargs.get("snapshot_reason")))
+    def update_portfolio_snapshot(self, **kwargs):
+        self.portfolio_updates.append(kwargs)
+        self.events.append(("portfolio", kwargs.get("snapshot_reason")))
         return None
 
 

@@ -71,7 +71,7 @@ def _strict_unrealized_pnl(fw: Any) -> float:
 
 
 def proto_to_account_spec(wallet_proto: Any) -> CanonicalAccountState:
-    """Convert a legacy/admin-only wallet proto into canonical wallet state."""
+    """Convert a core-service wallet proto into canonical wallet state."""
     fw = wallet_proto.futures if wallet_proto.futures else None
     sw = wallet_proto.spot if wallet_proto.spot else None
 

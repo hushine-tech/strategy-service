@@ -17,15 +17,7 @@ from typing import Any, Optional
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct
 
-from strategy_service.account_client import (
-    _compute_total_value,
-    _exchange_enum,
-    _get_available_balance,
-    _get_wallet_balance,
-    _market_enum,
-    _serialize_future_wallet,
-    _serialize_spot_wallet,
-)
+from strategy_service.account_client import _exchange_enum, _market_enum
 from strategy_service.order_client import OrderClient, _market_time_to_proto
 from strategy_service.types import ExecutionFeedback, OrderDecision
 
@@ -84,29 +76,6 @@ class RuntimeChannelPlatformProxy:
 class ProxyAccountClient:
     def __init__(self, proxy: RuntimeChannelPlatformProxy) -> None:
         self._proxy = proxy
-
-    def get_online_account_info(self, account_id: int, user_id: int):
-        """Legacy/admin-only helper. Normal Phase 3 sessions use get_portfolio_snapshot."""
-        try:
-            from strategy_service.gen import account_service_pb2
-
-            resp = self._proxy.invoke(
-                "account.GetOnlineAccountInfo",  # legacy/admin-only platform RPC
-                account_service_pb2.GetOnlineAccountInfoRequest(  # legacy/admin-only
-                    account_id=int(account_id),
-                    user_id=int(user_id),
-                ),
-                account_service_pb2.GetOnlineAccountInfoResponse,  # legacy/admin-only
-            )
-            return resp.wallet
-        except Exception:
-            logger.warning(
-                "Proxy GetOnlineAccountInfo failed for account_id=%s user_id=%s",
-                account_id,
-                user_id,
-                exc_info=True,
-            )
-            return None
 
     def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
         try:
@@ -330,46 +299,6 @@ class ProxyAccountClient:
     def require_running_sessions(self, runtime_id: str = ""):
         del runtime_id
         raise RuntimeError("self-hosted runtime recovery must be coordinated by control-panel")
-
-    def update_account_wallet_state(
-        self,
-        account_id: int,
-        future_wallet: Optional[Any] = None,
-        spot_wallet: Optional[Any] = None,
-        snapshot_reason: int = 0,
-        strategy_id: int = 0,
-        session_id: str = "",
-        snapshot_time: object | None = None,
-    ):
-        """Persist strategy-computed wallet state for backtest sessions."""
-        try:
-            from strategy_service.gen import account_service_pb2
-
-            kwargs = {
-                "account_id": int(account_id),
-                "futures": _serialize_future_wallet(future_wallet) if future_wallet else None,
-                "spot": _serialize_spot_wallet(spot_wallet) if spot_wallet else None,
-                "total_value": _compute_total_value(future_wallet, spot_wallet),
-                "wallet_balance": _get_wallet_balance(future_wallet),
-                "available_balance": _get_available_balance(future_wallet),
-                "snapshot_reason": int(snapshot_reason),
-                "strategy_id": int(strategy_id),
-                "session_id": str(session_id or ""),
-            }
-            snapshot_time_pb = _market_time_to_proto(snapshot_time)
-            if snapshot_time_pb is not None:
-                kwargs["snapshot_time"] = snapshot_time_pb
-            req = account_service_pb2.UpdateAccountWalletStateRequest(**kwargs)
-            resp = self._proxy.invoke(
-                "account.UpdateAccountWalletState",
-                req,
-                account_service_pb2.UpdateAccountWalletStateResponse,
-            )
-            return resp.wallet
-        except Exception:
-            logger.warning("Proxy UpdateAccountWalletState failed for account_id=%s", account_id, exc_info=True)
-            return None
-
 
 class ProxyMarketDataClient:
     def __init__(self, proxy: RuntimeChannelPlatformProxy) -> None:

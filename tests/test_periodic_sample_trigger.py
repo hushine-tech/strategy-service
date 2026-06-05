@@ -77,28 +77,6 @@ class _RecordingAccountClient:
         if self._fail:
             raise RuntimeError("simulated transport failure")
 
-    def update_account_wallet_state(
-        self,
-        account_id: int,
-        future_wallet: Any | None = None,
-        spot_wallet: Any | None = None,
-        snapshot_reason: int = 0,
-        strategy_id: int = 0,
-        session_id: str = "",
-    ) -> None:
-        self.calls.append({
-            "kind": "wallet",
-            "account_id": account_id,
-            "future_wallet": future_wallet,
-            "spot_wallet": spot_wallet,
-            "snapshot_reason": snapshot_reason,
-            "strategy_id": strategy_id,
-            "session_id": session_id,
-        })
-        if self._fail:
-            raise RuntimeError("simulated transport failure")
-
-
 class _FakeClock:
     """Injectable monotonic clock for deterministic idle-threshold testing."""
 
@@ -185,10 +163,10 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
     # Exactly one PeriodicSample push.
     assert len(account_client.calls) == 1
     call = account_client.calls[0]
-    assert call["kind"] == "wallet"
+    assert call["kind"] == "portfolio"
     assert call["snapshot_reason"] == SNAPSHOT_REASON_PERIODIC_SAMPLE
     assert call["account_id"] == 101
-    assert call["future_wallet"] is not None
+    assert call["user_id"] == 17
     assert call["strategy_id"] == 202
     assert call["session_id"] == "sess-test"
 
@@ -268,10 +246,6 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
 
         def update_portfolio_snapshot(self, **kwargs):
             snapshot_calls.append(("portfolio_sync", kwargs.get("snapshot_reason")))
-
-        def update_account_wallet_state(self, *args, **kwargs):
-            del args, kwargs
-            raise AssertionError("normal Phase 3 run must not call UpdateAccountWalletState")
 
         def update_session(self, **_kwargs) -> bool:
             return True
@@ -353,10 +327,6 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
 
         def update_portfolio_snapshot(self, **kwargs):
             snapshot_calls.append(("portfolio_sync", kwargs.get("snapshot_reason")))
-
-        def update_account_wallet_state(self, *args, **kwargs):
-            del args, kwargs
-            raise AssertionError("normal Phase 3 run must not call UpdateAccountWalletState")
 
         def update_session(self, **_kwargs) -> bool:
             return True

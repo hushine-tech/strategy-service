@@ -23,9 +23,14 @@ class DebugControlServer:
         self.socket_path = socket_path
         self._replay_handler = replay_handler
         self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._startup_error: OSError | None = None
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
+        self._stop.clear()
+        self._ready.clear()
+        self._startup_error = None
         Path(self.socket_path).parent.mkdir(parents=True, exist_ok=True)
         try:
             os.unlink(self.socket_path)
@@ -33,6 +38,10 @@ class DebugControlServer:
             pass
         self._thread = threading.Thread(target=self._serve, name="hushine-debug-control", daemon=True)
         self._thread.start()
+        if not self._ready.wait(timeout=1.0):
+            raise RuntimeError(f"debug control socket did not start: {self.socket_path}")
+        if self._startup_error is not None:
+            raise RuntimeError(f"debug control socket failed to start: {self._startup_error}") from self._startup_error
 
     def stop(self) -> None:
         self._stop.set()
@@ -43,8 +52,14 @@ class DebugControlServer:
 
     def _serve(self) -> None:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
-            server.bind(self.socket_path)
-            server.listen(4)
+            try:
+                server.bind(self.socket_path)
+                server.listen(4)
+            except OSError as exc:
+                self._startup_error = exc
+                self._ready.set()
+                return
+            self._ready.set()
             server.settimeout(0.2)
             while not self._stop.is_set():
                 try:

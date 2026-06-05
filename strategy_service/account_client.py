@@ -63,31 +63,6 @@ class AccountClient:
             logger.warning("AccountClient: failed to connect to %s", self._address, exc_info=True)
             self._stub = None
 
-    def get_online_account_info(self, account_id: int, user_id: int):
-        """Legacy/admin-only helper.
-
-        Normal Phase 3 strategy sessions use ``get_portfolio_snapshot``.
-        """
-        if not self._stub:
-            return None
-        try:
-            from strategy_service.gen import account_service_pb2
-
-            req = account_service_pb2.GetOnlineAccountInfoRequest(  # legacy/admin-only
-                account_id=int(account_id),
-                user_id=int(user_id),
-            )
-            resp = self._stub.GetOnlineAccountInfo(req)  # legacy/admin-only
-            return resp.wallet
-        except Exception:
-            logger.warning(
-                "GetOnlineAccountInfo failed for account_id=%s user_id=%s",
-                account_id,
-                user_id,
-                exc_info=True,
-            )
-            return None
-
     def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
         """Fetch the account portfolio snapshot from core-service."""
         if not self._stub:
@@ -334,47 +309,6 @@ class AccountClient:
     # Phase D2: get_market_data_stream_status / create_or_renew_market_data_lease /
     # release_market_data_lease moved to MarketDataClient (control-panel-service).
     # See strategy_service/marketdata_client.py.
-
-    def update_account_wallet_state(
-        self,
-        account_id: int,
-        future_wallet: Optional[Any] = None,
-        spot_wallet: Optional[Any] = None,
-        snapshot_reason: int = 0,
-        strategy_id: int = 0,
-        session_id: str = "",
-        snapshot_time: object | None = None,
-    ):
-        """Persist strategy-computed wallet state for backtest sessions.
-
-        snapshot_reason: 0=no snapshot, 1=order_fill, 2=strategy_start, 3=strategy_end, etc.
-        """
-        if not self._stub:
-            return None
-        try:
-            from strategy_service.gen import account_service_pb2
-
-            kwargs = {
-                "account_id": int(account_id),
-                "futures": _serialize_future_wallet(future_wallet) if future_wallet else None,
-                "spot": _serialize_spot_wallet(spot_wallet) if spot_wallet else None,
-                "total_value": _compute_total_value(future_wallet, spot_wallet),
-                "wallet_balance": _get_wallet_balance(future_wallet),
-                "available_balance": _get_available_balance(future_wallet),
-                "snapshot_reason": int(snapshot_reason),
-                "strategy_id": int(strategy_id),
-                "session_id": str(session_id or ""),
-            }
-            snapshot_time_pb = _market_time_to_proto(snapshot_time)
-            if snapshot_time_pb is not None:
-                kwargs["snapshot_time"] = snapshot_time_pb
-            req = account_service_pb2.UpdateAccountWalletStateRequest(**kwargs)  # legacy/admin-only
-            resp = self._stub.UpdateAccountWalletState(req)  # legacy/admin-only
-            return resp.wallet
-        except Exception:
-            logger.warning("UpdateAccountWalletState failed for account_id=%s", account_id, exc_info=True)
-            return None
-
 
 def _exchange_enum(exchange: str) -> int:
     key = str(exchange or "").strip().lower()

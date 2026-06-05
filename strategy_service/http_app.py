@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 
 from market_data.config import TimescaleConfig
 
-from strategy_service.account_client import AccountClient
 from strategy_service.data_loop import BacktestDataLoop
 from strategy_service.order_client import OrderClient
 from strategy_service.service import StrategyEngine
@@ -179,16 +178,6 @@ def create_app() -> Any:
             if symbol_type == Market.PERPETUAL_FUTURES and not wallet.futures.positions:
                 raise ValueError("account.futures.positions must define at least one futures slot")
 
-            # --- legacy/admin-only FastAPI wrapper integration (optional) ---
-            client = AccountClient(req.account_service_address)
-            if req.account_id:
-                info = client.get_online_account_info(req.account_id, req.user_id)  # legacy/admin-only
-                if info is not None:
-                    logger.info(
-                        "core-service calibration: account_id=%s environment=%s futures.wallet_balance=%.4f",
-                        req.account_id, info.environment, info.futures.wallet_balance if info.futures else 0.0,
-                    )
-
             order_client = OrderClient(req.order_service_address)
 
             engine = StrategyEngine()
@@ -204,17 +193,6 @@ def create_app() -> Any:
                 order_client=order_client,
                 account_id=req.account_id,
             )
-
-            # Register post-order callback to sync wallet to core-service
-            if req.account_id:
-                _aid = req.account_id
-
-                def _on_order_sync(_aid=_aid) -> None:
-                    client.update_account_wallet_state(  # legacy/admin-only FastAPI wrapper
-                        _aid, wallet.futures, wallet.spot,
-                    )
-                user_strategy.on_order_callback = _on_order_sync
-
             ts = req.timescale.model_dump() if req.timescale else {}
             config = TimescaleConfig.from_dict(ts) if ts else TimescaleConfig()
             loop = BacktestDataLoop(service=engine, config=config)

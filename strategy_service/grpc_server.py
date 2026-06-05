@@ -135,30 +135,6 @@ def _periodic_sample_max_idle_seconds(request: Any) -> float:
     return t if t > 0 else float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS)
 
 
-def _wallet_parts_for_account_sync(wallet: Any) -> tuple[Any | None, Any | None]:
-    futures_wallet = None
-    spot_wallet = None
-    if isinstance(wallet, PortfolioWalletRuntime):
-        for (_exchange, market, _venue_id), route_wallet in wallet.wallets.items():
-            if market == "spot" and spot_wallet is None:
-                spot_wallet = getattr(route_wallet, "spot", None)
-            elif market in {"perpetual_futures", "delivery_futures"} and futures_wallet is None:
-                futures_wallet = getattr(route_wallet, "futures", None)
-        return futures_wallet, spot_wallet if _spot_wallet_has_state(spot_wallet) else None
-    spot_wallet = getattr(wallet, "spot", None)
-    return getattr(wallet, "futures", None), spot_wallet if _spot_wallet_has_state(spot_wallet) else None
-
-
-def _spot_wallet_has_state(spot_wallet: Any) -> bool:
-    if spot_wallet is None:
-        return False
-    if float(getattr(spot_wallet, "free", 0.0) or 0.0) != 0.0:
-        return True
-    if float(getattr(spot_wallet, "locked", 0.0) or 0.0) != 0.0:
-        return True
-    return bool(getattr(spot_wallet, "assets", {}) or {})
-
-
 def _sync_strategy_snapshot(
     account_client: Any,
     *,
@@ -171,22 +147,16 @@ def _sync_strategy_snapshot(
     session_id: str,
     snapshot_time: object | None = None,
 ) -> Any:
+    del environment, wallet
     kwargs = {
         "account_id": account_id,
         "snapshot_reason": snapshot_reason,
         "strategy_id": strategy_id,
         "session_id": session_id,
+        "user_id": user_id,
     }
     if _snapshot_time_present(snapshot_time):
         kwargs["snapshot_time"] = snapshot_time
-    if int(environment) in {0, 1}:
-        future_wallet, spot_wallet = _wallet_parts_for_account_sync(wallet)
-        kwargs["future_wallet"] = future_wallet
-        kwargs["spot_wallet"] = spot_wallet
-        return account_client.update_account_wallet_state(
-            **kwargs,
-        )
-    kwargs["user_id"] = user_id
     return account_client.update_portfolio_snapshot(
         **kwargs,
     )
