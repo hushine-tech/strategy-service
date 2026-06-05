@@ -9,11 +9,12 @@ from strategy_service import (
     OrderResponse,
     OrderUpdateEvent,
     OrderUpdateFill,
-    StrategyService,
+    StrategyEngine,
 )
 from strategy_service.strategy.base import _load_strategy_instance
 from strategy_service.wallet import SpotAsset
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from tests.helpers.order_client import FilledOrderClient
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
@@ -139,7 +140,6 @@ def _inline(body: str, *, symbol: str = "TESTUSDT", market: str = "perpetual_fut
         "from strategy_service.types import OrderDecision as _OrderDecision\n"
         "\n"
         "def OrderDecision(symbol, side, qty, price=None, market=None, exchange=None, order_type=None, **kwargs):\n"
-        "    mapped_side = {\"LONG\": \"BUY\", \"SHORT\": \"SELL\"}.get(str(side).upper(), str(side).upper())\n"
         f"    raw_market = market or \"{market}\"\n"
         "    resolved_market = {\"futures\": \"perpetual_futures\"}.get(str(raw_market), str(raw_market))\n"
         "    resolved_order_type = order_type or (\"LIMIT\" if price is not None else \"MARKET\")\n"
@@ -147,7 +147,7 @@ def _inline(body: str, *, symbol: str = "TESTUSDT", market: str = "perpetual_fut
         "        exchange=exchange or \"binance\",\n"
         "        market=resolved_market,\n"
         "        symbol=symbol,\n"
-        "        side=mapped_side,\n"
+        "        side=str(side).upper(),\n"
         "        qty=str(qty),\n"
         "        order_type=resolved_order_type,\n"
         "        price=str(price) if price is not None else None,\n"
@@ -175,21 +175,19 @@ def test_inline_strategy_code_uses_strategy_path_as_python_filename():
     assert strategy.on_market_data.__code__.co_filename == "/workspace/self_hosted_strategy.py"
 
 
-def test_running_strategy_no_signal_does_not_call_on_order(capsys):
+def test_running_strategy_no_signal_does_not_call_on_order():
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "strategies.noop", wallet)
     wallet.on_order = MagicMock(wraps=wallet.on_order)
     svc.running_strategy(_md())
     wallet.on_order.assert_not_called()
-    out = capsys.readouterr().out
-    assert "[Mock Order]" not in out
 
 
-def test_running_strategy_with_signal_calls_on_order_and_prints(capsys):
+def test_running_strategy_with_signal_calls_on_order():
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
-    svc.create_strategy("u1", "strategies.buy_once", wallet)
+    svc = StrategyEngine()
+    svc.create_strategy("u1", "strategies.buy_once", wallet, order_client=FilledOrderClient())
     wallet.on_order = MagicMock(wraps=wallet.on_order)
     svc.running_strategy(_md(price=51_000.0))
     wallet.on_order.assert_called_once()
@@ -202,8 +200,10 @@ def test_running_strategy_with_signal_calls_on_order_and_prints(capsys):
 
 def test_on_order_response_called_when_defined():
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
-    strat = svc.create_strategy("u1", "strategies.buy_with_callback", wallet)
+    svc = StrategyEngine()
+    strat = svc.create_strategy(
+        "u1", "strategies.buy_with_callback", wallet, order_client=FilledOrderClient()
+    )
     svc.running_strategy(_md())
     assert strat._strategy_instance is not None
     assert strat._strategy_instance.last_resp is not None
@@ -260,7 +260,7 @@ def test_multiple_fill_events_are_applied_sequentially_to_wallet():
                 ],
             )
 
-    svc = StrategyService()
+    svc = StrategyEngine()
     strat = svc.create_strategy("u1", "strategies.buy_once", wallet, order_client=FakeOrderClient())
     wallet.on_order = MagicMock(wraps=wallet.on_order)
     strat.on_order_callback = MagicMock()
@@ -324,7 +324,7 @@ def test_order_update_event_updates_wallet_before_callback():
             raise AssertionError("on_order_update return value must not place orders")
 
     client = FakeOrderClient()
-    svc = StrategyService()
+    svc = StrategyEngine()
     strat = svc.create_strategy(
         "u1",
         "/workspace/strategy.py",
@@ -352,7 +352,7 @@ def test_async_order_update_unblocks_symbol_and_triggers_snapshot_callback():
         "        pass\n"
         "    def on_market_data(self, data, wallet):\n"
         "        self.market_calls += 1\n"
-        "        return OrderDecision(symbol=\"TESTUSDT\", side=\"LONG\", qty=0.01, market=\"futures\")\n"
+        "        return OrderDecision(symbol=\"TESTUSDT\", side=\"BUY\", qty=0.01, market=\"futures\")\n"
     )
 
     class FakeOrderClient:
@@ -404,7 +404,7 @@ def test_async_order_update_unblocks_symbol_and_triggers_snapshot_callback():
             )
 
     client = FakeOrderClient()
-    svc = StrategyService()
+    svc = StrategyEngine()
     strat = svc.create_strategy(
         "u1",
         "/workspace/strategy.py",
@@ -430,7 +430,7 @@ def test_async_partial_order_update_keeps_symbol_blocked():
         "    def on_order_update(self, event, wallet):\n"
         "        pass\n"
         "    def on_market_data(self, data, wallet):\n"
-        "        return OrderDecision(symbol=\"TESTUSDT\", side=\"LONG\", qty=0.01, market=\"futures\")\n"
+        "        return OrderDecision(symbol=\"TESTUSDT\", side=\"BUY\", qty=0.01, market=\"futures\")\n"
     )
 
     class FakeOrderClient:
@@ -465,7 +465,7 @@ def test_async_partial_order_update_keeps_symbol_blocked():
             raise AssertionError("blocked symbol should not place a new order")
 
     client = FakeOrderClient()
-    svc = StrategyService()
+    svc = StrategyEngine()
     strat = svc.create_strategy(
         "u1",
         "/workspace/strategy.py",
@@ -518,7 +518,7 @@ def test_order_update_callback_error_does_not_block_market_tick():
                 )
             ]
 
-    svc = StrategyService()
+    svc = StrategyEngine()
     strat = svc.create_strategy(
         "u1",
         "/workspace/strategy.py",
@@ -564,7 +564,7 @@ def test_existing_order_events_seed_cursor_without_replaying_wallet():
                 return [old_event]
             return []
 
-    svc = StrategyService()
+    svc = StrategyEngine()
     strat = svc.create_strategy(
         "u1",
         "/workspace/strategy.py",
@@ -598,7 +598,7 @@ def test_unknown_execution_blocks_same_symbol_from_repeat_orders():
             )
 
     order_client = FakeOrderClient()
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "strategies.buy_once", wallet, order_client=order_client)
 
     svc.running_strategy(_md(price=50_000.0))
@@ -638,7 +638,7 @@ def test_fill_pending_execution_does_not_update_wallet_and_blocks_symbol():
             )
 
     order_client = FakeOrderClient()
-    svc = StrategyService()
+    svc = StrategyEngine()
     strat = svc.create_strategy("u1", "strategies.buy_once", wallet, order_client=order_client)
     wallet.on_order = MagicMock(wraps=wallet.on_order)
     strat.on_order_callback = MagicMock()
@@ -654,7 +654,7 @@ def test_fill_pending_execution_does_not_update_wallet_and_blocks_symbol():
 
 def test_unknown_symbol_market_is_dropped_by_router():
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "strategies.noop", wallet)
     wallet.on_market_data = MagicMock(wraps=wallet.on_market_data)
     # noop declares only TESTUSDT futures 1m; any other key is silently dropped.
@@ -678,7 +678,7 @@ def test_strategy_can_access_wallet_by_exchange_market():
         "        assert futures_wallet is not None\n"
         "        return None\n"
     )
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "<db:wallet_get>", wallet, strategy_code=strategy_code)
 
     svc.running_strategy(_md(symbol="TESTUSDT", market="perpetual_futures", interval="1m"))
@@ -694,7 +694,7 @@ def test_order_decision_requires_declared_exchange_market_symbol():
         "    def on_market_data(self, data, wallet):\n"
         "        return OrderDecision(exchange='okx', market='perpetual_futures', symbol='ETHUSDT', side='BUY', qty='0.1', order_type='MARKET')\n"
     )
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "<db:bad_exchange_target>", wallet, strategy_code=strategy_code)
 
     with pytest.raises(ValueError, match="ORDER_TARGETS"):
@@ -726,7 +726,7 @@ def test_order_decision_inherits_declared_exchange_before_place_order():
             )
 
     order_client = CaptureOrderClient()
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "<db:okx_inherited_exchange>", wallet, strategy_code=strategy_code, order_client=order_client)
 
     svc.running_strategy(_md(symbol="ETHUSDT", market="perpetual_futures", interval="1m", exchange="okx"))
@@ -742,7 +742,7 @@ def test_strategy_declared_symbols_route_even_without_wallet_slot():
         margin_mode="isolated",
         spot_assets=[{"symbol": "USDC", "qty": 1.0, "price": 1.0}],
     ), ("binance", "perpetual_futures"))
-    svc = StrategyService()
+    svc = StrategyEngine()
     strategy_code = _inline(
         body="    def on_market_data(self, data, wallet):\n        return None\n",
         symbol="ETHUSDT",
@@ -766,7 +766,7 @@ def test_same_symbol_different_market_routes_correctly():
     """Strategy declaring both markets → both route to the same instance."""
     wallet = _wallet_with_futures_slot(symbol="BTCUSDT")
     wallet.spot.assets["BTCUSDT"] = SpotAsset()
-    svc = StrategyService()
+    svc = StrategyEngine()
     strategy_code = (
         "class MyStrategy:\n"
         '    INPUTS = [\n'
@@ -792,7 +792,7 @@ def test_same_symbol_different_market_routes_correctly():
 
 def test_user_strategy_uses_preconfigured_spot_slot():
     wallet = _wallet_with_spot_slot()
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "strategies.noop", wallet)
     assert "TESTUSDT" in wallet.spot.assets
 
@@ -801,7 +801,7 @@ def test_import_error_message():
     """Per pre_C3 contract the strategy is loaded during create_strategy —
     so import errors surface there, not on the first tick."""
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
+    svc = StrategyEngine()
     with pytest.raises(ImportError, match="failed to import strategy module"):
         svc.create_strategy("u1", "strategies.does_not_exist_module", wallet)
 
@@ -810,7 +810,7 @@ def test_empty_wallet_can_still_create_strategy():
     """Pre_C3 §2.2: an empty wallet is a valid starting state; strategy creation
     MUST succeed as long as the declaration is valid."""
     wallet = _portfolio_wallet(make_backtest_wallet(margin_mode="isolated"), ("binance", "perpetual_futures"))
-    svc = StrategyService()
+    svc = StrategyEngine()
     strategy_code = _inline(
         body="    def on_market_data(self, data, wallet):\n        return None\n",
     )
@@ -837,8 +837,8 @@ def test_full_flow_mark_then_order_and_open_position():
     wallet.on_market_data = trace_md
     wallet.on_order = trace_oo
 
-    svc = StrategyService()
-    svc.create_strategy("u1", "strategies.buy_once", wallet)
+    svc = StrategyEngine()
+    svc.create_strategy("u1", "strategies.buy_once", wallet, order_client=FilledOrderClient())
     svc.running_strategy(_md(price=51_000.0))
 
     assert events == ["on_market_data", "on_order"]
@@ -851,7 +851,7 @@ def test_full_flow_mark_then_order_and_open_position():
 
 def test_declared_tick_refreshes_mark_price_without_new_order():
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
+    svc = StrategyEngine()
     strategy_code = _inline(
         "    def __init__(self):\n"
         "        self.done = False\n"
@@ -861,7 +861,13 @@ def test_declared_tick_refreshes_mark_price_without_new_order():
         "        self.done = True\n"
         "        return OrderDecision(symbol=data.symbol, side='BUY', qty='0.1')\n"
     )
-    svc.create_strategy("u1", "<db:buy_once_inline>", wallet, strategy_code=strategy_code)
+    svc.create_strategy(
+        "u1",
+        "<db:buy_once_inline>",
+        wallet,
+        order_client=FilledOrderClient(),
+        strategy_code=strategy_code,
+    )
 
     svc.running_strategy(_md(price=50_000.0))
     svc.running_strategy(_md(price=50_100.0))
@@ -874,7 +880,7 @@ def test_declared_tick_refreshes_mark_price_without_new_order():
 
 def test_running_strategy_records_last_market_time():
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
+    svc = StrategyEngine()
     strat = svc.create_strategy("u1", "strategies.noop", wallet)
     ts = datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
 
@@ -885,7 +891,7 @@ def test_running_strategy_records_last_market_time():
 
 def test_futures_short_signal_closes_one_way_position():
     wallet = _wallet_with_futures_slot(symbol="TESTUSDT")
-    svc = StrategyService()
+    svc = StrategyEngine()
     strategy_code = _inline(
         body=(
             "    def __init__(self):\n"
@@ -901,7 +907,13 @@ def test_futures_short_signal_closes_one_way_position():
             "        return None\n"
         ),
     )
-    svc.create_strategy("u1", "<db:test_full_flow>", wallet, strategy_code=strategy_code)
+    svc.create_strategy(
+        "u1",
+        "<db:test_full_flow>",
+        wallet,
+        order_client=FilledOrderClient(),
+        strategy_code=strategy_code,
+    )
 
     svc.running_strategy(MarketData(
         symbol="TESTUSDT",
@@ -930,7 +942,7 @@ def test_futures_short_signal_closes_one_way_position():
 def test_spot_market_buy_updates_spot_wallet_only():
     wallet = _wallet_with_spot_slot()
     wallet.spot.free = 1_000.0
-    svc = StrategyService()
+    svc = StrategyEngine()
     # buy_once declares (futures, TESTUSDT, 1m); for the spot test we use an
     # inline strategy declaring the spot input.
     strategy_code = _inline(
@@ -940,7 +952,13 @@ def test_spot_market_buy_updates_spot_wallet_only():
         ),
         market="spot",
     )
-    svc.create_strategy("u1", "<db:spot_buy>", wallet, strategy_code=strategy_code)
+    svc.create_strategy(
+        "u1",
+        "<db:spot_buy>",
+        wallet,
+        order_client=FilledOrderClient(),
+        strategy_code=strategy_code,
+    )
 
     svc.running_strategy(_md(symbol="TESTUSDT", price=100.0, market="spot"))
 
@@ -957,7 +975,7 @@ def test_futures_open_precheck_uses_available_balance_not_wallet_balance():
     wallet._default_wallet.get_available_balance = MagicMock(return_value=100.0)
     wallet.on_order = MagicMock(wraps=wallet.on_order)
 
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "strategies.buy_once", wallet)
     svc.running_strategy(_md(price=50_000.0))
 
@@ -991,7 +1009,7 @@ def test_limit_order_passes_market_tick_as_mark_price_not_limit_price():
         "        )\n"
     )
 
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy(
         "u1",
         "<db:limit_mark_price>",
@@ -1017,7 +1035,7 @@ def test_spot_sell_precheck_uses_unlocked_qty():
         market="spot",
     )
 
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "<db:sell_locked>", wallet, strategy_code=strategy_code)
     svc.running_strategy(_md(symbol="TESTUSDT", price=100.0, market="spot"))
 
@@ -1029,8 +1047,10 @@ def test_spot_sell_precheck_uses_unlocked_qty():
 def test_order_callbacks_run_after_wallet_update_in_order():
     wallet = _wallet_with_futures_slot()
     events: list[str] = []
-    svc = StrategyService()
-    strat = svc.create_strategy("u1", "strategies.buy_with_callback", wallet)
+    svc = StrategyEngine()
+    strat = svc.create_strategy(
+        "u1", "strategies.buy_with_callback", wallet, order_client=FilledOrderClient()
+    )
 
     _wallet_on_order = wallet.on_order
 
@@ -1063,9 +1083,9 @@ def test_spot_order_callbacks_run_after_wallet_update_in_order():
     wallet = _wallet_with_spot_slot()
     wallet.spot.free = 1_000.0
     events: list[str] = []
-    svc = StrategyService()
+    svc = StrategyEngine()
     # For the spot variant we need a strategy declaring spot TESTUSDT and
-    # emitting LONG (BUY) — reuse buy_with_callback's body but declare spot.
+    # emitting a BUY order — reuse buy_with_callback's body but declare spot.
     strategy_code = _inline(
         body=(
             "    def __init__(self):\n"
@@ -1077,7 +1097,13 @@ def test_spot_order_callbacks_run_after_wallet_update_in_order():
         ),
         market="spot",
     )
-    strat = svc.create_strategy("u1", "<db:spot_buy_with_callback>", wallet, strategy_code=strategy_code)
+    strat = svc.create_strategy(
+        "u1",
+        "<db:spot_buy_with_callback>",
+        wallet,
+        order_client=FilledOrderClient(),
+        strategy_code=strategy_code,
+    )
 
     _wallet_on_order = wallet.on_order
 
@@ -1109,7 +1135,7 @@ def test_spot_order_callbacks_run_after_wallet_update_in_order():
 
 def test_zero_qty_rejected_before_wallet():
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "strategies.zero_qty", wallet)
     wallet.on_order = MagicMock(wraps=wallet.on_order)
     with pytest.raises(ValueError, match="OrderDecision.qty"):
@@ -1119,7 +1145,7 @@ def test_zero_qty_rejected_before_wallet():
 
 def test_invalid_futures_side_rejected_in_hedge_mode():
     wallet = _wallet_with_futures_slot(position_mode="hedge")
-    svc = StrategyService()
+    svc = StrategyEngine()
     svc.create_strategy("u1", "strategies.bad_side", wallet)
     with pytest.raises(ValueError, match="OrderDecision.side"):
         svc.running_strategy(_md())
@@ -1129,7 +1155,7 @@ def test_module_without_mystategy_raises():
     """Strategy code without a MyStrategy class fails at create_strategy time
     (pre_C3 contract: strategy is loaded + validated eagerly)."""
     wallet = _wallet_with_futures_slot()
-    svc = StrategyService()
+    svc = StrategyEngine()
     bad_code = "class NotMyStrategy:\n    pass\n"
     with pytest.raises(AttributeError, match="MyStrategy"):
         svc.create_strategy("u1", "<db:no_mystrategy>", wallet, strategy_code=bad_code)
@@ -1164,7 +1190,7 @@ def test_multi_symbol_routes_to_same_strategy():
         ],
     ), ("binance", "perpetual_futures"))
 
-    svc = StrategyService()
+    svc = StrategyEngine()
     strategy_code = (
         "class MyStrategy:\n"
         '    INPUTS = [\n'

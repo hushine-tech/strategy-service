@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from strategy_service import StrategyService
+from strategy_service import StrategyEngine
 from strategy_service.data_loop import (
     BacktestDataLoop,
     LiveDataLoop,
@@ -12,6 +12,7 @@ from strategy_service.data_loop import (
 )
 from strategy_service.types import Exchange, Market, MarketData
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from tests.helpers.order_client import FilledOrderClient
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
@@ -80,91 +81,13 @@ def test_adapt_kline_optional_fields_are_none():
 # BacktestDataLoop
 # ---------------------------------------------------------------------------
 
-def test_backtest_loop_calls_running_strategy_per_kline():
-    """BacktestDataLoop calls running_strategy once per kline from the source."""
-    from market_data.models import MarketKline
-
-    service = StrategyService()
-    dispatched_mds: list[MarketData] = []
-
-    def counting_run(md: MarketData):
-        dispatched_mds.append(md)
-
-    service.running_strategy = counting_run
-
-    klines = [
-        MarketKline(
-            symbol="BTCUSDT", interval="1m",
-            open_time=1000, close_time=60000,
-            open=49000.0, high=51000.0, low=48000.0,
-            close=50000.0, volume=100.0, timestamp=60000,
-        ),
-        MarketKline(
-            symbol="BTCUSDT", interval="1m",
-            open_time=60000, close_time=120000,
-            open=50000.0, high=52000.0, low=49000.0,
-            close=51000.0, volume=110.0, timestamp=120000,
-        ),
-    ]
-
-    class FakeDataSource:
-        def get_klines(self, symbol, interval, st, et, market="futures"):
-            return iter(klines)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-    loop = BacktestDataLoop(service=service, config=None)
-    with patch("strategy_service.data_loop.BacktestDataSource", return_value=FakeDataSource()):
-        loop.run("BTCUSDT", start_time=0, end_time=200000, interval="1m")
-
-    assert len(dispatched_mds) == 2
-    assert dispatched_mds[0].price == 50000.0
-    assert dispatched_mds[1].price == 51000.0
-
-
-def test_backtest_loop_uses_interval_and_market_params():
-    """BacktestDataLoop passes interval and market through to BacktestDataSource."""
-    from market_data.models import MarketKline
-
-    service = StrategyService()
-    received_args: dict = {}
-
-    def capture_run(md: MarketData):
-        pass
-
-    service.running_strategy = capture_run
-
-    class FakeDataSource:
-        def get_klines(self, symbol, interval, st, et, market="futures"):
-            received_args.update(symbol=symbol, interval=interval, st=st, et=et, market=market)
-            return iter([])
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-    loop = BacktestDataLoop(service=service, config=None)
-    with patch("strategy_service.data_loop.BacktestDataSource", return_value=FakeDataSource()):
-        loop.run("ETHUSDT", start_time=0, end_time=100000, interval="5m", market="spot")
-
-    assert received_args["symbol"] == "ETHUSDT"
-    assert received_args["interval"] == "5m"
-    assert received_args["market"] == "spot"
-
-
 def test_run_declared_iterates_per_declared_interval():
     """pre_C3 gate 2: a strategy declaring BTCUSDT 1m + BTCUSDT 5m must
-    replay BOTH iterators through running_strategy — the legacy
-    single-interval ``run_account`` would have silently dropped one."""
+    replay BOTH iterators through running_strategy; single-interval replay
+    would silently drop one."""
     from market_data.models import MarketKline
 
-    service = StrategyService()
+    service = StrategyEngine()
     seen: list[tuple[str, int, float]] = []
 
     def capture(md):
@@ -220,7 +143,7 @@ def test_run_declared_accepts_strategyinput_like_objects():
     pass declared_inputs straight through without re-serialising."""
     from market_data.models import MarketKline
 
-    service = StrategyService()
+    service = StrategyEngine()
     service.running_strategy = MagicMock()
 
     class DuckInput:
@@ -255,7 +178,7 @@ def test_run_declared_accepts_strategyinput_like_objects():
 def test_run_declared_queries_futures_storage_but_dispatches_canonical_market():
     from market_data.models import MarketKline
 
-    service = StrategyService()
+    service = StrategyEngine()
     dispatched: list[MarketData] = []
     received_markets: list[str] = []
 
@@ -329,7 +252,7 @@ def _portfolio_wallet(default_wallet, *routes: tuple[str, str]) -> PortfolioWall
 
 def test_live_loop_start_calls_live_start():
     """LiveDataLoop.start() calls LiveDataSource.start()."""
-    service = StrategyService()
+    service = StrategyEngine()
     service.running_strategy = MagicMock()
 
     loop = LiveDataLoop(service=service, config=None, now_ms_fn=lambda: 60_000)
@@ -341,7 +264,7 @@ def test_live_loop_start_calls_live_start():
 
 def test_live_loop_stop_calls_live_stop():
     """LiveDataLoop.stop() calls LiveDataSource.stop()."""
-    service = StrategyService()
+    service = StrategyEngine()
     service.running_strategy = MagicMock()
 
     loop = LiveDataLoop(service=service, config=None, now_ms_fn=lambda: 60_000)
@@ -356,7 +279,7 @@ def test_live_loop_callback_adapts_and_dispatches():
     """LiveDataLoop's internal callback converts MarketKline and calls running_strategy."""
     from market_data.models import MarketKline
 
-    service = StrategyService()
+    service = StrategyEngine()
     dispatched: list[MarketData] = []
 
     def collect(md: MarketData):
@@ -385,7 +308,7 @@ def test_live_loop_callback_adapts_and_dispatches():
 def test_live_loop_can_dispatch_canonical_market_for_storage_market():
     from market_data.models import MarketKline
 
-    service = StrategyService()
+    service = StrategyEngine()
     dispatched: list[MarketData] = []
     service.running_strategy = dispatched.append
 
@@ -424,7 +347,7 @@ def test_live_loop_callback_replays_spot_kline_into_spot_strategy():
     from market_data.models import MarketKline
 
     wallet = _wallet_with_spot_slot(symbol="BTCUSDT", spot_free=1_000.0)
-    service = StrategyService()
+    service = StrategyEngine()
     strategy_code = (
         "from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType\n"
         "\n"
@@ -439,6 +362,7 @@ def test_live_loop_callback_replays_spot_kline_into_spot_strategy():
         "u1",
         "<db:spot_live_replay>",
         _portfolio_wallet(wallet, (Exchange.BINANCE, Market.SPOT)),
+        order_client=FilledOrderClient(),
         strategy_code=strategy_code,
     )
 
@@ -463,7 +387,7 @@ def test_live_loop_calls_unroutable_callback_when_route_misses():
     """LiveDataLoop should surface unroutable live traffic for diagnostics."""
     from market_data.models import MarketKline
 
-    service = StrategyService()
+    service = StrategyEngine()
     seen: list[MarketKline] = []
     service.running_strategy = lambda _md: False
 
@@ -485,7 +409,7 @@ def test_live_loop_drops_stale_kline_older_than_60_seconds():
     """Live stream guard: pushed klines older than 60s are discarded."""
     from market_data.models import MarketKline
 
-    service = StrategyService()
+    service = StrategyEngine()
     service.running_strategy = MagicMock()
     seen: list[MarketKline] = []
 
@@ -513,7 +437,7 @@ def test_live_loop_drops_stale_kline_older_than_60_seconds():
 def test_live_loop_accepts_kline_within_60_seconds():
     from market_data.models import MarketKline
 
-    service = StrategyService()
+    service = StrategyEngine()
     service.running_strategy = MagicMock(return_value=True)
 
     loop = LiveDataLoop(

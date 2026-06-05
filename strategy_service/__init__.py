@@ -1,6 +1,5 @@
-from strategy_service.service import StrategyEngine, StrategyService
+from strategy_service.service import StrategyEngine
 from strategy_service.strategy.base import BaseStrategy
-from strategy_service.strategy.user import UserStrategy
 from strategy_service.types import (
     ExecutionFeedback,
     MarketData,
@@ -22,9 +21,7 @@ __all__ = [
     "OrderUpdateEvent",
     "OrderUpdateFill",
     "StrategyEngine",
-    "StrategyService",
     "TimescaleConfig",
-    "UserStrategy",
 ]
 
 

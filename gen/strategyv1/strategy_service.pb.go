@@ -334,14 +334,13 @@ func (x *GetStrategyStatusResponse) GetError() string {
 }
 
 type StopStrategyRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	SessionId      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	ClosePositions bool                   `protobuf:"varint,2,opt,name=close_positions,json=closePositions,proto3" json:"close_positions,omitempty"` // legacy compatibility only
-	StopAction     StopAction             `protobuf:"varint,3,opt,name=stop_action,json=stopAction,proto3,enum=strategy.v1.StopAction" json:"stop_action,omitempty"`
-	UserId         int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	RuntimeId      string                 `protobuf:"bytes,101,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	StopAction    StopAction             `protobuf:"varint,3,opt,name=stop_action,json=stopAction,proto3,enum=strategy.v1.StopAction" json:"stop_action,omitempty"`
+	UserId        int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RuntimeId     string                 `protobuf:"bytes,101,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StopStrategyRequest) Reset() {
@@ -379,13 +378,6 @@ func (x *StopStrategyRequest) GetSessionId() string {
 		return x.SessionId
 	}
 	return ""
-}
-
-func (x *StopStrategyRequest) GetClosePositions() bool {
-	if x != nil {
-		return x.ClosePositions
-	}
-	return false
 }
 
 func (x *StopStrategyRequest) GetStopAction() StopAction {
@@ -1440,11 +1432,10 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x19GetStrategyStatusResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12%\n" +
 	"\x0ebars_processed\x18\x02 \x01(\x05R\rbarsProcessed\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\xcf\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xa6\x01\n" +
 	"\x13StopStrategyRequest\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12'\n" +
-	"\x0fclose_positions\x18\x02 \x01(\bR\x0eclosePositions\x128\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x128\n" +
 	"\vstop_action\x18\x03 \x01(\x0e2\x17.strategy.v1.StopActionR\n" +
 	"stopAction\x12\x17\n" +
 	"\auser_id\x18d \x01(\x03R\x06userId\x12\x1d\n" +

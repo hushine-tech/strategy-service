@@ -51,7 +51,7 @@ SpotAsset（现货标的）
 SpotWallet
 ├── on_market_data(symbol, price)
 ├── on_order(symbol, order_resp)   # 统一订单回调入口
-├── on_fill(symbol, side, qty, fill_price, fee=0)  # 兼容包装
+├── on_fill(symbol, side, qty, fill_price, fee=0)  # 直接 fill 辅助入口
 ├── get_unrealized_pnl()
 └── get_estimated_value()
 ```
@@ -90,9 +90,9 @@ spot    → SpotWallet.on_market_data → 更新 assets[symbol].price
 非 FILLED → 直接返回
 
 futures → FutureWallet.on_order
-          1. Position.open_position（LONG/BUY=+1，SHORT/SELL=-1）
+          1. Position.open_position（BUY=+1，SELL=-1；hedge 方向由 position_side 表示）
           2. 同上 _compute_* 钩子（默认空实现）
-spot    → SpotWallet.on_order（内部按 order_resp.fee 结算；BUY/LONG 扣减 free 增加仓位；SELL/SHORT 减仓增加 free）
+spot    → SpotWallet.on_order（内部按 order_resp.fee 结算；BUY 扣减 free 增加仓位；SELL 减仓增加 free）
 ```
 
 ---
@@ -162,7 +162,7 @@ account.futures.get_liquidation_price("BTCUSDT")  # 全仓爆仓价
 @dataclass
 class OrderResponse:
     symbol: str
-    side: str       # LONG/SHORT/BUY/SELL
+    side: str       # BUY/SELL
     qty: float
     fill_price: float
     status: str     # FILLED / REJECTED / CANCELLED

@@ -1,4 +1,4 @@
-"""Demo RSI strategy: LONG when RSI < 30 (oversold), flat otherwise."""
+"""Demo RSI strategy: BUY when RSI < 30 (oversold), flat otherwise."""
 
 from strategy_service.types import MarketData, OrderDecision
 
@@ -8,7 +8,7 @@ class MyStrategy:
     RSI-based strategy.
 
     Maintains a rolling window of close prices.
-    Computes RSI(14) and submits LONG when RSI < 30.
+    Computes RSI(14) and submits BUY when RSI < 30.
     """
 
     INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT", "interval": "1m"}]

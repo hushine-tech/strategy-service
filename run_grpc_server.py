@@ -220,7 +220,7 @@ def _build_caller_token_interceptor(runtime_client, cfg: Config):
 
     Defaults to enforce=True (reject invalid tokens). Operators flip
     to log-only via env `RUNTIME_CALLER_TOKEN_ENFORCE=0` during rollout
-    while quant-handler is still on the legacy direct-dial path.
+    while quant-handler is still allowed to call a standalone runtime directly.
     """
     if runtime_client is None or runtime_client.identity is None:
         return None

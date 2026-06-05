@@ -73,7 +73,6 @@ enum StopAction {
 
 message StopStrategyRequest {
   string session_id = 1;
-  bool close_positions = 2;  // legacy compatibility only
   StopAction stop_action = 3;
   int64 user_id = 100;
   string runtime_id = 101;

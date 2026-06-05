@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from strategy_service import StrategyService
+from strategy_service import StrategyEngine
 from strategy_service.inputs import (
     InputView,
     StrategyDeclarationError,
@@ -22,6 +22,7 @@ from strategy_service.types import (
     PositionSide,
 )
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from tests.helpers.order_client import FilledOrderClient
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
@@ -258,7 +259,7 @@ def test_view_keys_expose_declared_structure():
 
 
 def test_router_binds_only_to_declared_inputs_even_on_empty_wallet():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market
 
@@ -276,7 +277,7 @@ class MyStrategy:
 
 
 def test_router_drops_undeclared_ticks_silently():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market
 
@@ -295,7 +296,7 @@ class MyStrategy:
 
 
 def test_declared_input_routes_without_wallet_position():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market
 
@@ -314,7 +315,7 @@ class MyStrategy:
 
 
 def test_multi_symbol_same_market_both_route():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market
 
@@ -340,7 +341,7 @@ class MyStrategy:
 
 
 def test_mixed_spot_and_perpetual_futures_both_route():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market
 
@@ -363,7 +364,7 @@ class MyStrategy:
 
 
 def test_multiple_intervals_same_symbol_route_independently():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market
 
@@ -388,7 +389,7 @@ class MyStrategy:
 
 
 def test_multi_interval_view_indexes_each_interval_separately():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market
 
@@ -415,21 +416,21 @@ class MyStrategy:
 
 
 def test_create_strategy_without_inputs_fails_fast():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = "class MyStrategy:\n    ORDER_TARGETS = []\n    def on_market_data(self, data, wallet):\n        return None\n"
     with pytest.raises(StrategyDeclarationError, match="at least one stream"):
         svc.create_strategy("u1", "<db:no_inputs>", _empty_wallet(), strategy_code=code)
 
 
 def test_create_strategy_with_empty_inputs_fails_fast():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = "class MyStrategy:\n    INPUTS = []\n    ORDER_TARGETS = []\n    def on_market_data(self, data, wallet):\n        return None\n"
     with pytest.raises(StrategyDeclarationError, match="at least one stream"):
         svc.create_strategy("u1", "<db:empty_inputs>", _empty_wallet(), strategy_code=code)
 
 
 def test_create_strategy_with_invalid_market_fails_fast():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = (
         "class MyStrategy:\n"
         '    INPUTS = [{"exchange": "binance", "market": "margin", "symbol": "BTCUSDT", "interval": "1m"}]\n'
@@ -458,7 +459,7 @@ def test_order_guard_rejects_undeclared_symbol():
             },
         ],
     )
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType, PositionSide
 
@@ -480,7 +481,7 @@ def test_order_guard_rejects_undeclared_market():
         spot_assets=[{"symbol": "TESTUSDT", "qty": 100.0, "price": 1.0}],
         spot_free=1_000.0,
     )
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType
 
@@ -512,7 +513,7 @@ def test_order_guard_allows_declared_orders():
             },
         ],
     )
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType, PositionSide
 
@@ -522,13 +523,19 @@ class MyStrategy:
     def on_market_data(self, data, wallet):
         return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="TESTUSDT", side=OrderSide.BUY, qty="0.1", order_type=OrderType.MARKET, position_side=PositionSide.BOTH)
 """
-    svc.create_strategy("u1", "<db:declared_ok>", _portfolio_wallet(raw_wallet), strategy_code=code)
+    svc.create_strategy(
+        "u1",
+        "<db:declared_ok>",
+        _portfolio_wallet(raw_wallet),
+        order_client=FilledOrderClient(),
+        strategy_code=code,
+    )
     svc.running_strategy(_md("TESTUSDT", Market.PERPETUAL_FUTURES, "1m", price=100.0))
     assert raw_wallet.futures.positions[("TESTUSDT", 0)].net_qty == pytest.approx(0.1)
 
 
 def test_order_guard_rejects_signal_market_override_outside_targets():
-    svc = StrategyService()
+    svc = StrategyEngine()
     code = """
 from strategy_service.types import Exchange, Market, OrderDecision, OrderSide, OrderType
 

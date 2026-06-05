@@ -1705,7 +1705,7 @@ def test_stop_strategy_hides_other_users_session():
     context = _FakeContext()
 
     resp = servicer.StopStrategy(
-        SimpleNamespace(session_id=session_id, user_id=99, close_positions=False),
+        SimpleNamespace(session_id=session_id, user_id=99),
         context,
     )
 
@@ -1812,7 +1812,6 @@ def test_stop_strategy_stop_only_persists_state_and_halts_runtime(monkeypatch):
             session_id=session_id,
             user_id=17,
             stop_action=pb2.STOP_ACTION_STOP_ONLY,
-            close_positions=False,
         ),
         context,
     )
@@ -1861,7 +1860,6 @@ def test_stop_strategy_persists_runtime_guard(monkeypatch):
             user_id=17,
             runtime_id="rt-owned",
             stop_action=pb2.STOP_ACTION_STOP_ONLY,
-            close_positions=False,
         ),
         context,
     )
@@ -1935,7 +1933,6 @@ def test_stop_strategy_finish_persists_finished_and_halts_runtime(monkeypatch):
             session_id=session_id,
             user_id=17,
             stop_action=pb2.STOP_ACTION_FINISH,
-            close_positions=False,
         ),
         context,
     )
@@ -2012,7 +2009,7 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             assert decision.market == "perpetual_futures"
             assert market == "perpetual_futures"
             assert decision.symbol == "ETHUSDT"
-            assert decision.side == "SHORT"
+            assert decision.side == "SELL"
             assert abs(float(decision.qty) - 0.02) < 1e-12
             return OrderResponse(
                 symbol=account_symbol or decision.symbol,
@@ -2036,7 +2033,6 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             session_id=session_id,
             user_id=17,
             stop_action=pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS,
-            close_positions=True,
         ),
         context,
     )
@@ -2094,7 +2090,6 @@ def test_stop_strategy_stop_and_close_mode2_fails_closed_for_spot_exit(monkeypat
             session_id=session_id,
             user_id=17,
             stop_action=pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS,
-            close_positions=True,
         ),
         context,
     )

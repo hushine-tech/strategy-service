@@ -180,7 +180,6 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
     engine.running_strategy(_fake_md(100))
     assert len(account_client.calls) == 2
 
-
 def test_periodic_sample_fires_after_idle_threshold_with_few_bars():
     """environment=1 path: 3 bars but 6 minutes elapse → trigger fires on the bar after the idle trip."""
     servicer = _make_servicer()
@@ -398,39 +397,3 @@ def test_periodic_sample_push_failure_does_not_interrupt_strategy():
     assert len(original_calls) == 40
     # Push attempted twice (once per 20-bar window, counter reset on failure).
     assert len(account_client.calls) == 2
-
-
-def test_periodic_sample_config_defaults_when_request_unset():
-    """When request has no reconcile fields, defaults kick in."""
-    req = SimpleNamespace()
-    from strategy_service.grpc_server import (
-        _periodic_sample_every_bars,
-        _periodic_sample_max_idle_seconds,
-    )
-
-    assert _periodic_sample_every_bars(req) == DEFAULT_PERIODIC_SAMPLE_EVERY_BARS
-    assert _periodic_sample_max_idle_seconds(req) == float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS)
-
-
-def test_periodic_sample_config_defaults_when_request_zero():
-    """When request sets reconcile fields to 0 (proto default), defaults still kick in."""
-    req = SimpleNamespace(reconcile_every_n_bars=0, reconcile_max_idle_seconds=0)
-    from strategy_service.grpc_server import (
-        _periodic_sample_every_bars,
-        _periodic_sample_max_idle_seconds,
-    )
-
-    assert _periodic_sample_every_bars(req) == DEFAULT_PERIODIC_SAMPLE_EVERY_BARS
-    assert _periodic_sample_max_idle_seconds(req) == float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS)
-
-
-def test_periodic_sample_config_honors_positive_request_overrides():
-    """When request provides positive values, they override defaults."""
-    req = SimpleNamespace(reconcile_every_n_bars=5, reconcile_max_idle_seconds=30)
-    from strategy_service.grpc_server import (
-        _periodic_sample_every_bars,
-        _periodic_sample_max_idle_seconds,
-    )
-
-    assert _periodic_sample_every_bars(req) == 5
-    assert _periodic_sample_max_idle_seconds(req) == 30.0

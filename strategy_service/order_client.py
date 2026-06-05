@@ -1,4 +1,4 @@
-"""gRPC client for order.v1. Soft dependency: falls back to mock when address is empty."""
+"""gRPC client for order.v1."""
 
 from __future__ import annotations
 
@@ -82,8 +82,8 @@ def _market_time_to_proto(value: object | None):
 class OrderClient:
     """Thin wrapper around order.v1 gRPC stubs.
 
-    If *grpc_address* is empty, ``place_order`` falls back to an inline mock so
-    backtest workflows continue to work without the order API running.
+    Order placement must go through core-service/order.v1. Tests may inject a
+    fake stub explicitly, but production code must not synthesize local fills.
     """
 
     def __init__(self, grpc_address: str = "") -> None:
@@ -127,7 +127,7 @@ class OrderClient:
         intent_id: str = "",
         market_time: object | None = None,
     ) -> ExecutionFeedback:
-        """Place an order via order.v1 (or mock if not configured)."""
+        """Place an order via order.v1."""
         symbol = account_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
         effective_market = str(getattr(decision, "market", None) or "").strip()
@@ -142,7 +142,7 @@ class OrderClient:
         position_side_code = self._position_side_code(getattr(decision, "position_side", None))
 
         if not self._stub:
-            return self._mock_fill(decision, mark_price, symbol, effective_market, intent)
+            raise RuntimeError("order.v1 gRPC client is not configured")
 
         try:
             from strategy_service.gen import order_service_pb2
@@ -188,39 +188,16 @@ class OrderClient:
             )
 
     @staticmethod
-    def _mock_fill(decision: OrderDecision, mark_price: float, symbol: str, market: str, intent_id: str) -> ExecutionFeedback:
-        fill_price = float(decision.price) if decision.price is not None else float(mark_price)
-        logger.debug("[Mock Order] %s %s %s @ %s", decision.side, decision.qty, decision.symbol, fill_price)
-        order_id = uuid.uuid4().hex
-        delta_qty = OrderClient._wallet_qty(decision.qty, decision.side, market)
-        return ExecutionFeedback(
-            intent_id=intent_id,
-            attempt_id=uuid.uuid4().hex,
-            attempt_status="ACCEPTED",
-            order=OrderResponse(
-                symbol=symbol,
-                side=decision.side,
-                qty=delta_qty,
-                fill_price=fill_price,
-                status="FILLED",
-                order_id=order_id,
-                orig_qty=abs(float(decision.qty)),
-                executed_qty=abs(float(decision.qty)),
-                remaining_qty=0.0,
-            ),
-            fill_count=1,
-            delta_qty=delta_qty,
-        )
-
-    @staticmethod
     def _wallet_qty(qty: float, side: str, market: str) -> float:
         q = abs(float(qty))
         if not OrderClient._is_futures_market(market):
             return q
         side_upper = str(side).upper().strip()
-        if side_upper in ("SHORT", "SELL"):
+        if side_upper == "BUY":
+            return q
+        if side_upper == "SELL":
             return -q
-        return q
+        raise ValueError(f"unsupported order side: {side!r}")
 
     @staticmethod
     def _is_futures_market(market: str) -> bool:

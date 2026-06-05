@@ -18,7 +18,7 @@ VERSION="${1:-dev}"
 IMAGE_PREFIX="${IMAGE_PREFIX:-hushine/strategy-runtime}"
 
 EXECUTOR_IMAGE="${IMAGE_PREFIX}:executor-${VERSION}"
-LEGACY_IMAGE="${IMAGE_PREFIX}:${VERSION}"
+DEFAULT_IMAGE="${IMAGE_PREFIX}:${VERSION}"
 
 echo "Building ${EXECUTOR_IMAGE} from ${REPO_ROOT}"
 docker build \
@@ -27,17 +27,17 @@ docker build \
     -t "${EXECUTOR_IMAGE}" \
     -t "${IMAGE_PREFIX}:executor" \
     -t "${IMAGE_PREFIX}:dev" \
-    -t "${LEGACY_IMAGE}" \
+    -t "${DEFAULT_IMAGE}" \
     "${REPO_ROOT}"
 
 echo
 echo "Built:"
 echo "  ${EXECUTOR_IMAGE}"
-echo "  ${LEGACY_IMAGE}  # compatibility tag for existing control-panel configs"
+echo "  ${DEFAULT_IMAGE}  # default tag for existing control-panel configs"
 echo
 echo "Quick-run examples:"
 echo
-echo "  # 1. Boot without registration (legacy direct-dial deployments):"
+echo "  # 1. Boot without registration (standalone direct-GRPC deployments):"
 echo "  docker run --rm -p 50053:50053 ${EXECUTOR_IMAGE}"
 echo
 echo "  # 2. Hosted executor mode is launched by control-panel DockerProvisioner:"

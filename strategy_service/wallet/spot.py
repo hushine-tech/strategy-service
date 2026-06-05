@@ -132,7 +132,7 @@ class SpotWallet:
         if status not in _SUPPORTED_ORDER_STATUSES:
             raise ValueError(f"unsupported spot order status: {status!r}")
         side = str(getattr(order_resp, "side", "") or "").strip().upper()
-        if side not in ("BUY", "SELL", "LONG", "SHORT"):
+        if side not in ("BUY", "SELL"):
             raise ValueError(f"unknown spot order side: {side!r}")
         event_qty = abs(float(getattr(order_resp, "qty", 0.0) or 0.0))
         raw_orig_qty = abs(float(getattr(order_resp, "orig_qty", 0.0) or 0.0))
@@ -226,7 +226,7 @@ class SpotWallet:
         order.locked_base = desired
 
     def _desired_order_lock(self, order: SpotOpenOrder) -> tuple[float, float]:
-        if order.side in ("BUY", "LONG"):
+        if order.side == "BUY":
             return max(0.0, float(order.remaining_qty or 0.0) * float(order.price or 0.0)), 0.0
         return 0.0, max(0.0, float(order.remaining_qty or 0.0))
 
@@ -271,7 +271,7 @@ class SpotWallet:
         asset = self._get_or_create_asset(sym)
         if qty <= 0:
             raise ValueError("fill qty must be > 0")
-        if side in ("BUY", "LONG"):
+        if side == "BUY":
             cost = qty * fill_price + fee
             if self.free + _QTY_EPS < cost:
                 raise ValueError("insufficient spot free balance for buy")
@@ -284,7 +284,7 @@ class SpotWallet:
                 asset.qty += qty
                 asset.avg_entry_price = total_val / asset.qty
             return
-        if side in ("SELL", "SHORT"):
+        if side == "SELL":
             available = asset.qty - asset.locked
             if qty > available + _QTY_EPS:
                 raise ValueError("insufficient spot base available to sell")
@@ -316,7 +316,7 @@ class SpotWallet:
                 )
             else:
                 asset = self._get_or_create_asset(order.symbol)
-                if order.side in ("BUY", "LONG"):
+                if order.side == "BUY":
                     self._apply_buy_fill(asset, fill_delta, fill_price, fee)
                     order.locked_quote = float(existing.locked_quote or 0.0) if existing is not None else 0.0
                     order.locked_quote = max(0.0, order.locked_quote - (fill_delta * fill_price + fee))
@@ -330,7 +330,7 @@ class SpotWallet:
             order.locked_base = float(order.locked_base or 0.0)
 
         desired_quote, desired_base = self._desired_order_lock(order)
-        if order.side in ("BUY", "LONG"):
+        if order.side == "BUY":
             self._sync_quote_lock(order, desired_quote)
         else:
             self._sync_base_lock(order, desired_base)

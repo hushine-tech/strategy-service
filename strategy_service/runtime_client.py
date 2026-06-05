@@ -89,7 +89,7 @@ class ControlPlaneClient:
         """Register this runtime as `source=hosted` and cache the token.
 
         Raises grpc.RpcError on failure; caller decides whether to retry,
-        fail-fast, or fall back to legacy direct-dial mode.
+        fail-fast, or keep running as a standalone direct-gRPC service.
         """
         if bind_user_id <= 0:
             raise ValueError(

@@ -40,9 +40,9 @@ def _sign(value: float) -> int:
 
 def _side_sign(side: str) -> int:
     side_upper = str(side or "").strip().upper()
-    if side_upper in ("BUY", "LONG"):
+    if side_upper == "BUY":
         return 1
-    if side_upper in ("SELL", "SHORT"):
+    if side_upper == "SELL":
         return -1
     raise ValueError(f"unsupported order side: {side!r}")
 

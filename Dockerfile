@@ -45,7 +45,6 @@ COPY strategy-service/strategy_service/ /app/strategy-service/strategy_service/
 COPY strategy-service/strategy_templates/ /app/strategy-service/strategy_templates/
 COPY strategy-service/proto/ /app/strategy-service/proto/
 COPY strategy-service/run_grpc_server.py /app/strategy-service/run_grpc_server.py
-COPY strategy-service/run_http_server.py /app/strategy-service/run_http_server.py
 COPY strategy-service/config.yaml /app/strategy-service/config.yaml
 
 # In the image we recreate the symlink layout the source tree uses so

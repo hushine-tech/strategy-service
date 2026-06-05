@@ -1,11 +1,11 @@
-"""每根 K 线都开多单 0.001 BTC，用于验证 4 步钱包更新流程。"""
+"""每根 K 线都买入 0.001 BTC，用于验证 4 步钱包更新流程。"""
 
 from strategy_service.types import MarketData, OrderDecision
 
 
 class MyStrategy:
     """
-    简化策略：每根 K 线都下一个固定数量的 LONG。
+    简化策略：每根 K 线都下一个固定数量的 BUY。
 
     不做任何技术指标计算，纯粹验证：
     Step 1: wallet.on_market_data  更新 mark_price

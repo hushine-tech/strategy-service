@@ -2,7 +2,7 @@
 
 Verify that when a strategy-runtime is bound to a user_id, RPC requests
 carrying a different user_id get rejected with PermissionDenied. When
-bound_user_id=0 (legacy / unregistered mode) the check is skipped.
+bound_user_id=0 (standalone / unregistered mode) the check is skipped.
 
 The full StrategyServiceServicer __init__ requires a live core-service
 (via _restore_running_sessions); these tests patch that out so we can
@@ -59,10 +59,10 @@ def test_bound_runtime_rejects_mismatching_user_id():
     assert "99" in detail
 
 
-def test_legacy_mode_skips_check():
-    """bound_user_id=0 means the runtime is in legacy mode (no
+def test_unregistered_mode_skips_check():
+    """bound_user_id=0 means the runtime is unregistered (no
     control-panel registration). The check is bypassed so any positive
-    user_id passes — the legacy direct-dial trust model still applies."""
+    user_id passes — the direct gRPC trust model still applies."""
     servicer = _build_servicer(bound_user_id=0)
     ctx = _ctx()
     assert servicer._enforce_user_binding(42, ctx) is True

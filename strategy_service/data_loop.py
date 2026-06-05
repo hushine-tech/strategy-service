@@ -85,40 +85,6 @@ class BacktestDataLoop:
     def config(self) -> Optional[TimescaleConfig]:
         return self._config
 
-    def run(
-        self,
-        symbol: str,
-        start_time: int,
-        end_time: int,
-        interval: str,
-        market: str = "futures",
-        should_stop: Optional[Callable[[], bool]] = None,
-    ) -> None:
-        """Single-symbol replay (backward compatible)."""
-        with BacktestDataSource(self._config) as ds:
-            for kline in ds.get_klines(symbol, interval, start_time, end_time, market=market):
-                if should_stop is not None and should_stop():
-                    break
-                self._service.running_strategy(_adapt_kline(kline, market))
-
-    def run_account(
-        self,
-        symbols_with_market: list[tuple[str, str]],
-        start_time: int,
-        end_time: int,
-        interval: str,
-        should_stop: Optional[Callable[[], bool]] = None,
-    ) -> int:
-        """Legacy single-interval multi-symbol replay (kept for callers that
-        still pass a uniform interval across all symbols).
-
-        For pre_C3 multi-interval strategies, use ``run_declared`` instead —
-        that path honours each declared input's own interval, which a single
-        shared ``interval`` argument cannot represent.
-        """
-        declared = [(market, symbol, interval) for symbol, market in symbols_with_market]
-        return self.run_declared(declared, start_time, end_time, should_stop=should_stop)
-
     def run_declared(
         self,
         declared: list[tuple[str, str, str]] | list[object],

@@ -309,6 +309,20 @@ def test_exchange_and_market_codes_do_not_default_missing_route() -> None:
         OrderClient._market_code(None)
 
 
+def test_place_order_without_order_service_fails_fast() -> None:
+    client = OrderClient("")
+
+    with pytest.raises(RuntimeError, match="order.v1 gRPC client is not configured"):
+        client.place_order(
+            13,
+            _decision(),
+            51000.0,
+            account_symbol="ETHUSDT",
+            market="perpetual_futures",
+            intent_id="intent-missing-client",
+        )
+
+
 def test_order_response_from_update_rejects_missing_market_route() -> None:
     event = OrderUpdateEvent(
         event_id=1,

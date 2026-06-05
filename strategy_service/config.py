@@ -14,7 +14,6 @@ import yaml
 @dataclass
 class ServerConfig:
     grpc_addr: str = "0.0.0.0:50053"
-    http_addr: str = ":8000"
 
 
 @dataclass
@@ -119,7 +118,6 @@ class Config:
         if isinstance(data.get("server"), dict):
             s = data["server"]
             cfg.server.grpc_addr = s.get("grpc_addr", cfg.server.grpc_addr)
-            cfg.server.http_addr = s.get("http_addr", cfg.server.http_addr)
         if isinstance(data.get("database"), dict):
             d = data["database"]
             cfg.database.host = d.get("host", cfg.database.host)
@@ -209,9 +207,6 @@ class Config:
         v = os.environ.get("SERVER_GRPC_ADDR") or os.environ.get("GRPC_ADDR")
         if v:
             self.server.grpc_addr = v
-        v = os.environ.get("SERVER_HTTP_ADDR") or os.environ.get("HTTP_ADDR")
-        if v:
-            self.server.http_addr = v
         # Database
         v = os.environ.get("DATABASE_HOST") or os.environ.get("TIMESCALE_HOST")
         if v:
@@ -232,8 +227,6 @@ class Config:
         v = (
             os.environ.get("DEPENDENCIES_CORE_SERVICE_GRPC")
             or os.environ.get("CORE_SERVICE_GRPC_ADDR")
-            or os.environ.get("DEPENDENCIES_ACCOUNT_SERVICE_GRPC")
-            or os.environ.get("ACCOUNT_SERVICE_GRPC_ADDR")
         )
         if v:
             self.dependencies.account_service_grpc = v

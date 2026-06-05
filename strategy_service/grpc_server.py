@@ -100,41 +100,6 @@ class _StopOrder:
     mark_price: float
 
 
-def _periodic_sample_every_bars(request: Any) -> int:
-    """Return bar-count threshold, falling back to default when not configured or <=0.
-
-    Extension hook — NOT yet reachable from a real gRPC client.
-    `reconcile_every_n_bars` is NOT currently a field on `RunStrategyRequest`
-    in `proto/strategy_service.proto`, so for real traffic this always falls
-    through to `DEFAULT_PERIODIC_SAMPLE_EVERY_BARS`. The authoritative source
-    of truth for thresholds is `core-service`'s `reconciliation.*` config
-    (see `core-service/internal/config/config.go` → `ReconciliationConfig`).
-    The hook stays so a future proto extension (per-session override) can
-    light up without touching this code path, and so unit tests can inject
-    test doubles via SimpleNamespace.
-    """
-    n = getattr(request, "reconcile_every_n_bars", 0) or 0
-    try:
-        n = int(n)
-    except (TypeError, ValueError):
-        n = 0
-    return n if n > 0 else DEFAULT_PERIODIC_SAMPLE_EVERY_BARS
-
-
-def _periodic_sample_max_idle_seconds(request: Any) -> float:
-    """Return wall-clock idle threshold, falling back to default when not configured or <=0.
-
-    Extension hook — see ``_periodic_sample_every_bars`` for the proto-field
-    gap explanation. Real clients always get `DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS`.
-    """
-    t = getattr(request, "reconcile_max_idle_seconds", 0) or 0
-    try:
-        t = float(t)
-    except (TypeError, ValueError):
-        t = 0.0
-    return t if t > 0 else float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS)
-
-
 def _sync_strategy_snapshot(
     account_client: Any,
     *,
@@ -233,8 +198,6 @@ def _resolve_stop_action(request: Any) -> int:
     action = int(getattr(request, "stop_action", pb2.STOP_ACTION_UNSPECIFIED) or pb2.STOP_ACTION_UNSPECIFIED)
     if action != pb2.STOP_ACTION_UNSPECIFIED:
         return action
-    if bool(getattr(request, "close_positions", False)):
-        return pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS
     return pb2.STOP_ACTION_STOP_ONLY
 
 
@@ -444,9 +407,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         rejected. Caller MUST return immediately on False.
         """
         if self._bound_user_id <= 0:
-            # Legacy / unregistered runtime — control-plane attestation is
+            # Unregistered standalone runtime — control-plane attestation is
             # absent so cross-check has no anchor. Accept and rely on
-            # the legacy direct-dial trust model.
+            # the direct gRPC trust model.
             return True
         if int(request_user_id) != self._bound_user_id:
             context.set_code(grpc.StatusCode.PERMISSION_DENIED)
@@ -895,8 +858,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     session_id=session_id,
                     wallet=wallet,
                     account_client=acct_client,
-                    every_n_bars=_periodic_sample_every_bars(request),
-                    max_idle_seconds=_periodic_sample_max_idle_seconds(request),
+                    every_n_bars=DEFAULT_PERIODIC_SAMPLE_EVERY_BARS,
+                    max_idle_seconds=float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS),
                 )
 
             if environment == 0:
@@ -1735,7 +1698,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     symbol = str(getattr(pos, "symbol", "") or "").strip().upper()
                     if not symbol:
                         return [], "stop_and_close_failed:invalid_futures_symbol"
-                    side = "SHORT" if float(getattr(pos, "position_qty", 0.0) or 0.0) > 0 else "LONG"
+                    side = "SELL" if float(getattr(pos, "position_qty", 0.0) or 0.0) > 0 else "BUY"
                     mark_price = float(
                         getattr(pos, "mark_price", 0.0)
                         or getattr(pos, "entry_price", 0.0)

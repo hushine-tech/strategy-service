@@ -5,7 +5,6 @@ from strategy_service.wallet.runtime import WalletRuntime
 from strategy_service.notification import StrategyNotifier
 from strategy_service.order_client import OrderClient
 from strategy_service.strategy.base import BaseStrategy
-from strategy_service.strategy.user import UserStrategy
 from strategy_service.types import MarketData
 from strategy_service.inputs import _normalize_exchange, _normalize_market
 
@@ -34,8 +33,8 @@ class StrategyEngine:
         session_id: str = "",
         strategy_code: str | None = None,
         notifier: StrategyNotifier | None = None,
-    ) -> UserStrategy:
-        user_strategy = UserStrategy(
+    ) -> BaseStrategy:
+        user_strategy = BaseStrategy(
             strategy_path,
             wallet,
             order_client=order_client,
@@ -63,8 +62,4 @@ class StrategyEngine:
         strategy.running_strategy(market_data)
         return True
 
-
-# Backward-compatible alias
-StrategyService = StrategyEngine
-
-__all__ = ["StrategyEngine", "StrategyService"]
+__all__ = ["StrategyEngine"]

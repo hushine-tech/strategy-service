@@ -1,6 +1,5 @@
 server:
   grpc_addr: "0.0.0.0:50053"
-  http_addr: ":8000"
 
 database:
   host: "192.168.88.10"
@@ -14,15 +13,15 @@ dependencies:
   order_service_grpc: "127.0.0.1:50051"
   # Phase D1 — control-panel-service. Set when running as a hosted
   # strategy-runtime that should self-register on startup; leave empty
-  # in legacy / non-D1 deployments.
+  # when running as a standalone local gRPC service.
   control_panel_service_grpc: ""
 
-# Legacy inbound strategy-runtime self-registration (off by default).
+# Hosted strategy-runtime self-registration (off by default).
 # When register_with_control_panel=true, on startup the service calls
 # RegisterRuntime(source="hosted", bind_user_id, ...) against
 # control-panel-service and runs a heartbeat loop in the background.
 runtime:
-  # inbound = legacy/local direct gRPC behavior (default);
+  # inbound = standalone/local direct gRPC behavior (default);
   # outbound = RuntimeChannel only for hosted/self-hosted containers; both = dev/test.
   # Outbound mode is the runtime isolation boundary: direct
   # core-service, order API, Kafka, and database dependencies from this
@@ -35,7 +34,7 @@ runtime:
   runtime_id: ""              # empty → control panel generates one
   name: ""
   bind_user_id: 0             # required when register_with_control_panel=true
-  endpoint_host: ""           # legacy inbound advertised host; unused in outbound
+  endpoint_host: ""           # inbound advertised host; unused in outbound
   grpc_port: 50053
   debug_port: 0
   capabilities: ["strategy", "spot", "futures"]
