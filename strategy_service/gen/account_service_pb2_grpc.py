@@ -120,6 +120,11 @@ class AccountServiceStub(object):
                 request_serializer=account__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
                 response_deserializer=account__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
                 _registered_method=True)
+        self.UpdateAccountWalletState = channel.unary_unary(
+                '/account.v1.AccountService/UpdateAccountWalletState',
+                request_serializer=account__service__pb2.UpdateAccountWalletStateRequest.SerializeToString,
+                response_deserializer=account__service__pb2.UpdateAccountWalletStateResponse.FromString,
+                _registered_method=True)
         self.ListSymbols = channel.unary_unary(
                 '/account.v1.AccountService/ListSymbols',
                 request_serializer=account__service__pb2.ListSymbolsRequest.SerializeToString,
@@ -371,6 +376,15 @@ class AccountServiceServicer(object):
     def UpdatePortfolioSnapshot(self, request, context):
         """Refresh and persist the current portfolio snapshot. Exchange-backed
         accounts read from active venues; backtest accounts read local state.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateAccountWalletState(self, request, context):
+        """Push strategy-computed wallet state for snapshot/audit sync.
+        Backtest accounts persist it as authoritative local state; exchange-backed
+        accounts use it as the local side of reconciliation.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -662,6 +676,11 @@ def add_AccountServiceServicer_to_server(servicer, server):
                     servicer.UpdatePortfolioSnapshot,
                     request_deserializer=account__service__pb2.UpdatePortfolioSnapshotRequest.FromString,
                     response_serializer=account__service__pb2.UpdatePortfolioSnapshotResponse.SerializeToString,
+            ),
+            'UpdateAccountWalletState': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateAccountWalletState,
+                    request_deserializer=account__service__pb2.UpdateAccountWalletStateRequest.FromString,
+                    response_serializer=account__service__pb2.UpdateAccountWalletStateResponse.SerializeToString,
             ),
             'ListSymbols': grpc.unary_unary_rpc_method_handler(
                     servicer.ListSymbols,
@@ -1259,6 +1278,33 @@ class AccountService(object):
             '/account.v1.AccountService/UpdatePortfolioSnapshot',
             account__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
             account__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdateAccountWalletState(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/UpdateAccountWalletState',
+            account__service__pb2.UpdateAccountWalletStateRequest.SerializeToString,
+            account__service__pb2.UpdateAccountWalletStateResponse.FromString,
             options,
             channel_credentials,
             insecure,

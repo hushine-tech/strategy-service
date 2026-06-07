@@ -112,19 +112,54 @@ def _sync_strategy_snapshot(
     session_id: str,
     snapshot_time: object | None = None,
 ) -> Any:
-    del environment, wallet
     kwargs = {
         "account_id": account_id,
         "snapshot_reason": snapshot_reason,
         "strategy_id": strategy_id,
         "session_id": session_id,
-        "user_id": user_id,
     }
     if _snapshot_time_present(snapshot_time):
         kwargs["snapshot_time"] = snapshot_time
-    return account_client.update_portfolio_snapshot(
+    future_wallet, spot_wallet = _wallet_parts_for_account_sync(wallet)
+    kwargs["user_id"] = user_id
+    kwargs["future_wallet"] = future_wallet
+    kwargs["spot_wallet"] = spot_wallet
+    result = account_client.update_account_wallet_state(
         **kwargs,
     )
+    if result is None:
+        raise RuntimeError(
+            f"UpdateAccountWalletState returned no response for account_id={account_id} session_id={session_id}"
+        )
+    return result
+
+
+def _force_session_failed(state: SessionState, error: str) -> None:
+    state.force_failed(error)
+
+
+def _wallet_parts_for_account_sync(wallet: Any) -> tuple[Any | None, Any | None]:
+    futures_wallet = None
+    spot_wallet = None
+    if isinstance(wallet, PortfolioWalletRuntime):
+        for (_exchange, market, _venue_id), route_wallet in wallet.wallets.items():
+            if market == "spot" and spot_wallet is None:
+                spot_wallet = getattr(route_wallet, "spot", None)
+            elif market in {"perpetual_futures", "delivery_futures"} and futures_wallet is None:
+                futures_wallet = getattr(route_wallet, "futures", None)
+        return futures_wallet, spot_wallet if _spot_wallet_has_state(spot_wallet) else None
+    spot_wallet = getattr(wallet, "spot", None)
+    return getattr(wallet, "futures", None), spot_wallet if _spot_wallet_has_state(spot_wallet) else None
+
+
+def _spot_wallet_has_state(spot_wallet: Any) -> bool:
+    if spot_wallet is None:
+        return False
+    if float(getattr(spot_wallet, "free", 0.0) or 0.0) != 0.0:
+        return True
+    if float(getattr(spot_wallet, "locked", 0.0) or 0.0) != 0.0:
+        return True
+    return bool(getattr(spot_wallet, "assets", {}) or {})
 
 
 def _snapshot_time_present(value: object | None) -> bool:
@@ -665,6 +700,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 snapshot,
                 allowed_routes=required_routes,
             )
+            backtest_restore_wallet = None
+            if environment == 0:
+                backtest_restore_wallet = build_portfolio_wallet_from_snapshot(
+                    snapshot,
+                    allowed_routes=required_routes,
+                )
         except Exception as e:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(f"failed to build wallet: {e}")
@@ -762,18 +803,41 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             self._sessions.discard(session_id)
             return pb2.RunStrategyResponse()
 
-        # 写 strategy_start 组合快照
-        _sync_strategy_snapshot(
-            acct_client,
-            account_id=account_id,
-            user_id=user_id,
-            environment=environment,
-            wallet=wallet,
-            snapshot_reason=SNAPSHOT_REASON_STRATEGY_START,
-            strategy_id=strategy_id,
-            session_id=session_id,
-            snapshot_time=getattr(request, "start_time_ms", None),
-        )
+        # 写 strategy_start 组合快照。启动快照写不进去时直接拒绝启动，
+        # 否则 backtest 会继续产生成交但没有钱包/PnL 审计链路。
+        try:
+            _sync_strategy_snapshot(
+                acct_client,
+                account_id=account_id,
+                user_id=user_id,
+                environment=environment,
+                wallet=wallet,
+                snapshot_reason=SNAPSHOT_REASON_STRATEGY_START,
+                strategy_id=strategy_id,
+                session_id=session_id,
+                snapshot_time=getattr(request, "start_time_ms", None),
+            )
+        except Exception as e:
+            logger.warning("session %s: failed to persist strategy_start snapshot", session_id, exc_info=True)
+            error = f"failed to persist strategy_start snapshot: {e}"
+            state.transition("failed", error=error)
+            try:
+                if not acct_client.update_session(
+                    session_id=session_id,
+                    status=state.status,
+                    bars_processed=state.bars_processed,
+                    error=state.error,
+                    runtime_id=state.runtime_id,
+                ):
+                    logger.warning("session %s: failed to persist startup failure status", session_id)
+            except Exception:
+                logger.warning("session %s: failed to persist startup failure status", session_id, exc_info=True)
+            if environment == 1:
+                self._release_session_market_data_subscriptions(session_id, state)
+            self._sessions.discard(session_id)
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details(error)
+            return pb2.RunStrategyResponse()
 
         # 5. 启动后台线程
         otel_parent_context = _capture_otel_context()
@@ -785,6 +849,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 lambda: self._run_session(
                     session_id, state, request, wallet, environment, account_id, user_id,
                     declared_inputs, strategy_path, strategy_id, strategy_code,
+                    backtest_restore_wallet=backtest_restore_wallet,
                 ),
             )
 
@@ -810,6 +875,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         strategy_path: str,
         strategy_id: int,
         strategy_code: str | None,
+        backtest_restore_wallet: Any | None = None,
     ) -> None:
         user_strategy: Any | None = None
         try:
@@ -882,27 +948,53 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             self._release_session_market_data_subscriptions(session_id, state)
             try:
                 acct_client = self._account_client()
-                _sync_strategy_snapshot(
-                    acct_client,
-                    account_id=account_id,
-                    user_id=user_id,
-                    environment=environment,
-                    wallet=wallet,
-                    snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
-                    strategy_id=strategy_id,
-                    session_id=session_id,
-                    snapshot_time=(
-                        (getattr(user_strategy, "last_market_time", None) if user_strategy is not None else None)
-                        or getattr(request, "end_time_ms", None)
-                    ),
-                )
-                acct_client.update_session(
+                try:
+                    _sync_strategy_snapshot(
+                        acct_client,
+                        account_id=account_id,
+                        user_id=user_id,
+                        environment=environment,
+                        wallet=wallet,
+                        snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
+                        strategy_id=strategy_id,
+                        session_id=session_id,
+                        snapshot_time=(
+                            (getattr(user_strategy, "last_market_time", None) if user_strategy is not None else None)
+                            or getattr(request, "end_time_ms", None)
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning("session %s: failed to persist strategy_end snapshot", session_id, exc_info=True)
+                    _force_session_failed(state, f"failed to persist strategy_end snapshot: {e}")
+                if environment == 0 and backtest_restore_wallet is not None:
+                    try:
+                        # 回测过程中的 wallet 写入只服务本 session 审计；结束后必须
+                        # 恢复启动前账户状态，避免下一次回测继承本次 PnL/仓位。
+                        _sync_strategy_snapshot(
+                            acct_client,
+                            account_id=account_id,
+                            user_id=user_id,
+                            environment=environment,
+                            wallet=backtest_restore_wallet,
+                            snapshot_reason=0,
+                            strategy_id=strategy_id,
+                            session_id=session_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "session %s: failed to restore backtest account wallet state",
+                            session_id,
+                            exc_info=True,
+                        )
+                        _force_session_failed(state, f"failed to restore backtest account wallet state: {e}")
+                if not acct_client.update_session(
                     session_id=session_id,
                     status=state.status,
                     bars_processed=state.bars_processed,
                     error=state.error,
                     runtime_id=state.runtime_id,
-                )
+                ):
+                    logger.warning("session %s: failed to persist final session status", session_id)
                 self._sessions.mark_terminal(session_id)
             except Exception:
                 logger.warning("session %s: failed to finalize", session_id, exc_info=True)

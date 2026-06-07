@@ -69,13 +69,13 @@ def _feed(strat: MyStrategy, view: InputView, price: float, wallet: _StubWallet)
     return strat.on_market_data(view, wallet)
 
 
-def _assert_order(decision: OrderDecision | None, side: str) -> None:
+def _assert_order(decision: OrderDecision | None, side: str, qty: str = "0.1") -> None:
     assert isinstance(decision, OrderDecision)
     assert decision.exchange == Exchange.BINANCE
     assert decision.market == Market.PERPETUAL_FUTURES
     assert decision.symbol == "ZECUSDT"
     assert decision.side == side
-    assert decision.qty == "0.1"
+    assert decision.qty == qty
     assert decision.order_type == OrderType.MARKET
     assert decision.position_side == PositionSide.BOTH
 
@@ -98,62 +98,52 @@ def test_declares_zecusdt_one_minute_futures_input_and_order_target():
     ]
 
 
-def test_two_consecutive_one_minute_rises_buy_from_flat():
+def test_point_one_percent_one_minute_rise_buys_from_flat():
     strat = MyStrategy()
     view = _make_view()
     wallet = _StubWallet(qty=0.0)
 
     assert _feed(strat, view, 100.0, wallet) is None
-    assert _feed(strat, view, 100.6, wallet) is None
-    _assert_order(_feed(strat, view, 101.21, wallet), OrderSide.BUY)
+    _assert_order(_feed(strat, view, 100.1, wallet), OrderSide.BUY)
 
 
-def test_rise_sequence_must_be_consecutive():
+def test_sub_point_one_percent_move_does_not_trade():
     strat = MyStrategy()
     view = _make_view()
     wallet = _StubWallet(qty=0.0)
 
     assert _feed(strat, view, 100.0, wallet) is None
-    assert _feed(strat, view, 100.6, wallet) is None
-    assert _feed(strat, view, 100.8, wallet) is None
-    assert _feed(strat, view, 101.41, wallet) is None
-    _assert_order(_feed(strat, view, 102.02, wallet), OrderSide.BUY)
+    assert _feed(strat, view, 100.09, wallet) is None
 
 
-def test_two_consecutive_one_minute_drops_sell_from_flat():
+def test_point_one_percent_one_minute_drop_sells_from_flat():
     strat = MyStrategy()
     view = _make_view()
     wallet = _StubWallet(qty=0.0)
 
     assert _feed(strat, view, 100.0, wallet) is None
-    assert _feed(strat, view, 99.4, wallet) is None
-    _assert_order(_feed(strat, view, 98.8, wallet), OrderSide.SELL)
+    _assert_order(_feed(strat, view, 99.9, wallet), OrderSide.SELL)
 
 
-def test_down_signal_closes_long_then_opens_short_on_next_bearish_tick():
+def test_each_point_one_percent_wave_resets_reference_and_can_sell_again():
     strat = MyStrategy()
     view = _make_view()
-    wallet = _StubWallet(qty=0.1)
+    wallet = _StubWallet(qty=0.0)
 
     assert _feed(strat, view, 100.0, wallet) is None
-    assert _feed(strat, view, 99.4, wallet) is None
-    _assert_order(_feed(strat, view, 98.8, wallet), OrderSide.SELL)
-
-    wallet.set_qty(0.0)
-    _assert_order(_feed(strat, view, 98.2, wallet), OrderSide.SELL)
+    _assert_order(_feed(strat, view, 99.9, wallet), OrderSide.SELL)
+    assert _feed(strat, view, 99.81, wallet) is None
+    _assert_order(_feed(strat, view, 99.8001, wallet), OrderSide.SELL)
 
 
-def test_up_signal_closes_short_then_opens_long_on_next_bullish_tick():
+def test_same_direction_signal_places_another_order_for_reconciliation_samples():
     strat = MyStrategy()
     view = _make_view()
-    wallet = _StubWallet(qty=-0.1)
+    wallet = _StubWallet(qty=0.2)
 
     assert _feed(strat, view, 100.0, wallet) is None
-    assert _feed(strat, view, 100.6, wallet) is None
-    _assert_order(_feed(strat, view, 101.21, wallet), OrderSide.BUY)
-
-    wallet.set_qty(0.0)
-    _assert_order(_feed(strat, view, 101.82, wallet), OrderSide.BUY)
+    _assert_order(_feed(strat, view, 100.1, wallet), OrderSide.BUY)
+    _assert_order(_feed(strat, view, 100.2001, wallet), OrderSide.BUY)
 
 
 def test_non_zecusdt_input_is_ignored_by_declared_view():

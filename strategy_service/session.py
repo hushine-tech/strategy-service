@@ -65,6 +65,15 @@ class SessionState:
                 self.error = error
             return True
 
+    def force_failed(self, error: str) -> None:
+        """Mark the session failed even after a terminal runtime transition."""
+        with self._lock:
+            if self.status not in {"failed", "stop_failed", "recoverable"}:
+                self.status = "failed"
+                self.error = error
+            elif not self.error:
+                self.error = error
+
     def is_active(self) -> bool:
         with self._lock:
             return self.status in _ACTIVE_STATUSES

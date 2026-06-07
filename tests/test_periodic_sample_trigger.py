@@ -58,21 +58,27 @@ class _RecordingAccountClient:
         self.calls: list[dict[str, Any]] = []
         self._fail = fail
 
-    def update_portfolio_snapshot(
+    def update_account_wallet_state(
         self,
         account_id: int,
         user_id: int = 0,
+        future_wallet: Any | None = None,
+        spot_wallet: Any | None = None,
         snapshot_reason: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
+        snapshot_time: object | None = None,
     ) -> None:
         self.calls.append({
-            "kind": "portfolio",
+            "kind": "wallet",
             "account_id": account_id,
             "user_id": user_id,
+            "future_wallet": future_wallet,
+            "spot_wallet": spot_wallet,
             "snapshot_reason": snapshot_reason,
             "strategy_id": strategy_id,
             "session_id": session_id,
+            "snapshot_time": snapshot_time,
         })
         if self._fail:
             raise RuntimeError("simulated transport failure")
@@ -163,7 +169,7 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
     # Exactly one PeriodicSample push.
     assert len(account_client.calls) == 1
     call = account_client.calls[0]
-    assert call["kind"] == "portfolio"
+    assert call["kind"] == "wallet"
     assert call["snapshot_reason"] == SNAPSHOT_REASON_PERIODIC_SAMPLE
     assert call["account_id"] == 101
     assert call["user_id"] == 17
@@ -243,8 +249,8 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_portfolio_snapshot(self, **kwargs):
-            snapshot_calls.append(("portfolio_sync", kwargs.get("snapshot_reason")))
+        def update_account_wallet_state(self, **kwargs):
+            snapshot_calls.append(("wallet_sync", kwargs.get("snapshot_reason")))
 
         def update_session(self, **_kwargs) -> bool:
             return True
@@ -324,8 +330,8 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_portfolio_snapshot(self, **kwargs):
-            snapshot_calls.append(("portfolio_sync", kwargs.get("snapshot_reason")))
+        def update_account_wallet_state(self, **kwargs):
+            snapshot_calls.append(("wallet_sync", kwargs.get("snapshot_reason")))
 
         def update_session(self, **_kwargs) -> bool:
             return True

@@ -224,8 +224,8 @@ class BinancePosition:
             self.carry_cost = 0.0
             return
         if self.mark_price is not None:
-            self.notional = abs(self.position_qty) * float(self.mark_price)
-            self.position_initial_margin = self.notional / float(self.leverage or 1.0)
+            self.notional = float(self.position_qty) * float(self.mark_price)
+            self.position_initial_margin = abs(self.notional) / float(self.leverage or 1.0)
         self.initial_margin = float(self.position_initial_margin or 0.0) + float(self.open_order_initial_margin or 0.0)
         self.break_even_price = self._compute_break_even_price()
 

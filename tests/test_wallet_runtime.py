@@ -911,8 +911,12 @@ def test_event_fill_without_prior_mark_uses_fill_price_for_risk_fields():
     assert pos.position_qty == pytest.approx(-0.021)
     assert pos.position_side == "BOTH"
     assert pos.mark_price == pytest.approx(2328.08476)
-    assert pos.position_initial_margin > 0.0
+    assert pos.notional == pytest.approx(-0.021 * 2328.08476)
+    assert pos.position_initial_margin == pytest.approx(abs(pos.notional) / 20.0)
     assert pos.maint_margin >= 0.0
+
+    proto_fw = _serialize_future_wallet(wallet.futures)
+    assert proto_fw.positions[0].notional == pytest.approx(pos.notional)
 
 
 def test_binance_parity_wallet_applies_each_fill_fee_to_wallet_balance():

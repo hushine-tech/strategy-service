@@ -17,7 +17,15 @@ from typing import Any, Optional
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct
 
-from strategy_service.account_client import _exchange_enum, _market_enum
+from strategy_service.account_client import (
+    _compute_total_value,
+    _exchange_enum,
+    _get_available_balance,
+    _get_wallet_balance,
+    _market_enum,
+    _serialize_future_wallet,
+    _serialize_spot_wallet,
+)
 from strategy_service.order_client import OrderClient, _market_time_to_proto
 from strategy_service.types import ExecutionFeedback, OrderDecision
 
@@ -25,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 ACCOUNT_GET_PORTFOLIO = "account.GetPortfolioSnapshot"
-ACCOUNT_UPDATE_PORTFOLIO = "account.UpdatePortfolioSnapshot"
+ACCOUNT_UPDATE_WALLET_STATE = "account.UpdateAccountWalletState"
 ACCOUNT_PREFLIGHT_STRATEGY_SESSION = "account.PreflightStrategySession"
 ACCOUNT_GET_ACTIVE_STRATEGY = "account.GetActiveStrategy"
 ACCOUNT_SAVE_SESSION = "account.SaveSession"
@@ -108,12 +116,34 @@ class ProxyAccountClient:
         session_id: str = "",
         snapshot_time: object | None = None,
     ):
+        del account_id, user_id, snapshot_reason, strategy_id, session_id, snapshot_time
+        raise RuntimeError(
+            "UpdatePortfolioSnapshot is deprecated for runtime sessions; use UpdateAccountWalletState"
+        )
+
+    def update_account_wallet_state(
+        self,
+        account_id: int,
+        user_id: int = 0,
+        future_wallet: Optional[Any] = None,
+        spot_wallet: Optional[Any] = None,
+        snapshot_reason: int = 0,
+        strategy_id: int = 0,
+        session_id: str = "",
+        snapshot_time: object | None = None,
+    ):
+        """Push strategy-computed wallet state for snapshot/audit sync."""
         try:
             from strategy_service.gen import account_service_pb2
 
             kwargs = {
                 "account_id": int(account_id),
                 "user_id": int(user_id),
+                "futures": _serialize_future_wallet(future_wallet) if future_wallet else None,
+                "spot": _serialize_spot_wallet(spot_wallet) if spot_wallet else None,
+                "total_value": _compute_total_value(future_wallet, spot_wallet),
+                "wallet_balance": _get_wallet_balance(future_wallet),
+                "available_balance": _get_available_balance(future_wallet),
                 "snapshot_reason": int(snapshot_reason),
                 "strategy_id": int(strategy_id),
                 "session_id": str(session_id or ""),
@@ -122,19 +152,21 @@ class ProxyAccountClient:
             if snapshot_time_pb is not None:
                 kwargs["snapshot_time"] = snapshot_time_pb
             resp = self._proxy.invoke(
-                ACCOUNT_UPDATE_PORTFOLIO,
-                account_service_pb2.UpdatePortfolioSnapshotRequest(**kwargs),
-                account_service_pb2.UpdatePortfolioSnapshotResponse,
+                ACCOUNT_UPDATE_WALLET_STATE,
+                account_service_pb2.UpdateAccountWalletStateRequest(**kwargs),
+                account_service_pb2.UpdateAccountWalletStateResponse,
             )
-            return resp.snapshot
-        except Exception:
+            return resp.wallet
+        except Exception as exc:
             logger.warning(
-                "Proxy UpdatePortfolioSnapshot failed for account_id=%s user_id=%s",
+                "Proxy UpdateAccountWalletState failed for account_id=%s user_id=%s",
                 account_id,
                 user_id,
                 exc_info=True,
             )
-            return None
+            raise RuntimeError(
+                f"Proxy UpdateAccountWalletState failed for account_id={account_id} user_id={user_id}: {exc}"
+            ) from exc
 
     def preflight_strategy_session(
         self,

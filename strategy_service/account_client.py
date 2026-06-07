@@ -310,6 +310,58 @@ class AccountClient:
     # release_market_data_lease moved to MarketDataClient (control-panel-service).
     # See strategy_service/marketdata_client.py.
 
+    def update_account_wallet_state(
+        self,
+        account_id: int,
+        user_id: int = 0,
+        future_wallet: Optional[Any] = None,
+        spot_wallet: Optional[Any] = None,
+        snapshot_reason: int = 0,
+        strategy_id: int = 0,
+        session_id: str = "",
+        snapshot_time: object | None = None,
+    ):
+        """Push strategy-computed wallet state for snapshot/audit sync.
+
+        Backtest accounts persist this local wallet as authoritative state.
+        Exchange-backed accounts use the payload as the local side of
+        reconciliation while core-service refreshes the exchange snapshot.
+        """
+        if not self._stub:
+            return None
+        try:
+            from strategy_service.gen import account_service_pb2
+
+            kwargs = {
+                "account_id": int(account_id),
+                "user_id": int(user_id),
+                "futures": _serialize_future_wallet(future_wallet) if future_wallet else None,
+                "spot": _serialize_spot_wallet(spot_wallet) if spot_wallet else None,
+                "total_value": _compute_total_value(future_wallet, spot_wallet),
+                "wallet_balance": _get_wallet_balance(future_wallet),
+                "available_balance": _get_available_balance(future_wallet),
+                "snapshot_reason": int(snapshot_reason),
+                "strategy_id": int(strategy_id),
+                "session_id": str(session_id or ""),
+            }
+            snapshot_time_pb = _market_time_to_proto(snapshot_time)
+            if snapshot_time_pb is not None:
+                kwargs["snapshot_time"] = snapshot_time_pb
+            req = account_service_pb2.UpdateAccountWalletStateRequest(**kwargs)
+            resp = self._stub.UpdateAccountWalletState(req)
+            return resp.wallet
+        except Exception as exc:
+            logger.warning(
+                "UpdateAccountWalletState failed for account_id=%s user_id=%s",
+                account_id,
+                user_id,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"UpdateAccountWalletState failed for account_id={account_id} user_id={user_id}: {exc}"
+            ) from exc
+
+
 def _exchange_enum(exchange: str) -> int:
     key = str(exchange or "").strip().lower()
     if key not in _EXCHANGE_ENUMS:

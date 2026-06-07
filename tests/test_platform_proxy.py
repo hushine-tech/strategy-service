@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
 
 from strategy_service.gen import account_service_pb2, marketdata_service_pb2, order_service_pb2
 from strategy_service.platform_proxy import (
     ACCOUNT_PREFLIGHT_STRATEGY_SESSION,
     ACCOUNT_GET_PORTFOLIO,
     ACCOUNT_SAVE_SESSION,
-    ACCOUNT_UPDATE_PORTFOLIO,
+    ACCOUNT_UPDATE_WALLET_STATE,
     LOGS_EMIT,
     MARKETDATA_FETCH_KLINES,
     MARKETDATA_GET_STATUS,
@@ -57,29 +60,81 @@ def test_proxy_account_client_fetches_portfolio_snapshot_over_runtime_channel():
 
 def test_proxy_account_client_updates_portfolio_snapshot_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
-    runtime.responses[ACCOUNT_UPDATE_PORTFOLIO] = account_service_pb2.UpdatePortfolioSnapshotResponse(
-        snapshot=account_service_pb2.PortfolioSnapshot(account_id=7, user_id=3)
-    )
     proxy = RuntimeChannelPlatformProxy(runtime)
 
-    snapshot = proxy.account_client().update_portfolio_snapshot(
+    with pytest.raises(RuntimeError, match="deprecated"):
+        proxy.account_client().update_portfolio_snapshot(
+            account_id=7,
+            user_id=3,
+            snapshot_reason=2,
+            strategy_id=9,
+            session_id="sess-1",
+            snapshot_time=1780274580000,
+        )
+
+    assert runtime.calls == []
+
+
+def test_proxy_account_client_updates_backtest_wallet_state_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ACCOUNT_UPDATE_WALLET_STATE] = account_service_pb2.UpdateAccountWalletStateResponse(
+        wallet=account_service_pb2.AccountWalletState(total_value=1200)
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+    future_wallet = SimpleNamespace(
+        margin_mode="cross",
+        position_mode="one_way",
+        positions={},
+        wallet_balance=1100.0,
+        available_balance=1000.0,
+        margin_balance=1200.0,
+    )
+
+    wallet = proxy.account_client().update_account_wallet_state(
         account_id=7,
         user_id=3,
-        snapshot_reason=2,
+        future_wallet=future_wallet,
+        snapshot_reason=1,
         strategy_id=9,
         session_id="sess-1",
         snapshot_time=1780274580000,
     )
 
     method, req = runtime.calls[-1]
-    assert method == ACCOUNT_UPDATE_PORTFOLIO
+    assert method == ACCOUNT_UPDATE_WALLET_STATE
     assert req.account_id == 7
     assert req.user_id == 3
-    assert req.snapshot_reason == 2
-    assert req.snapshot_time.ToDatetime(tzinfo=timezone.utc) == datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
-    assert req.strategy_id == 9
+    assert req.futures.wallet_balance == 1100.0
+    assert req.total_value == 1200.0
+    assert req.snapshot_reason == 1
     assert req.session_id == "sess-1"
-    assert snapshot.account_id == 7
+    assert wallet.total_value == 1200
+
+
+def test_proxy_account_client_surfaces_wallet_state_update_errors():
+    runtime = _FakeRuntimeChannel()
+    runtime.errors[ACCOUNT_UPDATE_WALLET_STATE] = RuntimeError(
+        "Unavailable: save snapshot: duplicate key"
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+    future_wallet = SimpleNamespace(
+        margin_mode="cross",
+        position_mode="one_way",
+        positions={},
+        wallet_balance=1100.0,
+        available_balance=1000.0,
+        margin_balance=1200.0,
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate key"):
+        proxy.account_client().update_account_wallet_state(
+            account_id=7,
+            user_id=3,
+            future_wallet=future_wallet,
+            snapshot_reason=1,
+            strategy_id=9,
+            session_id="sess-1",
+        )
 
 
 def test_proxy_account_client_preflight_sends_session_metadata_over_runtime_channel():
@@ -293,6 +348,7 @@ def test_runtime_channel_log_handler_skips_proxy_internals():
 class _FakeRuntimeChannel:
     def __init__(self) -> None:
         self.calls = []
+        self.errors = {}
         self.responses = {
             ACCOUNT_SAVE_SESSION: account_service_pb2.SaveSessionResponse(),
             ORDER_PLACE: order_service_pb2.PlaceOrderResponse(),
@@ -302,6 +358,8 @@ class _FakeRuntimeChannel:
     def invoke_platform_unary(self, method, request, response_type, *, timeout_seconds=30.0):
         del timeout_seconds
         self.calls.append((method, request))
+        if method in self.errors:
+            raise self.errors[method]
         resp = self.responses.get(method)
         if resp is None:
             return response_type()

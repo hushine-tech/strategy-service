@@ -390,7 +390,6 @@ def main() -> None:
                 RuntimeChannelPlatformProxy,
                 install_runtime_channel_log_handler,
             )
-            from strategy_service.debug_replay import DebugReplayRunner
 
             credential = load_runtime_credential(cfg.runtime.credential_path or None)
             if servicer is None:
@@ -424,15 +423,6 @@ def main() -> None:
             servicer.set_platform_proxy(platform_proxy)
             if cfg.notification.enabled:
                 servicer.set_notification_client(platform_proxy.notification_client())
-            debug_replay_runner = DebugReplayRunner(
-                agent=runtime_agent,
-                platform_proxy=platform_proxy,
-                workspace_path=os.getenv("HUSHINE_DEBUG_WORKSPACE", "/workspace"),
-            )
-            runtime_agent.start_debug_control_server(
-                socket_path=os.getenv("HUSHINE_DEBUG_SOCKET", "/tmp/hushine-debug.sock"),
-                replay_handler=debug_replay_runner.replay,
-            )
         except Exception as e:  # noqa: BLE001
             logger.error("runtime credential / RuntimeChannel setup failed: %s", e)
             raise SystemExit(1) from e

@@ -52,6 +52,99 @@ def _current_timestamp() -> Timestamp:
     return ts
 
 
+def test_backtest_snapshot_sync_pushes_local_wallet_state():
+    calls: list[dict[str, object]] = []
+    wallet = SimpleNamespace(
+        futures=SimpleNamespace(wallet_balance=1234.5, available_balance=1200.0),
+        spot=None,
+    )
+
+    class FakeAccountClient:
+        def update_account_wallet_state(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace()
+
+        def update_portfolio_snapshot(self, **_kwargs):
+            raise AssertionError("backtest wallet sync must push local wallet state")
+
+    grpc_server._sync_strategy_snapshot(
+        FakeAccountClient(),
+        account_id=407,
+        user_id=17,
+        environment=0,
+        wallet=wallet,
+        snapshot_reason=grpc_server.SNAPSHOT_REASON_EVENT,
+        strategy_id=43,
+        session_id="sess-wallet-sync",
+        snapshot_time=1780274580000,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["account_id"] == 407
+    assert calls[0]["user_id"] == 17
+    assert calls[0]["future_wallet"] is wallet.futures
+    assert calls[0]["snapshot_reason"] == grpc_server.SNAPSHOT_REASON_EVENT
+    assert calls[0]["session_id"] == "sess-wallet-sync"
+
+
+def test_exchange_snapshot_sync_pushes_local_wallet_state_for_reconciliation():
+    calls: list[dict[str, object]] = []
+    wallet = SimpleNamespace(
+        futures=SimpleNamespace(wallet_balance=1234.5, available_balance=1200.0),
+        spot=None,
+    )
+
+    class FakeAccountClient:
+        def update_account_wallet_state(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace()
+
+        def update_portfolio_snapshot(self, **_kwargs):
+            raise AssertionError("exchange wallet sync must include local wallet for reconciliation")
+
+    grpc_server._sync_strategy_snapshot(
+        FakeAccountClient(),
+        account_id=407,
+        user_id=17,
+        environment=1,
+        wallet=wallet,
+        snapshot_reason=grpc_server.SNAPSHOT_REASON_EVENT,
+        strategy_id=43,
+        session_id="sess-wallet-sync",
+        snapshot_time=1780274580000,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["account_id"] == 407
+    assert calls[0]["user_id"] == 17
+    assert calls[0]["future_wallet"] is wallet.futures
+    assert calls[0]["snapshot_reason"] == grpc_server.SNAPSHOT_REASON_EVENT
+    assert calls[0]["session_id"] == "sess-wallet-sync"
+
+
+def test_backtest_snapshot_sync_fails_when_wallet_state_not_persisted():
+    wallet = SimpleNamespace(
+        futures=SimpleNamespace(wallet_balance=1234.5, available_balance=1200.0),
+        spot=None,
+    )
+
+    class FakeAccountClient:
+        def update_account_wallet_state(self, **_kwargs):
+            return None
+
+    with pytest.raises(RuntimeError, match="UpdateAccountWalletState returned no response"):
+        grpc_server._sync_strategy_snapshot(
+            FakeAccountClient(),
+            account_id=407,
+            user_id=17,
+            environment=0,
+            wallet=wallet,
+            snapshot_reason=grpc_server.SNAPSHOT_REASON_EVENT,
+            strategy_id=43,
+            session_id="sess-wallet-sync",
+        )
+
+
 def make_portfolio_snapshot_with_binance_perp_and_spot(
     account_id: int,
     *,
@@ -294,7 +387,7 @@ def test_run_strategy_rejects_wallet_schema_mismatch(monkeypatch):
 
 
 def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
-    calls = {"portfolio": 0, "preflight": 0, "portfolio_update": 0}
+    calls = {"portfolio": 0, "preflight": 0, "wallet_update": 0}
 
     class FakeAccountClient:
         def __init__(self, _addr: str) -> None:
@@ -321,9 +414,9 @@ def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
         def save_session(self, **_kwargs) -> bool:
             return True
 
-        def update_portfolio_snapshot(self, *_args, **_kwargs):
-            calls["portfolio_update"] += 1
-            return None
+        def update_account_wallet_state(self, *_args, **_kwargs):
+            calls["wallet_update"] += 1
+            return SimpleNamespace()
 
     class FakeThread:
         def __init__(self, target=None, args=(), daemon=None) -> None:
@@ -358,12 +451,81 @@ def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
     assert resp.session_id != ""
     assert context.code is None
     assert calls["portfolio"] == 1
-    assert calls["portfolio_update"] == 1
+    assert calls["wallet_update"] == 1
+
+
+def test_run_strategy_fails_start_when_backtest_wallet_sync_is_missing(monkeypatch):
+    calls = {"portfolio": 0, "preflight": 0, "wallet_update": 0, "update_session": []}
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+            calls["portfolio"] += 1
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def preflight_strategy_session(self, **_kwargs):
+            calls["preflight"] += 1
+            return SimpleNamespace(ok=True, issues=[])
+
+        def get_active_strategy(self, _account_id: int):
+            return SimpleNamespace(
+                strategy_id=42,
+                code=_phase3_strategy_code(),
+                name="phase3",
+                version="v1",
+            )
+
+        def save_session(self, **_kwargs) -> bool:
+            return True
+
+        def update_account_wallet_state(self, *_args, **_kwargs):
+            calls["wallet_update"] += 1
+            return None
+
+        def update_session(self, **kwargs) -> bool:
+            calls["update_session"].append(dict(kwargs))
+            return True
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None) -> None:
+            pass
+
+        def start(self) -> None:
+            raise AssertionError("session thread must not start when startup wallet sync fails")
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        market_data_policy={"preflight_enabled": False},
+        runtime_id="rt-test",
+        restore_running_sessions=False,
+    )
+    context = _FakeContext()
+
+    resp = servicer.RunStrategy(SimpleNamespace(
+        account_id=404,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    ), context)
+
+    assert resp.session_id == ""
+    assert context.code == grpc.StatusCode.UNAVAILABLE
+    assert "failed to persist strategy_start snapshot" in context.details
+    assert calls["wallet_update"] == 1
+    assert calls["update_session"][0]["status"] == "failed"
+    assert "UpdateAccountWalletState returned no response" in calls["update_session"][0]["error"]
 
 
 def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
     captured: dict[str, object] = {}
-    portfolio_calls = []
+    wallet_calls = []
 
     class FakeAccountClient:
         def __init__(self, _addr: str) -> None:
@@ -387,9 +549,9 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
         def save_session(self, **_kwargs) -> bool:
             return True
 
-        def update_portfolio_snapshot(self, *_args, **kwargs):
-            portfolio_calls.append(kwargs)
-            return None
+        def update_account_wallet_state(self, *_args, **kwargs):
+            wallet_calls.append(kwargs)
+            return SimpleNamespace()
 
     class FakeThread:
         def __init__(self, target=None, args=(), daemon=None) -> None:
@@ -420,7 +582,7 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
 
     assert resp.session_id != ""
     assert context.code is None
-    assert len(portfolio_calls) == 1
+    assert len(wallet_calls) == 1
     req = captured["preflight"]
     assert set(req["required_routes"]) == {
         ("binance", "perpetual_futures"),
@@ -432,8 +594,8 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
     }
 
 
-def test_run_session_order_callback_updates_portfolio_snapshot(monkeypatch):
-    calls = {"portfolio_update": 0}
+def test_run_session_order_callback_updates_account_wallet_state(monkeypatch):
+    calls = {"wallet_update": 0}
     captured: list[dict[str, object]] = []
     state = SessionState(environment=0, account_id=406, strategy_id=42)
     wallet = make_portfolio_snapshot_with_binance_perp_and_spot(406)
@@ -442,10 +604,10 @@ def test_run_session_order_callback_updates_portfolio_snapshot(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_portfolio_snapshot(self, **kwargs):
-            calls["portfolio_update"] += 1
+        def update_account_wallet_state(self, **kwargs):
+            calls["wallet_update"] += 1
             captured.append(kwargs)
-            return None
+            return SimpleNamespace()
 
         def update_session(self, **_kwargs):
             return True
@@ -495,15 +657,15 @@ def test_run_session_order_callback_updates_portfolio_snapshot(monkeypatch):
         _phase3_strategy_code(),
     )
 
-    assert calls["portfolio_update"] >= 1
+    assert calls["wallet_update"] >= 1
     order_update = next(item for item in captured if item["snapshot_reason"] == 1)
     assert order_update["account_id"] == 406
     assert order_update["strategy_id"] == 42
     assert order_update["session_id"] == "sess-portfolio"
 
 
-def test_backtest_run_persists_portfolio_snapshots(monkeypatch):
-    calls = {"portfolio_update": 0}
+def test_backtest_run_persists_wallet_snapshots(monkeypatch):
+    calls = {"wallet_update": 0}
     state = SessionState(environment=0, account_id=407, strategy_id=43, user_id=17)
     snapshot = make_portfolio_snapshot_with_binance_perp_and_spot(407, user_id=17)
 
@@ -514,12 +676,12 @@ def test_backtest_run_persists_portfolio_snapshots(monkeypatch):
         def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
             return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
 
-        def update_portfolio_snapshot(self, *args, **kwargs):
+        def update_account_wallet_state(self, *args, **kwargs):
             del args
-            calls["portfolio_update"] += 1
+            calls["wallet_update"] += 1
             assert kwargs["account_id"] == 407
             assert kwargs["user_id"] == 17
-            return None
+            return SimpleNamespace()
 
         def update_session(self, **_kwargs):
             return True
@@ -569,7 +731,110 @@ def test_backtest_run_persists_portfolio_snapshots(monkeypatch):
         _phase3_strategy_code(),
     )
 
-    assert calls["portfolio_update"] >= 2
+    assert calls["wallet_update"] >= 2
+
+
+def test_backtest_run_restores_account_wallet_state_after_finish(monkeypatch):
+    wallet_updates: list[dict[str, object]] = []
+    session_updates: list[dict[str, object]] = []
+    created: dict[str, object] = {}
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+            return make_portfolio_snapshot_with_binance_perp_and_spot(account_id, user_id=user_id)
+
+        def preflight_strategy_session(self, **_kwargs):
+            return SimpleNamespace(ok=True, issues=[])
+
+        def get_active_strategy(self, _account_id: int):
+            return SimpleNamespace(
+                strategy_id=43,
+                code=_phase3_strategy_code(),
+                name="phase3",
+                version="v1",
+            )
+
+        def save_session(self, **_kwargs) -> bool:
+            return True
+
+        def update_account_wallet_state(self, **kwargs):
+            future_wallet = kwargs["future_wallet"]
+            wallet_updates.append({
+                "snapshot_reason": kwargs["snapshot_reason"],
+                "wallet_balance": future_wallet.get_wallet_balance(),
+                "session_id": kwargs["session_id"],
+            })
+            return SimpleNamespace()
+
+        def update_session(self, **kwargs):
+            session_updates.append(dict(kwargs))
+            return True
+
+    class FakeStrategy:
+        def __init__(self) -> None:
+            self.on_order_callback = None
+            self.last_market_time = 1780274580000
+
+    fake_strategy = FakeStrategy()
+
+    class FakeEngine:
+        def create_strategy(self, **kwargs):
+            created["wallet"] = kwargs["wallet"]
+            return fake_strategy
+
+    class InlineThread:
+        def __init__(self, target=None, args=(), daemon=None) -> None:
+            del args, daemon
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+    monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
+    monkeypatch.setattr(threading, "Thread", InlineThread)
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        market_data_policy={"preflight_enabled": False},
+        runtime_id="rt-test",
+        restore_running_sessions=False,
+    )
+
+    def fake_run_backtest(*_args, **_kwargs):
+        wallet = created["wallet"]
+        route_wallet = wallet.get("binance", "perpetual_futures")
+        route_wallet.futures.wallet_balance = 777.0
+        route_wallet.futures._refresh_account_fields()
+        state = _args[1]
+        state.transition("finished", bars=3)
+
+    monkeypatch.setattr(servicer, "_run_backtest", fake_run_backtest)
+
+    context = _FakeContext()
+    resp = servicer.RunStrategy(SimpleNamespace(
+        account_id=407,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    ), context)
+
+    assert resp.session_id != ""
+    assert context.code is None
+    assert [item["snapshot_reason"] for item in wallet_updates] == [
+        grpc_server.SNAPSHOT_REASON_STRATEGY_START,
+        grpc_server.SNAPSHOT_REASON_STRATEGY_END,
+        0,
+    ]
+    assert wallet_updates[-2]["wallet_balance"] == pytest.approx(777.0)
+    assert wallet_updates[-1]["wallet_balance"] == pytest.approx(1000.0)
+    assert session_updates[-1]["status"] == "finished"
 
 
 def test_run_strategy_returns_internal_when_session_persist_fails(monkeypatch):
@@ -1042,8 +1307,9 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
             calls["save_session"] += 1
             return True
 
-        def update_portfolio_snapshot(self, *args, **kwargs):
-            return None
+        def update_account_wallet_state(self, *args, **kwargs):
+            del args, kwargs
+            return SimpleNamespace()
 
     class FakeThread:
         def __init__(self, target=None, args=(), daemon=None) -> None:
@@ -1156,8 +1422,9 @@ class MyStrategy:
         def save_session(self, **_kwargs) -> bool:
             return True
 
-        def update_portfolio_snapshot(self, *args, **kwargs):
-            return None
+        def update_account_wallet_state(self, *args, **kwargs):
+            del args, kwargs
+            return SimpleNamespace()
 
     class FakeThread:
         def __init__(self, target=None, args=(), daemon=None) -> None:
@@ -1472,17 +1739,20 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_portfolio_snapshot(
+        def update_account_wallet_state(
             self,
             account_id,
             user_id=0,
+            future_wallet=None,
+            spot_wallet=None,
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
             snapshot_time=None,
         ):
+            del future_wallet, spot_wallet
             events.append((
-                "portfolio_sync",
+                "wallet_sync",
                 snapshot_reason,
                 strategy_id,
                 session_id,
@@ -1490,7 +1760,7 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
                 user_id,
                 snapshot_time,
             ))
-            return None
+            return SimpleNamespace()
 
         def update_session(self, session_id: str, status: str, bars_processed: int = 0, error: str = "", runtime_id: str = "") -> bool:
             events.append(("session_update", status, bars_processed, error, session_id))
@@ -1535,8 +1805,8 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
     )
 
     assert events == [
-        ("portfolio_sync", 1, 202, "sess-backtest", 101, 17, snapshot_time),
-        ("portfolio_sync", 3, 202, "sess-backtest", 101, 17, snapshot_time),
+        ("wallet_sync", 1, 202, "sess-backtest", 101, 17, snapshot_time),
+        ("wallet_sync", 3, 202, "sess-backtest", 101, 17, snapshot_time),
         ("session_update", "finished", 17, "", "sess-backtest"),
     ]
 
@@ -1552,18 +1822,20 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_portfolio_snapshot(
+        def update_account_wallet_state(
             self,
             account_id,
             user_id=0,
+            future_wallet=None,
+            spot_wallet=None,
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
             snapshot_time=None,
         ):
-            del snapshot_time
-            events.append(("portfolio_sync", snapshot_reason, strategy_id, session_id, account_id, user_id))
-            return None
+            del future_wallet, spot_wallet, snapshot_time
+            events.append(("wallet_sync", snapshot_reason, strategy_id, session_id, account_id, user_id))
+            return SimpleNamespace()
 
         def update_session(self, session_id: str, status: str, bars_processed: int = 0, error: str = "", runtime_id: str = "") -> bool:
             events.append(("session_update", status, bars_processed, error, session_id))
@@ -1610,7 +1882,7 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
     )
 
     assert events == [
-        ("portfolio_sync", 3, 404, "sess-live", 303, 17),
+        ("wallet_sync", 3, 404, "sess-live", 303, 17),
         ("session_update", "stopped", 0, "", "sess-live"),
     ]
 
@@ -1626,18 +1898,20 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_portfolio_snapshot(
+        def update_account_wallet_state(
             self,
             account_id,
             user_id=0,
+            future_wallet=None,
+            spot_wallet=None,
             snapshot_reason=0,
             strategy_id=0,
             session_id="",
             snapshot_time=None,
         ):
-            del snapshot_time
-            events.append(("portfolio_sync", snapshot_reason, strategy_id, session_id, account_id, user_id))
-            return None
+            del future_wallet, spot_wallet, snapshot_time
+            events.append(("wallet_sync", snapshot_reason, strategy_id, session_id, account_id, user_id))
+            return SimpleNamespace()
 
         def update_session(self, session_id: str, status: str, bars_processed: int = 0, error: str = "", runtime_id: str = "") -> bool:
             events.append(("session_update", status, bars_processed, error, session_id))
@@ -1679,7 +1953,7 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
     assert state.status == "failed"
     assert state.error == "schema mismatch from downstream feed"
     assert events == [
-        ("portfolio_sync", 3, 606, "sess-failed", 505, 17),
+        ("wallet_sync", 3, 606, "sess-failed", 505, 17),
         ("session_update", "failed", 0, "schema mismatch from downstream feed", "sess-failed"),
     ]
 
@@ -1976,16 +2250,18 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             updates.append((session_id, status, bars_processed, error))
             return True
 
-        def update_portfolio_snapshot(
+        def update_account_wallet_state(
             self,
             account_id: int,
             user_id: int = 0,
+            future_wallet=None,
+            spot_wallet=None,
             snapshot_reason: int = 0,
             strategy_id: int = 0,
             session_id: str = "",
             snapshot_time=None,
         ) -> bool:
-            del snapshot_time
+            del user_id, future_wallet, spot_wallet, strategy_id, snapshot_time
             wallet_syncs.append((account_id, snapshot_reason, session_id))
             return True
 
@@ -2329,6 +2605,7 @@ def _build_servicer_with_faked_preflight_deps(
     calls.setdefault("save_session", 0)
     calls.setdefault("save_kwargs", [])
     calls.setdefault("update_portfolio", 0)
+    calls.setdefault("update_wallet", 0)
 
     class FakeAccountClient:
         def __init__(self, _addr: str) -> None:
@@ -2365,7 +2642,11 @@ def _build_servicer_with_faked_preflight_deps(
 
         def update_portfolio_snapshot(self, *_args, **_kwargs):
             calls["update_portfolio"] += 1
-            return None
+            return SimpleNamespace()
+
+        def update_account_wallet_state(self, *_args, **_kwargs):
+            calls["update_wallet"] += 1
+            return SimpleNamespace()
 
     # Phase D2: GetMarketDataStreamStatus moved out of AccountClient. Default
     # behaviour (no stream) preserved so tests that don't care about D2-specific
