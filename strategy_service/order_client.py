@@ -320,6 +320,8 @@ class OrderClient:
             position_side=POSITION_SIDE_NAMES.get(int(item.position_side), f"position_side:{int(item.position_side)}"),
             event_type=str(item.event_type or ""),
             order_status=str(item.order_status or ""),
+            event_source=str(getattr(item, "event_source", "") or ""),
+            symbol=str((getattr(order_state, "symbol", "") if order_state is not None else "") or (fill.symbol if fill is not None else "") or "").upper(),
             intent_id=str(item.intent_id or ""),
             attempt_id=str(item.attempt_id or ""),
             order_id=str(item.order_id or ""),

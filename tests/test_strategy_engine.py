@@ -483,6 +483,113 @@ def test_async_partial_order_update_keeps_symbol_blocked():
     assert client.place_calls == 0
 
 
+def test_force_close_terminal_event_unblocks_route_without_wallet_settlement():
+    wallet = _wallet_with_futures_slot()
+    wallet.on_order = MagicMock(wraps=wallet.on_order)
+    code = _inline(
+        "    def __init__(self):\n"
+        "        self.events = []\n"
+        "    def on_order_update(self, event, wallet):\n"
+        "        self.events.append(event)\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    class FakeOrderClient:
+        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
+            if limit == 500 or after_event_id >= 7:
+                return []
+            return [
+                OrderUpdateEvent(
+                    event_id=7,
+                    session_id=session_id,
+                    account_id=1,
+                    venue_id=10,
+                    exchange="binance",
+                    market="perpetual_futures",
+                    side="BUY",
+                    position_side="both",
+                    event_type="terminal",
+                    order_status="RECOVERY_EXPIRED",
+                    symbol="TESTUSDT",
+                    order_id="order-expired",
+                    exchange_order_id="ex-expired",
+                    orig_qty=0.1,
+                    executed_qty=0.04,
+                    remaining_qty=0.06,
+                )
+            ]
+
+    svc = StrategyEngine()
+    strat = svc.create_strategy(
+        "u1",
+        "/workspace/strategy.py",
+        wallet,
+        order_client=FakeOrderClient(),
+        session_id="session-1",
+        strategy_code=code,
+    )
+    blocked_key = ("binance", "perpetual_futures", "TESTUSDT")
+    strat._blocked_order_keys.add(blocked_key)
+    before_qty = wallet.futures.positions[("TESTUSDT", 0)].position_qty
+
+    svc.running_strategy(_md(price=50_000.0))
+
+    assert blocked_key not in strat._blocked_order_keys
+    assert wallet.futures.positions[("TESTUSDT", 0)].position_qty == before_qty
+    wallet.on_order.assert_not_called()
+    assert strat._strategy_instance.events[0].order_status == "RECOVERY_EXPIRED"
+
+
+def test_incremental_fill_event_updates_wallet_once():
+    wallet = _wallet_with_futures_slot()
+    code = _inline(
+        "    def on_order_update(self, event, wallet):\n"
+        "        pass\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    event = OrderUpdateEvent(
+        event_id=8,
+        session_id="session-1",
+        account_id=1,
+        venue_id=10,
+        exchange="binance",
+        market="perpetual_futures",
+        side="BUY",
+        position_side="both",
+        event_type="fill",
+        order_status="PARTIALLY_FILLED",
+        order_id="order-once",
+        fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.04, fill_price=50_000.0),
+        orig_qty=0.1,
+        executed_qty=0.04,
+        remaining_qty=0.06,
+    )
+
+    class FakeOrderClient:
+        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
+            if limit == 500 or after_event_id >= 8:
+                return []
+            return [event, event]
+
+    svc = StrategyEngine()
+    strat = svc.create_strategy(
+        "u1",
+        "/workspace/strategy.py",
+        wallet,
+        order_client=FakeOrderClient(),
+        session_id="session-1",
+        strategy_code=code,
+    )
+
+    svc.running_strategy(_md(price=50_000.0))
+
+    assert wallet.futures.positions[("TESTUSDT", 0)].position_qty == pytest.approx(0.04)
+    assert 8 in strat._settled_lifecycle_event_ids
+
+
 def test_order_update_callback_error_does_not_block_market_tick():
     wallet = _wallet_with_futures_slot()
     code = _inline(

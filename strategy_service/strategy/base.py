@@ -26,7 +26,14 @@ from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+_TERMINAL_ORDER_STATUSES = {
+    "FILLED",
+    "CANCELED",
+    "EXPIRED",
+    "REJECTED",
+    "RECOVERY_EXPIRED",
+    "FORCE_CLOSED",
+}
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -438,6 +445,7 @@ class BaseStrategy:
         symbol = str(
             getattr(order_resp, "symbol", "")
             or getattr(getattr(event, "fill", None), "symbol", "")
+            or getattr(event, "symbol", "")
             or ""
         )
         return (

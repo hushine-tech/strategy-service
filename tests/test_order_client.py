@@ -381,6 +381,7 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
                 position_side=0,
                 side="BUY",
                 event_type="fill",
+                event_source="force_close",
                 order_status="FILLED",
                 order_id="order-1",
                 fill_delta=order_service_pb2.FillDeltaEntry(
@@ -407,6 +408,8 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
     assert event.market == "perpetual_futures"
     assert event.position_side == "both"
     assert event.side == "BUY"
+    assert event.event_source == "force_close"
+    assert event.symbol == "ETHUSDT"
     assert event.fill is not None
     assert event.fill.qty == pytest.approx(0.1)
     order_response = OrderClient.order_response_from_update(event)
