@@ -48,6 +48,10 @@ def _decision(
     order_type: str = "MARKET",
     price: str | None = None,
     position_side: str | None = None,
+    time_in_force: str | None = None,
+    post_only: bool = False,
+    good_till_date: object | None = None,
+    reduce_only: bool = False,
 ) -> OrderDecision:
     return OrderDecision(
         exchange=exchange,
@@ -58,6 +62,10 @@ def _decision(
         order_type=order_type,
         price=price,
         position_side=position_side,
+        time_in_force=time_in_force,
+        post_only=post_only,
+        good_till_date=good_till_date,
+        reduce_only=reduce_only,
     )
 
 
@@ -277,7 +285,7 @@ def test_place_order_sends_explicit_venue_route_fields():
     assert feedback.attempt_status == "ACCEPTED"
 
 
-def test_place_order_sends_limit_gtc_when_price_is_set():
+def test_place_order_sends_advanced_order_contract_fields():
     response = order_service_pb2.PlaceOrderResponse(
         intent_id="intent-limit",
         attempt_id="attempt-limit",
@@ -286,10 +294,21 @@ def test_place_order_sends_limit_gtc_when_price_is_set():
     client = OrderClient("")
     stub = _Stub(response)
     client._stub = stub
+    good_till_date = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
     client.place_order(
         13,
-        _decision(symbol="ETHUSDT", side="BUY", qty="0.05", price="50000", order_type="LIMIT"),
+        _decision(
+            symbol="ETHUSDT",
+            side="BUY",
+            qty="0.05",
+            price="50000",
+            order_type="LIMIT",
+            time_in_force="GTD",
+            post_only=True,
+            good_till_date=good_till_date,
+            reduce_only=True,
+        ),
         51000.0,
         account_symbol="ETHUSDT",
         market="perpetual_futures",
@@ -299,7 +318,11 @@ def test_place_order_sends_limit_gtc_when_price_is_set():
     assert stub.last_request is not None
     assert stub.last_request.price == 50000.0
     assert stub.last_request.order_type == "LIMIT"
-    assert stub.last_request.time_in_force == "GTC"
+    assert stub.last_request.time_in_force == "GTD"
+    assert stub.last_request.post_only is True
+    assert stub.last_request.reduce_only is True
+    assert stub.last_request.HasField("good_till_date")
+    assert stub.last_request.good_till_date.ToDatetime(tzinfo=timezone.utc) == good_till_date
 
 
 def test_exchange_and_market_codes_do_not_default_missing_route() -> None:
