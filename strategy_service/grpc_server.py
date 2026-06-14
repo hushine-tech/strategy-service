@@ -25,10 +25,7 @@ except Exception:  # noqa: BLE001
 from strategy_service.gen import strategy_service_pb2 as pb2
 from strategy_service.gen import strategy_service_pb2_grpc as pb2_grpc
 
-from strategy_service.account_client import AccountClient
-from strategy_service.marketdata_client import MarketDataClient
 from strategy_service.notification import StrategyNotifier
-from strategy_service.order_client import OrderClient
 from strategy_service.service import StrategyEngine
 from strategy_service.session import SessionManager, SessionState, StreamBinding
 from strategy_service.inputs import (
@@ -44,7 +41,6 @@ from strategy_service.preflight import (
     RuntimeSourceProfile,
     backtest_preflight,
     check_profile_supported,
-    default_backtest_availability,
     live_stream_preflight,
     _marketdata_market,
     resolve_profile,
@@ -73,7 +69,6 @@ DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
 RESTORE_RUNNING_SESSIONS_RETRIES = 5
 RESTORE_RUNNING_SESSIONS_RETRY_SECONDS = 1.0
-PLATFORM_ACCESS_DIRECT = "direct"
 PLATFORM_ACCESS_PROXY_ONLY = "proxy_only"
 
 
@@ -414,15 +409,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         runtime_id: str = "",
         runtime_source: str = "",
         runtime_name: str = "",
-        platform_access_mode: str = PLATFORM_ACCESS_DIRECT,
+        platform_access_mode: str = PLATFORM_ACCESS_PROXY_ONLY,
         market_data_control_panel_addr: str = "",
         restore_running_sessions: bool = True,
         platform_proxy: Any | None = None,
         notification_client: Any | None = None,
     ) -> None:
         self._account_addr = account_service_addr
-        # Phase D2: market-data control plane lives in control-panel-service.
-        # Empty string ⇒ MarketDataClient runs in noop mode (dev / partial env).
         self._market_data_addr = market_data_control_panel_addr
         self._order_addr = order_service_addr
         self._ts_config = timescale_config
@@ -436,11 +429,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._runtime_id = str(runtime_id or "").strip()
         self._runtime_source = str(runtime_source or "").strip()
         self._runtime_name = str(runtime_name or "").strip()
-        self._platform_access_mode = (
-            PLATFORM_ACCESS_PROXY_ONLY
-            if str(platform_access_mode or "").strip().lower() == PLATFORM_ACCESS_PROXY_ONLY
-            else PLATFORM_ACCESS_DIRECT
-        )
+        if str(platform_access_mode or "").strip().lower() not in ("", PLATFORM_ACCESS_PROXY_ONLY):
+            logger.warning("unsupported platform_access_mode=%s ignored; using RuntimeChannel proxy", platform_access_mode)
+        self._platform_access_mode = PLATFORM_ACCESS_PROXY_ONLY
         self._platform_proxy = platform_proxy
         self._notification_client = notification_client
         self._runtime_data_source = None
@@ -472,25 +463,19 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._runtime_data_source = runtime_data_source
 
     def _account_client(self):
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            if self._platform_proxy is None:
-                raise RuntimeError("self-hosted platform proxy client is not configured")
-            return self._platform_proxy.account_client()
-        return AccountClient(self._account_addr)
+        if self._platform_proxy is None:
+            raise RuntimeError("RuntimeChannel platform proxy client is not configured")
+        return self._platform_proxy.account_client()
 
     def _order_client(self):
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            if self._platform_proxy is None:
-                raise RuntimeError("self-hosted platform proxy client is not configured")
-            return self._platform_proxy.order_client()
-        return OrderClient(self._order_addr)
+        if self._platform_proxy is None:
+            raise RuntimeError("RuntimeChannel platform proxy client is not configured")
+        return self._platform_proxy.order_client()
 
     def _marketdata_client(self):
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            if self._platform_proxy is None:
-                raise RuntimeError("self-hosted platform proxy client is not configured")
-            return self._platform_proxy.marketdata_client()
-        return MarketDataClient(self._market_data_addr)
+        if self._platform_proxy is None:
+            raise RuntimeError("RuntimeChannel platform proxy client is not configured")
+        return self._platform_proxy.marketdata_client()
 
     def _restore_running_sessions(self) -> None:
         if not self._runtime_id:
@@ -561,7 +546,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 orphaned,
             )
 
-    def _list_running_sessions_for_restore(self, acct_client: AccountClient):
+    def _list_running_sessions_for_restore(self, acct_client: Any):
         strict = getattr(acct_client, "require_running_sessions", None)
         if callable(strict):
             return strict(runtime_id=self._runtime_id)
@@ -570,20 +555,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     def _enforce_user_binding(self, request_user_id: int, context) -> bool:
         """Phase D1 section 6.5 cross-check.
 
-        When the runtime is registered with control-panel-service it is
-        bound to a single user (the bind_user_id at registration time).
-        All strategy RPCs MUST carry that user_id in their request. A
-        mismatch means either (a) a caller_token issued for user A is
-        being replayed against user B's runtime, or (b) the handler is
-        wired wrong.
+        Bare debug runtimes can be pinned to one user at startup. All
+        strategy RPCs MUST carry that user_id in their request so a
+        mismatched platform route fails closed.
 
         Returns True if the call should continue, False if it was
         rejected. Caller MUST return immediately on False.
         """
         if self._bound_user_id <= 0:
-            # Unregistered standalone runtime — control-plane attestation is
-            # absent so cross-check has no anchor. Accept and rely on
-            # the direct gRPC trust model.
             return True
         if int(request_user_id) != self._bound_user_id:
             context.set_code(grpc.StatusCode.PERMISSION_DENIED)
@@ -676,27 +655,23 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return False
         return True
 
-    def _require_direct_platform_access(self, context, operation: str) -> bool:
-        if self._platform_access_mode != PLATFORM_ACCESS_PROXY_ONLY:
-            return True
+    def _require_platform_proxy(self, context, operation: str) -> bool:
         if self._platform_proxy is not None:
             return True
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
         context.set_details(
-            f"{operation} unavailable in self-hosted proxy-only runtime: "
+            f"{operation} unavailable in RuntimeChannel runtime: "
             "platform proxy client is not configured"
         )
         return False
 
     def _require_market_data_execution_path(self, context, operation: str, profile: RuntimeSourceProfile) -> bool:
-        if self._platform_access_mode != PLATFORM_ACCESS_PROXY_ONLY:
-            return True
         if profile in (RuntimeSourceProfile.DEMO, RuntimeSourceProfile.LIVE):
             if callable(getattr(self._runtime_data_source, "iter_live_klines", None)):
                 return True
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(
-                f"{operation} unavailable in self-hosted proxy-only runtime for "
+                f"{operation} unavailable in RuntimeChannel runtime for "
                 f"profile={profile.value}: platform live delivery is not configured; "
                 "FetchKlines fallback is disabled for demo/live execution"
             )
@@ -706,7 +681,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 return True
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(
-                f"{operation} unavailable in self-hosted proxy-only runtime for "
+                f"{operation} unavailable in RuntimeChannel runtime for "
                 f"profile={profile.value}: chunked dataset delivery is not configured; "
                 "FetchKlines fallback is disabled for backtest execution"
             )
@@ -717,7 +692,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             except Exception as exc:  # noqa: BLE001
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details(
-                    f"{operation} unavailable in self-hosted proxy-only runtime: "
+                    f"{operation} unavailable in RuntimeChannel runtime: "
                     f"market-data proxy client failed to initialize: {exc}"
                 )
                 return False
@@ -725,10 +700,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 return True
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
         context.set_details(
-            f"{operation} unavailable in self-hosted proxy-only runtime for "
+            f"{operation} unavailable in RuntimeChannel runtime for "
             f"profile={profile.value}: account/order/control-plane proxy is wired, "
             "but strategy market-data execution still needs an approved platform "
-            "data proxy; direct TimescaleDB/Kafka access is disabled"
+            "data proxy"
         )
         return False
 
@@ -744,7 +719,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.RunStrategyResponse()
         if not self._enforce_request_runtime(request, context):
             return pb2.RunStrategyResponse()
-        if not self._require_direct_platform_access(context, "RunStrategy"):
+        if not self._require_platform_proxy(context, "RunStrategy"):
             return pb2.RunStrategyResponse()
         account_id = request.account_id
         if account_id == 0:
@@ -891,9 +866,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         # 2. Readiness gating (optional via ``market_data_policy.preflight_enabled``)
         #    — state/delivery/freshness checks. Disabling this is an operator
         #    bypass for testing; it must NOT disable binding resolution.
-        # Phase D2: market-data RPCs split off into MarketDataClient
-        # (control-panel-service). Build it only after profile/path guards so
-        # proxy-only runtimes cannot accidentally touch direct market-data deps.
+        # Build the control-panel market-data proxy only after profile/path
+        # guards so RuntimeChannel sessions cannot accidentally use local
+        # data sources.
         marketdata_client = self._marketdata_client()
         preflight = self._run_profile_preflight(
             profile=profile,
@@ -1218,7 +1193,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         *,
         profile: RuntimeSourceProfile,
         declared_inputs: list[StrategyInput],
-        marketdata_client: MarketDataClient,
+        marketdata_client: Any,
         start_ms: int,
         end_ms: int,
         require_readiness: bool = True,
@@ -1240,18 +1215,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 # an unconditional pass. Return an empty ok result rather than
                 # burning a DB query on an evaluator whose result we'd ignore.
                 return PreflightResult(profile=profile)
-            if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-                return backtest_preflight(
-                    declared_inputs,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
-                    availability_fn=self._proxy_backtest_availability(marketdata_client),
-                )
             return backtest_preflight(
                 declared_inputs,
                 start_ms=start_ms,
                 end_ms=end_ms,
-                availability_fn=default_backtest_availability(self._ts_config),
+                availability_fn=self._proxy_backtest_availability(marketdata_client),
             )
         if profile in (RuntimeSourceProfile.DEMO, RuntimeSourceProfile.LIVE):
             return live_stream_preflight(
@@ -1283,14 +1251,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         return _check
 
     @staticmethod
-    def _live_stream_lookup(marketdata_client: MarketDataClient):
+    def _live_stream_lookup(marketdata_client: Any):
         """Return a callable that looks up control-plane stream status by key.
 
         Kept as a separate method so tests can patch it cleanly when they
-        want to assert per-declared-input lookups without spinning up a
-        ``MarketDataClient``. (Phase D2 moved this RPC from core-service
-        into control-panel-service; the per-declared-input lookup contract
-        is unchanged.)
+        want to assert per-declared-input lookups without a real platform
+        proxy. The per-declared-input lookup contract is unchanged.
         """
         def _lookup(market: str, symbol: str, interval: str):
             return marketdata_client.get_market_data_stream_status(
@@ -1440,43 +1406,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         request: Any,
         declared_inputs: list[StrategyInput],
     ) -> None:
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            self._run_backtest_via_platform_proxy(
-                session_id=session_id,
-                state=state,
-                engine=engine,
-                request=request,
-                declared_inputs=declared_inputs,
-            )
-            return
-
-        from market_data.config import TimescaleConfig
-        from strategy_service.data_loop import BacktestDataLoop
-
-        start = request.start_time_ms
-        end = request.end_time_ms
-
-        if start == 0 or end == 0:
-            state.transition("failed", error="start_time_ms and end_time_ms are required for backtest accounts")
-            return
-
-        ts_config = TimescaleConfig.from_dict(self._ts_config)
-        loop = BacktestDataLoop(service=engine, config=ts_config)
-
-        # Multi-input replay — each declared (market, symbol, interval)
-        # gets its own iterator so distinct intervals (e.g. BTCUSDT 1m + 5m)
-        # both reach the strategy.
-        n = loop.run_declared(
-            declared_inputs,
-            start,
-            end,
-            should_stop=lambda: state.status != "running",
+        self._run_backtest_via_platform_proxy(
+            session_id=session_id,
+            state=state,
+            engine=engine,
+            request=request,
+            declared_inputs=declared_inputs,
         )
-        if state.status == "running":
-            state.transition("finished", bars=n)
-        else:
-            state.bars_processed = n
-        logger.info("session %s finished: %d bars", session_id, n)
 
     def _run_backtest_via_platform_proxy(
         self,
@@ -1573,92 +1509,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         declared_inputs: list[StrategyInput],
         strategy_id: int,
     ) -> None:
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            self._run_live_via_platform_proxy(session_id, state, engine)
-            return
-
-        unsupported_exchanges = sorted({inp.exchange for inp in declared_inputs if inp.exchange != "binance"})
-        if unsupported_exchanges:
-            state.transition(
-                "failed",
-                error=(
-                    "unsupported live market-data exchange(s): "
-                    + ", ".join(unsupported_exchanges)
-                ),
-            )
-            return
-
-        import threading as _threading
-        from market_data.config import KafkaBrokerConfig, KafkaConfig, LiveKlineSubscription
-        from strategy_service.data_loop import LiveDataLoop
-
-        # KAFKA_BROKERS 环境变量是逗号分隔的 "host:port" 字符串，
-        # 这里先只负责解析 brokers；topic family / filtering 语义交给 strategy-library.
-        broker_list = []
-        for entry in str(self._kafka_brokers).split(","):
-            entry = entry.strip()
-            if not entry:
-                continue
-            if ":" in entry:
-                host, port_str = entry.rsplit(":", 1)
-                try:
-                    port = int(port_str)
-                except ValueError:
-                    host, port = entry, 9092
-            else:
-                host, port = entry, 9092
-            broker_list.append(KafkaBrokerConfig(host=host, port=port))
-        consumer_group = state.live_consumer_group or _live_consumer_group(strategy_id, session_id)
-        # Multi-interval subscription — one Kafka topic per distinct
-        # (market, interval) pair declared by the strategy. Ensures a
-        # BTCUSDT 1m + 5m strategy consumes both topics, not just one.
-        marketdata_inputs = [
-            SimpleNamespace(
-                exchange=inp.exchange,
-                market=_marketdata_market(inp.market),
-                symbol=inp.symbol,
-                interval=inp.interval,
-            )
-            for inp in declared_inputs
-        ]
-        subscription = LiveKlineSubscription.from_declared_inputs(
-            marketdata_inputs,
-            consumer_group=consumer_group,
-            exchange="binance",
-        )
-        kafka_cfg = KafkaConfig.for_live_kline_subscription(
-            subscription,
-            brokers=broker_list,
-        )
-        if state.environment == 1 and self._lease_management_enabled:
-            if not self._renew_stream_leases_once(session_id, state):
-                raise RuntimeError("failed to create required market-data leases for demo session")
-            lease_stop_event = _threading.Event()
-            lease_thread = _threading.Thread(
-                target=self._lease_heartbeat_loop,
-                args=(session_id, state, lease_stop_event),
-                daemon=True,
-            )
-            state.set_lease_runtime(stop_event=lease_stop_event, lease_thread=lease_thread)
-            lease_thread.start()
-        live_loop = LiveDataLoop(
-            service=engine,
-            config=kafka_cfg,
-            on_unroutable=lambda kline: self._record_unroutable_live_kline(session_id, state, kline),
-            canonical_markets={
-                _stream_key(_marketdata_market(inp.market), inp.symbol, inp.interval): inp.market
-                for inp in declared_inputs
-            },
-        )
-        self._sessions.set_live_loop(session_id, live_loop)
-
-        stop_event = _threading.Event()
-        state._stop_event = stop_event  # type: ignore[attr-defined]
-        live_loop.start()
-        # 每 60 秒唤醒一次检查 session 是否仍为 running（防止孤儿 hang）
-        while not stop_event.wait(timeout=60):
-            if state.status != "running":
-                break
+        del declared_inputs, strategy_id
+        self._run_live_via_platform_proxy(session_id, state, engine)
 
     def _run_live_via_platform_proxy(
         self,
@@ -2183,7 +2035,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.PreviewRunStrategyResponse()
         if not self._enforce_request_runtime(request, context):
             return pb2.PreviewRunStrategyResponse()
-        if not self._require_direct_platform_access(context, "PreviewRunStrategy"):
+        if not self._require_platform_proxy(context, "PreviewRunStrategy"):
             return pb2.PreviewRunStrategyResponse()
         account_id = int(getattr(request, "account_id", 0) or 0)
         if account_id == 0:

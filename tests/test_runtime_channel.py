@@ -24,6 +24,7 @@ from strategy_service.runtime_channel import (
     RuntimeCredentialError,
     RuntimeHelloArgs,
     RuntimeChannelStrategyDispatcher,
+    build_bare_hello,
     build_signed_hello,
     canonical_hello_payload,
     load_runtime_credential,
@@ -76,12 +77,52 @@ def test_build_signed_hello_signs_canonical_payload():
         '"resource_profile":"small",'
         '"runtime_id":"runtime-1",'
         '"name":"custom-steady-river",'
+        '"source":"",'
+        '"user_id":0,'
         '"version":"0.1.0"}'
     )
 
     signature = base64.urlsafe_b64decode(hello.signature + "==")
     public_key = private_key.public_key()
     public_key.verify(signature, canonical_hello_payload(hello))
+
+
+def test_build_bare_hello_uses_debug_user_without_signature():
+    hello = build_bare_hello(
+        RuntimeHelloArgs(
+            source="bare",
+            user_id=42,
+            runtime_id="bare-42-dev",
+            name="desk-debug",
+            capabilities=("strategy", "futures"),
+        ),
+        now_ms=1_700_000_000_000,
+    )
+
+    assert hello.source == "bare"
+    assert hello.user_id == 42
+    assert hello.runtime_id == "bare-42-dev"
+    assert hello.name == "desk-debug"
+    assert hello.issued_at_unix_ms == 1_700_000_000_000
+    assert hello.key_id == ""
+    assert hello.nonce == ""
+    assert hello.signature == ""
+
+    assert canonical_hello_payload(hello).decode("utf-8") == (
+        '{"capabilities":["strategy","futures"],'
+        '"debug_port":0,'
+        '"endpoint_host":"",'
+        '"grpc_port":0,'
+        '"issued_at_unix_ms":1700000000000,'
+        '"key_id":"",'
+        '"nonce":"",'
+        '"resource_profile":"small",'
+        '"runtime_id":"bare-42-dev",'
+        '"name":"desk-debug",'
+        '"source":"bare",'
+        '"user_id":42,'
+        '"version":"0.1.0"}'
+    )
 
 
 def test_build_signed_hello_rejects_non_ed25519_key():

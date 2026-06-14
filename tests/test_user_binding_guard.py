@@ -60,9 +60,8 @@ def test_bound_runtime_rejects_mismatching_user_id():
 
 
 def test_unregistered_mode_skips_check():
-    """bound_user_id=0 means the runtime is unregistered (no
-    control-panel registration). The check is bypassed so any positive
-    user_id passes — the direct gRPC trust model still applies."""
+    """bound_user_id=0 means the runtime relies on control-panel routing.
+    The local user-id pin is bypassed so any positive user_id passes."""
     servicer = _build_servicer(bound_user_id=0)
     ctx = _ctx()
     assert servicer._enforce_user_binding(42, ctx) is True

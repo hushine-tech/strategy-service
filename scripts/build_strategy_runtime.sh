@@ -37,22 +37,18 @@ echo "  ${DEFAULT_IMAGE}  # default tag for existing control-panel configs"
 echo
 echo "Quick-run examples:"
 echo
-echo "  # 1. Boot without registration (standalone direct-GRPC deployments):"
-echo "  docker run --rm -p 50053:50053 ${EXECUTOR_IMAGE}"
+echo "  # 1. Hosted executor mode is launched by control-panel DockerProvisioner:"
+echo "  #    RuntimeChannel only, no published strategy gRPC host port."
 echo
-echo "  # 2. Hosted executor mode is launched by control-panel DockerProvisioner:"
-echo "  #    outbound RuntimeChannel only, no published strategy gRPC host port."
-echo
-echo "  # 3. Boot as a user's self-hosted executor runtime (RuntimeChannel only):"
+echo "  # 2. Boot as a user's self-hosted executor runtime:"
 echo "  docker run --rm \\"
 echo "    -v \$HOME/.hushine/runtime.cred:/etc/hushine/runtime.cred:ro \\"
-echo "    -e RUNTIME_INGRESS_MODE=outbound \\"
 echo "    -e RUNTIME_CREDENTIAL_PATH=/etc/hushine/runtime.cred \\"
-echo "    -e CONTROL_PANEL_SERVICE_GRPC_ADDR=host.docker.internal:50054 \\"
+echo "    -e CONTROL_PANEL_SERVICE_GRPC_ADDR=host.docker.internal:50055 \\"
 echo "    ${EXECUTOR_IMAGE}"
 echo
-echo "  In outbound mode the process ignores account/order/Kafka/database"
+echo "  RuntimeChannel startup ignores account/order/Kafka/database"
 echo "  config and uses only RuntimeChannel platform proxy calls."
 echo
-echo "  Local strategy debugging now uses the separate strategy-debugger-cli"
-echo "  package and does not require a platform-connected debugger image."
+echo "  # 3. Local bare debug on a machine with uv installed:"
+echo "  uv run hushine-runtime start --config config.yaml --user-id 123"

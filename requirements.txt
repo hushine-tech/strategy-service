@@ -3,6 +3,7 @@ grpcio-tools>=1.80.0
 psycopg2-binary>=2.9.9
 cryptography>=44.0.0
 kafka-python>=2.0.0
+PyYAML>=6.0.0
 
 # OpenTelemetry for cross-service distributed tracing. Optional at runtime —
 # strategy-library's grpc_interceptors degrade gracefully if missing, and

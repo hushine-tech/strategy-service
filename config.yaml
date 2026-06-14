@@ -9,38 +9,26 @@ database:
   password: "postgres"
 
 dependencies:
-  account_service_grpc: "127.0.0.1:50051"
-  order_service_grpc: "127.0.0.1:50051"
-  # Phase D1 — control-panel-service. Set when running as a hosted
-  # strategy-runtime that should self-register on startup; leave empty
-  # when running as a standalone local gRPC service.
-  control_panel_service_grpc: ""
+  # RuntimeChannel endpoint on control-panel-service.
+  control_panel_service_grpc: "127.0.0.1:50055"
 
-# Hosted strategy-runtime self-registration (off by default).
-# When register_with_control_panel=true, on startup the service calls
-# RegisterRuntime(source="hosted", bind_user_id, ...) against
-# control-panel-service and runs a heartbeat loop in the background.
 runtime:
-  # inbound = standalone/local direct gRPC behavior (default);
-  # outbound = RuntimeChannel only for hosted/self-hosted containers; both = dev/test.
-  # Outbound mode is the runtime isolation boundary: direct
-  # core-service, order API, Kafka, and database dependencies from this
-  # file are ignored at boot and strategy execution uses RuntimeChannel proxy
-  # clients instead.
-  ingress_mode: "inbound"
   # Empty uses /etc/hushine/runtime.cred. Override with RUNTIME_CREDENTIAL_PATH.
   credential_path: ""
-  register_with_control_panel: false
+  # Empty lets control-panel infer hosted/self_hosted from the credential.
+  # Use `bare` only through `hushine-runtime start --user-id ...`.
+  source: ""
   runtime_id: ""              # empty → control panel generates one
   name: ""
-  bind_user_id: 0             # required when register_with_control_panel=true
-  endpoint_host: ""           # inbound advertised host; unused in outbound
-  grpc_port: 50053
-  debug_port: 0
   capabilities: ["strategy", "spot", "futures"]
   resource_profile: "small"
   version: "0.1.0"
   heartbeat_interval_seconds: 10
+
+runtime_channel_tls:
+  enabled: false
+  root_cert_file: ""
+  server_name: ""
 
 kafka:
   brokers:
@@ -73,7 +61,7 @@ log:
     brokers: ["192.168.88.10:19092"]
     topic_prefix: "app-logs"
   # Tracing uses the same key path as account/order/handler's config.yaml.
-  # When enabled=true, `run_grpc_server.py` calls
+  # When enabled=true, `hushine-runtime start` calls
   # `utils.log.tracer.init_tracer(service_name, endpoint)` on boot so gRPC
   # spans join the cross-service Jaeger trace. When disabled the tracer is
   # a noop and trace_id fields in log entries are empty.

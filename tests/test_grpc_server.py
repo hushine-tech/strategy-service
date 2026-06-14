@@ -3179,14 +3179,14 @@ def test_proxy_only_uses_platform_proxy_client_factories():
     )
     context = _FakeContext()
 
-    assert servicer._require_direct_platform_access(context, "RunStrategy") is True
+    assert servicer._require_platform_proxy(context, "RunStrategy") is True
     assert servicer._account_client() is proxy.account
     assert servicer._order_client() is proxy.order
     assert servicer._marketdata_client() is proxy.marketdata
     assert context.code is None
 
 
-def test_proxy_only_with_proxy_fails_closed_before_market_data_direct_access():
+def test_proxy_only_with_proxy_fails_closed_before_market_data_source_ready():
     class FakeAccountClient:
         def get_portfolio_snapshot(self, account_id: int, user_id: int):
             assert account_id == 201

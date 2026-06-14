@@ -38,29 +38,29 @@ class DependenciesConfig:
 
 @dataclass
 class RuntimeConfig:
-    """Phase D1 hosted strategy-runtime self-registration config.
+    """RuntimeChannel startup metadata.
 
-    When `register_with_control_panel` is true, the service registers itself
-    with `control-panel-service` on startup and sends periodic heartbeats.
-    Defaults to off so existing non-D1 deployments keep working unchanged.
-
-    `source` is hard-wired to "hosted" in D1; self-hosted entrypoint is part
-    of phase-d3-self-hosted-runtime.
+    The runtime has a single platform boundary now: it connects outward to
+    control-panel-service RuntimeChannel. Hosted/self-hosted runtimes use a
+    signed credential; local debug can use source=bare when control-panel is
+    explicitly running with debug bare runtime enabled.
     """
 
-    ingress_mode: str = "inbound"  # inbound | outbound | both
     credential_path: str = ""  # empty => /etc/hushine/runtime.cred
-    register_with_control_panel: bool = False
+    source: str = ""  # empty lets control-panel infer hosted/self_hosted from credential
     runtime_id: str = ""  # empty → control panel generates one
     name: str = ""
-    bind_user_id: int = 0  # required when registration is enabled
-    endpoint_host: str = ""  # advertised host:port for handler dial
-    grpc_port: int = 50053
-    debug_port: int = 0
     capabilities: list[str] = field(default_factory=lambda: ["strategy", "spot", "futures"])
     resource_profile: str = "small"
     version: str = "0.1.0"
     heartbeat_interval_seconds: int = 10
+
+
+@dataclass
+class RuntimeChannelTLSConfig:
+    enabled: bool = False
+    root_cert_file: str = ""
+    server_name: str = ""
 
 
 @dataclass
@@ -105,6 +105,7 @@ class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     dependencies: DependenciesConfig = field(default_factory=DependenciesConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    runtime_channel_tls: RuntimeChannelTLSConfig = field(default_factory=RuntimeChannelTLSConfig)
     kafka: KafkaConfig = field(default_factory=KafkaConfig)
     market_data: MarketDataPolicyConfig = field(default_factory=MarketDataPolicyConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)
@@ -138,17 +139,10 @@ class Config:
             )
         if isinstance(data.get("runtime"), dict):
             r = data["runtime"]
-            cfg.runtime.ingress_mode = str(r.get("ingress_mode", cfg.runtime.ingress_mode) or "inbound")
             cfg.runtime.credential_path = r.get("credential_path", cfg.runtime.credential_path)
-            cfg.runtime.register_with_control_panel = bool(
-                r.get("register_with_control_panel", cfg.runtime.register_with_control_panel)
-            )
+            cfg.runtime.source = r.get("source", cfg.runtime.source)
             cfg.runtime.runtime_id = r.get("runtime_id", cfg.runtime.runtime_id)
             cfg.runtime.name = r.get("name", cfg.runtime.name)
-            cfg.runtime.bind_user_id = int(r.get("bind_user_id", cfg.runtime.bind_user_id))
-            cfg.runtime.endpoint_host = r.get("endpoint_host", cfg.runtime.endpoint_host)
-            cfg.runtime.grpc_port = int(r.get("grpc_port", cfg.runtime.grpc_port))
-            cfg.runtime.debug_port = int(r.get("debug_port", cfg.runtime.debug_port))
             caps = r.get("capabilities")
             if isinstance(caps, list):
                 cfg.runtime.capabilities = [str(c) for c in caps]
@@ -156,6 +150,17 @@ class Config:
             cfg.runtime.version = r.get("version", cfg.runtime.version)
             cfg.runtime.heartbeat_interval_seconds = int(
                 r.get("heartbeat_interval_seconds", cfg.runtime.heartbeat_interval_seconds)
+            )
+        if isinstance(data.get("runtime_channel_tls"), dict):
+            rtls = data["runtime_channel_tls"]
+            cfg.runtime_channel_tls.enabled = bool(rtls.get("enabled", cfg.runtime_channel_tls.enabled))
+            cfg.runtime_channel_tls.root_cert_file = rtls.get(
+                "root_cert_file",
+                cfg.runtime_channel_tls.root_cert_file,
+            )
+            cfg.runtime_channel_tls.server_name = rtls.get(
+                "server_name",
+                cfg.runtime_channel_tls.server_name,
             )
         if isinstance(data.get("kafka"), dict):
             k = data["kafka"]
@@ -203,10 +208,6 @@ class Config:
         return cfg
 
     def apply_env_overrides(self) -> None:
-        # Server
-        v = os.environ.get("SERVER_GRPC_ADDR") or os.environ.get("GRPC_ADDR")
-        if v:
-            self.server.grpc_addr = v
         # Database
         v = os.environ.get("DATABASE_HOST") or os.environ.get("TIMESCALE_HOST")
         if v:
@@ -254,31 +255,19 @@ class Config:
             self.dependencies.market_data_control_panel_grpc = (
                 self.dependencies.control_panel_service_grpc
             )
-        # Runtime self-registration (Phase D1 hosted strategy-runtime)
-        v = os.environ.get("RUNTIME_INGRESS_MODE")
-        if v:
-            self.runtime.ingress_mode = v
+        # RuntimeChannel metadata
         v = os.environ.get("RUNTIME_CREDENTIAL_PATH")
         if v:
             self.runtime.credential_path = v
-        v = os.environ.get("RUNTIME_REGISTER_WITH_CONTROL_PANEL")
+        v = os.environ.get("RUNTIME_SOURCE")
         if v:
-            self.runtime.register_with_control_panel = v.lower() in ("1", "true", "yes", "on")
+            self.runtime.source = v
         v = os.environ.get("RUNTIME_RUNTIME_ID")
         if v:
             self.runtime.runtime_id = v
         v = os.environ.get("RUNTIME_NAME")
         if v:
             self.runtime.name = v
-        v = os.environ.get("RUNTIME_BIND_USER_ID")
-        if v:
-            self.runtime.bind_user_id = int(v)
-        v = os.environ.get("RUNTIME_ENDPOINT_HOST")
-        if v:
-            self.runtime.endpoint_host = v
-        v = os.environ.get("RUNTIME_GRPC_PORT")
-        if v:
-            self.runtime.grpc_port = int(v)
         v = os.environ.get("RUNTIME_RESOURCE_PROFILE")
         if v:
             self.runtime.resource_profile = v
@@ -288,6 +277,15 @@ class Config:
         v = os.environ.get("RUNTIME_HEARTBEAT_INTERVAL_SECONDS")
         if v:
             self.runtime.heartbeat_interval_seconds = int(v)
+        v = os.environ.get("RUNTIME_CHANNEL_TLS_ENABLED")
+        if v:
+            self.runtime_channel_tls.enabled = v.lower() in ("1", "true", "yes", "on")
+        v = os.environ.get("RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE")
+        if v:
+            self.runtime_channel_tls.root_cert_file = v
+        v = os.environ.get("RUNTIME_CHANNEL_TLS_SERVER_NAME")
+        if v:
+            self.runtime_channel_tls.server_name = v
         # Kafka
         v = os.environ.get("KAFKA_BROKERS")
         if v:

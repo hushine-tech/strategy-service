@@ -1,7 +1,9 @@
 # back-test is the legacy implementation, managed separately
 back-test/
-pyproject.toml
 __pycache__/
+.venv/
+.uv-bootstrap/
+*.egg-info/
 .deps/
 /logs
 .pytest_cache/
