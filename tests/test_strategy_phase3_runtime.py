@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -124,6 +125,65 @@ class RecoveringFirstOrderClient(StubOrderClient):
             ),
             fill_count=1,
             delta_qty=float(decision.qty),
+        )
+
+
+class ExpiredNoFillOrderClient(StubOrderClient):
+    def place_order(
+        self,
+        _account_id: int,
+        decision: OrderDecision,
+        mark_price: float,
+        **kwargs: Any,
+    ) -> ExecutionFeedback:
+        self.orders.append((decision, mark_price, kwargs))
+        return ExecutionFeedback(
+            attempt_id="attempt-expired",
+            attempt_status="ACCEPTED",
+            order=OrderResponse(
+                symbol=decision.symbol,
+                side=decision.side,
+                qty=0.0,
+                fill_price=0.0,
+                status="EXPIRED",
+                order_id="order-expired",
+                orig_qty=float(decision.qty),
+                executed_qty=0.0,
+                remaining_qty=float(decision.qty),
+                price=mark_price,
+            ),
+            fill_count=0,
+            delta_qty=0.0,
+        )
+
+
+class IocPartialExpiredOrderClient(StubOrderClient):
+    def place_order(
+        self,
+        _account_id: int,
+        decision: OrderDecision,
+        mark_price: float,
+        **kwargs: Any,
+    ) -> ExecutionFeedback:
+        self.orders.append((decision, mark_price, kwargs))
+        fill_qty = 0.004
+        return ExecutionFeedback(
+            attempt_id="attempt-ioc",
+            attempt_status="ACCEPTED",
+            order=OrderResponse(
+                symbol=decision.symbol,
+                side=decision.side,
+                qty=fill_qty,
+                fill_price=mark_price,
+                status="EXPIRED",
+                order_id="order-ioc",
+                orig_qty=float(decision.qty),
+                executed_qty=fill_qty,
+                remaining_qty=float(decision.qty) - fill_qty,
+                price=mark_price,
+            ),
+            fill_count=1,
+            delta_qty=fill_qty,
         )
 
 
@@ -298,6 +358,70 @@ def test_unresolved_order_blocks_only_same_account_route_symbol() -> None:
     assert (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "ETHUSDT") in svc._blocked_order_keys
     assert (Exchange.BINANCE, Market.SPOT, "ETHUSDT") not in svc._blocked_order_keys
     assert (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "BTCUSDT") not in svc._blocked_order_keys
+
+
+def test_terminal_zero_fill_order_is_normal_noop(caplog: pytest.LogCaptureFixture) -> None:
+    wallet, route_wallet = _real_futures_portfolio()
+    client = ExpiredNoFillOrderClient()
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        client,
+        account_id=1,
+        session_id="session-expired",
+        strategy_code=_strategy(
+            '        if not hasattr(self, "sent"):\n'
+            "            self.sent = True\n"
+            '            return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.02", order_type=OrderType.LIMIT, price="2500")\n'
+            "        return None\n",
+        ),
+    )
+    responses: list[ExecutionFeedback] = []
+    svc._strategy_instance.on_order_response = responses.append
+
+    caplog.set_level(logging.WARNING, logger="strategy_service.strategy.base")
+
+    svc.running_strategy(_tick(price=2500.0))
+
+    assert len(client.orders) == 1
+    assert responses and responses[0].status == "EXPIRED"
+    assert route_wallet.futures.open_orders == {}
+    assert not any(
+        "attempt accepted without confirmed fill details" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_ioc_partial_expired_settles_filled_qty_without_open_order() -> None:
+    wallet, route_wallet = _real_futures_portfolio()
+    client = IocPartialExpiredOrderClient()
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        client,
+        account_id=1,
+        session_id="session-ioc",
+        strategy_code=_strategy(
+            '        if not hasattr(self, "sent"):\n'
+            "            self.sent = True\n"
+            '            return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.02", order_type=OrderType.LIMIT, price="2500", time_in_force="IOC")\n'
+            "        return None\n",
+        ),
+    )
+    responses: list[ExecutionFeedback] = []
+    svc._strategy_instance.on_order_response = responses.append
+
+    svc.running_strategy(_tick(price=2500.0))
+
+    assert len(client.orders) == 1
+    decision, _mark_price, kwargs = client.orders[0]
+    assert decision.time_in_force == "IOC"
+    assert kwargs["market"] == Market.PERPETUAL_FUTURES
+    assert responses and responses[0].status == "EXPIRED"
+    pos = route_wallet.futures.positions[("ETHUSDT", 0)]
+    assert pos.position_qty == pytest.approx(0.004)
+    assert route_wallet.futures.open_orders == {}
+    assert (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "ETHUSDT") not in svc._blocked_order_keys
 
 
 def test_batch_decisions_are_validated_before_any_order_is_placed() -> None:
@@ -811,6 +935,87 @@ def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
 
     pos = route_wallet.futures.positions[("ETHUSDT", 0)]
     assert pos.position_qty == pytest.approx(0.2)
+    assert route_wallet.futures.open_orders == {}
+    assert client.place_calls == 1
+
+
+def test_lifecycle_after_partial_close_short_applies_rest_recovery_fill() -> None:
+    event = OrderUpdateEvent(
+        event_id=1,
+        session_id="session-1",
+        account_id=1,
+        venue_id=10,
+        exchange=Exchange.BINANCE,
+        market=Market.PERPETUAL_FUTURES,
+        side="BUY",
+        position_side="both",
+        event_type="fill",
+        event_source="rest_recovery",
+        order_status="FILLED",
+        order_id="order-close-short",
+        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.016, fill_price=2510.0),
+        orig_qty=0.02,
+        executed_qty=0.02,
+        remaining_qty=0.0,
+    )
+
+    class PartialCloseThenRecoveryClient(LifecycleOrderClient):
+        def __init__(self) -> None:
+            super().__init__([event])
+            self.place_calls = 0
+
+        def list_order_lifecycle_events(self, *, session_id: str, after_event_id: int = 0, limit: int = 100) -> list[OrderUpdateEvent]:
+            if self.place_calls <= 0:
+                return []
+            return super().list_order_lifecycle_events(session_id=session_id, after_event_id=after_event_id, limit=limit)
+
+        def place_order(self, _account_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
+            self.place_calls += 1
+            return ExecutionFeedback(
+                attempt_status="ACCEPTED",
+                order=OrderResponse(
+                    symbol=decision.symbol,
+                    side=decision.side,
+                    qty=0.004,
+                    fill_price=mark_price,
+                    status="PARTIALLY_FILLED",
+                    order_id="order-close-short",
+                    orig_qty=0.02,
+                    executed_qty=0.004,
+                    remaining_qty=0.016,
+                ),
+                fill_count=1,
+                delta_qty=0.004,
+            )
+
+    client = PartialCloseThenRecoveryClient()
+    wallet, route_wallet = _real_futures_portfolio()
+    pos = route_wallet.futures.positions[("ETHUSDT", 0)]
+    pos.position_qty = -2.0
+    pos.entry_price = 2500.0
+    pos.mark_price = 2500.0
+    pos._refresh_derived_fields()
+
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        client,
+        account_id=1,
+        session_id="session-1",
+        strategy_code=_strategy(
+            '        if not hasattr(self, "sent"):\n'
+            "            self.sent = True\n"
+            '            return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.02", order_type=OrderType.MARKET)\n'
+            "        return None\n",
+        ),
+    )
+
+    svc.running_strategy(_tick(price=2500.0))
+    assert route_wallet.futures.positions[("ETHUSDT", 0)].position_qty == pytest.approx(-1.996)
+
+    svc.running_strategy(_tick(price=2510.0))
+
+    assert route_wallet.futures.positions[("ETHUSDT", 0)].position_qty == pytest.approx(-1.98)
     assert route_wallet.futures.open_orders == {}
     assert client.place_calls == 1
 

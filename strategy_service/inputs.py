@@ -41,8 +41,10 @@ from typing import Any, Iterable
 from hushine_strategy.inputs import (
     StrategyInput,
     StrategyOrderTarget,
+    StrategyRiskControls,
     parse_declared_inputs as _parse_declared_inputs,
     parse_order_targets as _parse_order_targets,
+    parse_risk_controls as _parse_risk_controls,
 )
 
 from strategy_service.types import MarketData
@@ -50,11 +52,13 @@ from strategy_service.types import MarketData
 __all__ = [
     "StrategyInput",
     "StrategyOrderTarget",
+    "StrategyRiskControls",
     "StrategyDeclarations",
     "StrategyDeclarationError",
     "InputView",
     "parse_declared_inputs",
     "parse_order_targets",
+    "parse_risk_controls",
     "extract_declarations",
     "_normalize_exchange",
     "_normalize_market",
@@ -129,10 +133,18 @@ def parse_order_targets(raw: Any) -> list[StrategyOrderTarget]:
         raise StrategyDeclarationError(str(exc)) from exc
 
 
+def parse_risk_controls(raw: Any) -> StrategyRiskControls:
+    try:
+        return _parse_risk_controls(raw)
+    except ValueError as exc:
+        raise StrategyDeclarationError(str(exc)) from exc
+
+
 @dataclass(frozen=True)
 class StrategyDeclarations:
     inputs: list[StrategyInput]
     order_targets: list[StrategyOrderTarget]
+    risk_controls: StrategyRiskControls
 
     @property
     def input_keys(self) -> set[tuple[str, str, str, str]]:
@@ -156,7 +168,12 @@ def extract_declarations(strategy_instance: Any) -> StrategyDeclarations:
     order_targets = parse_order_targets(
         getattr(strategy_instance, "ORDER_TARGETS", None)
     )
-    return StrategyDeclarations(inputs=inputs, order_targets=order_targets)
+    risk_controls = parse_risk_controls(getattr(strategy_instance, "RISK_CONTROLS", None))
+    return StrategyDeclarations(
+        inputs=inputs,
+        order_targets=order_targets,
+        risk_controls=risk_controls,
+    )
 
 
 class InputView:

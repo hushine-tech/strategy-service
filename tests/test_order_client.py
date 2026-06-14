@@ -133,6 +133,60 @@ def test_place_order_uses_canonical_symbol_and_emits_fill_events():
     assert feedback.fill_events[1].remaining_qty == pytest.approx(0.0)
 
 
+def test_place_order_ioc_partial_expired_emits_terminal_fill_event():
+    response = order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-ioc",
+        attempt_id="attempt-ioc",
+        attempt_status="ACCEPTED",
+        order=order_service_pb2.ExchangeOrderEntry(
+            order_id="order-ioc",
+            exchange_order_id="ex-ioc",
+            symbol="ETHUSDT",
+            side="BUY",
+            orig_qty=0.02,
+            executed_qty=0.004,
+            remaining_qty=0.016,
+            avg_price=2500.0,
+            price=2500.0,
+            status="EXPIRED",
+        ),
+        fill_deltas=[
+            order_service_pb2.OrderFillEntry(
+                order_id="order-ioc",
+                qty=0.004,
+                fill_price=2500.0,
+                fee=0.01,
+            ),
+        ],
+    )
+    client = OrderClient("")
+    stub = _Stub(response)
+    client._stub = stub
+
+    feedback = client.place_order(
+        13,
+        _decision(order_type="LIMIT", price="2500", time_in_force="IOC"),
+        2500.0,
+        account_symbol="ETHUSDT",
+        market="perpetual_futures",
+        intent_id="intent-ioc",
+    )
+
+    assert stub.last_request is not None
+    assert stub.last_request.order_type == "LIMIT"
+    assert stub.last_request.time_in_force == "IOC"
+    assert feedback.attempt_status == "ACCEPTED"
+    assert feedback.order is not None
+    assert feedback.order.status == "EXPIRED"
+    assert feedback.fill_count == 1
+    assert feedback.delta_qty == pytest.approx(0.004)
+    assert len(feedback.fill_events) == 1
+    assert feedback.fill_events[0].status == "EXPIRED"
+    assert feedback.fill_events[0].qty == pytest.approx(0.004)
+    assert feedback.fill_events[0].executed_qty == pytest.approx(0.004)
+    assert feedback.fill_events[0].remaining_qty == pytest.approx(0.016)
+
+
 def test_place_order_passes_market_time_to_order_service():
     response = order_service_pb2.PlaceOrderResponse(
         intent_id="intent-1",

@@ -31,7 +31,13 @@ from strategy_service.notification import StrategyNotifier
 from strategy_service.order_client import OrderClient
 from strategy_service.service import StrategyEngine
 from strategy_service.session import SessionManager, SessionState, StreamBinding
-from strategy_service.inputs import StrategyDeclarationError, StrategyInput, StrategyOrderTarget
+from strategy_service.inputs import (
+    StrategyDeclarationError,
+    StrategyInput,
+    StrategyOrderTarget,
+    _normalize_exchange,
+    _normalize_market,
+)
 from strategy_service.preflight import (
     SUPPORTED_PROFILES,
     PreflightResult,
@@ -64,6 +70,7 @@ DEFAULT_LEASE_HEARTBEAT_SECONDS = 30
 DEFAULT_LEASE_TTL_SECONDS = 90
 DEFAULT_FRESHNESS_GRACE_SECONDS = 30
 DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS = 30
+DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
 RESTORE_RUNNING_SESSIONS_RETRIES = 5
 RESTORE_RUNNING_SESSIONS_RETRY_SECONDS = 1.0
 PLATFORM_ACCESS_DIRECT = "direct"
@@ -98,6 +105,12 @@ class _StopOrder:
     side: str
     qty: float
     mark_price: float
+
+
+@dataclass(frozen=True)
+class _EffectiveRiskControls:
+    max_loss_close_pct: float
+    max_loss_close_source: str
 
 
 def _sync_strategy_snapshot(
@@ -168,6 +181,132 @@ def _snapshot_time_present(value: object | None) -> bool:
     if isinstance(value, (int, float)):
         return float(value) > 0.0
     return True
+
+
+def _normalize_target_key(exchange: Any, market: Any, symbol: Any) -> tuple[str, str, str]:
+    return (
+        _normalize_exchange(exchange),
+        _normalize_market(market),
+        str(symbol or "").strip().upper(),
+    )
+
+
+def _target_is_allowed(state: SessionState, exchange: Any, market: Any, symbol: Any) -> bool:
+    symbol_text = str(symbol or "").strip().upper()
+    if not symbol_text:
+        return False
+    try:
+        key = _normalize_target_key(exchange, market, symbol_text)
+    except StrategyDeclarationError:
+        return False
+    return key in set(state.order_target_keys or set())
+
+
+def _spot_asset_target_is_allowed(state: SessionState, exchange: Any, market: Any, asset_symbol: Any) -> bool:
+    sym = str(asset_symbol or "").strip().upper()
+    if not sym:
+        return False
+    return _target_is_allowed(state, exchange, market, sym) or _target_is_allowed(
+        state, exchange, market, f"{sym}USDT"
+    )
+
+
+def _effective_risk_controls_from_request(declarations: Any, request_value: Any) -> _EffectiveRiskControls:
+    declared_value = getattr(getattr(declarations, "risk_controls", None), "max_loss_close_pct", None)
+    if declared_value is not None:
+        return _EffectiveRiskControls(float(declared_value), "strategy")
+
+    try:
+        raw = float(request_value or 0.0)
+    except (TypeError, ValueError) as exc:
+        raise StrategyDeclarationError("max_loss_close_pct must be a number") from exc
+    if raw < 0.0 or raw > 1.0:
+        raise StrategyDeclarationError("max_loss_close_pct must satisfy 0 < value <= 1")
+    if raw > 0.0:
+        return _EffectiveRiskControls(raw, "request_default")
+    return _EffectiveRiskControls(DEFAULT_MAX_LOSS_CLOSE_PCT, "platform_default")
+
+
+def _wallet_margin_balance(wallet: Any) -> float:
+    if isinstance(wallet, PortfolioWalletRuntime):
+        total = 0.0
+        found_futures = False
+        for (_exchange, market, _venue_id), route_wallet in wallet.wallets.items():
+            if market not in {"perpetual_futures", "delivery_futures"}:
+                continue
+            futures = getattr(route_wallet, "futures", None)
+            getter = getattr(futures, "get_margin_balance", None)
+            if not callable(getter):
+                continue
+            total += float(getter())
+            found_futures = True
+        if found_futures:
+            return total
+
+    getter = getattr(wallet, "get_margin_balance", None)
+    if callable(getter):
+        return float(getter())
+    futures = getattr(wallet, "futures", None)
+    getter = getattr(futures, "get_margin_balance", None)
+    if callable(getter):
+        return float(getter())
+    total_value = getattr(wallet, "get_total_value", None)
+    if callable(total_value):
+        return float(total_value())
+    raise RuntimeError("margin_balance unavailable")
+
+
+def _target_close_margin_balance(
+    wallet: Any,
+    order_target_keys: set[tuple[str, str, str]],
+) -> float:
+    normalized_targets: set[tuple[str, str, str]] = set()
+    for exchange, market, symbol in order_target_keys or set():
+        try:
+            normalized_targets.add(_normalize_target_key(exchange, market, symbol))
+        except StrategyDeclarationError:
+            continue
+    if not normalized_targets:
+        return _wallet_margin_balance(wallet)
+
+    if isinstance(wallet, PortfolioWalletRuntime):
+        total = 0.0
+        found_target_route = False
+        for (exchange, market, _venue_id), route_wallet in wallet.wallets.items():
+            if market not in {"perpetual_futures", "delivery_futures"}:
+                continue
+            try:
+                route_exchange = _normalize_exchange(exchange)
+                route_market = _normalize_market(market)
+            except StrategyDeclarationError:
+                continue
+            if not any(key[0] == route_exchange and key[1] == route_market for key in normalized_targets):
+                continue
+            futures = getattr(route_wallet, "futures", None)
+            getter = getattr(futures, "get_wallet_balance", None)
+            if not callable(getter):
+                continue
+            route_value = float(getter())
+            positions = getattr(futures, "positions", {}) or {}
+            for pos in positions.values():
+                symbol = str(getattr(pos, "symbol", "") or "").strip().upper()
+                if (route_exchange, route_market, symbol) not in normalized_targets:
+                    continue
+                upnl_getter = getattr(pos, "get_unrealized_pnl", None)
+                if callable(upnl_getter):
+                    route_value += float(upnl_getter())
+                    continue
+                qty = float(getattr(pos, "position_qty", 0.0) or 0.0)
+                entry = float(getattr(pos, "entry_price", 0.0) or 0.0)
+                mark = float(getattr(pos, "mark_price", 0.0) or 0.0)
+                if entry > 0.0 and mark > 0.0:
+                    route_value += qty * (mark - entry)
+            total += route_value
+            found_target_route = True
+        if found_target_route:
+            return total
+
+    return _wallet_margin_balance(wallet)
 
 
 # Note: wallet-derived symbol inference was intentionally removed (pre_C3 §2.1/§2.2).
@@ -669,6 +808,15 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy could not be loaded: {e}")
             return pb2.RunStrategyResponse()
+        try:
+            effective_risk = _effective_risk_controls_from_request(
+                declarations,
+                getattr(request, "max_loss_close_pct", 0.0),
+            )
+        except StrategyDeclarationError as e:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(f"strategy risk control invalid: {e}")
+            return pb2.RunStrategyResponse()
         declared_inputs = list(declarations.inputs)
         required_routes = set(declarations.required_routes)
         required_symbols = {
@@ -709,6 +857,19 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         except Exception as e:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(f"failed to build wallet: {e}")
+            return pb2.RunStrategyResponse()
+        try:
+            initial_margin_balance = _target_close_margin_balance(
+                wallet,
+                set(declarations.order_target_keys),
+            )
+        except Exception as e:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(f"failed to initialize risk controls: {e}")
+            return pb2.RunStrategyResponse()
+        if initial_margin_balance <= 0.0:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details("failed to initialize risk controls: initial margin_balance must be positive")
             return pb2.RunStrategyResponse()
 
         # The declared 3-tuple universe is threaded straight through to the
@@ -783,6 +944,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         else:
             state.account_id = account_id
             state.strategy_id = strategy_id
+        state.configure_risk_runtime(
+            order_target_keys=set(declarations.order_target_keys),
+            max_loss_close_pct=effective_risk.max_loss_close_pct,
+            max_loss_close_source=effective_risk.max_loss_close_source,
+            initial_margin_balance=initial_margin_balance,
+        )
 
         if not self._persist_session_or_set_error(
             acct_client,
@@ -927,6 +1094,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     every_n_bars=DEFAULT_PERIODIC_SAMPLE_EVERY_BARS,
                     max_idle_seconds=float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS),
                 )
+            self._install_max_loss_close_guard(
+                engine=engine,
+                session_id=session_id,
+                state=state,
+                wallet=wallet,
+            )
 
             if environment == 0:
                 self._run_backtest(session_id, state, engine, request, declared_inputs)
@@ -1190,6 +1363,74 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             _maybe_fire()
 
         engine.running_strategy = wrapped  # type: ignore[assignment]
+
+    def _install_max_loss_close_guard(
+        self,
+        *,
+        engine: StrategyEngine,
+        session_id: str,
+        state: SessionState,
+        wallet: Any,
+    ) -> None:
+        if float(getattr(state, "initial_margin_balance", 0.0) or 0.0) <= 0.0:
+            return
+        original = getattr(engine, "running_strategy", None)
+        if not callable(original):
+            return
+
+        def wrapped(market_data: Any) -> None:
+            original(market_data)
+            if state.status != "running":
+                return
+            try:
+                self._maybe_trigger_max_loss_close(
+                    session_id=session_id,
+                    state=state,
+                    wallet=wallet,
+                )
+            except Exception:
+                logger.warning("session %s: max-loss guard failed", session_id, exc_info=True)
+
+        engine.running_strategy = wrapped  # type: ignore[assignment]
+
+    def _maybe_trigger_max_loss_close(
+        self,
+        *,
+        session_id: str,
+        state: SessionState,
+        wallet: Any,
+    ) -> None:
+        initial = float(state.initial_margin_balance or 0.0)
+        threshold = float(state.max_loss_close_pct or DEFAULT_MAX_LOSS_CLOSE_PCT)
+        if initial <= 0.0 or threshold <= 0.0:
+            return
+        current = _target_close_margin_balance(wallet, set(state.order_target_keys or set()))
+        loss_pct = max(0.0, initial - current) / initial
+        if loss_pct < threshold:
+            return
+        if not state.mark_max_loss_close_triggered():
+            return
+
+        reason = (
+            "max_loss_close_triggered:"
+            f"loss_pct={loss_pct:.8f}:threshold={threshold:.8f}:"
+            f"source={state.max_loss_close_source}:"
+            f"initial_margin_balance={initial:.8f}:"
+            f"current_margin_balance={current:.8f}"
+        )
+        logger.warning("session %s: %s", session_id, reason)
+        if not state.transition("stopping", error=reason):
+            return
+        self._persist_session_status(session_id, state)
+        self._halt_session_runtime(state, finalize=False)
+
+        ok, close_reason = self._stop_and_close_account(session_id, state)
+        if ok:
+            state.transition("stopped", error=reason)
+        else:
+            state.transition("stop_failed", error=f"{reason}; {close_reason}")
+        self._persist_session_status(session_id, state)
+        self._halt_session_runtime(state, finalize=True)
 
     def _run_backtest(
         self,
@@ -1761,6 +2002,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             side=order.side,
             qty=str(order.qty),
             order_type="MARKET",
+            reduce_only=True,
         )
 
     def _build_stop_and_close_orders(self, wallet: Any, state: SessionState) -> tuple[list[_StopOrder], str]:
@@ -1769,11 +2011,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
         futures_open_orders = 0
         spot_open_orders = 0
-        for (_exchange, market, _venue_id), route_wallet in wallet.wallets.items():
-            if market == "perpetual_futures":
-                futures_open_orders += len(getattr(route_wallet.futures, "open_orders", {}) or {})
+        for (exchange, market, _venue_id), route_wallet in wallet.wallets.items():
+            if market in {"perpetual_futures", "delivery_futures"}:
+                for open_order in (getattr(route_wallet.futures, "open_orders", {}) or {}).values():
+                    symbol = getattr(open_order, "symbol", "")
+                    if _target_is_allowed(state, exchange, market, symbol):
+                        futures_open_orders += 1
             elif market == "spot":
-                spot_open_orders += len(getattr(route_wallet.spot, "open_orders", {}) or {})
+                for open_order in (getattr(route_wallet.spot, "open_orders", {}) or {}).values():
+                    symbol = getattr(open_order, "symbol", "")
+                    if _target_is_allowed(state, exchange, market, symbol):
+                        spot_open_orders += 1
         if futures_open_orders or spot_open_orders:
             return [], (
                 "stop_and_close_failed:open_orders_present:"
@@ -1782,7 +2030,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
         orders: list[_StopOrder] = []
         for (exchange, market, venue_id), route_wallet in sorted(wallet.wallets.items()):
-            if market == "perpetual_futures":
+            if market in {"perpetual_futures", "delivery_futures"}:
                 for pos in list(getattr(route_wallet.futures, "positions", {}).values()):
                     qty = abs(float(getattr(pos, "position_qty", 0.0) or 0.0))
                     if qty <= 1e-12:
@@ -1790,6 +2038,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     symbol = str(getattr(pos, "symbol", "") or "").strip().upper()
                     if not symbol:
                         return [], "stop_and_close_failed:invalid_futures_symbol"
+                    if not _target_is_allowed(state, exchange, market, symbol):
+                        continue
                     side = "SELL" if float(getattr(pos, "position_qty", 0.0) or 0.0) > 0 else "BUY"
                     mark_price = float(
                         getattr(pos, "mark_price", 0.0)
@@ -1810,6 +2060,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 for asset_symbol, asset in getattr(route_wallet.spot, "assets", {}).items():
                     sym = str(asset_symbol).strip().upper()
                     if sym == "USDT":
+                        continue
+                    if not _spot_asset_target_is_allowed(state, exchange, market, sym):
                         continue
                     qty = float(getattr(asset, "qty", 0.0) or 0.0) - float(getattr(asset, "locked", 0.0) or 0.0)
                     if qty <= 1e-12:
@@ -1836,17 +2088,24 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     def _account_is_flat(wallet: Any, state: SessionState) -> tuple[bool, str]:
         if not isinstance(wallet, PortfolioWalletRuntime):
             return False, "stop_and_close_failed:portfolio_wallet_required"
-        for (_exchange, market, _venue_id), route_wallet in sorted(wallet.wallets.items()):
-            if market == "perpetual_futures":
+        for (exchange, market, _venue_id), route_wallet in sorted(wallet.wallets.items()):
+            if market in {"perpetual_futures", "delivery_futures"}:
                 for pos in getattr(route_wallet.futures, "positions", {}).values():
+                    symbol = str(getattr(pos, "symbol", "") or "").strip().upper()
+                    if not _target_is_allowed(state, exchange, market, symbol):
+                        continue
                     if abs(float(getattr(pos, "position_qty", 0.0) or 0.0)) > 1e-12:
-                        return False, f"stop_and_close_failed:futures_not_flat:{getattr(pos, 'symbol', '')}"
-                if getattr(route_wallet.futures, "open_orders", {}):
-                    return False, "stop_and_close_failed:futures_open_orders_remaining"
+                        return False, f"stop_and_close_failed:futures_not_flat:{symbol}"
+                for open_order in (getattr(route_wallet.futures, "open_orders", {}) or {}).values():
+                    symbol = getattr(open_order, "symbol", "")
+                    if _target_is_allowed(state, exchange, market, symbol):
+                        return False, "stop_and_close_failed:futures_open_orders_remaining"
             elif market == "spot":
                 for asset_symbol, asset in getattr(route_wallet.spot, "assets", {}).items():
                     sym = str(asset_symbol).strip().upper()
                     if sym == "USDT":
+                        continue
+                    if not _spot_asset_target_is_allowed(state, exchange, market, sym):
                         continue
                     qty = float(getattr(asset, "qty", 0.0) or 0.0)
                     locked = float(getattr(asset, "locked", 0.0) or 0.0)
@@ -1854,8 +2113,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         if state.environment == 0:
                             return False, f"stop_and_close_failed:spot_not_flat:{sym}"
                         return False, f"stop_and_close_failed:spot_exit_unsupported:{sym}"
-                if getattr(route_wallet.spot, "open_orders", {}):
-                    return False, "stop_and_close_failed:spot_open_orders_remaining"
+                for open_order in (getattr(route_wallet.spot, "open_orders", {}) or {}).values():
+                    symbol = getattr(open_order, "symbol", "")
+                    if _target_is_allowed(state, exchange, market, symbol):
+                        return False, "stop_and_close_failed:spot_open_orders_remaining"
         return True, ""
 
     # ── ValidateStrategyCode ─────────────────────────────────────────────────
@@ -1946,7 +2207,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             declared: list[StrategyInput] | None = None,
             order_targets: list[StrategyOrderTarget] | None = None,
             required_routes: set[tuple[str, str]] | None = None,
+            risk_controls: _EffectiveRiskControls | None = None,
         ) -> pb2.PreviewRunStrategyResponse:
+            effective = risk_controls or _EffectiveRiskControls(
+                DEFAULT_MAX_LOSS_CLOSE_PCT,
+                "platform_default",
+            )
             failures_proto: list[pb2.PreflightFailureProto] = []
             for f in preflight_result.failures:
                 kw: dict[str, Any] = {"kind": f.kind.value, "reason": f.reason}
@@ -1998,6 +2264,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 declared_inputs=declared_inputs_proto,
                 declared_order_targets=declared_order_targets_proto,
                 required_routes=required_routes_proto,
+                risk_controls=pb2.RiskControls(
+                    max_loss_close_pct=effective.max_loss_close_pct,
+                    max_loss_close_source=effective.max_loss_close_source,
+                ),
             )
 
         # Profile support gate — same as RunStrategy's early check.
@@ -2030,6 +2300,15 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         except (ImportError, AttributeError) as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy could not be loaded: {e}")
+            return pb2.PreviewRunStrategyResponse()
+        try:
+            effective_risk = _effective_risk_controls_from_request(
+                declarations,
+                getattr(request, "max_loss_close_pct", 0.0),
+            )
+        except StrategyDeclarationError as e:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(f"strategy risk control invalid: {e}")
             return pb2.PreviewRunStrategyResponse()
         declared_inputs = list(declarations.inputs)
         required_routes = set(declarations.required_routes)
@@ -2089,6 +2368,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             declared_inputs,
             list(declarations.order_targets),
             required_routes,
+            effective_risk,
         )
 
     def GetLiveConsumptionDiagnostics(self, request, context):

@@ -8,6 +8,7 @@ from strategy_service.inputs import (
     StrategyDeclarationError,
     parse_declared_inputs,
     parse_order_targets,
+    parse_risk_controls,
 )
 from strategy_service.runtime_profile import DEBUGGER_ONLY_MODULES, current_runtime_profile
 
@@ -186,6 +187,9 @@ def _validate_phase3_contract(tree: ast.AST, issues: list[StrategyValidationIssu
     else:
         _validate_order_targets_literal(assignments["ORDER_TARGETS"], issues)
 
+    if "RISK_CONTROLS" in assignments:
+        _validate_risk_controls_literal(assignments["RISK_CONTROLS"], issues)
+
     for node in ast.walk(strategy_class):
         if isinstance(node, ast.Call) and _is_order_decision_call(node):
             _validate_order_decision_call(node, issues)
@@ -233,6 +237,20 @@ def _validate_order_targets_literal(node: ast.AST, issues: list[StrategyValidati
             StrategyValidationIssue(
                 code="invalid_order_targets",
                 message=f"invalid ORDER_TARGETS declaration: {exc}",
+                line=getattr(node, "lineno", 0),
+            )
+        )
+
+
+def _validate_risk_controls_literal(node: ast.AST, issues: list[StrategyValidationIssue]) -> None:
+    try:
+        raw = _literal_eval_phase3(node)
+        parse_risk_controls(raw)
+    except (ValueError, StrategyDeclarationError) as exc:
+        issues.append(
+            StrategyValidationIssue(
+                code="invalid_risk_controls",
+                message=f"invalid RISK_CONTROLS declaration: {exc}",
                 line=getattr(node, "lineno", 0),
             )
         )

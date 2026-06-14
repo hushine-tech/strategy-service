@@ -50,6 +50,11 @@ class SessionState:
     last_unroutable_reason: str = ""
     wallet: object | None = None
     order_client: object | None = None
+    order_target_keys: set[tuple[str, str, str]] = field(default_factory=set)
+    max_loss_close_pct: float = 0.30
+    max_loss_close_source: str = "platform_default"
+    initial_margin_balance: float = 0.0
+    max_loss_close_triggered: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def transition(self, new_status: str, bars: int | None = None, error: str | None = None) -> bool:
@@ -123,6 +128,28 @@ class SessionState:
         with self._lock:
             self.wallet = wallet
             self.order_client = order_client
+
+    def configure_risk_runtime(
+        self,
+        *,
+        order_target_keys: set[tuple[str, str, str]],
+        max_loss_close_pct: float,
+        max_loss_close_source: str,
+        initial_margin_balance: float,
+    ) -> None:
+        with self._lock:
+            self.order_target_keys = set(order_target_keys)
+            self.max_loss_close_pct = float(max_loss_close_pct)
+            self.max_loss_close_source = str(max_loss_close_source or "platform_default")
+            self.initial_margin_balance = float(initial_margin_balance)
+            self.max_loss_close_triggered = False
+
+    def mark_max_loss_close_triggered(self) -> bool:
+        with self._lock:
+            if self.max_loss_close_triggered:
+                return False
+            self.max_loss_close_triggered = True
+            return True
 
     def note_lease_heartbeat(self, now_ms: int | None = None) -> None:
         with self._lock:

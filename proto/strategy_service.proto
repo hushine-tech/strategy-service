@@ -45,6 +45,9 @@ message RunStrategyRequest {
   int64  end_time_ms   = 7;
   int64  user_id       = 100;
   string runtime_id    = 101;
+  // Ratio, not percent. 0 means "not provided"; runtime falls back to
+  // strategy declaration or platform default.
+  double max_loss_close_pct = 102;
 }
 
 message RunStrategyResponse {
@@ -118,6 +121,9 @@ message PreviewRunStrategyRequest {
   int64  end_time_ms   = 7;
   int64  user_id       = 100;
   string runtime_id    = 101;
+  // Ratio, not percent. 0 means "not provided"; runtime falls back to
+  // strategy declaration or platform default.
+  double max_loss_close_pct = 102;
 }
 
 message PreflightInputKey {
@@ -160,6 +166,14 @@ message PreviewRunStrategyResponse {
   repeated StrategyOrderTargetBinding declared_order_targets = 7;
   // Union of INPUTS and ORDER_TARGETS routes required by the account/session.
   repeated StrategyRouteBinding required_routes = 8;
+  // Effective risk settings after strategy declaration and request defaults
+  // have been resolved.
+  RiskControls risk_controls = 9;
+}
+
+message RiskControls {
+  double max_loss_close_pct = 1;
+  string max_loss_close_source = 2; // strategy / request_default / platform_default
 }
 
 message GetLiveConsumptionDiagnosticsRequest {}
