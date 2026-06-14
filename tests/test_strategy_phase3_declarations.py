@@ -167,3 +167,74 @@ def test_order_target_keys_returns_exchange_market_symbol():
         ("binance", "perpetual_futures", "ETHUSDT"),
         ("okx", "spot", "BTCUSDT"),
     }
+
+
+def test_risk_controls_optional_defaults_empty():
+    class Strategy:
+        INPUTS = [
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "ETHUSDT",
+                "interval": "1m",
+            },
+        ]
+        ORDER_TARGETS = [
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "ETHUSDT",
+            },
+        ]
+
+    declarations = extract_declarations(Strategy())
+
+    assert declarations.risk_controls.max_loss_close_pct is None
+
+
+def test_risk_controls_parse_max_loss_ratio():
+    class Strategy:
+        INPUTS = [
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "ETHUSDT",
+                "interval": "1m",
+            },
+        ]
+        ORDER_TARGETS = [
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "ETHUSDT",
+            },
+        ]
+        RISK_CONTROLS = {"max_loss_close_pct": "0.2"}
+
+    declarations = extract_declarations(Strategy())
+
+    assert declarations.risk_controls.max_loss_close_pct == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize("value", [0, -0.1, 1.1, "abc"])
+def test_risk_controls_reject_invalid_max_loss(value):
+    class Strategy:
+        INPUTS = [
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "ETHUSDT",
+                "interval": "1m",
+            },
+        ]
+        ORDER_TARGETS = [
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "ETHUSDT",
+            },
+        ]
+        RISK_CONTROLS = {"max_loss_close_pct": value}
+
+    with pytest.raises(StrategyDeclarationError, match="max_loss_close_pct"):
+        extract_declarations(Strategy())

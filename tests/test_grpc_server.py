@@ -2287,6 +2287,7 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
             assert decision.symbol == "ETHUSDT"
             assert decision.side == "SELL"
             assert abs(float(decision.qty) - 0.02) < 1e-12
+            assert decision.reduce_only is True
             return OrderResponse(
                 symbol=account_symbol or decision.symbol,
                 side="SELL",
@@ -2301,6 +2302,12 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
     servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092", restore_running_sessions=False)
     session_id, state = servicer._sessions.create(environment=0, user_id=17, account_id=505)
     state.strategy_id = 606
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "perpetual_futures", "ETHUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+        initial_margin_balance=1000.0,
+    )
     state.configure_stop_runtime(wallet=wallet, order_client=FakeOrderClient())
     context = _FakeContext()
 
@@ -2320,6 +2327,234 @@ def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypat
     assert updates[0][1] == "stopping"
     assert updates[-1][1] == "stopped"
     assert wallet_syncs[-1] == (505, 1, session_id)
+
+
+def test_stop_strategy_stop_and_close_only_closes_declared_order_targets(monkeypatch):
+    route_wallet = make_backtest_wallet(
+        futures_positions=[
+            {
+                "symbol": "ETHUSDT",
+                "position_qty": 0.02,
+                "entry_price": 2300.0,
+                "mark_price": 2310.0,
+                "margin_mode": "cross",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "position_qty": -0.01,
+                "entry_price": 70000.0,
+                "mark_price": 69000.0,
+                "margin_mode": "cross",
+            },
+        ],
+    )
+    wallet = PortfolioWalletRuntime(
+        account_id=515,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    placed: list[str] = []
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def list_running_sessions(self, runtime_id: str = ""):
+            return []
+
+        def update_session(self, session_id: str, status: str, bars_processed: int = 0, error: str = "", runtime_id: str = "") -> bool:
+            return True
+
+        def update_account_wallet_state(self, **_kwargs) -> bool:
+            return True
+
+    class FakeOrderClient:
+        def place_order(self, account_id, decision, mark_price, **kwargs):
+            del account_id, kwargs
+            placed.append(decision.symbol)
+            return OrderResponse(
+                symbol=decision.symbol,
+                side=decision.side,
+                qty=float(decision.qty),
+                fill_price=mark_price,
+                status="FILLED",
+                order_id=f"close-{decision.symbol}",
+                reduce_only=decision.reduce_only,
+            )
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+
+    servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092", restore_running_sessions=False)
+    session_id, state = servicer._sessions.create(environment=0, user_id=17, account_id=515)
+    state.strategy_id = 616
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "perpetual_futures", "ETHUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+        initial_margin_balance=1000.0,
+    )
+    state.configure_stop_runtime(wallet=wallet, order_client=FakeOrderClient())
+
+    resp = servicer.StopStrategy(
+        SimpleNamespace(
+            session_id=session_id,
+            user_id=17,
+            stop_action=pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS,
+        ),
+        _FakeContext(),
+    )
+
+    assert resp.stopped is True
+    assert placed == ["ETHUSDT"]
+    assert abs(route_wallet.futures.positions[("ETHUSDT", 0)].position_qty) <= 1e-12
+    assert abs(route_wallet.futures.positions[("BTCUSDT", 0)].position_qty + 0.01) <= 1e-12
+
+
+def test_max_loss_guard_stops_and_closes_target_position(monkeypatch):
+    route_wallet = make_backtest_wallet(
+        wallet_balance=1000.0,
+        futures_positions=[{
+            "symbol": "ETHUSDT",
+            "position_qty": 1.0,
+            "entry_price": 2300.0,
+            "mark_price": 1900.0,
+            "margin_mode": "cross",
+        }],
+    )
+    wallet = PortfolioWalletRuntime(
+        account_id=525,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    updates: list[tuple[str, str, str]] = []
+    placed: list[tuple[str, bool]] = []
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def list_running_sessions(self, runtime_id: str = ""):
+            return []
+
+        def update_session(self, session_id: str, status: str, bars_processed: int = 0, error: str = "", runtime_id: str = "") -> bool:
+            del bars_processed, runtime_id
+            updates.append((session_id, status, error))
+            return True
+
+        def update_account_wallet_state(self, **_kwargs) -> bool:
+            return True
+
+    class FakeOrderClient:
+        def place_order(self, account_id, decision, mark_price, **kwargs):
+            del account_id, kwargs
+            placed.append((decision.symbol, decision.reduce_only))
+            return OrderResponse(
+                symbol=decision.symbol,
+                side=decision.side,
+                qty=float(decision.qty),
+                fill_price=mark_price,
+                status="FILLED",
+                order_id="risk-close-1",
+                reduce_only=decision.reduce_only,
+            )
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+
+    servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092", restore_running_sessions=False)
+    session_id, state = servicer._sessions.create(environment=0, user_id=17, account_id=525)
+    state.strategy_id = 626
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "perpetual_futures", "ETHUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="strategy",
+        initial_margin_balance=1000.0,
+    )
+    state.configure_stop_runtime(wallet=wallet, order_client=FakeOrderClient())
+
+    servicer._maybe_trigger_max_loss_close(
+        session_id=session_id,
+        state=state,
+        wallet=wallet,
+    )
+
+    assert state.status == "stopped"
+    assert state.max_loss_close_triggered is True
+    assert "max_loss_close_triggered" in state.error
+    assert placed == [("ETHUSDT", True)]
+    assert updates[0][1] == "stopping"
+    assert updates[-1][1] == "stopped"
+    assert abs(route_wallet.futures.positions[("ETHUSDT", 0)].position_qty) <= 1e-12
+
+
+def test_max_loss_guard_ignores_unowned_position_drawdown(monkeypatch):
+    route_wallet = make_backtest_wallet(
+        wallet_balance=1000.0,
+        futures_positions=[
+            {
+                "symbol": "ETHUSDT",
+                "position_qty": 0.02,
+                "entry_price": 2300.0,
+                "mark_price": 2310.0,
+                "margin_mode": "cross",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "position_qty": 1.0,
+                "entry_price": 70000.0,
+                "mark_price": 69000.0,
+                "margin_mode": "cross",
+            },
+        ],
+    )
+    wallet = PortfolioWalletRuntime(
+        account_id=526,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    updates: list[tuple[str, str, str]] = []
+    placed: list[tuple[str, bool]] = []
+
+    class FakeAccountClient:
+        def __init__(self, _addr: str) -> None:
+            pass
+
+        def list_running_sessions(self, runtime_id: str = ""):
+            return []
+
+        def update_session(self, session_id: str, status: str, bars_processed: int = 0, error: str = "", runtime_id: str = "") -> bool:
+            del bars_processed, runtime_id
+            updates.append((session_id, status, error))
+            return True
+
+    class FakeOrderClient:
+        def place_order(self, account_id, decision, mark_price, **kwargs):
+            del account_id, mark_price, kwargs
+            placed.append((decision.symbol, decision.reduce_only))
+            raise AssertionError("non-target drawdown must not trigger close orders")
+
+    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
+
+    servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092", restore_running_sessions=False)
+    session_id, state = servicer._sessions.create(environment=0, user_id=17, account_id=526)
+    state.strategy_id = 627
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "perpetual_futures", "ETHUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="strategy",
+        initial_margin_balance=1000.0,
+    )
+    state.configure_stop_runtime(wallet=wallet, order_client=FakeOrderClient())
+
+    servicer._maybe_trigger_max_loss_close(
+        session_id=session_id,
+        state=state,
+        wallet=wallet,
+    )
+
+    assert state.status == "running"
+    assert state.max_loss_close_triggered is False
+    assert placed == []
+    assert updates == []
 
 
 def test_stop_strategy_stop_and_close_mode2_fails_closed_for_spot_exit(monkeypatch):
@@ -2356,6 +2591,12 @@ def test_stop_strategy_stop_and_close_mode2_fails_closed_for_spot_exit(monkeypat
     servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092", restore_running_sessions=False)
     session_id, state = servicer._sessions.create(environment=1, user_id=17, account_id=707)
     state.strategy_id = 808
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "spot", "BTCUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+        initial_margin_balance=1000.0,
+    )
     state.configure_stop_runtime(wallet=wallet, order_client=object())
     stop_event = threading.Event()
     state._stop_event = stop_event  # type: ignore[attr-defined]
@@ -2768,6 +3009,41 @@ def test_run_strategy_persists_runtime_binding(monkeypatch):
     assert calls["save_kwargs"][-1]["runtime_source"] == "hosted"
     assert calls["save_kwargs"][-1]["runtime_name"] == "default"
     assert servicer._sessions.get(resp.session_id).runtime_id == "rt-hosted"
+
+
+def test_run_strategy_stores_effective_max_loss_controls(monkeypatch):
+    servicer, _ = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=(
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"}]\n'
+            '    RISK_CONTROLS = {"max_loss_close_pct": 0.2}\n'
+            "    def on_market_data(self, data, wallet): return None\n"
+        ),
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    request = SimpleNamespace(
+        account_id=201,
+        user_id=17,
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+        max_loss_close_pct=0.25,
+    )
+    context = _FakeContext()
+
+    resp = servicer.RunStrategy(request, context)
+
+    assert context.code is None
+    state = servicer._sessions.get(resp.session_id)
+    assert state.max_loss_close_pct == 0.2
+    assert state.max_loss_close_source == "strategy"
+    assert state.initial_margin_balance == 1000.0
+    assert state.order_target_keys == {("binance", "perpetual_futures", "BTCUSDT")}
 
 
 def test_run_strategy_account_preflight_passes_persistence_session_id(monkeypatch):
@@ -3514,6 +3790,75 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
     assert {(r.exchange, r.market) for r in resp.required_routes} == {
         ("binance", "perpetual_futures")
     }
+
+
+def test_preview_run_strategy_returns_effective_risk_controls(monkeypatch):
+    servicer, _ = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=(
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT"}]\n'
+            '    RISK_CONTROLS = {"max_loss_close_pct": 0.2}\n'
+            "    def on_market_data(self, data, wallet): return None\n"
+        ),
+    )
+
+    def fake_preflight(**kwargs):
+        from strategy_service.preflight import PreflightResult, RuntimeSourceProfile
+        return PreflightResult(profile=RuntimeSourceProfile.BACKTEST)
+
+    monkeypatch.setattr(servicer, "_run_profile_preflight", fake_preflight)
+
+    request = SimpleNamespace(
+        account_id=301,
+        user_id=17,
+        strategy_path="",
+        start_time_ms=1,
+        end_time_ms=2,
+        max_loss_close_pct=0.25,
+    )
+    context = _FakeContext()
+    resp = servicer.PreviewRunStrategy(request, context)
+
+    assert context.code is None
+    assert resp.risk_controls.max_loss_close_pct == 0.2
+    assert resp.risk_controls.max_loss_close_source == "strategy"
+
+
+def test_preview_run_strategy_uses_request_risk_default_when_strategy_omits(monkeypatch):
+    servicer, _ = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=(
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = []\n'
+            "    def on_market_data(self, data, wallet): return None\n"
+        ),
+    )
+
+    def fake_preflight(**kwargs):
+        from strategy_service.preflight import PreflightResult, RuntimeSourceProfile
+        return PreflightResult(profile=RuntimeSourceProfile.BACKTEST)
+
+    monkeypatch.setattr(servicer, "_run_profile_preflight", fake_preflight)
+
+    request = SimpleNamespace(
+        account_id=301,
+        user_id=17,
+        strategy_path="",
+        start_time_ms=1,
+        end_time_ms=2,
+        max_loss_close_pct=0.25,
+    )
+    context = _FakeContext()
+    resp = servicer.PreviewRunStrategy(request, context)
+
+    assert context.code is None
+    assert resp.risk_controls.max_loss_close_pct == 0.25
+    assert resp.risk_controls.max_loss_close_source == "request_default"
 
 
 def test_preview_run_strategy_reports_unsupported_live_profile(monkeypatch):

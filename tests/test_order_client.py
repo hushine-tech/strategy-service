@@ -48,6 +48,10 @@ def _decision(
     order_type: str = "MARKET",
     price: str | None = None,
     position_side: str | None = None,
+    time_in_force: str | None = None,
+    post_only: bool = False,
+    good_till_date: object | None = None,
+    reduce_only: bool = False,
 ) -> OrderDecision:
     return OrderDecision(
         exchange=exchange,
@@ -58,6 +62,10 @@ def _decision(
         order_type=order_type,
         price=price,
         position_side=position_side,
+        time_in_force=time_in_force,
+        post_only=post_only,
+        good_till_date=good_till_date,
+        reduce_only=reduce_only,
     )
 
 
@@ -123,6 +131,60 @@ def test_place_order_uses_canonical_symbol_and_emits_fill_events():
     assert feedback.fill_events[1].status == "FILLED"
     assert feedback.fill_events[1].executed_qty == pytest.approx(0.05)
     assert feedback.fill_events[1].remaining_qty == pytest.approx(0.0)
+
+
+def test_place_order_ioc_partial_expired_emits_terminal_fill_event():
+    response = order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-ioc",
+        attempt_id="attempt-ioc",
+        attempt_status="ACCEPTED",
+        order=order_service_pb2.ExchangeOrderEntry(
+            order_id="order-ioc",
+            exchange_order_id="ex-ioc",
+            symbol="ETHUSDT",
+            side="BUY",
+            orig_qty=0.02,
+            executed_qty=0.004,
+            remaining_qty=0.016,
+            avg_price=2500.0,
+            price=2500.0,
+            status="EXPIRED",
+        ),
+        fill_deltas=[
+            order_service_pb2.OrderFillEntry(
+                order_id="order-ioc",
+                qty=0.004,
+                fill_price=2500.0,
+                fee=0.01,
+            ),
+        ],
+    )
+    client = OrderClient("")
+    stub = _Stub(response)
+    client._stub = stub
+
+    feedback = client.place_order(
+        13,
+        _decision(order_type="LIMIT", price="2500", time_in_force="IOC"),
+        2500.0,
+        account_symbol="ETHUSDT",
+        market="perpetual_futures",
+        intent_id="intent-ioc",
+    )
+
+    assert stub.last_request is not None
+    assert stub.last_request.order_type == "LIMIT"
+    assert stub.last_request.time_in_force == "IOC"
+    assert feedback.attempt_status == "ACCEPTED"
+    assert feedback.order is not None
+    assert feedback.order.status == "EXPIRED"
+    assert feedback.fill_count == 1
+    assert feedback.delta_qty == pytest.approx(0.004)
+    assert len(feedback.fill_events) == 1
+    assert feedback.fill_events[0].status == "EXPIRED"
+    assert feedback.fill_events[0].qty == pytest.approx(0.004)
+    assert feedback.fill_events[0].executed_qty == pytest.approx(0.004)
+    assert feedback.fill_events[0].remaining_qty == pytest.approx(0.016)
 
 
 def test_place_order_passes_market_time_to_order_service():
@@ -277,7 +339,7 @@ def test_place_order_sends_explicit_venue_route_fields():
     assert feedback.attempt_status == "ACCEPTED"
 
 
-def test_place_order_sends_limit_gtc_when_price_is_set():
+def test_place_order_sends_advanced_order_contract_fields():
     response = order_service_pb2.PlaceOrderResponse(
         intent_id="intent-limit",
         attempt_id="attempt-limit",
@@ -286,10 +348,21 @@ def test_place_order_sends_limit_gtc_when_price_is_set():
     client = OrderClient("")
     stub = _Stub(response)
     client._stub = stub
+    good_till_date = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
     client.place_order(
         13,
-        _decision(symbol="ETHUSDT", side="BUY", qty="0.05", price="50000", order_type="LIMIT"),
+        _decision(
+            symbol="ETHUSDT",
+            side="BUY",
+            qty="0.05",
+            price="50000",
+            order_type="LIMIT",
+            time_in_force="GTD",
+            post_only=True,
+            good_till_date=good_till_date,
+            reduce_only=True,
+        ),
         51000.0,
         account_symbol="ETHUSDT",
         market="perpetual_futures",
@@ -299,7 +372,11 @@ def test_place_order_sends_limit_gtc_when_price_is_set():
     assert stub.last_request is not None
     assert stub.last_request.price == 50000.0
     assert stub.last_request.order_type == "LIMIT"
-    assert stub.last_request.time_in_force == "GTC"
+    assert stub.last_request.time_in_force == "GTD"
+    assert stub.last_request.post_only is True
+    assert stub.last_request.reduce_only is True
+    assert stub.last_request.HasField("good_till_date")
+    assert stub.last_request.good_till_date.ToDatetime(tzinfo=timezone.utc) == good_till_date
 
 
 def test_exchange_and_market_codes_do_not_default_missing_route() -> None:
@@ -358,6 +435,7 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
                 position_side=0,
                 side="BUY",
                 event_type="fill",
+                event_source="force_close",
                 order_status="FILLED",
                 order_id="order-1",
                 fill_delta=order_service_pb2.FillDeltaEntry(
@@ -384,6 +462,8 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
     assert event.market == "perpetual_futures"
     assert event.position_side == "both"
     assert event.side == "BUY"
+    assert event.event_source == "force_close"
+    assert event.symbol == "ETHUSDT"
     assert event.fill is not None
     assert event.fill.qty == pytest.approx(0.1)
     order_response = OrderClient.order_response_from_update(event)

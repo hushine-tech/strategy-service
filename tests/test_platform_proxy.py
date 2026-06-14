@@ -194,7 +194,12 @@ def test_proxy_order_client_places_order_without_direct_stub():
             symbol="ETHUSDT",
             side="BUY",
             qty="1",
-            order_type="MARKET",
+            order_type="LIMIT",
+            price="1999.5",
+            time_in_force="GTD",
+            post_only=True,
+            good_till_date=datetime(2030, 1, 1, tzinfo=timezone.utc),
+            reduce_only=True,
         ),
         2000,
         strategy_id=9,
@@ -208,6 +213,13 @@ def test_proxy_order_client_places_order_without_direct_stub():
     assert req.exchange == 1
     assert req.market == 2
     assert req.position_side == 0
+    assert req.price == 1999.5
+    assert req.order_type == "LIMIT"
+    assert req.time_in_force == "GTD"
+    assert req.post_only is True
+    assert req.reduce_only is True
+    assert req.HasField("good_till_date")
+    assert req.good_till_date.ToDatetime(tzinfo=timezone.utc) == datetime(2030, 1, 1, tzinfo=timezone.utc)
     assert feedback.attempt_status == "ACCEPTED"
     assert feedback.order.order_id == "order-1"
 

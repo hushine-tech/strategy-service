@@ -143,6 +143,40 @@ class MyStrategy:
     assert any(issue.code == "invalid_inputs" and "unsupported market" in issue.message for issue in result.issues)
 
 
+def test_validator_accepts_risk_controls_declaration():
+    result = validate_strategy_code(
+        """
+class MyStrategy:
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"}]
+    RISK_CONTROLS = {"max_loss_close_pct": 0.2}
+
+    def on_market_data(self, data, wallet):
+        return None
+"""
+    )
+
+    assert result.ok is True
+    assert result.issues == []
+
+
+def test_validator_rejects_invalid_risk_controls_declaration():
+    result = validate_strategy_code(
+        """
+class MyStrategy:
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"}]
+    RISK_CONTROLS = {"max_loss_close_pct": 1.2}
+
+    def on_market_data(self, data, wallet):
+        return None
+"""
+    )
+
+    assert result.ok is False
+    assert any(issue.code == "invalid_risk_controls" for issue in result.issues)
+
+
 def test_validator_rejects_legacy_order_decision_shape():
     result = validate_strategy_code(
         """

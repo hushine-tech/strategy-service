@@ -169,6 +169,11 @@ class OrderClient:
             time_in_force = str(getattr(decision, "time_in_force", None) or "").strip().upper()
             if order_type == "LIMIT":
                 kwargs["time_in_force"] = time_in_force or "GTC"
+            kwargs["post_only"] = bool(getattr(decision, "post_only", False))
+            kwargs["reduce_only"] = bool(getattr(decision, "reduce_only", False))
+            good_till_date_pb = _market_time_to_proto(getattr(decision, "good_till_date", None))
+            if good_till_date_pb is not None:
+                kwargs["good_till_date"] = good_till_date_pb
             market_time_pb = _market_time_to_proto(market_time)
             if market_time_pb is not None:
                 kwargs["market_time"] = market_time_pb
@@ -315,6 +320,8 @@ class OrderClient:
             position_side=POSITION_SIDE_NAMES.get(int(item.position_side), f"position_side:{int(item.position_side)}"),
             event_type=str(item.event_type or ""),
             order_status=str(item.order_status or ""),
+            event_source=str(getattr(item, "event_source", "") or ""),
+            symbol=str((getattr(order_state, "symbol", "") if order_state is not None else "") or (fill.symbol if fill is not None else "") or "").upper(),
             intent_id=str(item.intent_id or ""),
             attempt_id=str(item.attempt_id or ""),
             order_id=str(item.order_id or ""),

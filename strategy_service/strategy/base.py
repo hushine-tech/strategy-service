@@ -26,7 +26,14 @@ from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+_TERMINAL_ORDER_STATUSES = {
+    "FILLED",
+    "CANCELED",
+    "EXPIRED",
+    "REJECTED",
+    "RECOVERY_EXPIRED",
+    "FORCE_CLOSED",
+}
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -438,6 +445,7 @@ class BaseStrategy:
         symbol = str(
             getattr(order_resp, "symbol", "")
             or getattr(getattr(event, "fill", None), "symbol", "")
+            or getattr(event, "symbol", "")
             or ""
         )
         return (
@@ -781,6 +789,13 @@ class BaseStrategy:
             and feedback.order is not None
             and abs(float(getattr(feedback.order, "qty", 0.0) or 0.0)) > 0.0
         )
+        order_status = str(getattr(feedback.order, "status", "") or "").strip().upper() if feedback.order is not None else ""
+        terminal_without_fill = (
+            feedback.order is not None
+            and order_status in _TERMINAL_ORDER_STATUSES
+            and not has_settleable_fill
+            and float(getattr(feedback.order, "executed_qty", 0.0) or 0.0) <= 0.0
+        )
         pending_fill_confirmation = (
             feedback.attempt_status in {"ACCEPTED", "RECOVERED"}
             and feedback.order is not None
@@ -814,6 +829,8 @@ class BaseStrategy:
         elif has_settleable_fill:
             self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order, venue_id=item.venue_id)
             self._record_order_settlement(feedback.order)
+        elif terminal_without_fill:
+            self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order, venue_id=item.venue_id)
         else:
             self._notify_order_response(feedback)
             logger.warning(
