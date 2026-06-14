@@ -42,16 +42,6 @@ class ControlPanelServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.RegisterRuntime = channel.unary_unary(
-                '/controlpanel.v1.ControlPanelService/RegisterRuntime',
-                request_serializer=control__panel__service__pb2.RegisterRuntimeRequest.SerializeToString,
-                response_deserializer=control__panel__service__pb2.RegisterRuntimeResponse.FromString,
-                _registered_method=True)
-        self.HeartbeatRuntime = channel.unary_unary(
-                '/controlpanel.v1.ControlPanelService/HeartbeatRuntime',
-                request_serializer=control__panel__service__pb2.HeartbeatRuntimeRequest.SerializeToString,
-                response_deserializer=control__panel__service__pb2.HeartbeatRuntimeResponse.FromString,
-                _registered_method=True)
         self.ListRuntimes = channel.unary_unary(
                 '/controlpanel.v1.ControlPanelService/ListRuntimes',
                 request_serializer=control__panel__service__pb2.ListRuntimesRequest.SerializeToString,
@@ -76,11 +66,6 @@ class ControlPanelServiceStub(object):
                 '/controlpanel.v1.ControlPanelService/EnsureHostedRuntime',
                 request_serializer=control__panel__service__pb2.EnsureHostedRuntimeRequest.SerializeToString,
                 response_deserializer=control__panel__service__pb2.EnsureHostedRuntimeResponse.FromString,
-                _registered_method=True)
-        self.ValidateCallerToken = channel.unary_unary(
-                '/controlpanel.v1.ControlPanelService/ValidateCallerToken',
-                request_serializer=control__panel__service__pb2.ValidateCallerTokenRequest.SerializeToString,
-                response_deserializer=control__panel__service__pb2.ValidateCallerTokenResponse.FromString,
                 _registered_method=True)
         self.IssueRuntimeCredential = channel.unary_unary(
                 '/controlpanel.v1.ControlPanelService/IssueRuntimeCredential',
@@ -159,26 +144,6 @@ class ControlPanelServiceServicer(object):
     ── Runtime registry ──────────────────────────────────────────────────────
     """
 
-    def RegisterRuntime(self, request, context):
-        """RegisterRuntime is called by hosted strategy-runtime instances on startup.
-        Self-hosted runtimes MUST use RuntimeChannel HELLO with a signed
-        runtime credential instead; RegisterRuntime rejects source=self_hosted.
-        The response returns a registration_token that the hosted runtime must
-        present on subsequent Heartbeat calls.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def HeartbeatRuntime(self, request, context):
-        """HeartbeatRuntime updates the runtime's heartbeat_at timestamp. Auth via
-        registration_token in gRPC metadata. Stale heartbeats cause the route
-        resolver to mark the runtime unhealthy (configurable deadline).
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def ListRuntimes(self, request, context):
         """ListRuntimes returns the runtimes visible to the authenticated caller.
         Filters: user_id (required for non-admin callers), status, source.
@@ -237,21 +202,6 @@ class ControlPanelServiceServicer(object):
         user's runtime.
 
         For D1 this RPC is gated by quant-handler's strategy session paths.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ValidateCallerToken(self, request, context):
-        """ValidateCallerToken is the runtime-side hook the strategy-runtime
-        gRPC interceptor calls to verify an inbound `x-caller-token`
-        metadata value. The caller_token was issued by control-panel-service
-        on a previous Resolve / Ensure call; this RPC checks that the token
-        is still valid and is bound to the inbound runtime_id.
-
-        Phase D1 only — D3 will move handler↔runtime traffic through the
-        control-panel proxy and the per-call attestation token disappears.
-        Documented as D3-removable.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -386,16 +336,6 @@ class ControlPanelServiceServicer(object):
 
 def add_ControlPanelServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'RegisterRuntime': grpc.unary_unary_rpc_method_handler(
-                    servicer.RegisterRuntime,
-                    request_deserializer=control__panel__service__pb2.RegisterRuntimeRequest.FromString,
-                    response_serializer=control__panel__service__pb2.RegisterRuntimeResponse.SerializeToString,
-            ),
-            'HeartbeatRuntime': grpc.unary_unary_rpc_method_handler(
-                    servicer.HeartbeatRuntime,
-                    request_deserializer=control__panel__service__pb2.HeartbeatRuntimeRequest.FromString,
-                    response_serializer=control__panel__service__pb2.HeartbeatRuntimeResponse.SerializeToString,
-            ),
             'ListRuntimes': grpc.unary_unary_rpc_method_handler(
                     servicer.ListRuntimes,
                     request_deserializer=control__panel__service__pb2.ListRuntimesRequest.FromString,
@@ -420,11 +360,6 @@ def add_ControlPanelServiceServicer_to_server(servicer, server):
                     servicer.EnsureHostedRuntime,
                     request_deserializer=control__panel__service__pb2.EnsureHostedRuntimeRequest.FromString,
                     response_serializer=control__panel__service__pb2.EnsureHostedRuntimeResponse.SerializeToString,
-            ),
-            'ValidateCallerToken': grpc.unary_unary_rpc_method_handler(
-                    servicer.ValidateCallerToken,
-                    request_deserializer=control__panel__service__pb2.ValidateCallerTokenRequest.FromString,
-                    response_serializer=control__panel__service__pb2.ValidateCallerTokenResponse.SerializeToString,
             ),
             'IssueRuntimeCredential': grpc.unary_unary_rpc_method_handler(
                     servicer.IssueRuntimeCredential,
@@ -508,60 +443,6 @@ class ControlPanelService(object):
     market-data control-plane tables (requests / streams / leases / history).
     ── Runtime registry ──────────────────────────────────────────────────────
     """
-
-    @staticmethod
-    def RegisterRuntime(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/controlpanel.v1.ControlPanelService/RegisterRuntime',
-            control__panel__service__pb2.RegisterRuntimeRequest.SerializeToString,
-            control__panel__service__pb2.RegisterRuntimeResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def HeartbeatRuntime(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/controlpanel.v1.ControlPanelService/HeartbeatRuntime',
-            control__panel__service__pb2.HeartbeatRuntimeRequest.SerializeToString,
-            control__panel__service__pb2.HeartbeatRuntimeResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
 
     @staticmethod
     def ListRuntimes(request,
@@ -688,33 +569,6 @@ class ControlPanelService(object):
             '/controlpanel.v1.ControlPanelService/EnsureHostedRuntime',
             control__panel__service__pb2.EnsureHostedRuntimeRequest.SerializeToString,
             control__panel__service__pb2.EnsureHostedRuntimeResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ValidateCallerToken(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/controlpanel.v1.ControlPanelService/ValidateCallerToken',
-            control__panel__service__pb2.ValidateCallerTokenRequest.SerializeToString,
-            control__panel__service__pb2.ValidateCallerTokenResponse.FromString,
             options,
             channel_credentials,
             insecure,
