@@ -112,8 +112,8 @@ wallet sync（历史旧路径）
   └─ 旧钱包快照 RPC(local wallet, snapshot_reason)
                                            │
                                            │ 主流程
-                                           ├─ 1. 读取 account.mode
-                                           ├─ 2. mode=2 拉一次 exchange authoritative snapshot
+                                           ├─ 1. 读取 account.environment
+                                           ├─ 2. demo/live 交易所环境拉一次 exchange authoritative snapshot
                                            ├─ 3. 持久化 authoritative wallet / account snapshot
                                            ├─ 4. 组织 compare payload:
                                            │      - local snapshot（来自 request）

@@ -21,7 +21,7 @@
 | `total_value` | `AccountWalletState.total_value` | 账户总资产价值 |
 | `spot_estimated_value` | `AccountWalletState.spot_estimated_value` | 现货展示估值 |
 | `futures_position_equity` | `AccountWalletState.futures_position_equity` | 期货腿展示值；canonical 目标口径为 `futures.margin_balance`，对 Binance 快照等同 `futures.total_margin_balance` |
-| `mode` | `AccountWalletState.mode` | 账户模式 |
+| `environment` | `AccountWalletState.environment` | 账户环境：`0=backtest`、`1=demo`、`2=live` |
 | `updated_at` | `AccountWalletState.updated_at` | 快照时间 |
 | `metrics_authoritative` | `AccountWalletState.metrics_authoritative` | 展示指标是否由服务端权威给出 |
 
@@ -33,8 +33,8 @@
 | --- | --- | --- |
 | `margin_mode` | `futures.margin_mode` | `cross` / `isolated` |
 | `position_mode` | `futures.position_mode` | `one_way` / `hedge` |
-| `multi_assets_mode` | `futures.multi_assets_mode` | Binance 多资产模式；`mode=2` 下若为 `true` 则 fail-closed |
-| `portfolio_margin` | `futures.portfolio_margin` | Binance 组合保证金模式；`mode=2` 下若为 `true` 则 fail-closed |
+| `multi_assets_mode` | `futures.multi_assets_mode` | Binance 多资产模式；demo/live 交易所环境下若为 `true` 则 fail-closed |
+| `portfolio_margin` | `futures.portfolio_margin` | Binance 组合保证金模式；demo/live 交易所环境下若为 `true` 则 fail-closed |
 | `wallet_balance` | `futures.wallet_balance` | 期货钱包余额 |
 | `available_balance` | `futures.available_balance` | 期货可用余额 |
 | `margin_balance` | `futures.margin_balance` | 期货保证金余额 |
@@ -104,8 +104,8 @@
 
 ## 兼容边界
 
-- `mode=0`：`BinanceWalletRuntime` 直接消费 canonical state；HTTP / gRPC backtest 共用同一 runtime
-- `mode=2`：`BinanceWalletRuntime` 直接消费 canonical state（旧别名 `BinanceParityWallet` 已在 `C2b` 清理中删除）
-- `mode=2` 若 `multi_assets_mode=true` 或 `portfolio_margin=true`：直接 fail-closed
+- `environment=0`：`BinanceWalletRuntime` 直接消费 canonical state；backtest 共用同一 runtime
+- `environment=1`：`BinanceWalletRuntime` 直接消费 canonical state（旧别名 `BinanceParityWallet` 已在 `C2b` 清理中删除）
+- demo/live 交易所环境若 `multi_assets_mode=true` 或 `portfolio_margin=true`：直接 fail-closed
 - 缺 metadata 的风险字段仍可保留 exchange/oracle 值，但不再回退 legacy 近似公式
 - `LegacyWalletAdapter` 已在 `Phase C / C2b` 删除；主代码不再依赖 canonical -> legacy 转换层
