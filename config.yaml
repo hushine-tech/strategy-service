@@ -9,8 +9,12 @@ database:
   password: "postgres"
 
 dependencies:
-  # RuntimeChannel endpoint on control-panel-service.
-  control_panel_service_grpc: "127.0.0.1:50055"
+  # Normal control-panel gRPC is used by platform services / market-data
+  # control-plane calls. Runtime startup uses runtime_channel_grpc only.
+  control_panel_service_grpc: "127.0.0.1:50054"
+  market_data_control_panel_grpc: "127.0.0.1:50054"
+  # Dedicated RuntimeChannel listener on control-panel-service.
+  runtime_channel_grpc: "127.0.0.1:50055"
 
 runtime:
   # Empty uses /etc/hushine/runtime.cred. Override with RUNTIME_CREDENTIAL_PATH.

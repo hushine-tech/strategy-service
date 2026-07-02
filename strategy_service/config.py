@@ -1,6 +1,6 @@
 """Config loader for strategy-service.
 
-Loads YAML config and applies env var overrides. Legacy env vars are honored as aliases.
+Loads YAML config and applies env var overrides.
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ class DependenciesConfig:
     account_service_grpc: str = "localhost:50051"
     order_service_grpc: str = "127.0.0.1:50051"
     control_panel_service_grpc: str = ""
+    runtime_channel_grpc: str = ""
     # Phase D2: market-data control-plane RPCs moved out of core-service.
     # When unset, falls back to control_panel_service_grpc (same address —
     # both services live on the same gRPC port :50054 in D2).
@@ -61,6 +62,9 @@ class RuntimeChannelTLSConfig:
     enabled: bool = False
     root_cert_file: str = ""
     server_name: str = ""
+    client_cert_file: str = ""
+    client_key_file: str = ""
+    bundle_json: str = ""
 
 
 @dataclass
@@ -133,6 +137,9 @@ class Config:
             cfg.dependencies.control_panel_service_grpc = dep.get(
                 "control_panel_service_grpc", cfg.dependencies.control_panel_service_grpc
             )
+            cfg.dependencies.runtime_channel_grpc = dep.get(
+                "runtime_channel_grpc", cfg.dependencies.runtime_channel_grpc
+            )
             cfg.dependencies.market_data_control_panel_grpc = dep.get(
                 "market_data_control_panel_grpc",
                 cfg.dependencies.market_data_control_panel_grpc,
@@ -161,6 +168,14 @@ class Config:
             cfg.runtime_channel_tls.server_name = rtls.get(
                 "server_name",
                 cfg.runtime_channel_tls.server_name,
+            )
+            cfg.runtime_channel_tls.client_cert_file = rtls.get(
+                "client_cert_file",
+                cfg.runtime_channel_tls.client_cert_file,
+            )
+            cfg.runtime_channel_tls.client_key_file = rtls.get(
+                "client_key_file",
+                cfg.runtime_channel_tls.client_key_file,
             )
         if isinstance(data.get("kafka"), dict):
             k = data["kafka"]
@@ -239,15 +254,20 @@ class Config:
         )
         if v:
             self.dependencies.control_panel_service_grpc = v
+        v = os.environ.get("DEPENDENCIES_RUNTIME_CHANNEL_GRPC") or os.environ.get(
+            "RUNTIME_CHANNEL_GRPC_ADDR"
+        )
+        if v:
+            self.dependencies.runtime_channel_grpc = v
         v = os.environ.get("DEPENDENCIES_MARKET_DATA_CONTROL_PANEL_GRPC") or os.environ.get(
             "MARKET_DATA_CONTROL_PANEL_GRPC_ADDR"
         )
         if v:
             self.dependencies.market_data_control_panel_grpc = v
         # D2: if no explicit market-data address is set anywhere, fall back to
-        # the runtime control-plane address (both services live on the same
-        # gRPC port :50054 in D2). When a future deployment wants to point
-        # them at separate processes, set the explicit override.
+        # the normal control-panel gRPC address (:50054). RuntimeChannel has
+        # a dedicated listener (:50055) and must never be used for market-data
+        # control-plane RPCs.
         if (
             not self.dependencies.market_data_control_panel_grpc
             and self.dependencies.control_panel_service_grpc
@@ -286,6 +306,15 @@ class Config:
         v = os.environ.get("RUNTIME_CHANNEL_TLS_SERVER_NAME")
         if v:
             self.runtime_channel_tls.server_name = v
+        v = os.environ.get("RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE")
+        if v:
+            self.runtime_channel_tls.client_cert_file = v
+        v = os.environ.get("RUNTIME_CHANNEL_TLS_CLIENT_KEY_FILE")
+        if v:
+            self.runtime_channel_tls.client_key_file = v
+        v = os.environ.get("RUNTIME_CHANNEL_TLS_BUNDLE_JSON")
+        if v:
+            self.runtime_channel_tls.bundle_json = v
         # Kafka
         v = os.environ.get("KAFKA_BROKERS")
         if v:

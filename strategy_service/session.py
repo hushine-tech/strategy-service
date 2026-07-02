@@ -53,6 +53,8 @@ class SessionState:
     order_target_keys: set[tuple[str, str, str]] = field(default_factory=set)
     max_loss_close_pct: float = 0.30
     max_loss_close_source: str = "platform_default"
+    leverage: float = 1.0
+    leverage_source: str = "platform_default"
     initial_margin_balance: float = 0.0
     max_loss_close_triggered: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -82,6 +84,10 @@ class SessionState:
     def is_active(self) -> bool:
         with self._lock:
             return self.status in _ACTIVE_STATUSES
+
+    def is_terminal(self) -> bool:
+        with self._lock:
+            return self.status in _TERMINAL_STATUSES
 
     def configure_live_runtime(
         self,
@@ -135,12 +141,16 @@ class SessionState:
         order_target_keys: set[tuple[str, str, str]],
         max_loss_close_pct: float,
         max_loss_close_source: str,
-        initial_margin_balance: float,
+        initial_margin_balance: float = 0.0,
+        leverage: float = 1.0,
+        leverage_source: str = "platform_default",
     ) -> None:
         with self._lock:
             self.order_target_keys = set(order_target_keys)
             self.max_loss_close_pct = float(max_loss_close_pct)
             self.max_loss_close_source = str(max_loss_close_source or "platform_default")
+            self.leverage = float(leverage)
+            self.leverage_source = str(leverage_source or "platform_default")
             self.initial_margin_balance = float(initial_margin_balance)
             self.max_loss_close_triggered = False
 
@@ -160,6 +170,23 @@ class SessionState:
             self.unroutable_events += 1
             self.last_unroutable_reason = reason
             self.last_unroutable_at_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+
+    def record_runtime_error(self, error: str) -> bool:
+        with self._lock:
+            message = str(error or "").strip()
+            if not message or self.error == message:
+                return False
+            self.error = message
+            return True
+
+    def clear_runtime_error(self, prefix: str = "") -> bool:
+        with self._lock:
+            if not self.error:
+                return False
+            if prefix and not self.error.startswith(prefix):
+                return False
+            self.error = ""
+            return True
 
 
 class SessionManager:

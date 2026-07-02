@@ -89,8 +89,11 @@ type RunStrategyRequest struct {
 	// Ratio, not percent. 0 means "not provided"; runtime falls back to
 	// strategy declaration or platform default.
 	MaxLossClosePct float64 `protobuf:"fixed64,102,opt,name=max_loss_close_pct,json=maxLossClosePct,proto3" json:"max_loss_close_pct,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Session-level leverage used by runtime/order risk checks.
+	// 0 means "not provided"; runtime falls back to platform default 1x.
+	Leverage      float64 `protobuf:"fixed64,103,opt,name=leverage,proto3" json:"leverage,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunStrategyRequest) Reset() {
@@ -175,6 +178,13 @@ func (x *RunStrategyRequest) GetRuntimeId() string {
 func (x *RunStrategyRequest) GetMaxLossClosePct() float64 {
 	if x != nil {
 		return x.MaxLossClosePct
+	}
+	return 0
+}
+
+func (x *RunStrategyRequest) GetLeverage() float64 {
+	if x != nil {
+		return x.Leverage
 	}
 	return 0
 }
@@ -678,8 +688,11 @@ type PreviewRunStrategyRequest struct {
 	// Ratio, not percent. 0 means "not provided"; runtime falls back to
 	// strategy declaration or platform default.
 	MaxLossClosePct float64 `protobuf:"fixed64,102,opt,name=max_loss_close_pct,json=maxLossClosePct,proto3" json:"max_loss_close_pct,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Session-level leverage preview. 0 means "not provided"; runtime falls
+	// back to platform default 1x.
+	Leverage      float64 `protobuf:"fixed64,103,opt,name=leverage,proto3" json:"leverage,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PreviewRunStrategyRequest) Reset() {
@@ -757,6 +770,13 @@ func (x *PreviewRunStrategyRequest) GetRuntimeId() string {
 func (x *PreviewRunStrategyRequest) GetMaxLossClosePct() float64 {
 	if x != nil {
 		return x.MaxLossClosePct
+	}
+	return 0
+}
+
+func (x *PreviewRunStrategyRequest) GetLeverage() float64 {
+	if x != nil {
+		return x.Leverage
 	}
 	return 0
 }
@@ -1015,6 +1035,8 @@ type RiskControls struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	MaxLossClosePct    float64                `protobuf:"fixed64,1,opt,name=max_loss_close_pct,json=maxLossClosePct,proto3" json:"max_loss_close_pct,omitempty"`
 	MaxLossCloseSource string                 `protobuf:"bytes,2,opt,name=max_loss_close_source,json=maxLossCloseSource,proto3" json:"max_loss_close_source,omitempty"` // strategy / request_default / platform_default
+	Leverage           float64                `protobuf:"fixed64,3,opt,name=leverage,proto3" json:"leverage,omitempty"`
+	LeverageSource     string                 `protobuf:"bytes,4,opt,name=leverage_source,json=leverageSource,proto3" json:"leverage_source,omitempty"` // request_default / platform_default
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1059,6 +1081,20 @@ func (x *RiskControls) GetMaxLossClosePct() float64 {
 func (x *RiskControls) GetMaxLossCloseSource() string {
 	if x != nil {
 		return x.MaxLossCloseSource
+	}
+	return ""
+}
+
+func (x *RiskControls) GetLeverage() float64 {
+	if x != nil {
+		return x.Leverage
+	}
+	return 0
+}
+
+func (x *RiskControls) GetLeverageSource() string {
+	if x != nil {
+		return x.LeverageSource
 	}
 	return ""
 }
@@ -1491,7 +1527,7 @@ var File_strategy_service_proto protoreflect.FileDescriptor
 
 const file_strategy_service_proto_rawDesc = "" +
 	"\n" +
-	"\x16strategy_service.proto\x12\vstrategy.v1\"\xbe\x02\n" +
+	"\x16strategy_service.proto\x12\vstrategy.v1\"\xda\x02\n" +
 	"\x12RunStrategyRequest\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\x03R\taccountId\x12#\n" +
@@ -1502,7 +1538,8 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\auser_id\x18d \x01(\x03R\x06userId\x12\x1d\n" +
 	"\n" +
 	"runtime_id\x18e \x01(\tR\truntimeId\x12+\n" +
-	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePctJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x06symbolR\vsymbol_type\"4\n" +
+	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\x12\x1a\n" +
+	"\bleverage\x18g \x01(\x01R\bleverageJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x06symbolR\vsymbol_type\"4\n" +
 	"\x13RunStrategyResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\"q\n" +
@@ -1541,7 +1578,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06issues\x18\x02 \x03(\v2$.strategy.v1.StrategyValidationIssueR\x06issues\x12'\n" +
 	"\x0fruntime_version\x18\x03 \x01(\tR\x0eruntimeVersion\x12'\n" +
 	"\x0fruntime_profile\x18\x04 \x01(\tR\x0eruntimeProfile\x12=\n" +
-	"\x1ballowed_third_party_modules\x18\x05 \x03(\tR\x18allowedThirdPartyModules\"\x88\x02\n" +
+	"\x1ballowed_third_party_modules\x18\x05 \x03(\tR\x18allowedThirdPartyModules\"\xa4\x02\n" +
 	"\x19PreviewRunStrategyRequest\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\x03R\taccountId\x12#\n" +
@@ -1551,7 +1588,8 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\auser_id\x18d \x01(\x03R\x06userId\x12\x1d\n" +
 	"\n" +
 	"runtime_id\x18e \x01(\tR\truntimeId\x12+\n" +
-	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\"_\n" +
+	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\x12\x1a\n" +
+	"\bleverage\x18g \x01(\x01R\bleverage\"_\n" +
 	"\x11PreflightInputKey\x12\x16\n" +
 	"\x06market\x18\x01 \x01(\tR\x06market\x12\x16\n" +
 	"\x06symbol\x18\x02 \x01(\tR\x06symbol\x12\x1a\n" +
@@ -1569,10 +1607,12 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x0fdeclared_inputs\x18\x06 \x03(\v2\x1e.strategy.v1.LiveStreamBindingR\x0edeclaredInputs\x12]\n" +
 	"\x16declared_order_targets\x18\a \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\x12J\n" +
 	"\x0frequired_routes\x18\b \x03(\v2!.strategy.v1.StrategyRouteBindingR\x0erequiredRoutes\x12>\n" +
-	"\rrisk_controls\x18\t \x01(\v2\x19.strategy.v1.RiskControlsR\friskControls\"n\n" +
+	"\rrisk_controls\x18\t \x01(\v2\x19.strategy.v1.RiskControlsR\friskControls\"\xb3\x01\n" +
 	"\fRiskControls\x12+\n" +
 	"\x12max_loss_close_pct\x18\x01 \x01(\x01R\x0fmaxLossClosePct\x121\n" +
-	"\x15max_loss_close_source\x18\x02 \x01(\tR\x12maxLossCloseSource\"&\n" +
+	"\x15max_loss_close_source\x18\x02 \x01(\tR\x12maxLossCloseSource\x12\x1a\n" +
+	"\bleverage\x18\x03 \x01(\x01R\bleverage\x12'\n" +
+	"\x0fleverage_source\x18\x04 \x01(\tR\x0eleverageSource\"&\n" +
 	"$GetLiveConsumptionDiagnosticsRequest\"h\n" +
 	"\x1aStrategyOrderTargetBinding\x12\x1a\n" +
 	"\bexchange\x18\x01 \x01(\tR\bexchange\x12\x16\n" +

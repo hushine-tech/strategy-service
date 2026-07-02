@@ -12,6 +12,7 @@ from strategy_service.platform_proxy import (
     ACCOUNT_SAVE_SESSION,
     ACCOUNT_UPDATE_WALLET_STATE,
     LOGS_EMIT,
+    MARKETDATA_FETCH_BACKTEST_PAGE,
     MARKETDATA_FETCH_KLINES,
     MARKETDATA_GET_STATUS,
     ORDER_PLACE,
@@ -33,6 +34,7 @@ def test_proxy_account_client_sends_save_session_over_runtime_channel():
         runtime_id="runtime-1",
         runtime_source="self_hosted",
         runtime_name="desk",
+        leverage=4,
     )
 
     assert ok is True
@@ -40,6 +42,7 @@ def test_proxy_account_client_sends_save_session_over_runtime_channel():
     assert method == ACCOUNT_SAVE_SESSION
     assert req.session_id == "sess-1"
     assert req.runtime_id == "runtime-1"
+    assert req.leverage == 4
 
 
 def test_proxy_account_client_fetches_portfolio_snapshot_over_runtime_channel():
@@ -49,12 +52,18 @@ def test_proxy_account_client_fetches_portfolio_snapshot_over_runtime_channel():
     )
     proxy = RuntimeChannelPlatformProxy(runtime)
 
-    snapshot = proxy.account_client().get_portfolio_snapshot(account_id=7, user_id=3)
+    snapshot = proxy.account_client().get_portfolio_snapshot(
+        account_id=7,
+        user_id=3,
+        required_symbols={("binance", "perpetual_futures", "ethusdt")},
+    )
 
     method, req = runtime.calls[-1]
     assert method == ACCOUNT_GET_PORTFOLIO
     assert req.account_id == 7
     assert req.user_id == 3
+    assert len(req.required_symbols) == 1
+    assert req.required_symbols[0].symbol == "ETHUSDT"
     assert snapshot.account_id == 7
 
 
@@ -151,6 +160,7 @@ def test_proxy_account_client_preflight_sends_session_metadata_over_runtime_chan
         required_symbols={("binance", "perpetual_futures", "btcusdt")},
         session_id="preflight-session-1",
         strategy_id=9,
+        leverage=1,
     )
 
     method, req = runtime.calls[-1]
@@ -158,6 +168,7 @@ def test_proxy_account_client_preflight_sends_session_metadata_over_runtime_chan
     assert resp.ok is True
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 9
+    assert req.leverage == 1
 
 
 def test_proxy_order_client_places_order_without_direct_stub():
@@ -290,6 +301,56 @@ def test_proxy_marketdata_client_fetches_klines_over_runtime_channel():
     assert req["symbol"] == "ETHUSDT"
     assert rows[0].open_time == 1000
     assert rows[0].close == 1.5
+
+
+def test_proxy_marketdata_client_fetches_backtest_page_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    from google.protobuf.struct_pb2 import Struct
+
+    resp = Struct()
+    resp.update({
+        "stream_key": "binance/futures/kline/ETHUSDT/1s",
+        "next_cursor_time_ms": 3000,
+        "has_more": False,
+        "limit": 8192,
+        "klines": [{
+            "exchange": "binance",
+            "market": "futures",
+            "symbol": "ETHUSDT",
+            "interval": "1s",
+            "open_time": 1000,
+            "close_time": 1999,
+            "timestamp": 1000,
+            "open": 1.0,
+            "high": 1.1,
+            "low": 0.9,
+            "close": 1.0,
+            "volume": 2.0,
+        }],
+    })
+    runtime.responses[MARKETDATA_FETCH_BACKTEST_PAGE] = resp
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    page = proxy.marketdata_client().fetch_backtest_page(
+        exchange="binance",
+        market="futures",
+        kind="kline",
+        symbol="ETHUSDT",
+        interval="1s",
+        start_after_time_ms=0,
+        end_time_ms=10_000,
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == MARKETDATA_FETCH_BACKTEST_PAGE
+    assert int(req["limit"]) == 8192
+    assert req["start_after_time_ms"] == 0
+    assert page.stream_key == "binance/futures/kline/ETHUSDT/1s"
+    assert page.next_cursor_time_ms == 3000
+    assert page.has_more is False
+    assert len(page.klines) == 1
+    assert page.klines[0].open_time == 1000
+    assert page.klines[0].market == "futures"
 
 
 def test_proxy_log_client_emits_over_runtime_channel():

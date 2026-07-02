@@ -454,6 +454,28 @@ class RuntimeChannelClient:
             ),
         ))
 
+    def send_data_backpressure(
+        self,
+        *,
+        session_id: str,
+        stream_key: str,
+        reason: str,
+        resume_after_unix_ms: int = 0,
+    ) -> None:
+        with self._outbound_lock:
+            outbound = self._outbound
+        if outbound is None:
+            raise RuntimeError("runtime channel is not connected")
+        outbound.put(cp_pb2.RuntimeFrame(
+            frame_type=cp_pb2.FRAME_TYPE_DATA_BACKPRESSURE,
+            data_backpressure=cp_pb2.RuntimeDataBackpressure(
+                session_id=session_id,
+                stream_key=stream_key,
+                resume_after_unix_ms=int(resume_after_unix_ms),
+                reason=reason,
+            ),
+        ))
+
     def _fail_pending(self, reason: str) -> None:
         with self._pending_lock:
             pending = list(self._pending.items())
@@ -573,6 +595,7 @@ class RuntimeChannelClient:
         if frame.frame_type in (
             cp_pb2.FRAME_TYPE_DATASET_CHUNK,
             cp_pb2.FRAME_TYPE_LIVE_KLINE_BATCH,
+            cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH,
         ):
             self._handle_data_frame(frame, outbound)
             return
@@ -729,6 +752,13 @@ class RuntimeChannelClient:
                 frame.live_kline_batch.session_id,
                 frame.live_kline_batch.stream_key,
                 frame.live_kline_batch.sequence,
+            ))
+            return
+        if frame.frame_type == cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH and frame.HasField("order_update_batch"):
+            outbound.put(_data_ack_frame(
+                frame.order_update_batch.session_id,
+                frame.order_update_batch.stream_key or "order_lifecycle",
+                frame.order_update_batch.sequence,
             ))
 
 

@@ -12,10 +12,12 @@ import logging
 import threading
 import traceback
 import uuid
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct
+from google.protobuf.any_pb2 import Any as ProtoAny
 
 from strategy_service.account_client import (
     _compute_total_value,
@@ -23,6 +25,7 @@ from strategy_service.account_client import (
     _get_available_balance,
     _get_wallet_balance,
     _market_enum,
+    _required_symbol_protos,
     _serialize_future_wallet,
     _serialize_spot_wallet,
 )
@@ -42,6 +45,7 @@ ORDER_PLACE = "order.PlaceOrder"
 ORDER_RESOLVE_ATTEMPT = "order.ResolveOrderAttempt"
 MARKETDATA_GET_STATUS = "marketdata.GetMarketDataStreamStatus"
 MARKETDATA_FETCH_KLINES = "marketdata.FetchKlines"
+MARKETDATA_FETCH_BACKTEST_PAGE = "marketdata.FetchBacktestPage"
 MARKETDATA_DELIVER_DATASET = "marketdata.DeliverDataset"
 MARKETDATA_RENEW_LEASE = "marketdata.CreateOrRenewMarketDataLease"
 MARKETDATA_RELEASE_LEASE = "marketdata.ReleaseMarketDataLease"
@@ -49,6 +53,7 @@ MARKETDATA_CREATE_SESSION_SUBSCRIPTIONS = "marketdata.CreateSessionMarketDataSub
 MARKETDATA_RELEASE_SESSION_SUBSCRIPTIONS = "marketdata.ReleaseSessionMarketDataSubscriptions"
 LOGS_EMIT = "logs.Emit"
 NOTIFICATION_PUBLISH = "notification.Publish"
+BACKTEST_PAGE_SIZE = 8192
 
 
 class RuntimeChannelPlatformProxy:
@@ -80,12 +85,45 @@ class RuntimeChannelPlatformProxy:
     def notification_client(self) -> "ProxyNotificationClient":
         return ProxyNotificationClient(self)
 
+    def send_session_status_patch(
+        self,
+        *,
+        session_id: str,
+        status: str,
+        bars_processed: int = 0,
+        error: str = "",
+        runtime_id: str = "",
+    ) -> None:
+        from strategy_service.gen import account_service_pb2
+
+        req = account_service_pb2.UpdateSessionRequest(
+            session_id=str(session_id or ""),
+            status=str(status or ""),
+            bars_processed=int(bars_processed or 0),
+            error=str(error or ""),
+            runtime_id=str(runtime_id or ""),
+        )
+        payload = ProtoAny()
+        payload.Pack(req)
+        self._client.send_status_patch(
+            runtime_id=runtime_id,
+            session_id=session_id,
+            status=status,
+            reason=error,
+            payload=payload,
+        )
+
 
 class ProxyAccountClient:
     def __init__(self, proxy: RuntimeChannelPlatformProxy) -> None:
         self._proxy = proxy
 
-    def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+    def get_portfolio_snapshot(
+        self,
+        account_id: int,
+        user_id: int = 0,
+        required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+    ):
         try:
             from strategy_service.gen import account_service_pb2
 
@@ -94,6 +132,7 @@ class ProxyAccountClient:
                 account_service_pb2.GetPortfolioSnapshotRequest(
                     account_id=int(account_id),
                     user_id=int(user_id),
+                    required_symbols=_required_symbol_protos(account_service_pb2, required_symbols),
                 ),
                 account_service_pb2.GetPortfolioSnapshotResponse,
             )
@@ -176,6 +215,7 @@ class ProxyAccountClient:
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
+        leverage: float = 0.0,
     ):
         try:
             from strategy_service.gen import account_service_pb2
@@ -185,6 +225,7 @@ class ProxyAccountClient:
                 user_id=int(user_id),
                 session_id=str(session_id or ""),
                 strategy_id=int(strategy_id),
+                leverage=float(leverage or 0.0),
                 required_routes=[
                     account_service_pb2.RequiredRoute(
                         exchange=_exchange_enum(exchange),
@@ -192,14 +233,7 @@ class ProxyAccountClient:
                     )
                     for exchange, market in sorted(required_routes or [])
                 ],
-                required_symbols=[
-                    account_service_pb2.RequiredSymbol(
-                        exchange=_exchange_enum(exchange),
-                        market=_market_enum(market),
-                        symbol=str(symbol or "").strip().upper(),
-                    )
-                    for exchange, market, symbol in sorted(required_symbols or [])
-                ],
+                required_symbols=_required_symbol_protos(account_service_pb2, required_symbols),
             )
             return self._proxy.invoke(
                 ACCOUNT_PREFLIGHT_STRATEGY_SESSION,
@@ -243,6 +277,7 @@ class ProxyAccountClient:
         session_type: str = "",
         runtime_version: str = "",
         session_name: str = "",
+        leverage: float = 1.0,
     ) -> bool:
         try:
             self.require_save_session(
@@ -259,6 +294,7 @@ class ProxyAccountClient:
                 session_type=session_type,
                 runtime_version=runtime_version,
                 session_name=session_name,
+                leverage=leverage,
             )
             return True
         except Exception:
@@ -280,6 +316,7 @@ class ProxyAccountClient:
         session_type: str = "",
         runtime_version: str = "",
         session_name: str = "",
+        leverage: float = 1.0,
     ) -> None:
         from strategy_service.gen import account_service_pb2
 
@@ -297,6 +334,7 @@ class ProxyAccountClient:
             session_type=str(session_type or ""),
             runtime_version=str(runtime_version or ""),
             session_name=str(session_name or ""),
+            leverage=float(leverage or 1.0),
         )
         self._proxy.invoke(ACCOUNT_SAVE_SESSION, req, account_service_pb2.SaveSessionResponse)
 
@@ -318,7 +356,12 @@ class ProxyAccountClient:
                 error=error,
                 runtime_id=str(runtime_id or ""),
             )
-            self._proxy.invoke(ACCOUNT_UPDATE_SESSION, req, account_service_pb2.UpdateSessionResponse)
+            self._proxy.invoke(
+                ACCOUNT_UPDATE_SESSION,
+                req,
+                account_service_pb2.UpdateSessionResponse,
+                timeout_seconds=60.0,
+            )
             return True
         except Exception:
             logger.warning("Proxy UpdateSession failed for session=%s", session_id, exc_info=True)
@@ -331,6 +374,14 @@ class ProxyAccountClient:
     def require_running_sessions(self, runtime_id: str = ""):
         del runtime_id
         raise RuntimeError("self-hosted runtime recovery must be coordinated by control-panel")
+
+@dataclass(frozen=True)
+class BacktestPage:
+    stream_key: str
+    klines: list[Any]
+    next_cursor_time_ms: int
+    has_more: bool
+
 
 class ProxyMarketDataClient:
     def __init__(self, proxy: RuntimeChannelPlatformProxy) -> None:
@@ -488,8 +539,6 @@ class ProxyMarketDataClient:
         limit: int = 1000,
     ) -> list[Any]:
         try:
-            from market_data.models import MarketKline
-
             req = Struct()
             req.update({
                 "exchange": exchange,
@@ -501,25 +550,7 @@ class ProxyMarketDataClient:
                 "limit": float(int(limit)),
             })
             resp = self._proxy.invoke(MARKETDATA_FETCH_KLINES, req, Struct)
-            data = MessageToDict(resp)
-            out: list[Any] = []
-            for item in data.get("klines", []):
-                if not isinstance(item, dict):
-                    continue
-                out.append(MarketKline(
-                    symbol=str(item.get("symbol") or symbol),
-                    interval=str(item.get("interval") or interval),
-                    open_time=int(item.get("open_time") or 0),
-                    close_time=int(item.get("close_time") or 0),
-                    open=float(item.get("open") or 0.0),
-                    high=float(item.get("high") or 0.0),
-                    low=float(item.get("low") or 0.0),
-                    close=float(item.get("close") or 0.0),
-                    volume=float(item.get("volume") or 0.0),
-                    timestamp=int(item.get("timestamp") or item.get("close_time") or 0),
-                    market=str(item.get("market") or market),
-                ))
-            return out
+            return _klines_from_struct(resp, market=market, symbol=symbol, interval=interval)
         except Exception:
             logger.warning(
                 "Proxy FetchKlines failed for %s/%s/%s/%s %s-%s",
@@ -532,6 +563,42 @@ class ProxyMarketDataClient:
                 exc_info=True,
             )
             return []
+
+    def fetch_backtest_page(
+        self,
+        *,
+        exchange: str = "binance",
+        market: str,
+        kind: str = "kline",
+        symbol: str,
+        interval: str,
+        start_after_time_ms: int,
+        end_time_ms: int,
+    ) -> BacktestPage:
+        req = Struct()
+        req.update({
+            "exchange": exchange,
+            "market": market,
+            "kind": kind or "kline",
+            "symbol": symbol,
+            "interval": interval,
+            "start_after_time_ms": float(int(start_after_time_ms)),
+            "end_time_ms": float(int(end_time_ms)),
+            "limit": float(BACKTEST_PAGE_SIZE),
+        })
+        resp = self._proxy.invoke(
+            MARKETDATA_FETCH_BACKTEST_PAGE,
+            req,
+            Struct,
+            timeout_seconds=30.0,
+        )
+        data = MessageToDict(resp)
+        return BacktestPage(
+            stream_key=str(data.get("stream_key") or ""),
+            klines=_klines_from_struct(resp, market=market, symbol=symbol, interval=interval),
+            next_cursor_time_ms=int(data.get("next_cursor_time_ms") or 0),
+            has_more=bool(data.get("has_more") or False),
+        )
 
     def deliver_dataset_klines(
         self,
@@ -577,6 +644,30 @@ class ProxyMarketDataClient:
                 exc_info=True,
             )
             return False
+
+
+def _klines_from_struct(resp: Struct, *, market: str, symbol: str, interval: str) -> list[Any]:
+    from market_data.models import MarketKline
+
+    data = MessageToDict(resp)
+    out: list[Any] = []
+    for item in data.get("klines", []):
+        if not isinstance(item, dict):
+            continue
+        out.append(MarketKline(
+            symbol=str(item.get("symbol") or symbol),
+            interval=str(item.get("interval") or interval),
+            open_time=int(item.get("open_time") or 0),
+            close_time=int(item.get("close_time") or 0),
+            open=float(item.get("open") or 0.0),
+            high=float(item.get("high") or 0.0),
+            low=float(item.get("low") or 0.0),
+            close=float(item.get("close") or 0.0),
+            volume=float(item.get("volume") or 0.0),
+            timestamp=int(item.get("timestamp") or item.get("close_time") or 0),
+            market=str(item.get("market") or market),
+        ))
+    return out
 
     def release_market_data_lease(self, *, session_id: str, stream_id: int) -> bool:
         try:

@@ -506,6 +506,57 @@ def test_cross_long_liquidation_clamps_to_zero_when_wallet_balance_covers_positi
     assert pos.liquidation_price == pytest.approx(0.0)
 
 
+def test_cross_short_liquidation_is_estimated_when_exchange_price_and_brackets_are_missing():
+    wallet_proto = account_service_pb2.AccountWalletState(
+        environment=1,
+        total_value=1_050.0,
+        spot_estimated_value=0.0,
+        futures_position_equity=1_050.0,
+        futures=account_service_pb2.FuturesWallet(
+            margin_mode="cross",
+            position_mode="one_way",
+            wallet_balance=1_000.0,
+            available_balance=810.0,
+            total_unrealized_pnl=50.0,
+            unrealized_pnl=50.0,
+            total_margin_balance=1_050.0,
+            margin_balance=1_050.0,
+            total_position_initial_margin=190.0,
+            total_cross_wallet_balance=1_000.0,
+            total_cross_un_pnl=50.0,
+            positions=[
+                account_service_pb2.FuturesPosition(
+                    symbol="ETHUSDT",
+                    direction=0,
+                    leverage=5.0,
+                    fee_rate=0.0004,
+                    mark_price=1_900.0,
+                    qty=-0.5,
+                    position_qty=-0.5,
+                    entry_price=2_000.0,
+                    unrealized_pnl=50.0,
+                    position_side="BOTH",
+                    margin_type="cross",
+                    margin_mode="cross",
+                    notional=-950.0,
+                    initial_margin=190.0,
+                    position_initial_margin=190.0,
+                    maint_margin=0.0,
+                    liquidation_price=0.0,
+                    break_even_price=2_000.0,
+                ),
+            ],
+        ),
+        spot=account_service_pb2.SpotWallet(),
+    )
+
+    wallet = build_wallet_from_account(proto_to_account_spec(wallet_proto))
+    pos = wallet.futures.positions[("ETHUSDT", 0)]
+
+    assert pos.position_qty < 0.0
+    assert pos.liquidation_price == pytest.approx(4_000.0)
+
+
 def test_binance_parity_wallet_preserves_exchange_authoritative_open_order_and_oracle_risk_when_metadata_missing():
     wallet_proto = _wallet_proto(environment=1)
     wallet_proto.futures.positions[0].open_order_initial_margin = 0.25

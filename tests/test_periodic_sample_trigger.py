@@ -251,6 +251,7 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
 
         def update_account_wallet_state(self, **kwargs):
             snapshot_calls.append(("wallet_sync", kwargs.get("snapshot_reason")))
+            return SimpleNamespace(ok=True)
 
         def update_session(self, **_kwargs) -> bool:
             return True
@@ -277,9 +278,9 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
         for i in range(50):
             engine.running_strategy(_fake_md(i))
 
-    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
-    monkeypatch.setattr(grpc_server, "OrderClient", FakeOrderClient)
     monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
+    monkeypatch.setattr(servicer, "_account_client", lambda: FakeAccountClient(""))
+    monkeypatch.setattr(servicer, "_order_client", lambda: FakeOrderClient(""))
     monkeypatch.setattr(servicer, "_run_backtest", fake_run_backtest)
 
     from strategy_service.inputs import StrategyInput
@@ -332,6 +333,7 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
 
         def update_account_wallet_state(self, **kwargs):
             snapshot_calls.append(("wallet_sync", kwargs.get("snapshot_reason")))
+            return SimpleNamespace(ok=True)
 
         def update_session(self, **_kwargs) -> bool:
             return True
@@ -355,9 +357,9 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
         for i in range(50):
             engine.running_strategy(_fake_md(i))
 
-    monkeypatch.setattr(grpc_server, "AccountClient", FakeAccountClient)
-    monkeypatch.setattr(grpc_server, "OrderClient", FakeOrderClient)
     monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
+    monkeypatch.setattr(servicer, "_account_client", lambda: FakeAccountClient(""))
+    monkeypatch.setattr(servicer, "_order_client", lambda: FakeOrderClient(""))
     monkeypatch.setattr(servicer, "_run_live", fake_run_live)
 
     from strategy_service.inputs import StrategyInput

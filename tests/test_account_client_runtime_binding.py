@@ -25,6 +25,7 @@ def test_account_client_save_session_sends_runtime_binding():
         runtime_id="rt-1",
         runtime_source="hosted",
         runtime_name="default",
+        leverage=5,
     )
 
     assert ok is True
@@ -32,6 +33,7 @@ def test_account_client_save_session_sends_runtime_binding():
     assert req.runtime_id == "rt-1"
     assert req.runtime_source == "hosted"
     assert req.runtime_name == "default"
+    assert req.leverage == 5
 
 
 def test_account_client_update_session_sends_runtime_guard():
@@ -93,6 +95,33 @@ def test_account_client_get_portfolio_snapshot_uses_portfolio_api():
     assert snapshot.account_id == 11
 
 
+def test_account_client_get_portfolio_snapshot_sends_required_symbols():
+    captured: dict[str, object] = {}
+
+    class FakeStub:
+        def GetPortfolioSnapshot(self, req):
+            captured["req"] = req
+            return account_service_pb2.GetPortfolioSnapshotResponse(
+                snapshot=account_service_pb2.PortfolioSnapshot(account_id=11, user_id=5)
+            )
+
+    client = AccountClient("")
+    client._stub = FakeStub()
+
+    snapshot = client.get_portfolio_snapshot(
+        account_id=11,
+        user_id=5,
+        required_symbols={("binance", "perpetual_futures", "ethusdt")},
+    )
+
+    req = captured["req"]
+    assert snapshot.account_id == 11
+    assert len(req.required_symbols) == 1
+    assert req.required_symbols[0].exchange == 1
+    assert req.required_symbols[0].market == 2
+    assert req.required_symbols[0].symbol == "ETHUSDT"
+
+
 def test_account_client_update_portfolio_snapshot_uses_portfolio_api():
     captured: dict[str, object] = {}
 
@@ -143,9 +172,11 @@ def test_account_client_preflight_sends_session_metadata():
         required_symbols={("binance", "perpetual_futures", "ethusdt")},
         session_id="preflight-session-1",
         strategy_id=22,
+        leverage=1,
     )
 
     req = captured["req"]
     assert resp.ok is True
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 22
+    assert req.leverage == 1

@@ -1,4 +1,6 @@
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -175,6 +177,144 @@ def test_inline_strategy_code_uses_strategy_path_as_python_filename():
     assert strategy.on_market_data.__code__.co_filename == "/workspace/self_hosted_strategy.py"
 
 
+def _hot_reload_strategy_code(marker: str, *, symbol: str = "TESTUSDT") -> str:
+    return (
+        "class MyStrategy:\n"
+        f'    INPUTS = [{{"exchange": "binance", "market": "perpetual_futures", "symbol": "{symbol}", "interval": "1m"}}]\n'
+        f'    ORDER_TARGETS = [{{"exchange": "binance", "market": "perpetual_futures", "symbol": "{symbol}"}}]\n'
+        "    def __init__(self):\n"
+        f"        self.marker = {marker!r}\n"
+        "        self.market_calls = 0\n"
+        "        self.order_update_calls = []\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        self.market_calls += 1\n"
+        "        self.last_market_symbol = data.symbol\n"
+        "        return None\n"
+        "    def on_order_update(self, event, wallet):\n"
+        "        self.order_update_calls.append((self.marker, event.event_id))\n"
+    )
+
+
+def _replace_strategy_file(path: Path, code: str) -> None:
+    time.sleep(0.01)
+    path.write_text(code, encoding="utf-8")
+
+
+def test_bare_hot_reload_replaces_user_strategy_when_file_changes(tmp_path: Path):
+    strategy_path = tmp_path / "mystrategy.py"
+    strategy_path.write_text(_hot_reload_strategy_code("v1"), encoding="utf-8")
+    wallet = _wallet_with_futures_slot()
+    svc = StrategyEngine()
+    strat = svc.create_strategy(
+        "u1",
+        str(strategy_path),
+        wallet,
+        hot_reload=True,
+    )
+
+    svc.running_strategy(_md())
+    assert strat._get_strategy().marker == "v1"
+    assert strat._get_strategy().market_calls == 1
+
+    _replace_strategy_file(strategy_path, _hot_reload_strategy_code("v2"))
+
+    svc.running_strategy(_md())
+
+    assert strat._get_strategy().marker == "v2"
+    assert strat._get_strategy().market_calls == 1
+    assert strat._get_strategy().on_market_data.__code__.co_filename == str(strategy_path)
+
+
+def test_bare_hot_reload_runs_before_order_update_callback(tmp_path: Path):
+    strategy_path = tmp_path / "mystrategy.py"
+    strategy_path.write_text(_hot_reload_strategy_code("v1"), encoding="utf-8")
+    wallet = _wallet_with_futures_slot()
+    svc = StrategyEngine()
+    strat = svc.create_strategy(
+        "u1",
+        str(strategy_path),
+        wallet,
+        session_id="session-1",
+        hot_reload=True,
+    )
+    _replace_strategy_file(strategy_path, _hot_reload_strategy_code("v2"))
+
+    delivered = svc.handle_order_update(OrderUpdateEvent(
+        event_id=8,
+        session_id="session-1",
+        account_id=1,
+        venue_id=10,
+        exchange="binance",
+        market="perpetual_futures",
+        side="BUY",
+        position_side="both",
+        event_type="accepted",
+        order_status="NEW",
+        order_id="order-8",
+    ))
+
+    assert delivered is True
+    assert strat._get_strategy().marker == "v2"
+    assert strat._get_strategy().order_update_calls == [("v2", 8)]
+
+
+def test_bare_hot_reload_rejects_declaration_changes(tmp_path: Path, caplog):
+    strategy_path = tmp_path / "mystrategy.py"
+    strategy_path.write_text(_hot_reload_strategy_code("v1"), encoding="utf-8")
+    wallet = _wallet_with_futures_slot()
+    svc = StrategyEngine()
+    strat = svc.create_strategy(
+        "u1",
+        str(strategy_path),
+        wallet,
+        hot_reload=True,
+    )
+    svc.running_strategy(_md())
+    _replace_strategy_file(strategy_path, _hot_reload_strategy_code("v2", symbol="BTCUSDT"))
+
+    svc.running_strategy(_md())
+
+    assert strat._get_strategy().marker == "v1"
+    assert strat._get_strategy().market_calls == 2
+    assert "strategy hot reload skipped: declaration changed" in caplog.text
+
+
+def test_bare_hot_reload_user_code_error_keeps_session_alive_until_file_is_fixed(tmp_path: Path, caplog):
+    strategy_path = tmp_path / "mystrategy.py"
+    strategy_path.write_text(
+        _hot_reload_strategy_code("broken").replace(
+            "        self.market_calls += 1\n",
+            "        missing_name += 1\n",
+        ),
+        encoding="utf-8",
+    )
+    wallet = _wallet_with_futures_slot()
+    svc = StrategyEngine()
+    surfaced_errors: list[str] = []
+    recovered: list[bool] = []
+    strat = svc.create_strategy(
+        "u1",
+        str(strategy_path),
+        wallet,
+        hot_reload=True,
+        on_user_code_error=surfaced_errors.append,
+        on_user_code_recovered=lambda: recovered.append(True),
+    )
+
+    svc.running_strategy(_md())
+    assert strat._get_strategy().marker == "broken"
+    assert surfaced_errors
+    assert "user strategy on_market_data failed: UnboundLocalError" in surfaced_errors[-1]
+    assert "user strategy on_market_data failed: UnboundLocalError" in caplog.text
+
+    _replace_strategy_file(strategy_path, _hot_reload_strategy_code("fixed"))
+    svc.running_strategy(_md())
+
+    assert strat._get_strategy().marker == "fixed"
+    assert strat._get_strategy().market_calls == 1
+    assert recovered == [True]
+
+
 def test_running_strategy_no_signal_does_not_call_on_order():
     wallet = _wallet_with_futures_slot()
     svc = StrategyEngine()
@@ -182,6 +322,19 @@ def test_running_strategy_no_signal_does_not_call_on_order():
     wallet.on_order = MagicMock(wraps=wallet.on_order)
     svc.running_strategy(_md())
     wallet.on_order.assert_not_called()
+
+
+def test_user_on_market_data_exception_is_wrapped_as_user_code_error():
+    wallet = _wallet_with_futures_slot()
+    strategy_code = _inline(
+        "    def on_market_data(self, data, wallet):\n"
+        "        raise RuntimeError('boom from strategy')\n"
+    )
+    svc = StrategyEngine()
+    svc.create_strategy("u1", "<db:user_boom>", wallet, strategy_code=strategy_code)
+
+    with pytest.raises(RuntimeError, match="user strategy on_market_data failed: RuntimeError: boom from strategy"):
+        svc.running_strategy(_md())
 
 
 def test_running_strategy_with_signal_calls_on_order():
@@ -341,6 +494,55 @@ def test_order_update_event_updates_wallet_before_callback():
     assert strat._strategy_instance.events[0].order_id == "order-1"
     assert strat._strategy_instance.position_qty_seen == pytest.approx(0.1)
     assert client.place_calls == 0
+
+
+def test_strategy_engine_routes_order_update_to_matching_session():
+    wallet1 = _wallet_with_futures_slot()
+    wallet2 = _wallet_with_futures_slot()
+    code = _inline(
+        "    def __init__(self):\n"
+        "        self.event_ids = []\n"
+        "    def on_order_update(self, event, wallet):\n"
+        "        self.event_ids.append(event.event_id)\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+    svc = StrategyEngine()
+    strat1 = svc.create_strategy(
+        "u1",
+        "/workspace/strategy1.py",
+        wallet1,
+        session_id="session-1",
+        strategy_code=code,
+    )
+    strat2 = svc.create_strategy(
+        "u2",
+        "/workspace/strategy2.py",
+        wallet2,
+        session_id="session-2",
+        strategy_code=code,
+    )
+
+    delivered = svc.handle_order_update(OrderUpdateEvent(
+        event_id=5,
+        session_id="session-1",
+        account_id=1,
+        venue_id=10,
+        exchange="binance",
+        market="perpetual_futures",
+        side="BUY",
+        position_side="both",
+        event_type="fill",
+        order_status="FILLED",
+        order_id="order-5",
+        fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+    ))
+
+    assert delivered is True
+    assert strat1._strategy_instance.event_ids == [5]
+    assert strat2._strategy_instance.event_ids == []
+    assert wallet1.futures.positions[("TESTUSDT", 0)].position_qty == pytest.approx(0.1)
+    assert wallet2.futures.positions[("TESTUSDT", 0)].position_qty == pytest.approx(0.0)
 
 
 def test_async_order_update_unblocks_symbol_and_triggers_snapshot_callback():

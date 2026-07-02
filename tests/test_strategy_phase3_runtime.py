@@ -256,6 +256,61 @@ def _strategy(body: str, *, order_targets: str | None = None) -> str:
     )
 
 
+def _strategy_with_order_update_callback() -> str:
+    return (
+        "from strategy_service.types import Exchange, Market\n"
+        "\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT"}]\n'
+        "    def __init__(self):\n"
+        "        self.last_event_id = None\n"
+        "        self.last_event_type = None\n"
+        "        self.position_qty_seen = None\n"
+        "    def on_order_update(self, event, wallet):\n"
+        "        self.last_event_id = event.event_id\n"
+        "        self.last_event_type = event.event_type\n"
+        "        self.position_qty_seen = wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES).futures.positions[(\"ETHUSDT\", 0)].position_qty\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+
+def _order_update_event(
+    *,
+    event_id: int,
+    session_id: str,
+    event_type: str = "fill",
+    side: str = OrderSide.BUY,
+) -> OrderUpdateEvent:
+    return OrderUpdateEvent(
+        event_id=event_id,
+        session_id=session_id,
+        account_id=1,
+        venue_id=10,
+        exchange=Exchange.BINANCE,
+        market=Market.PERPETUAL_FUTURES,
+        side=side,
+        position_side="both",
+        event_type=event_type,
+        order_status="FILLED",
+        order_id=f"order-{event_id}",
+        exchange_order_id=f"exchange-order-{event_id}",
+        exchange_trade_id=f"trade-{event_id}",
+        fill=OrderUpdateFill(
+            symbol="ETHUSDT",
+            qty=0.02,
+            fill_price=2500.0,
+            fee=0.0,
+        ),
+        orig_qty=0.02,
+        executed_qty=0.02,
+        remaining_qty=0.0,
+        avg_price=2500.0,
+        event_source="binance_user_data",
+    )
+
+
 def test_base_strategy_requires_portfolio_wallet_runtime() -> None:
     with pytest.raises(TypeError, match="PortfolioWalletRuntime"):
         BaseStrategy(
@@ -422,6 +477,99 @@ def test_ioc_partial_expired_settles_filled_qty_without_open_order() -> None:
     assert pos.position_qty == pytest.approx(0.004)
     assert route_wallet.futures.open_orders == {}
     assert (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "ETHUSDT") not in svc._blocked_order_keys
+
+
+def test_on_order_response_exception_is_logged_without_raising(caplog: pytest.LogCaptureFixture) -> None:
+    wallet, route_wallet = _real_futures_portfolio()
+    client = StubOrderClient()
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        client,
+        account_id=1,
+        session_id="session-response-callback",
+        strategy_code=_strategy(
+            '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.02", order_type=OrderType.MARKET)\n',
+        ),
+    )
+
+    def broken_response(_response: ExecutionFeedback) -> None:
+        raise RuntimeError("callback exploded")
+
+    svc._strategy_instance.on_order_response = broken_response
+    caplog.set_level(logging.WARNING, logger="strategy_service.strategy.base")
+
+    svc.running_strategy(_tick(price=2500.0))
+
+    assert len(client.orders) == 1
+    pos = route_wallet.futures.positions[("ETHUSDT", 0)]
+    assert pos.position_qty == pytest.approx(0.02)
+    assert any("order response callback failed" in record.getMessage() for record in caplog.records)
+
+
+def test_handle_order_update_invokes_callback_without_market_data_tick() -> None:
+    wallet, route_wallet = _real_futures_portfolio()
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        FailingOrderClient(),
+        account_id=1,
+        session_id="session-push",
+        strategy_code=_strategy_with_order_update_callback(),
+    )
+
+    updated = svc.handle_order_update(_order_update_event(event_id=88, session_id="session-push"))
+
+    assert updated is True
+    pos = route_wallet.futures.positions[("ETHUSDT", 0)]
+    assert pos.position_qty == pytest.approx(0.02)
+    assert svc._strategy_instance.last_event_id == 88
+    assert svc._strategy_instance.position_qty_seen == pytest.approx(0.02)
+
+
+def test_handle_order_update_ignores_replayed_event_before_cursor() -> None:
+    wallet, route_wallet = _real_futures_portfolio()
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        FailingOrderClient(),
+        account_id=1,
+        session_id="session-push",
+        strategy_code=_strategy_with_order_update_callback(),
+    )
+    svc._order_event_cursor = 100
+
+    updated = svc.handle_order_update(_order_update_event(event_id=99, session_id="session-push"))
+
+    assert updated is False
+    pos = route_wallet.futures.positions[("ETHUSDT", 0)]
+    assert pos.position_qty == pytest.approx(0.0)
+    assert svc._strategy_instance.last_event_id is None
+
+
+def test_liquidation_order_update_reaches_user_strategy_callback() -> None:
+    wallet, route_wallet = _real_futures_portfolio()
+    svc = BaseStrategy(
+        "inline.py",
+        wallet,
+        FailingOrderClient(),
+        account_id=1,
+        session_id="session-liquidation",
+        strategy_code=_strategy_with_order_update_callback(),
+    )
+
+    updated = svc.handle_order_update(_order_update_event(
+        event_id=89,
+        session_id="session-liquidation",
+        event_type="liquidation",
+        side=OrderSide.SELL,
+    ))
+
+    assert updated is True
+    pos = route_wallet.futures.positions[("ETHUSDT", 0)]
+    assert pos.position_qty == pytest.approx(-0.02)
+    assert svc._strategy_instance.last_event_type == "liquidation"
+    assert svc._strategy_instance.position_qty_seen == pytest.approx(-0.02)
 
 
 def test_batch_decisions_are_validated_before_any_order_is_placed() -> None:

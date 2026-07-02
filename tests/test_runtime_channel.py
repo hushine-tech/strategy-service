@@ -37,6 +37,24 @@ def test_runtime_channel_default_heartbeat_leaves_watchdog_margin():
     assert DEFAULT_HEARTBEAT_SECONDS == 10
 
 
+def test_runtime_channel_proto_has_order_update_batch_frame() -> None:
+    frame = cp_pb2.RuntimeFrame(
+        frame_type=cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH,
+        order_update_batch=cp_pb2.RuntimeOrderUpdateBatch(
+            session_id="sess-1",
+            stream_key="order_lifecycle",
+            sequence=42,
+            events=[Any(type_url="type.googleapis.com/order.v1.OrderLifecycleEventEntry")],
+        ),
+    )
+
+    assert frame.HasField("order_update_batch")
+    assert frame.order_update_batch.session_id == "sess-1"
+    assert frame.order_update_batch.stream_key == "order_lifecycle"
+    assert frame.order_update_batch.sequence == 42
+    assert len(frame.order_update_batch.events) == 1
+
+
 def test_build_signed_hello_signs_canonical_payload():
     private_key = Ed25519PrivateKey.generate()
     private_pem = private_key.private_bytes(
@@ -206,7 +224,7 @@ def test_runtime_channel_client_aborts_inflight_callbacks():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -232,7 +250,7 @@ def test_runtime_channel_client_disconnect_aborts_inflight_execution():
     ).decode("utf-8")
     aborts: list[str] = []
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -262,7 +280,7 @@ def test_runtime_channel_client_reconnects_after_transient_disconnect():
     ).decode("utf-8")
     stub = _ReconnectOnceStub()
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -292,7 +310,7 @@ def test_runtime_channel_client_reconnects_with_resume_after_hello_ack():
     ).decode("utf-8")
     stub = _AckThenDisconnectThenResumeStub()
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -326,7 +344,7 @@ def test_runtime_channel_client_stops_after_terminal_disconnect():
     ).decode("utf-8")
     stub = _TerminalDisconnectStub()
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -356,7 +374,7 @@ def test_runtime_channel_client_stops_after_terminal_credential_error():
     ).decode("utf-8")
     stub = _CredentialTerminalDisconnectStub()
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -385,7 +403,7 @@ def test_runtime_channel_heartbeat_loop_keeps_idle_stream_alive():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -416,7 +434,7 @@ def test_runtime_channel_heartbeat_uses_latest_ack_fingerprint():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -460,7 +478,7 @@ def test_runtime_channel_client_invokes_platform_unary():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -510,6 +528,42 @@ def test_runtime_channel_client_invokes_platform_unary():
     assert isinstance(result[0], account_service_pb2.SaveSessionResponse)
 
 
+def test_runtime_channel_client_sends_data_backpressure_frame():
+    private_key = Ed25519PrivateKey.generate()
+    private_pem = private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.PKCS8,
+        encryption_algorithm=NoEncryption(),
+    ).decode("utf-8")
+    client = RuntimeChannelClient(
+        "control-panel:50055",
+        RuntimeCredential(
+            key_id="key-1",
+            private_key_pem=private_pem,
+            private_key=private_key,
+            path="/tmp/runtime.cred",
+        ),
+        RuntimeHelloArgs(key_id="key-1", private_key_pem=private_pem),
+    )
+    outbound: queue.Queue[cp_pb2.RuntimeFrame | None] = queue.Queue()
+    with client._outbound_lock:
+        client._outbound = outbound
+
+    client.send_data_backpressure(
+        session_id="sess-1",
+        stream_key="binance:futures:kline:ETHUSDT:1m",
+        reason="runtime_debug_worker_slow: queue_depth=1",
+        resume_after_unix_ms=1234,
+    )
+
+    frame = outbound.get_nowait()
+    assert frame.frame_type == cp_pb2.FRAME_TYPE_DATA_BACKPRESSURE
+    assert frame.data_backpressure.session_id == "sess-1"
+    assert frame.data_backpressure.stream_key == "binance:futures:kline:ETHUSDT:1m"
+    assert frame.data_backpressure.reason == "runtime_debug_worker_slow: queue_depth=1"
+    assert frame.data_backpressure.resume_after_unix_ms == 1234
+
+
 def test_runtime_channel_client_injects_trace_context_into_platform_request():
     try:
         from opentelemetry import context as otel_context
@@ -537,7 +591,7 @@ def test_runtime_channel_client_injects_trace_context_into_platform_request():
             encryption_algorithm=NoEncryption(),
         ).decode("utf-8")
         client = RuntimeChannelClient(
-            "control-panel:50054",
+            "control-panel:50055",
             RuntimeCredential(
                 key_id="key-1",
                 private_key_pem=private_pem,
@@ -621,7 +675,7 @@ def test_runtime_channel_request_handler_can_call_platform_proxy_without_deadloc
         )
 
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -677,7 +731,7 @@ def test_runtime_channel_request_deadline_is_honored_before_dispatch():
         raise AssertionError("expired requests must not dispatch")
 
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -713,7 +767,7 @@ def test_runtime_channel_client_replies_unimplemented_before_dispatch_is_wired()
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -748,7 +802,7 @@ def test_runtime_channel_client_handles_shutdown_command_without_worker():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -788,7 +842,7 @@ def test_runtime_channel_client_handles_shutdown_frame():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,

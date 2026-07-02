@@ -420,6 +420,54 @@ def test_order_response_from_update_rejects_missing_market_route() -> None:
         OrderClient.order_response_from_update(event)
 
 
+def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None:
+    item = order_service_pb2.OrderLifecycleEventEntry(
+        event_id=101,
+        session_id="sess-1",
+        account_id=7,
+        venue_id=20,
+        exchange=1,
+        market=2,
+        position_side=0,
+        side="BUY",
+        event_type="fill",
+        order_status="FILLED",
+        event_source="websocket",
+        order_id="order-1",
+        exchange_order_id="1001",
+        exchange_trade_id="9001",
+        fill_delta=order_service_pb2.FillDeltaEntry(
+            symbol="ETHUSDT",
+            qty=0.1,
+            fill_price=2500.0,
+            fee=0.02,
+            fee_asset="USDT",
+            exchange_trade_id="9001",
+            exchange_order_id="1001",
+        ),
+        order_state=order_service_pb2.OrderStateEntry(
+            symbol="ETHUSDT",
+            status="FILLED",
+            orig_qty=0.1,
+            executed_qty=0.1,
+            remaining_qty=0.0,
+            avg_price=2500.0,
+        ),
+    )
+
+    event = OrderClient.order_update_event_from_proto(item)
+
+    assert event.event_id == 101
+    assert event.exchange == "binance"
+    assert event.market == "perpetual_futures"
+    assert event.position_side == "both"
+    assert event.symbol == "ETHUSDT"
+    assert event.event_type == "fill"
+    assert event.fill is not None
+    assert event.fill.qty == pytest.approx(0.1)
+    assert event.fill.fee == pytest.approx(0.02)
+
+
 def test_list_order_lifecycle_events_maps_route_facts_and_fill():
     client = OrderClient("")
     stub = _Stub(order_service_pb2.PlaceOrderResponse())

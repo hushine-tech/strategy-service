@@ -31,3 +31,7 @@ def debug_main(argv: list[str] | None = None) -> int:
     from strategy_service.cli.hushine_debug import main as debug_cli_main
 
     return debug_cli_main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

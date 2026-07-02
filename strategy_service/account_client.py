@@ -63,7 +63,12 @@ class AccountClient:
             logger.warning("AccountClient: failed to connect to %s", self._address, exc_info=True)
             self._stub = None
 
-    def get_portfolio_snapshot(self, account_id: int, user_id: int = 0):
+    def get_portfolio_snapshot(
+        self,
+        account_id: int,
+        user_id: int = 0,
+        required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+    ):
         """Fetch the account portfolio snapshot from core-service."""
         if not self._stub:
             return None
@@ -73,6 +78,7 @@ class AccountClient:
             req = account_service_pb2.GetPortfolioSnapshotRequest(
                 account_id=int(account_id),
                 user_id=int(user_id),
+                required_symbols=_required_symbol_protos(account_service_pb2, required_symbols),
             )
             resp = self._stub.GetPortfolioSnapshot(req)
             return resp.snapshot
@@ -130,6 +136,7 @@ class AccountClient:
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
+        leverage: float = 0.0,
     ):
         """Validate venue route/symbol availability before strategy runtime creation."""
         if not self._stub:
@@ -142,6 +149,7 @@ class AccountClient:
                 user_id=int(user_id),
                 session_id=str(session_id or ""),
                 strategy_id=int(strategy_id),
+                leverage=float(leverage or 0.0),
                 required_routes=[
                     account_service_pb2.RequiredRoute(
                         exchange=_exchange_enum(exchange),
@@ -149,14 +157,7 @@ class AccountClient:
                     )
                     for exchange, market in sorted(required_routes or [])
                 ],
-                required_symbols=[
-                    account_service_pb2.RequiredSymbol(
-                        exchange=_exchange_enum(exchange),
-                        market=_market_enum(market),
-                        symbol=str(symbol or "").strip().upper(),
-                    )
-                    for exchange, market, symbol in sorted(required_symbols or [])
-                ],
+                required_symbols=_required_symbol_protos(account_service_pb2, required_symbols),
             )
             return self._stub.PreflightStrategySession(req)
         except Exception:
@@ -196,6 +197,7 @@ class AccountClient:
         session_type: str = "",
         runtime_version: str = "",
         session_name: str = "",
+        leverage: float = 1.0,
     ) -> bool:
         """Create a session record in core-service. Returns True on success."""
         try:
@@ -213,6 +215,7 @@ class AccountClient:
                 session_type=session_type,
                 runtime_version=runtime_version,
                 session_name=session_name,
+                leverage=leverage,
             )
             return True
         except Exception:
@@ -234,6 +237,7 @@ class AccountClient:
         session_type: str = "",
         runtime_version: str = "",
         session_name: str = "",
+        leverage: float = 1.0,
     ) -> None:
         """Create a session record and raise on core-service errors."""
         if not self._stub:
@@ -250,6 +254,7 @@ class AccountClient:
             session_type=str(session_type or ""),
             runtime_version=str(runtime_version or ""),
             session_name=str(session_name or ""),
+            leverage=float(leverage or 1.0),
         )
         self._stub.SaveSession(req)
 
@@ -374,6 +379,17 @@ def _market_enum(market: str) -> int:
     if key not in _MARKET_ENUMS:
         raise ValueError(f"unsupported market for preflight: {market!r}")
     return _MARKET_ENUMS[key]
+
+
+def _required_symbol_protos(account_service_pb2, required_symbols):
+    return [
+        account_service_pb2.RequiredSymbol(
+            exchange=_exchange_enum(exchange),
+            market=_market_enum(market),
+            symbol=str(symbol or "").strip().upper(),
+        )
+        for exchange, market, symbol in sorted(required_symbols or [])
+    ]
 
 
 def _get_wallet_balance(fw: Any) -> float:

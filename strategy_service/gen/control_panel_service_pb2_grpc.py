@@ -72,6 +72,11 @@ class ControlPanelServiceStub(object):
                 request_serializer=control__panel__service__pb2.IssueRuntimeCredentialRequest.SerializeToString,
                 response_deserializer=control__panel__service__pb2.IssueRuntimeCredentialResponse.FromString,
                 _registered_method=True)
+        self.BootstrapBareRuntimeCertificate = channel.unary_unary(
+                '/controlpanel.v1.ControlPanelService/BootstrapBareRuntimeCertificate',
+                request_serializer=control__panel__service__pb2.BootstrapBareRuntimeCertificateRequest.SerializeToString,
+                response_deserializer=control__panel__service__pb2.BootstrapBareRuntimeCertificateResponse.FromString,
+                _registered_method=True)
         self.ListRuntimeCredentials = channel.unary_unary(
                 '/controlpanel.v1.ControlPanelService/ListRuntimeCredentials',
                 request_serializer=control__panel__service__pb2.ListRuntimeCredentialsRequest.SerializeToString,
@@ -191,13 +196,13 @@ class ControlPanelServiceServicer(object):
         uses on the strategy-start path. Idempotent semantics:
 
         * Resolve plan, check quota / profile, allocate a hosted runtime via
-        the configured provisioner backend, wait for the runtime to
-        self-register, then return it. Runtime routing is by runtime_id only;
-        name is display-only.
+        the configured provisioner backend, wait for RuntimeChannel HELLO,
+        then return it. Runtime routing is by runtime_id only; name is
+        display-only.
 
         Fail-closed: returns RESOURCE_EXHAUSTED when plan / quota / profile
         checks reject; FailedPrecondition when the provisioner backend is
-        misconfigured or the runtime never self-registers within the
+        misconfigured or the runtime never opens RuntimeChannel within the
         configured timeout. NEVER silently returns a shared / different
         user's runtime.
 
@@ -221,6 +226,15 @@ class ControlPanelServiceServicer(object):
         GetUser miss), the RPC returns NotFound. user_id MUST be the
         authenticated user's id; quant-handler enforces that the JWT subject
         matches the request user_id.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def BootstrapBareRuntimeCertificate(self, request, context):
+        """BootstrapBareRuntimeCertificate signs a short-lived debugger client
+        certificate for internal bare runtime startup. It is only available when
+        debug bare runtime bootstrap is enabled and the caller IP is allowlisted.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -365,6 +379,11 @@ def add_ControlPanelServiceServicer_to_server(servicer, server):
                     servicer.IssueRuntimeCredential,
                     request_deserializer=control__panel__service__pb2.IssueRuntimeCredentialRequest.FromString,
                     response_serializer=control__panel__service__pb2.IssueRuntimeCredentialResponse.SerializeToString,
+            ),
+            'BootstrapBareRuntimeCertificate': grpc.unary_unary_rpc_method_handler(
+                    servicer.BootstrapBareRuntimeCertificate,
+                    request_deserializer=control__panel__service__pb2.BootstrapBareRuntimeCertificateRequest.FromString,
+                    response_serializer=control__panel__service__pb2.BootstrapBareRuntimeCertificateResponse.SerializeToString,
             ),
             'ListRuntimeCredentials': grpc.unary_unary_rpc_method_handler(
                     servicer.ListRuntimeCredentials,
@@ -596,6 +615,33 @@ class ControlPanelService(object):
             '/controlpanel.v1.ControlPanelService/IssueRuntimeCredential',
             control__panel__service__pb2.IssueRuntimeCredentialRequest.SerializeToString,
             control__panel__service__pb2.IssueRuntimeCredentialResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def BootstrapBareRuntimeCertificate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/controlpanel.v1.ControlPanelService/BootstrapBareRuntimeCertificate',
+            control__panel__service__pb2.BootstrapBareRuntimeCertificateRequest.SerializeToString,
+            control__panel__service__pb2.BootstrapBareRuntimeCertificateResponse.FromString,
             options,
             channel_credentials,
             insecure,

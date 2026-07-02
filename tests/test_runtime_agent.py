@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from strategy_service.gen import control_panel_service_pb2 as cp_pb2
+from strategy_service.gen import order_service_pb2
 from strategy_service.runtime_agent import RuntimeAgent, RuntimeWorkerProcess
 from strategy_service.runtime_channel import RuntimeChannelClient, RuntimeCredential, RuntimeHelloArgs
 
@@ -29,7 +30,7 @@ def test_runtime_agent_heartbeat_and_status_continue_while_worker_is_paused():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -76,7 +77,7 @@ def test_runtime_agent_caches_data_frames_and_runtime_channel_acks():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -118,7 +119,7 @@ def test_runtime_agent_buffers_dataset_chunks_for_backtest_delivery():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -177,7 +178,7 @@ def test_runtime_agent_dataset_end_stops_backtest_iterator():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -228,7 +229,7 @@ def test_runtime_agent_buffers_live_kline_batches_for_session_delivery():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -290,6 +291,127 @@ def test_runtime_agent_buffers_live_kline_batches_for_session_delivery():
     assert rows[0].close == 1.5
 
 
+def test_runtime_agent_queues_order_update_batch_and_acks():
+    private_key = Ed25519PrivateKey.generate()
+    private_pem = private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.PKCS8,
+        encryption_algorithm=NoEncryption(),
+    ).decode("utf-8")
+    client = RuntimeChannelClient(
+        "control-panel:50055",
+        RuntimeCredential(
+            key_id="key-1",
+            private_key_pem=private_pem,
+            private_key=private_key,
+            path="/tmp/runtime.cred",
+        ),
+        RuntimeHelloArgs(key_id="key-1", private_key_pem=private_pem, runtime_id="runtime-1"),
+    )
+    agent = RuntimeAgent(client, runtime_id="runtime-1")
+    client.set_data_handler(agent.handle_data_frame)
+    outbound: queue.Queue[cp_pb2.RuntimeFrame | None] = queue.Queue()
+
+    client._handle_inbound_frame(
+        cp_pb2.RuntimeFrame(
+            frame_type=cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH,
+            order_update_batch=cp_pb2.RuntimeOrderUpdateBatch(
+                session_id="sess-1",
+                stream_key="order_lifecycle",
+                sequence=11,
+                events=[_packed_order_lifecycle_event(event_id=501)],
+            ),
+        ),
+        outbound,
+    )
+
+    ack = outbound.get_nowait()
+    assert ack.frame_type == cp_pb2.FRAME_TYPE_DATA_ACK
+    assert ack.data_ack.session_id == "sess-1"
+    assert ack.data_ack.stream_key == "order_lifecycle"
+    assert ack.data_ack.sequence == 11
+
+    updates = list(agent.iter_order_updates(
+        session_id="sess-1",
+        stop_event=threading.Event(),
+        idle_timeout_seconds=0.01,
+        stop_when_idle=True,
+    ))
+    assert len(updates) == 1
+    assert updates[0].event_id == 501
+    assert updates[0].event_type == "fill"
+    assert updates[0].fill is not None
+    assert updates[0].fill.symbol == "ETHUSDT"
+
+
+def test_runtime_agent_iter_session_events_prioritizes_order_update_before_next_kline():
+    private_key = Ed25519PrivateKey.generate()
+    private_pem = private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.PKCS8,
+        encryption_algorithm=NoEncryption(),
+    ).decode("utf-8")
+    client = RuntimeChannelClient(
+        "control-panel:50055",
+        RuntimeCredential(
+            key_id="key-1",
+            private_key_pem=private_pem,
+            private_key=private_key,
+            path="/tmp/runtime.cred",
+        ),
+        RuntimeHelloArgs(key_id="key-1", private_key_pem=private_pem, runtime_id="runtime-1"),
+    )
+    agent = RuntimeAgent(client, runtime_id="runtime-1")
+
+    kline = Struct()
+    kline.update({
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "market": "futures",
+        "open_time": 1000,
+        "close_time": 2000,
+        "open": 1.0,
+        "high": 2.0,
+        "low": 0.5,
+        "close": 1.5,
+        "volume": 10.0,
+        "timestamp": 2000,
+    })
+    packed_kline = Any()
+    packed_kline.Pack(kline)
+
+    agent.handle_data_frame(cp_pb2.RuntimeFrame(
+        frame_type=cp_pb2.FRAME_TYPE_LIVE_KLINE_BATCH,
+        live_kline_batch=cp_pb2.RuntimeLiveKlineBatch(
+            session_id="sess-1",
+            stream_key="binance/futures/kline/BTCUSDT/1m",
+            sequence=3,
+            klines=[packed_kline],
+        ),
+    ))
+    agent.handle_data_frame(cp_pb2.RuntimeFrame(
+        frame_type=cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH,
+        order_update_batch=cp_pb2.RuntimeOrderUpdateBatch(
+            session_id="sess-1",
+            stream_key="order_lifecycle:fills",
+            sequence=4,
+            events=[_packed_order_lifecycle_event(event_id=777)],
+        ),
+    ))
+
+    events = list(agent.iter_session_events(
+        session_id="sess-1",
+        required_streams=[],
+        stop_event=threading.Event(),
+        idle_timeout_seconds=0.01,
+        stop_when_idle=True,
+    ))
+    assert [event.kind for event in events] == ["order_update", "kline"]
+    assert events[0].stream_key == "order_lifecycle:fills"
+    assert events[0].payload.event_id == 777
+    assert events[1].payload.symbol == "BTCUSDT"
+
+
 def test_runtime_agent_prepare_debug_workspace_command(tmp_path):
     private_key = Ed25519PrivateKey.generate()
     private_pem = private_key.private_bytes(
@@ -298,7 +420,7 @@ def test_runtime_agent_prepare_debug_workspace_command(tmp_path):
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -348,7 +470,7 @@ def test_runtime_agent_load_debug_dataset_command():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -394,6 +516,49 @@ def test_runtime_agent_load_debug_dataset_command():
     assert dataset.account_id == 10
     assert dataset.klines[0].symbol == "ETHUSDT"
     assert dataset.klines[0].market == "spot"
+
+
+def _packed_order_lifecycle_event(*, event_id: int) -> Any:
+    item = order_service_pb2.OrderLifecycleEventEntry(
+        event_id=event_id,
+        session_id="sess-1",
+        account_id=10,
+        venue_id=1,
+        intent_id="intent-1",
+        attempt_id="attempt-1",
+        order_id="order-1",
+        exchange_order_id="exchange-order-1",
+        exchange_trade_id="trade-1",
+        event_type="fill",
+        order_status="FILLED",
+        environment=2,
+        exchange=1,
+        market=2,
+        position_side=0,
+        side="BUY",
+        event_source="binance_user_data",
+        fill_delta=order_service_pb2.FillDeltaEntry(
+            exchange_trade_id="trade-1",
+            exchange_order_id="exchange-order-1",
+            symbol="ETHUSDT",
+            qty=0.02,
+            fill_price=3000.0,
+            fee=0.03,
+            fee_asset="USDT",
+        ),
+        order_state=order_service_pb2.OrderStateEntry(
+            exchange_order_id="exchange-order-1",
+            symbol="ETHUSDT",
+            status="FILLED",
+            orig_qty=0.02,
+            executed_qty=0.02,
+            remaining_qty=0.0,
+            avg_price=3000.0,
+        ),
+    )
+    packed = Any()
+    packed.Pack(item)
+    return packed
 
 
 def _paused_worker(stop_event):

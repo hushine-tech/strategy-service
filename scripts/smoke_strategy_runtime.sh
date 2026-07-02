@@ -30,9 +30,11 @@ print('python:', sys.version.split()[0])
 from strategy_service.config import Config
 cfg = Config.load('config.yaml')
 cfg.apply_env_overrides()
-print('runtime channel:', cfg.dependencies.control_panel_service_grpc)
+print('runtime channel:', cfg.dependencies.runtime_channel_grpc)
 from strategy_service.gen import control_panel_service_pb2 as cp
 print('proto:', cp.RuntimeHello.DESCRIPTOR.full_name)
+import hushine_runtime_cli
+print('console wrapper:', hushine_runtime_cli.main.__name__)
 from strategy_service.cli.hushine_runtime import main
 print('entrypoint:', main.__name__)
 print('OK')
@@ -40,7 +42,7 @@ print('OK')
 
 echo
 echo "=== smoke 2: hushine-runtime help ==="
-docker run --rm --entrypoint uv "${IMAGE}" run --no-sync hushine-runtime start --help
+docker run --rm --entrypoint uv "${IMAGE}" run --no-sync python -m hushine_runtime_cli start --help
 
 echo
 echo "All container smoke checks passed for ${IMAGE}."

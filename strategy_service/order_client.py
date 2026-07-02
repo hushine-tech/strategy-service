@@ -258,7 +258,8 @@ class OrderClient:
     @classmethod
     def order_response_from_update(cls, event: OrderUpdateEvent) -> OrderResponse | None:
         """Convert a fill lifecycle event into the wallet-facing order delta."""
-        if str(event.event_type or "").strip().lower() != "fill" or event.fill is None:
+        event_type = str(event.event_type or "").strip().lower()
+        if event_type not in {"fill", "liquidation"} or event.fill is None:
             return None
         if event.fill.fee_missing:
             return None
@@ -293,6 +294,10 @@ class OrderClient:
             remaining_qty=remaining_qty,
             price=float(getattr(event, "avg_price", 0.0) or 0.0),
         )
+
+    @staticmethod
+    def order_update_event_from_proto(item) -> OrderUpdateEvent:
+        return OrderClient._order_update_event_from_proto(item)
 
     @staticmethod
     def _order_update_event_from_proto(item) -> OrderUpdateEvent:

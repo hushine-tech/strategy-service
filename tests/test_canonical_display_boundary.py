@@ -155,9 +155,7 @@ def test_session_restore_cleanup_does_not_consume_wallet_fields():
     state. That cleanup path must stay wallet-agnostic — pulling wallet
     display fields into startup cleanup would silently break the
     canonical-wallet-display-boundary invariant."""
-    import threading
     from strategy_service.grpc_server import StrategyServiceServicer
-    from strategy_service import grpc_server
 
     captured: dict = {}
 
@@ -195,13 +193,13 @@ def test_session_restore_cleanup_does_not_consume_wallet_fields():
             }
             return True
 
-    import strategy_service.grpc_server as gs
-    original = gs.AccountClient
-    gs.AccountClient = FakeAccountClient
-    try:
-        servicer = StrategyServiceServicer("", "", {}, "kafka:9092", runtime_id="rt-restore")
-    finally:
-        gs.AccountClient = original
+    class FakePlatformProxy:
+        def account_client(self):
+            return FakeAccountClient("")
+
+    servicer = StrategyServiceServicer(
+        "", "", {}, "kafka:9092", runtime_id="rt-restore", platform_proxy=FakePlatformProxy()
+    )
 
     assert servicer._sessions.get("sess-restore-1") is None
     assert captured["update"]["session_id"] == "sess-restore-1"

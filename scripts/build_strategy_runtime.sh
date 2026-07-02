@@ -44,11 +44,11 @@ echo "  # 2. Boot as a user's self-hosted executor runtime:"
 echo "  docker run --rm \\"
 echo "    -v \$HOME/.hushine/runtime.cred:/etc/hushine/runtime.cred:ro \\"
 echo "    -e RUNTIME_CREDENTIAL_PATH=/etc/hushine/runtime.cred \\"
-echo "    -e CONTROL_PANEL_SERVICE_GRPC_ADDR=host.docker.internal:50055 \\"
+echo "    -e RUNTIME_CHANNEL_GRPC_ADDR=host.docker.internal:50055 \\"
 echo "    ${EXECUTOR_IMAGE}"
 echo
 echo "  RuntimeChannel startup ignores account/order/Kafka/database"
 echo "  config and uses only RuntimeChannel platform proxy calls."
 echo
 echo "  # 3. Local bare debug on a machine with uv installed:"
-echo "  uv run hushine-runtime start --config config.yaml --user-id 123"
+echo "  uv run hushine-runtime start --config config.yaml --runtime-channel-addr 127.0.0.1:50055 --user-id 123"

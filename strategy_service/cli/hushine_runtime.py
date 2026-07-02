@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import os
+import pathlib
 import signal
 import threading
 import uuid
@@ -33,6 +36,16 @@ def main(argv: list[str] | None = None) -> int:
     start = sub.add_parser("start")
     start.add_argument("-config", "--config", default="config.yaml", help="path to config.yaml")
     start.add_argument(
+        "--runtime-channel-addr",
+        default="",
+        help="control-panel RuntimeChannel gRPC address, for example host.example:50055",
+    )
+    start.add_argument(
+        "--control-panel-addr",
+        default="",
+        help="control-panel gRPC address used only for bare runtime certificate bootstrap",
+    )
+    start.add_argument(
         "--user-id",
         "--user_id",
         dest="user_id",
@@ -43,20 +56,32 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "start":
-        return start_runtime(config_path=args.config, bare_user_id=int(args.user_id or 0))
+        return start_runtime(
+            config_path=args.config,
+            bare_user_id=int(args.user_id or 0),
+            runtime_channel_addr=str(args.runtime_channel_addr or ""),
+            control_panel_addr=str(args.control_panel_addr or ""),
+        )
     raise AssertionError(f"unknown command {args.command}")
 
 
-def start_runtime(*, config_path: str, bare_user_id: int = 0) -> int:
+def start_runtime(
+    *,
+    config_path: str,
+    bare_user_id: int = 0,
+    runtime_channel_addr: str = "",
+    control_panel_addr: str = "",
+) -> int:
     cfg = Config.load(config_path)
     cfg.apply_env_overrides()
+    bare_bootstrap_addr = control_panel_addr.strip() or cfg.dependencies.control_panel_service_grpc
     _force_runtime_channel_boundary(cfg)
     _init_log_with_kafka(cfg)
     tracer_shutdown = _init_tracer(cfg)
 
-    cp_addr = cfg.dependencies.control_panel_service_grpc
+    cp_addr = runtime_channel_addr.strip() or cfg.dependencies.runtime_channel_grpc
     if not cp_addr:
-        logger.error("dependencies.control_panel_service_grpc is required for RuntimeChannel startup")
+        logger.error("dependencies.runtime_channel_grpc or --runtime-channel-addr is required for RuntimeChannel startup")
         return 1
 
     source = "bare" if bare_user_id > 0 else (cfg.runtime.source or "self_hosted")
@@ -67,9 +92,17 @@ def start_runtime(*, config_path: str, bare_user_id: int = 0) -> int:
     private_key_pem = ""
 
     try:
+        _materialize_tls_bundle(cfg)
         if bare_user_id > 0:
             runtime_id = _bare_runtime_id(runtime_id, bare_user_id)
             runtime_name = _bare_runtime_name(runtime_name, bare_user_id)
+            _bootstrap_bare_runtime_mtls_if_needed(
+                cfg,
+                cp_addr=bare_bootstrap_addr or cp_addr,
+                bare_user_id=bare_user_id,
+                runtime_id=runtime_id,
+                runtime_name=runtime_name,
+            )
         else:
             credential = load_runtime_credential(cfg.runtime.credential_path or None)
             key_id = credential.key_id
@@ -175,6 +208,9 @@ def _force_runtime_channel_boundary(cfg: Config) -> None:
     if cfg.dependencies.order_service_grpc:
         ignored.append("dependencies.order_service_grpc")
         cfg.dependencies.order_service_grpc = ""
+    if cfg.dependencies.control_panel_service_grpc:
+        ignored.append("dependencies.control_panel_service_grpc")
+        cfg.dependencies.control_panel_service_grpc = ""
     if cfg.dependencies.market_data_control_panel_grpc:
         ignored.append("dependencies.market_data_control_panel_grpc")
         cfg.dependencies.market_data_control_panel_grpc = ""
@@ -201,12 +237,109 @@ def _runtime_channel_factory(cfg: Config) -> Callable[[str], grpc.Channel]:
     if cfg.runtime_channel_tls.root_cert_file:
         with open(cfg.runtime_channel_tls.root_cert_file, "rb") as f:
             root_certificates = f.read()
-    credentials = grpc.ssl_channel_credentials(root_certificates=root_certificates)
+    private_key = None
+    certificate_chain = None
+    if cfg.runtime_channel_tls.client_key_file:
+        with open(cfg.runtime_channel_tls.client_key_file, "rb") as f:
+            private_key = f.read()
+    if cfg.runtime_channel_tls.client_cert_file:
+        with open(cfg.runtime_channel_tls.client_cert_file, "rb") as f:
+            certificate_chain = f.read()
+    credentials = grpc.ssl_channel_credentials(
+        root_certificates=root_certificates,
+        private_key=private_key,
+        certificate_chain=certificate_chain,
+    )
     options: list[tuple[str, str]] = []
     if cfg.runtime_channel_tls.server_name:
         options.append(("grpc.ssl_target_name_override", cfg.runtime_channel_tls.server_name))
         options.append(("grpc.default_authority", cfg.runtime_channel_tls.server_name))
     return lambda address: grpc.secure_channel(address, credentials, options=options)
+
+
+def _materialize_tls_bundle(cfg: Config) -> None:
+    raw = cfg.runtime_channel_tls.bundle_json or _tls_bundle_json_from_credential(cfg.runtime.credential_path or None)
+    if not raw:
+        return
+    body = json.loads(raw)
+    cfg.runtime_channel_tls.enabled = True
+    if not cfg.runtime_channel_tls.server_name:
+        cfg.runtime_channel_tls.server_name = str(body.get("server_name") or "runtime-channel.local")
+    target_dir = pathlib.Path(os.environ.get("RUNTIME_CHANNEL_TLS_BUNDLE_DIR", "/etc/hushine"))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    files = {
+        "root_cert_file": ("control-panel-ca.pem", body.get("server_ca_pem", "")),
+        "client_cert_file": ("runtime-client.pem", body.get("client_cert_pem", "")),
+        "client_key_file": ("runtime-client.key", body.get("client_key_pem", "")),
+    }
+    for attr, (name, content) in files.items():
+        if not content:
+            raise RuntimeError(f"runtime TLS bundle missing {attr}")
+        path = target_dir / name
+        path.write_text(content, encoding="utf-8")
+        if attr == "client_key_file":
+            path.chmod(0o600)
+        setattr(cfg.runtime_channel_tls, attr, str(path))
+
+
+def _tls_bundle_json_from_credential(path: str | None) -> str:
+    resolved = path or os.environ.get("RUNTIME_CREDENTIAL_PATH")
+    if not resolved:
+        return ""
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            body = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return ""
+    required = ("client_cert_pem", "client_key_pem", "server_ca_pem")
+    if not isinstance(body, dict) or not all(body.get(k) for k in required):
+        return ""
+    return json.dumps(
+        {
+            "client_cert_pem": body["client_cert_pem"],
+            "client_key_pem": body["client_key_pem"],
+            "server_ca_pem": body["server_ca_pem"],
+            "server_name": body.get("server_name") or "runtime-channel.local",
+        }
+    )
+
+
+def _bootstrap_bare_runtime_mtls_if_needed(
+    cfg: Config,
+    *,
+    cp_addr: str,
+    bare_user_id: int,
+    runtime_id: str,
+    runtime_name: str,
+    cache_dir: pathlib.Path | None = None,
+) -> None:
+    if bare_user_id <= 0:
+        return
+    if not cfg.runtime_channel_tls.enabled:
+        return
+    if cfg.runtime_channel_tls.client_cert_file:
+        return
+
+    from strategy_service import bare_bootstrap
+
+    target_dir = cache_dir or pathlib.Path(os.environ.get("RUNTIME_BARE_BOOTSTRAP_DIR", ".hushine-runtime/bare"))
+    paths = bare_bootstrap.load_existing_runtime_mtls_bundle(target_dir, runtime_id=runtime_id)
+    if paths is None:
+        paths = bare_bootstrap.bootstrap_bare_runtime_certificate(
+            address=cp_addr,
+            user_id=bare_user_id,
+            runtime_id=runtime_id,
+            name=runtime_name,
+            root_cert_file=cfg.runtime_channel_tls.root_cert_file,
+            server_name=cfg.runtime_channel_tls.server_name,
+            tls_enabled=_env_bool("RUNTIME_BARE_BOOTSTRAP_TLS_ENABLED", default=False),
+            output_dir=target_dir,
+        )
+    else:
+        logger.info("reusing cached bare runtime mTLS bundle: %s", target_dir)
+    cfg.runtime_channel_tls.root_cert_file = str(paths.root_cert_file)
+    cfg.runtime_channel_tls.client_cert_file = str(paths.client_cert_file)
+    cfg.runtime_channel_tls.client_key_file = str(paths.client_key_file)
 
 
 def _bare_runtime_id(configured: str, user_id: int) -> str:
@@ -222,6 +355,13 @@ def _bare_runtime_name(configured: str, user_id: int) -> str:
         return configured
     suffix = uuid.uuid4().hex[:6]
     return f"bare-debug-{int(user_id)}-{suffix}"
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.lower() in ("1", "true", "yes", "on")
 
 
 def _init_log_with_kafka(cfg: Config) -> None:

@@ -445,15 +445,27 @@ class BinanceFuturesBook:
         cumulative = float(getattr(bracket, "cumulative", 0.0) or 0.0)
         return max(0.0, abs(float(pos.notional or 0.0)) * mmr - cumulative)
 
-    def _compute_liquidation_price(self, key: tuple[str, int], pos: BinancePosition) -> float:
-        if abs(pos.position_qty) <= _QTY_EPS:
+    def _infer_maint_margin_ratio(self, pos: BinancePosition) -> float:
+        notional = abs(float(pos.notional or 0.0))
+        maint_margin = float(pos.oracle_maint_margin or pos.maint_margin or 0.0)
+        if notional <= _QTY_EPS or maint_margin <= 0.0:
             return 0.0
-        bracket = self._select_bracket(pos)
-        if bracket is None:
-            return float(pos.oracle_liquidation_price or 0.0)
+        return max(0.0, maint_margin / notional)
 
-        mmr = float(getattr(bracket, "maint_margin_ratio", 0.0) or 0.0)
-        cumulative = float(getattr(bracket, "cumulative", 0.0) or 0.0)
+    def _round_price(self, symbol: str, price: float) -> float:
+        metadata = self._resolve_metadata(symbol)
+        if metadata is not None and metadata.price_precision > 0:
+            return round(price, int(metadata.price_precision))
+        return price
+
+    def _compute_liquidation_formula(
+        self,
+        key: tuple[str, int],
+        pos: BinancePosition,
+        *,
+        mmr: float,
+        cumulative: float,
+    ) -> float:
         qty = abs(float(pos.position_qty or 0.0))
         if qty <= _QTY_EPS:
             return 0.0
@@ -502,10 +514,29 @@ class BinanceFuturesBook:
                     - maint_margin_others
                 ) / denom
 
-        metadata = self._resolve_metadata(pos.symbol)
-        if metadata is not None and metadata.price_precision > 0:
-            price = round(price, int(metadata.price_precision))
-        return max(0.0, float(price))
+        return max(0.0, float(self._round_price(pos.symbol, price)))
+
+    def _compute_liquidation_price(self, key: tuple[str, int], pos: BinancePosition) -> float:
+        if abs(pos.position_qty) <= _QTY_EPS:
+            return 0.0
+        bracket = self._select_bracket(pos)
+        if bracket is None:
+            oracle = float(pos.oracle_liquidation_price or 0.0)
+            if oracle > 0.0:
+                return self._round_price(pos.symbol, oracle)
+            return self._compute_liquidation_formula(
+                key,
+                pos,
+                mmr=self._infer_maint_margin_ratio(pos),
+                cumulative=0.0,
+            )
+
+        return self._compute_liquidation_formula(
+            key,
+            pos,
+            mmr=float(getattr(bracket, "maint_margin_ratio", 0.0) or 0.0),
+            cumulative=float(getattr(bracket, "cumulative", 0.0) or 0.0),
+        )
 
     def _resolve_effective_leverage(self, order: BinanceOpenOrder, pos: BinancePosition | None) -> float:
         if pos is not None:

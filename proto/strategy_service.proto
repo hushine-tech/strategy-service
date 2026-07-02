@@ -48,6 +48,9 @@ message RunStrategyRequest {
   // Ratio, not percent. 0 means "not provided"; runtime falls back to
   // strategy declaration or platform default.
   double max_loss_close_pct = 102;
+  // Session-level leverage used by runtime/order risk checks.
+  // 0 means "not provided"; runtime falls back to platform default 1x.
+  double leverage = 103;
 }
 
 message RunStrategyResponse {
@@ -124,6 +127,9 @@ message PreviewRunStrategyRequest {
   // Ratio, not percent. 0 means "not provided"; runtime falls back to
   // strategy declaration or platform default.
   double max_loss_close_pct = 102;
+  // Session-level leverage preview. 0 means "not provided"; runtime falls
+  // back to platform default 1x.
+  double leverage = 103;
 }
 
 message PreflightInputKey {
@@ -174,6 +180,8 @@ message PreviewRunStrategyResponse {
 message RiskControls {
   double max_loss_close_pct = 1;
   string max_loss_close_source = 2; // strategy / request_default / platform_default
+  double leverage = 3;
+  string leverage_source = 4; // request_default / platform_default
 }
 
 message GetLiveConsumptionDiagnosticsRequest {}
