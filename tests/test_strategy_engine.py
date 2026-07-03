@@ -1198,6 +1198,35 @@ def test_running_strategy_records_last_market_time():
     assert strat.last_market_time == ts
 
 
+def test_strategy_engine_collects_indicator_values_per_bar():
+    frames = []
+    wallet = _wallet_with_futures_slot()
+    svc = StrategyEngine()
+    strategy_code = _inline(
+        "    INDICATORS = {\"alpha_score\": {\"type\": \"line\", \"pane\": \"strategy\"}}\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        self.indicators.set(\"alpha_score\", data.price)\n"
+        "        return None\n"
+    )
+    strat = svc.create_strategy(
+        "u1",
+        "<db:indicator_values>",
+        wallet,
+        strategy_code=strategy_code,
+    )
+    strat.on_indicator_frame = (
+        lambda stream_key, market_time_ms, interval_ms, frame:
+        frames.append((stream_key, market_time_ms, interval_ms, frame))
+    )
+
+    svc.running_strategy(_md(price=1580.2, timestamp=datetime(2026, 6, 1, tzinfo=timezone.utc)))
+
+    assert frames[0][0] == "binance:perpetual_futures:TESTUSDT:1m"
+    assert frames[0][1] == 1_780_272_000_000
+    assert frames[0][2] == 60_000
+    assert frames[0][3].values == {"alpha_score": 1580.2}
+
+
 def test_futures_short_signal_closes_one_way_position():
     wallet = _wallet_with_futures_slot(symbol="TESTUSDT")
     svc = StrategyEngine()

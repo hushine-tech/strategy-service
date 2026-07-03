@@ -3832,6 +3832,119 @@ def test_proxy_only_backtest_reads_paged_data_without_runtime_dataset_delivery()
     }]
 
 
+def test_proxy_only_backtest_flushes_custom_indicator_chunks():
+    from market_data.models import MarketKline
+    from strategy_service.inputs import StrategyInput
+    from strategy_service.service import StrategyEngine
+
+    class FakeMarketDataClient:
+        def fetch_backtest_page(self, **kwargs):
+            start_after = int(kwargs["start_after_time_ms"])
+            rows = [
+                MarketKline(
+                    symbol="ETHUSDT",
+                    interval="1m",
+                    open_time=60_000,
+                    close_time=119_999,
+                    open=1.0,
+                    high=2.0,
+                    low=0.5,
+                    close=10.0,
+                    volume=10.0,
+                    timestamp=60_000,
+                    market="futures",
+                ),
+                MarketKline(
+                    symbol="ETHUSDT",
+                    interval="1m",
+                    open_time=120_000,
+                    close_time=179_999,
+                    open=10.0,
+                    high=12.0,
+                    low=9.5,
+                    close=11.0,
+                    volume=11.0,
+                    timestamp=120_000,
+                    market="futures",
+                ),
+            ]
+            rows = [row for row in rows if row.open_time > start_after]
+            return SimpleNamespace(
+                stream_key="binance/futures/kline/ETHUSDT/1m",
+                klines=rows,
+                next_cursor_time_ms=rows[-1].open_time if rows else start_after,
+                has_more=False,
+            )
+
+    class FakeAccountClient:
+        def __init__(self) -> None:
+            self.indicator_saves = []
+
+        def save_strategy_indicators(self, **kwargs):
+            self.indicator_saves.append(kwargs)
+            return (len(kwargs.get("definitions") or []), len(kwargs.get("chunks") or []))
+
+    class FakeProxy:
+        def __init__(self) -> None:
+            self.marketdata = FakeMarketDataClient()
+            self.account = FakeAccountClient()
+
+        def marketdata_client(self):
+            return self.marketdata
+
+        def account_client(self):
+            return self.account
+
+    route_wallet = make_backtest_wallet()
+    wallet = PortfolioWalletRuntime(
+        account_id=505,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    strategy_code = (
+        "class MyStrategy:\n"
+        "    INPUTS = [{\"exchange\": \"binance\", \"market\": \"perpetual_futures\", \"symbol\": \"ETHUSDT\", \"interval\": \"1m\"}]\n"
+        "    ORDER_TARGETS = []\n"
+        "    INDICATORS = {\"alpha_score\": {\"type\": \"line\", \"pane\": \"strategy\"}}\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        self.indicators.set(\"alpha_score\", data.price)\n"
+        "        return None\n"
+    )
+    engine = StrategyEngine()
+    engine.create_strategy(
+        "u1",
+        "<db:indicator_backtest>",
+        wallet,
+        session_id="sess-indicators",
+        strategy_code=strategy_code,
+    )
+
+    proxy = FakeProxy()
+    servicer = StrategyServiceServicer(
+        "",
+        "",
+        {},
+        "",
+        platform_access_mode=grpc_server.PLATFORM_ACCESS_PROXY_ONLY,
+        platform_proxy=proxy,
+        restore_running_sessions=False,
+    )
+    state = SessionState(environment=0)
+
+    servicer._run_backtest(
+        "sess-indicators",
+        state,
+        engine,
+        SimpleNamespace(start_time_ms=60_000, end_time_ms=180_000, user_id=6),
+        [StrategyInput(exchange="binance", market="perpetual_futures", symbol="ETHUSDT", interval="1m")],
+    )
+
+    chunk_saves = [call for call in proxy.account.indicator_saves if call.get("chunks")]
+    assert state.status == "finished"
+    assert proxy.account.indicator_saves[0]["definitions"][0].stream_key == "binance:perpetual_futures:ETHUSDT:1m"
+    assert chunk_saves[-1]["chunks"][0].values_json["values"] == [10.0, 11.0]
+
+
 def test_proxy_only_mode2_live_uses_runtime_delivery_not_fetch_klines():
     from market_data.models import MarketKline
 

@@ -10,6 +10,7 @@ from strategy_service.platform_proxy import (
     ACCOUNT_PREFLIGHT_STRATEGY_SESSION,
     ACCOUNT_GET_PORTFOLIO,
     ACCOUNT_SAVE_SESSION,
+    ACCOUNT_SAVE_STRATEGY_INDICATORS,
     ACCOUNT_UPDATE_WALLET_STATE,
     LOGS_EMIT,
     MARKETDATA_FETCH_BACKTEST_PAGE,
@@ -19,6 +20,7 @@ from strategy_service.platform_proxy import (
     RuntimeChannelLogHandler,
     RuntimeChannelPlatformProxy,
 )
+from strategy_service.indicators import IndicatorChunk, IndicatorDefinition
 from strategy_service.types import OrderDecision
 
 
@@ -43,6 +45,53 @@ def test_proxy_account_client_sends_save_session_over_runtime_channel():
     assert req.session_id == "sess-1"
     assert req.runtime_id == "runtime-1"
     assert req.leverage == 4
+
+
+def test_proxy_account_client_sends_strategy_indicators_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ACCOUNT_SAVE_STRATEGY_INDICATORS] = account_service_pb2.SaveStrategyIndicatorsResponse(
+        definitions_saved=1,
+        chunks_saved=1,
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    saved = proxy.account_client().save_strategy_indicators(
+        session_id="sess-1",
+        user_id=6,
+        definitions=[
+            IndicatorDefinition(
+                key="alpha_score",
+                name="Alpha Score",
+                type="line",
+                pane="strategy",
+                stream_key="binance:perpetual_futures:ETHUSDT:1m",
+                color="#2563eb",
+                config={"line_width": 2},
+            )
+        ],
+        chunks=[
+            IndicatorChunk(
+                stream_key="binance:perpetual_futures:ETHUSDT:1m",
+                indicator_key="alpha_score",
+                chunk_index=0,
+                start_time_ms=1_780_000_000_000,
+                end_time_ms=1_780_000_060_000,
+                interval_ms=60_000,
+                count=2,
+                values_json={"values": [0.12, 0.15], "times": None},
+            )
+        ],
+    )
+
+    method, req = runtime.calls[-1]
+    assert saved == (1, 1)
+    assert method == ACCOUNT_SAVE_STRATEGY_INDICATORS
+    assert req.session_id == "sess-1"
+    assert req.user_id == 6
+    assert req.definitions[0].stream_key == "binance:perpetual_futures:ETHUSDT:1m"
+    assert req.definitions[0].indicator_key == "alpha_score"
+    assert req.definitions[0].config_json == '{"line_width":2}'
+    assert req.chunks[0].values_json == '{"values":[0.12,0.15],"times":null}'
 
 
 def test_proxy_account_client_fetches_portfolio_snapshot_over_runtime_channel():

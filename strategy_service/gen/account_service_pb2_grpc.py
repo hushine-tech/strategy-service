@@ -230,6 +230,21 @@ class AccountServiceStub(object):
                 request_serializer=account__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
                 response_deserializer=account__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
                 _registered_method=True)
+        self.SaveStrategyIndicators = channel.unary_unary(
+                '/account.v1.AccountService/SaveStrategyIndicators',
+                request_serializer=account__service__pb2.SaveStrategyIndicatorsRequest.SerializeToString,
+                response_deserializer=account__service__pb2.SaveStrategyIndicatorsResponse.FromString,
+                _registered_method=True)
+        self.ListStrategyIndicators = channel.unary_unary(
+                '/account.v1.AccountService/ListStrategyIndicators',
+                request_serializer=account__service__pb2.ListStrategyIndicatorsRequest.SerializeToString,
+                response_deserializer=account__service__pb2.ListStrategyIndicatorsResponse.FromString,
+                _registered_method=True)
+        self.ListStrategyIndicatorChunks = channel.unary_unary(
+                '/account.v1.AccountService/ListStrategyIndicatorChunks',
+                request_serializer=account__service__pb2.ListStrategyIndicatorChunksRequest.SerializeToString,
+                response_deserializer=account__service__pb2.ListStrategyIndicatorChunksResponse.FromString,
+                _registered_method=True)
         self.GetNotificationSettings = channel.unary_unary(
                 '/account.v1.AccountService/GetNotificationSettings',
                 request_serializer=account__service__pb2.GetNotificationSettingsRequest.SerializeToString,
@@ -545,6 +560,27 @@ class AccountServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SaveStrategyIndicators(self, request, context):
+        """保存 strategy runtime 输出的 session 级自定义指标声明和 chunk 数据。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListStrategyIndicators(self, request, context):
+        """列出 session 自定义指标声明。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListStrategyIndicatorChunks(self, request, context):
+        """按时间窗口列出 session 自定义指标 chunk。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetNotificationSettings(self, request, context):
         """── 通知管理（Notification Management）────────────────────────────────────
 
@@ -786,6 +822,21 @@ def add_AccountServiceServicer_to_server(servicer, server):
                     servicer.GetSessionReconciliationSummary,
                     request_deserializer=account__service__pb2.GetSessionReconciliationSummaryRequest.FromString,
                     response_serializer=account__service__pb2.GetSessionReconciliationSummaryResponse.SerializeToString,
+            ),
+            'SaveStrategyIndicators': grpc.unary_unary_rpc_method_handler(
+                    servicer.SaveStrategyIndicators,
+                    request_deserializer=account__service__pb2.SaveStrategyIndicatorsRequest.FromString,
+                    response_serializer=account__service__pb2.SaveStrategyIndicatorsResponse.SerializeToString,
+            ),
+            'ListStrategyIndicators': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListStrategyIndicators,
+                    request_deserializer=account__service__pb2.ListStrategyIndicatorsRequest.FromString,
+                    response_serializer=account__service__pb2.ListStrategyIndicatorsResponse.SerializeToString,
+            ),
+            'ListStrategyIndicatorChunks': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListStrategyIndicatorChunks,
+                    request_deserializer=account__service__pb2.ListStrategyIndicatorChunksRequest.FromString,
+                    response_serializer=account__service__pb2.ListStrategyIndicatorChunksResponse.SerializeToString,
             ),
             'GetNotificationSettings': grpc.unary_unary_rpc_method_handler(
                     servicer.GetNotificationSettings,
@@ -1872,6 +1923,87 @@ class AccountService(object):
             '/account.v1.AccountService/GetSessionReconciliationSummary',
             account__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
             account__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SaveStrategyIndicators(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/SaveStrategyIndicators',
+            account__service__pb2.SaveStrategyIndicatorsRequest.SerializeToString,
+            account__service__pb2.SaveStrategyIndicatorsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListStrategyIndicators(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/ListStrategyIndicators',
+            account__service__pb2.ListStrategyIndicatorsRequest.SerializeToString,
+            account__service__pb2.ListStrategyIndicatorsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListStrategyIndicatorChunks(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/account.v1.AccountService/ListStrategyIndicatorChunks',
+            account__service__pb2.ListStrategyIndicatorChunksRequest.SerializeToString,
+            account__service__pb2.ListStrategyIndicatorChunksResponse.FromString,
             options,
             channel_credentials,
             insecure,

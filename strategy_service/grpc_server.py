@@ -7,7 +7,7 @@ import math
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, ROUND_FLOOR
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -27,6 +27,7 @@ except Exception:  # noqa: BLE001
 from strategy_service.gen import strategy_service_pb2 as pb2
 from strategy_service.gen import strategy_service_pb2_grpc as pb2_grpc
 
+from strategy_service.indicators import IndicatorChunkBuffer
 from strategy_service.notification import StrategyNotifier
 from strategy_service.service import StrategyEngine
 from strategy_service.session import SessionManager, SessionState, StreamBinding
@@ -1630,6 +1631,92 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._persist_session_status(session_id, state)
         self._halt_session_runtime(state, finalize=True)
 
+    def _install_indicator_collection(
+        self,
+        session_id: str,
+        state: SessionState,
+        engine: StrategyEngine,
+        request: Any | None = None,
+    ) -> Callable[[], None]:
+        strategies = [
+            strategy
+            for strategy in getattr(engine, "strategies", {}).values()
+            if getattr(strategy, "indicator_definitions", None)
+        ]
+        if not strategies:
+            return lambda: None
+
+        try:
+            account_client = self._account_client()
+        except Exception:  # noqa: BLE001
+            logger.warning("strategy indicator collection disabled: account client unavailable", exc_info=True)
+            return lambda: None
+
+        user_id = int(getattr(request, "user_id", 0) or getattr(state, "user_id", 0) or 0)
+        flushers: list[Callable[[], None]] = []
+
+        def save_payload(*, definitions: list[Any] | None = None, chunks: list[Any] | None = None) -> None:
+            if not definitions and not chunks:
+                return
+            save = getattr(account_client, "save_strategy_indicators", None)
+            if not callable(save):
+                logger.warning("strategy indicator collection disabled: account client cannot save indicators")
+                return
+            try:
+                save(
+                    session_id=session_id,
+                    user_id=user_id,
+                    definitions=definitions or [],
+                    chunks=chunks or [],
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "strategy indicator save failed: session=%s definitions=%d chunks=%d",
+                    session_id,
+                    len(definitions or []),
+                    len(chunks or []),
+                    exc_info=True,
+                )
+
+        for strategy in strategies:
+            definitions = list(getattr(strategy, "indicator_definitions", []) or [])
+            buffer = IndicatorChunkBuffer(definitions)
+            definition_streams_saved: set[str] = set()
+
+            def on_frame(
+                stream_key: str,
+                market_time_ms: int,
+                interval_ms: int,
+                frame,
+                *,
+                definitions=definitions,
+                buffer=buffer,
+                definition_streams_saved=definition_streams_saved,
+            ) -> None:
+                if stream_key not in definition_streams_saved:
+                    save_payload(
+                        definitions=[replace(definition, stream_key=stream_key) for definition in definitions],
+                    )
+                    definition_streams_saved.add(stream_key)
+                chunks = buffer.record_bar(stream_key, market_time_ms, interval_ms, frame)
+                if chunks:
+                    save_payload(chunks=chunks)
+
+            strategy.on_indicator_frame = on_frame
+
+            def flush(*, buffer=buffer) -> None:
+                chunks = buffer.flush_open()
+                if chunks:
+                    save_payload(chunks=chunks)
+
+            flushers.append(flush)
+
+        def flush_all() -> None:
+            for flush in flushers:
+                flush()
+
+        return flush_all
+
     def _run_backtest(
         self,
         session_id: str,
@@ -1701,14 +1788,18 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             end_time_ms=end,
             streams=required_streams,
         )
-        for kline in data_source.iter_klines():
-            if state.status != "running":
-                break
-            engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
-            n += 1
-            state.bars_processed = n
-            if n % BACKTEST_PAGE_SIZE == 0:
-                self._persist_session_status(session_id, state)
+        flush_indicators = self._install_indicator_collection(session_id, state, engine, request)
+        try:
+            for kline in data_source.iter_klines():
+                if state.status != "running":
+                    break
+                engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
+                n += 1
+                state.bars_processed = n
+                if n % BACKTEST_PAGE_SIZE == 0:
+                    self._persist_session_status(session_id, state)
+        finally:
+            flush_indicators()
 
         if state.status == "running":
             state.transition("finished", bars=n)
@@ -1782,37 +1873,41 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 )
             )
 
-        for event in live_events:
-            if state.status != "running" or stop_event.is_set():
-                break
-            event_kind = str(getattr(event, "kind", "") or "").strip().lower()
-            if event_kind == "order_update":
-                handler = getattr(engine, "handle_order_update", None)
-                if callable(handler):
-                    handler(getattr(event, "payload", None))
-                continue
-            kline = getattr(event, "payload", event)
-            routed = engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
-            if routed is False:
-                self._record_unroutable_live_kline(session_id, state, kline)
-            with state._lock:
-                state.bars_processed += 1
-                bars_processed = state.bars_processed
-                status = state.status
-                error = state.error
-                runtime_id = state.runtime_id
-            try:
-                ok = acct_client.update_session(
-                    session_id=session_id,
-                    status=status,
-                    bars_processed=bars_processed,
-                    error=error,
-                    runtime_id=runtime_id,
-                )
-                if not ok:
-                    logger.warning("session %s: failed to update live progress", session_id)
-            except Exception:  # noqa: BLE001
-                logger.warning("session %s: failed to update live progress", session_id, exc_info=True)
+        flush_indicators = self._install_indicator_collection(session_id, state, engine)
+        try:
+            for event in live_events:
+                if state.status != "running" or stop_event.is_set():
+                    break
+                event_kind = str(getattr(event, "kind", "") or "").strip().lower()
+                if event_kind == "order_update":
+                    handler = getattr(engine, "handle_order_update", None)
+                    if callable(handler):
+                        handler(getattr(event, "payload", None))
+                    continue
+                kline = getattr(event, "payload", event)
+                routed = engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
+                if routed is False:
+                    self._record_unroutable_live_kline(session_id, state, kline)
+                with state._lock:
+                    state.bars_processed += 1
+                    bars_processed = state.bars_processed
+                    status = state.status
+                    error = state.error
+                    runtime_id = state.runtime_id
+                try:
+                    ok = acct_client.update_session(
+                        session_id=session_id,
+                        status=status,
+                        bars_processed=bars_processed,
+                        error=error,
+                        runtime_id=runtime_id,
+                    )
+                    if not ok:
+                        logger.warning("session %s: failed to update live progress", session_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("session %s: failed to update live progress", session_id, exc_info=True)
+        finally:
+            flush_indicators()
 
     def _renew_stream_leases_once(self, session_id: str, state: SessionState) -> bool:
         if state.environment != 1 or not state.required_streams:

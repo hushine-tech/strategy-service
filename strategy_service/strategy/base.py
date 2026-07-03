@@ -3,12 +3,15 @@ from __future__ import annotations
 import importlib
 import logging
 import math
+import re
 import uuid
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
 
+from strategy_service.indicators import IndicatorDefinition, IndicatorFrame, IndicatorWriter, parse_indicator_definitions
 from strategy_service.inputs import (
     InputView,
     StrategyDeclarations,
@@ -42,6 +45,14 @@ class StrategyUserCodeError(RuntimeError):
 
 
 USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX = "user strategy on_market_data failed:"
+_INTERVAL_MS = {
+    "1s": 1_000,
+    "1m": 60_000,
+    "1h": 3_600_000,
+    "1d": 86_400_000,
+    "1w": 604_800_000,
+}
+_INTERVAL_RE = re.compile(r"^(\d+)([smhdw])$")
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -69,6 +80,57 @@ def _is_futures_market(market: str) -> bool:
 
 def _norm_interval(interval: str) -> str:
     return str(interval).strip()
+
+
+def _interval_to_ms(interval: str) -> int:
+    raw = _norm_interval(interval).lower()
+    if raw in _INTERVAL_MS:
+        return _INTERVAL_MS[raw]
+    match = _INTERVAL_RE.match(raw)
+    if not match:
+        return 60_000
+    qty = int(match.group(1))
+    unit = match.group(2)
+    unit_ms = {
+        "s": 1_000,
+        "m": 60_000,
+        "h": 3_600_000,
+        "d": 86_400_000,
+        "w": 604_800_000,
+    }[unit]
+    return qty * unit_ms
+
+
+def _stream_key(exchange: str, market: str, symbol: str, interval: str) -> str:
+    return f"{_norm_exchange(exchange)}:{_norm_market(market)}:{_norm_symbol(symbol)}:{_norm_interval(interval)}"
+
+
+def _value_to_epoch_ms(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _market_time_ms(market_data: MarketData) -> int:
+    for attr in ("open_time_ms", "open_time", "time_ms"):
+        raw = getattr(market_data, attr, None)
+        if raw is not None:
+            return _value_to_epoch_ms(raw)
+    klines = getattr(market_data, "klines", None)
+    if isinstance(klines, dict):
+        for key in ("open_time_ms", "open_time", "timestamp"):
+            raw = klines.get(key)
+            if raw is not None:
+                return _value_to_epoch_ms(raw)
+    return _value_to_epoch_ms(getattr(market_data, "timestamp", None))
 
 
 def _normalize_decisions(signal: object) -> list[OrderDecision]:
@@ -203,6 +265,13 @@ def _read_declared_inputs(strategy_instance: Any) -> list[StrategyInput]:
     return parse_declared_inputs(raw)
 
 
+def _read_indicator_definitions(strategy_instance: Any) -> list[IndicatorDefinition]:
+    try:
+        return parse_indicator_definitions(getattr(strategy_instance, "INDICATORS", None))
+    except ValueError as exc:
+        raise StrategyDeclarationError(f"invalid INDICATORS: {exc}") from exc
+
+
 def extract_strategy_inputs(
     strategy_path: str,
     strategy_code: str | None = None,
@@ -280,6 +349,7 @@ class BaseStrategy:
         self.strategy_path = strategy_path
         self.wallet = wallet
         self.on_order_callback: Any | None = None
+        self.on_indicator_frame: Callable[[str, int, int, IndicatorFrame], None] | None = None
         self._order_client: OrderClient = order_client or OrderClient()
         self._account_id: int = account_id
         self._strategy_id: int = strategy_id
@@ -303,6 +373,11 @@ class BaseStrategy:
         )
         setattr(self._strategy_instance, "notify", self._notifier)
         self._decl = extract_declarations(self._strategy_instance)
+        self._indicator_definitions = _read_indicator_definitions(self._strategy_instance)
+        self._indicator_writer = self._install_indicator_writer(
+            self._strategy_instance,
+            self._indicator_definitions,
+        )
         self._inputs: list[StrategyInput] = self._decl.inputs
         self._order_targets = self._decl.order_targets
         self._input_keys: set[tuple[str, str, str, str]] = self._decl.input_keys
@@ -329,6 +404,19 @@ class BaseStrategy:
 
     def _get_strategy(self) -> Any:
         return self._strategy_instance
+
+    @property
+    def indicator_definitions(self) -> list[IndicatorDefinition]:
+        return list(self._indicator_definitions)
+
+    def _install_indicator_writer(
+        self,
+        strategy_instance: Any,
+        definitions: list[IndicatorDefinition],
+    ) -> IndicatorWriter:
+        writer = IndicatorWriter(definitions)
+        setattr(strategy_instance, "indicators", writer)
+        return writer
 
     def _resolve_hot_reload_source_path(self, strategy_path: str) -> Path | None:
         if not self._hot_reload_enabled:
@@ -368,6 +456,7 @@ class BaseStrategy:
         try:
             candidate = _load_strategy_instance(str(source_path))
             candidate_decl = extract_declarations(candidate)
+            candidate_indicator_definitions = _read_indicator_definitions(candidate)
         except Exception:  # noqa: BLE001
             self._hot_reload_signature = signature
             logger.warning(
@@ -397,6 +486,8 @@ class BaseStrategy:
             return
 
         setattr(candidate, "notify", self._notifier)
+        self._indicator_definitions = candidate_indicator_definitions
+        self._indicator_writer = self._install_indicator_writer(candidate, self._indicator_definitions)
         self._strategy_instance = candidate
         self._hot_reload_signature = signature
         logger.info(
@@ -404,6 +495,36 @@ class BaseStrategy:
             self._session_id,
             source_path,
         )
+
+    def _prepare_indicator_frame(self) -> None:
+        writer = getattr(self._strategy_instance, "indicators", None)
+        if writer is not None:
+            writer.reset_bar()
+
+    def _drain_indicator_frame(self, stream_key: str, market_time_ms: int, interval_ms: int) -> None:
+        writer = getattr(self._strategy_instance, "indicators", None)
+        if writer is None or not self._indicator_definitions:
+            return
+        frame = writer.drain()
+        for warning in frame.warnings:
+            logger.warning(
+                "strategy indicator warning: session=%s strategy_id=%s %s",
+                self._session_id,
+                self._strategy_id,
+                warning,
+            )
+        if self.on_indicator_frame is None:
+            return
+        try:
+            self.on_indicator_frame(stream_key, market_time_ms, interval_ms, frame)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "strategy indicator callback failed: session=%s strategy_id=%s stream_key=%s",
+                self._session_id,
+                self._strategy_id,
+                stream_key,
+                exc_info=True,
+            )
 
     def _emit_user_code_error(self, message: str) -> None:
         if self._on_user_code_error is None:
@@ -727,6 +848,7 @@ class BaseStrategy:
         # Call user strategy with the view, not the raw tick.
         self._maybe_reload_strategy()
         try:
+            self._prepare_indicator_frame()
             raw_signals = self._strategy_instance.on_market_data(self._view, self.wallet)
         except Exception as exc:  # noqa: BLE001
             message = (
@@ -749,6 +871,11 @@ class BaseStrategy:
                 )
                 return
             raise StrategyUserCodeError(message) from exc
+        self._drain_indicator_frame(
+            _stream_key(exchange, market, sym, interval),
+            _market_time_ms(market_data),
+            _interval_to_ms(interval),
+        )
         self._emit_user_code_recovered()
         signals = _normalize_decisions(raw_signals)
         prepared = [
