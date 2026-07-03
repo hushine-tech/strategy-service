@@ -52,6 +52,19 @@ class _StubWallet:
         return self.route_wallet
 
 
+class _IndicatorRecorder:
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+        self.markers: list[tuple[str, str, float | None]] = []
+
+    def set(self, key: str, value: object) -> None:
+        self.values[key] = value
+
+    def mark(self, key: str, text: str = "", price: float | None = None, color: str = "") -> None:
+        del color
+        self.markers.append((key, text, price))
+
+
 def _md(price: float, symbol: str = "ETHUSDT", interval: str = "1m") -> MarketData:
     return MarketData(
         exchange=Exchange.BINANCE,
@@ -91,6 +104,10 @@ def test_declares_ethusdt_one_minute_futures_input_and_order_target():
             "symbol": "ETHUSDT",
         }
     ]
+    assert strategy_cls.INDICATORS["bb_upper"]["type"] == "line"
+    assert strategy_cls.INDICATORS["bb_upper"]["pane"] == "price"
+    assert strategy_cls.INDICATORS["alpha_score"]["pane"] == "strategy"
+    assert strategy_cls.INDICATORS["entry_signal"]["type"] == "marker"
 
 
 def test_point_one_percent_rise_buys_one_percent_wallet_balance():
@@ -134,3 +151,19 @@ def test_order_is_skipped_when_one_percent_wallet_balance_is_below_min_notional(
 
     assert _feed(strategy, view, 1000.0, wallet) is None
     assert _feed(strategy, view, 1001.0, wallet) is None
+
+
+def test_seed_strategy_writes_custom_indicators_when_runtime_injects_writer():
+    strategy_cls = _load_strategy_class()
+    strategy = strategy_cls()
+    strategy.indicators = _IndicatorRecorder()
+    view = _make_view(strategy_cls)
+    wallet = _StubWallet(wallet_balance=5000.0)
+
+    assert _feed(strategy, view, 1000.0, wallet) is None
+    decision = _feed(strategy, view, 1001.0, wallet)
+
+    assert isinstance(decision, OrderDecision)
+    assert {"bb_upper", "bb_middle", "bb_lower", "alpha_score"} <= set(strategy.indicators.values)
+    assert strategy.indicators.values["bb_middle"] is not None
+    assert strategy.indicators.markers == [("entry_signal", "BUY", 1001.0)]

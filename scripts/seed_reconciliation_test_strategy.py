@@ -86,6 +86,13 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
     class MyStrategy:
         INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT", "interval": "1m"}]
         ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT"}]
+        INDICATORS = {
+            "bb_upper": {"name": "BB Upper", "type": "line", "pane": "price", "color": "#2563eb", "unit": "USDT"},
+            "bb_middle": {"name": "BB Middle", "type": "line", "pane": "price", "color": "#64748b", "unit": "USDT"},
+            "bb_lower": {"name": "BB Lower", "type": "line", "pane": "price", "color": "#2563eb", "unit": "USDT"},
+            "alpha_score": {"name": "Alpha Score", "type": "line", "pane": "strategy", "color": "#7c3aed"},
+            "entry_signal": {"name": "Entry Signal", "type": "marker", "pane": "price", "color": "#0f766e"},
+        }
 
         # 触发阈值: ±0.1% (千分之一).
         TRIGGER_PCT = 0.001
@@ -98,6 +105,35 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
 
         def __init__(self):
             self._ref_price = None
+            self._prices = []
+
+        def _record_indicators(self, price, change):
+            self._prices.append(float(price))
+            if len(self._prices) > 20:
+                self._prices = self._prices[-20:]
+
+            indicators = getattr(self, "indicators", None)
+            if indicators is None:
+                return
+
+            if len(self._prices) >= 2:
+                middle = sum(self._prices) / len(self._prices)
+                variance = sum((item - middle) ** 2 for item in self._prices) / len(self._prices)
+                band = 2.0 * (variance ** 0.5)
+                indicators.set("bb_upper", middle + band)
+                indicators.set("bb_middle", middle)
+                indicators.set("bb_lower", middle - band)
+            else:
+                indicators.set("bb_upper", None)
+                indicators.set("bb_middle", None)
+                indicators.set("bb_lower", None)
+            indicators.set("alpha_score", float(change) * 10000.0)
+
+        def _mark_signal(self, side, price):
+            indicators = getattr(self, "indicators", None)
+            if indicators is None:
+                return
+            indicators.mark("entry_signal", text=str(side), price=float(price))
 
         def on_market_data(self, data, wallet):
             tick = data.exchange[Exchange.BINANCE].market[Market.PERPETUAL_FUTURES].symbol["ETHUSDT"].interval["1m"]
@@ -110,9 +146,11 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
             # 首 tick: 只初始化参考价, 不下单 (避免 session 一启动就发订单).
             if self._ref_price is None:
                 self._ref_price = price
+                self._record_indicators(price, 0.0)
                 return None
 
             change = (price - self._ref_price) / self._ref_price
+            self._record_indicators(price, change)
             if abs(change) < self.TRIGGER_PCT:
                 return None
 
@@ -143,6 +181,7 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
 
             if change > 0:
                 # 涨了 → 追涨做多 1%
+                self._mark_signal("BUY", price)
                 return OrderDecision(
                     exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES,
                     symbol="ETHUSDT", side=OrderSide.BUY, qty=str(qty),
@@ -150,6 +189,7 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
                 )
             else:
                 # 跌了 → 杀跌做空 1%
+                self._mark_signal("SELL", price)
                 return OrderDecision(
                     exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES,
                     symbol="ETHUSDT", side=OrderSide.SELL, qty=str(qty),
