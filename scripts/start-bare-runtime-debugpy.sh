@@ -100,7 +100,18 @@ CONTROL_PANEL_ADDR="${CONTROL_PANEL_ADDR:-${CONTROL_PANEL_SERVICE_GRPC_ADDR:-${P
 MARKET_DATA_CONTROL_PANEL_ADDR="${MARKET_DATA_CONTROL_PANEL_ADDR:-${MARKET_DATA_CONTROL_PANEL_GRPC_ADDR:-${CONTROL_PANEL_ADDR}}}"
 RUNTIME_CHANNEL_ADDR="${RUNTIME_CHANNEL_ADDR:-${RUNTIME_CHANNEL_GRPC_ADDR:-${PLATFORM_HOST}:50055}}"
 
-CONFIG_PATH="${CONFIG_PATH:-./config.local.yaml}"
+if [[ -z "${CONFIG_PATH:-}" ]]; then
+  if [[ -f "${STRATEGY_DIR}/config.local.yaml" ]]; then
+    CONFIG_PATH="./config.local.yaml"
+  else
+    CONFIG_PATH="./config.yaml"
+  fi
+fi
+if [[ ! -f "${STRATEGY_DIR}/${CONFIG_PATH#./}" && ! -f "${CONFIG_PATH}" ]]; then
+  echo "config file not found: ${CONFIG_PATH}" >&2
+  echo "Set CONFIG_PATH or run from a checkout that contains config.yaml." >&2
+  exit 1
+fi
 BOOTSTRAP_DIR="${RUNTIME_BARE_BOOTSTRAP_DIR:-/tmp/hushine-bare-debugpy-user-${USER_ID}}"
 
 export CORE_SERVICE_GRPC_ADDR="${CORE_SERVICE_ADDR}"
@@ -130,6 +141,7 @@ echo "VS Code attach: ${DEBUG_HOST}:${DEBUG_PORT}"
 echo "core-service: ${CORE_SERVICE_ADDR}"
 echo "control-panel: ${CONTROL_PANEL_ADDR}"
 echo "runtime-channel: ${RUNTIME_CHANNEL_ADDR}"
+echo "config: ${CONFIG_PATH}"
 if [[ "${#wait_args[@]}" -gt 0 ]]; then
   echo "Waiting for VS Code attach before registering runtime."
 fi
