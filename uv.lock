@@ -257,6 +257,23 @@ wheels = [
 ]
 
 [[package]]
+name = "hushine-strategy-library"
+version = "0.1.0"
+source = { git = "ssh://git@github.com/hushine-tech/strategy-library.git?rev=main#8e144ff875bc246784c33e143e03cb67e1bcd35a" }
+dependencies = [
+    { name = "grpcio" },
+    { name = "kafka-python" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
+    { name = "pandas" },
+    { name = "protobuf" },
+    { name = "psycopg2-binary" },
+    { name = "pyyaml" },
+    { name = "requests" },
+]
+
+[[package]]
 name = "hushine-strategy-service"
 version = "0.1.0"
 source = { editable = "." }
@@ -264,6 +281,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
     { name = "grpcio-tools" },
+    { name = "hushine-strategy-library" },
     { name = "kafka-python" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -285,6 +303,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44.0.0" },
     { name = "grpcio", specifier = ">=1.80.0" },
     { name = "grpcio-tools", specifier = ">=1.80.0" },
+    { name = "hushine-strategy-library", git = "ssh://git@github.com/hushine-tech/strategy-library.git?rev=main" },
     { name = "kafka-python", specifier = ">=2.0.0" },
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.20.0" },
