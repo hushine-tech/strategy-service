@@ -3,6 +3,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNTIME_SCRIPT="${REPO_ROOT}/strategy-service/scripts/start-bare-runtime-debugpy.sh"
+ATTACH_EXAMPLE="${REPO_ROOT}/strategy-service/scripts/vscode-bare-runtime-attach.launch.json"
+README="${REPO_ROOT}/strategy-service/README.md"
 OUTER_SCRIPT="${REPO_ROOT}/scripts/start-bare-runtime-debugpy.sh"
 
 if [[ ! -f "${RUNTIME_SCRIPT}" ]]; then
@@ -12,6 +14,11 @@ fi
 
 if [[ -e "${OUTER_SCRIPT}" ]]; then
   echo "bare debugpy launcher must live under strategy-service/scripts, not outer scripts: ${OUTER_SCRIPT}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${ATTACH_EXAMPLE}" ]]; then
+  echo "missing VS Code bare runtime attach example: ${ATTACH_EXAMPLE}" >&2
   exit 1
 fi
 
@@ -39,6 +46,19 @@ required_literals=(
 for literal in "${required_literals[@]}"; do
   if ! grep -Fq -- "${literal}" "${RUNTIME_SCRIPT}"; then
     echo "missing bare debugpy launcher literal: ${literal}" >&2
+    exit 1
+  fi
+done
+
+readme_literals=(
+  'DEBUG_WAIT=0 scripts/start-bare-runtime-debugpy.sh 6 192.168.88.6'
+  'There is no `attach.json`.'
+  'scripts/vscode-bare-runtime-attach.launch.json'
+)
+
+for literal in "${readme_literals[@]}"; do
+  if ! grep -Fq -- "${literal}" "${README}"; then
+    echo "missing README bare debugpy literal: ${literal}" >&2
     exit 1
   fi
 done

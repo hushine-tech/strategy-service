@@ -65,7 +65,57 @@ and talks to the platform through RuntimeChannel proxy calls.
 ## Local Strategy Debugging
 
 When control-panel is deployed with debug bare runtime enabled, a local process
-can connect without a runtime credential by naming the debug user explicitly:
+can connect without a runtime credential by naming the debug user explicitly.
+For the current bare-runtime debugpy path, start from the `strategy-service`
+directory:
+
+```bash
+DEBUG_WAIT=0 scripts/start-bare-runtime-debugpy.sh 6 192.168.88.6
+```
+
+The first positional argument is `user_id`; the second positional argument is
+the target platform host. With the command above, the script derives:
+
+- core-service: `192.168.88.6:50051`
+- control-panel: `192.168.88.6:50054`
+- RuntimeChannel: `192.168.88.6:50055`
+
+`DEBUG_WAIT=0` starts the runtime immediately without waiting for a VS Code
+debugger attach. Omit it, or set `DEBUG_WAIT=1`, when you want the process to
+pause before runtime registration.
+
+Equivalent explicit form:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh \
+  --user-id 6 \
+  --platform-host 192.168.88.6
+```
+
+When ports are non-standard, pass full addresses:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh \
+  --user-id 6 \
+  --core-service-addr 192.168.88.6:50051 \
+  --control-panel-addr 192.168.88.6:50054 \
+  --runtime-channel-addr 192.168.88.6:50055
+```
+
+There is no `attach.json`. VS Code uses `.vscode/launch.json`; `attach` is the
+debug configuration's `request` mode. Use the tracked example as the base for
+your local `.vscode/launch.json`:
+
+```bash
+scripts/vscode-bare-runtime-attach.launch.json
+```
+
+The default attach endpoint is `127.0.0.1:5678`, matching the script output:
+`VS Code attach: 127.0.0.1:5678`. If you start the runtime with
+`DEBUG_PORT=5679`, update the launch configuration port to `5679` as well.
+
+The raw `hushine-runtime start` form is still available for non-debugpy
+diagnostics:
 
 ```bash
 RUNTIME_CHANNEL_TLS_ENABLED=true \
@@ -75,41 +125,6 @@ uv run hushine-runtime start --config config.local.yaml \
   --control-panel-addr 127.0.0.1:50054 \
   --runtime-channel-addr 127.0.0.1:50055 \
   --user-id 123
-```
-
-`--control-panel-addr` is used only for the debug-gated certificate bootstrap.
-After that, runtime traffic uses `--runtime-channel-addr` with the issued mTLS
-client certificate.
-
-For VS Code/debugpy attach mode, use the runtime-owned shortcut script:
-
-```bash
-scripts/start-bare-runtime-debugpy.sh 123
-```
-
-To connect a local bare runtime to another platform machine, pass the platform
-host. The script derives core-service, control-panel, and RuntimeChannel ports:
-
-```bash
-scripts/start-bare-runtime-debugpy.sh 123 192.168.88.6
-```
-
-Equivalent explicit form:
-
-```bash
-scripts/start-bare-runtime-debugpy.sh \
-  --user-id 123 \
-  --platform-host 192.168.88.6
-```
-
-When ports are non-standard, pass full addresses:
-
-```bash
-scripts/start-bare-runtime-debugpy.sh \
-  --user-id 123 \
-  --core-service-addr 192.168.88.6:50051 \
-  --control-panel-addr 192.168.88.6:50054 \
-  --runtime-channel-addr 192.168.88.6:50055
 ```
 
 `core-service` is exported for config compatibility. Runtime traffic still goes
