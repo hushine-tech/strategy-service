@@ -18,12 +18,12 @@
 
 | Canonical | 当前来源 | 说明 |
 | --- | --- | --- |
-| `total_value` | `AccountWalletState.total_value` | 账户总资产价值 |
-| `spot_estimated_value` | `AccountWalletState.spot_estimated_value` | 现货展示估值 |
-| `futures_position_equity` | `AccountWalletState.futures_position_equity` | 期货腿展示值；canonical 目标口径为 `futures.margin_balance`，对 Binance 快照等同 `futures.total_margin_balance` |
-| `environment` | `AccountWalletState.environment` | 账户环境：`0=backtest`、`1=demo`、`2=live` |
-| `updated_at` | `AccountWalletState.updated_at` | 快照时间 |
-| `metrics_authoritative` | `AccountWalletState.metrics_authoritative` | 展示指标是否由服务端权威给出 |
+| `total_value` | `PortfolioWalletState.total_value` | 账户总资产价值 |
+| `spot_estimated_value` | `PortfolioWalletState.spot_estimated_value` | 现货展示估值 |
+| `futures_position_equity` | `PortfolioWalletState.futures_position_equity` | 期货腿展示值；canonical 目标口径为 `futures.margin_balance`，对 Binance 快照等同 `futures.total_margin_balance` |
+| `environment` | `PortfolioWalletState.environment` | 账户环境：`0=backtest`、`1=demo`、`2=live` |
+| `updated_at` | `PortfolioWalletState.updated_at` | 快照时间 |
+| `metrics_authoritative` | `PortfolioWalletState.metrics_authoritative` | 展示指标是否由服务端权威给出 |
 
 说明：顶层 canonical contract 只保留账户总览字段；`wallet_balance`、`available_balance`、`margin_balance`、`unrealized_pnl` 不再属于顶层 canonical，统一从 `futures.*` 读取。顶层若仍有同名 wire 字段，视为兼容镜像，不作为标准消费入口。
 

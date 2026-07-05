@@ -108,7 +108,7 @@ def test_place_order_uses_canonical_symbol_and_emits_fill_events():
         13,
         _decision(),
         51000.0,
-        account_symbol="ETHUSDT",
+        portfolio_symbol="ETHUSDT",
         market="perpetual_futures",
         intent_id="intent-1",
     )
@@ -167,7 +167,7 @@ def test_place_order_ioc_partial_expired_emits_terminal_fill_event():
         13,
         _decision(order_type="LIMIT", price="2500", time_in_force="IOC"),
         2500.0,
-        account_symbol="ETHUSDT",
+        portfolio_symbol="ETHUSDT",
         market="perpetual_futures",
         intent_id="intent-ioc",
     )
@@ -202,7 +202,7 @@ def test_place_order_passes_market_time_to_order_service():
         13,
         _decision(),
         51000.0,
-        account_symbol="ETHUSDT",
+        portfolio_symbol="ETHUSDT",
         market="perpetual_futures",
         intent_id="intent-1",
         market_time=market_time,
@@ -248,7 +248,7 @@ def test_place_order_exception_triggers_resolve_unknown_attempt():
         13,
         _decision(),
         51000.0,
-        account_symbol="ETHUSDT",
+        portfolio_symbol="ETHUSDT",
         market="perpetual_futures",
         intent_id="intent-2",
     )
@@ -295,7 +295,7 @@ def test_fee_missing_fill_is_not_wallet_settleable():
         13,
         _decision(),
         51000.0,
-        account_symbol="ETHUSDT",
+        portfolio_symbol="ETHUSDT",
         market="perpetual_futures",
         intent_id="intent-3",
     )
@@ -327,7 +327,7 @@ def test_place_order_sends_explicit_venue_route_fields():
             position_side="SHORT",
         ),
         51000.0,
-        account_symbol="ETHUSDT",
+        portfolio_symbol="ETHUSDT",
         market="delivery_futures",
         intent_id="intent-4",
     )
@@ -364,7 +364,7 @@ def test_place_order_sends_advanced_order_contract_fields():
             reduce_only=True,
         ),
         51000.0,
-        account_symbol="ETHUSDT",
+        portfolio_symbol="ETHUSDT",
         market="perpetual_futures",
         intent_id="intent-limit",
     )
@@ -394,7 +394,7 @@ def test_place_order_without_order_service_fails_fast() -> None:
             13,
             _decision(),
             51000.0,
-            account_symbol="ETHUSDT",
+            portfolio_symbol="ETHUSDT",
             market="perpetual_futures",
             intent_id="intent-missing-client",
         )
@@ -404,7 +404,7 @@ def test_order_response_from_update_rejects_missing_market_route() -> None:
     event = OrderUpdateEvent(
         event_id=1,
         session_id="session-1",
-        account_id=13,
+        portfolio_id=13,
         venue_id=20,
         exchange="binance",
         market="",
@@ -424,7 +424,7 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
     item = order_service_pb2.OrderLifecycleEventEntry(
         event_id=101,
         session_id="sess-1",
-        account_id=7,
+        portfolio_id=7,
         venue_id=20,
         exchange=1,
         market=2,
@@ -476,7 +476,7 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
             order_service_pb2.OrderLifecycleEventEntry(
                 event_id=11,
                 session_id="session-1",
-                account_id=13,
+                portfolio_id=13,
                 venue_id=20,
                 exchange=1,
                 market=2,
@@ -527,7 +527,7 @@ def test_order_response_from_update_uses_lifecycle_order_state():
             order_service_pb2.OrderLifecycleEventEntry(
                 event_id=12,
                 session_id="session-1",
-                account_id=13,
+                portfolio_id=13,
                 venue_id=20,
                 exchange=1,
                 market=2,

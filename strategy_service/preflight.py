@@ -1,15 +1,15 @@
 """Runtime source profile resolver + profile-specific startup preflight.
 
 pre_C3 gate 2: every strategy startup MUST resolve a runtime source profile
-from the account context, then evaluate a profile-specific preflight whose
+from the portfolio context, then evaluate a profile-specific preflight whose
 authoritative input set is the strategy's declared ``(market, symbol, interval)``
-universe — wallet positions / spot assets / account-balance assets MUST NOT
+universe — wallet positions / spot assets / portfolio-balance assets MUST NOT
 extend that set.
 
 This module is the single source of truth for:
 
 - ``RuntimeSourceProfile`` — conceptual runtime source (backtest / demo /
-  live). This is **not** a strategy-vs-account compatibility condition;
+  live). This is **not** a strategy-vs-portfolio compatibility condition;
   it only decides which data sources and which preflight to run.
 - ``SUPPORTED_PROFILES`` — profiles currently wired up in strategy-service.
   Mirrors the ``wallet_factory.RUNTIME_REGISTRY`` allowlist. LIVE is
@@ -46,7 +46,7 @@ class RuntimeSourceProfile(Enum):
     - ``BACKTEST`` — historical TimescaleDB replay; wallet mutates locally
     - ``DEMO`` — exchange demo data + demo order flow (exchange-parity wallet)
     - ``LIVE`` — real Binance (or other exchange) live data + real order flow
-    - ``UNKNOWN`` — unrecognised account environment (guardrail)
+    - ``UNKNOWN`` — unrecognised portfolio environment (guardrail)
     """
 
     BACKTEST = "backtest"
@@ -66,7 +66,7 @@ SUPPORTED_PROFILES: frozenset[RuntimeSourceProfile] = frozenset({
 
 
 def resolve_profile(environment: int) -> RuntimeSourceProfile:
-    """Map the numeric account environment to a runtime source profile.
+    """Map the numeric portfolio environment to a runtime source profile.
 
     This is a pure translation — it does NOT decide whether the profile is
     supported. Use ``SUPPORTED_PROFILES`` for that check.
@@ -153,7 +153,7 @@ def check_profile_supported(profile: RuntimeSourceProfile) -> PreflightResult:
     if profile in SUPPORTED_PROFILES:
         return result
     if profile is RuntimeSourceProfile.UNKNOWN:
-        reason = "account environment does not map to a known runtime source profile"
+        reason = "portfolio environment does not map to a known runtime source profile"
     else:
         reason = (
             f"runtime source profile {profile.value!r} is not yet wired up in "

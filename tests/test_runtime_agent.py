@@ -484,7 +484,7 @@ def test_runtime_agent_load_debug_dataset_command():
     result = agent.handle_runtime_command("load_debug_dataset", json.dumps({
         "dataset_id": "dbg-1",
         "user_id": 7,
-        "account_id": 10,
+        "portfolio_id": 10,
         "runtime_id": "runtime-1",
         "market": "spot",
         "symbol": "ETHUSDT",
@@ -513,7 +513,7 @@ def test_runtime_agent_load_debug_dataset_command():
     assert body["bar_count"] == 1
     dataset = agent.active_debug_dataset()
     assert dataset is not None
-    assert dataset.account_id == 10
+    assert dataset.portfolio_id == 10
     assert dataset.klines[0].symbol == "ETHUSDT"
     assert dataset.klines[0].market == "spot"
 
@@ -522,7 +522,7 @@ def _packed_order_lifecycle_event(*, event_id: int) -> Any:
     item = order_service_pb2.OrderLifecycleEventEntry(
         event_id=event_id,
         session_id="sess-1",
-        account_id=10,
+        portfolio_id=10,
         venue_id=1,
         intent_id="intent-1",
         attempt_id="attempt-1",

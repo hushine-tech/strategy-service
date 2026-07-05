@@ -27,7 +27,7 @@ class DatabaseConfig:
 
 @dataclass
 class DependenciesConfig:
-    account_service_grpc: str = "localhost:50051"
+    portfolio_service_grpc: str = "localhost:50051"
     order_service_grpc: str = "127.0.0.1:50051"
     control_panel_service_grpc: str = ""
     runtime_channel_grpc: str = ""
@@ -132,7 +132,7 @@ class Config:
             cfg.database.password = d.get("password", cfg.database.password)
         if isinstance(data.get("dependencies"), dict):
             dep = data["dependencies"]
-            cfg.dependencies.account_service_grpc = dep.get("account_service_grpc", cfg.dependencies.account_service_grpc)
+            cfg.dependencies.portfolio_service_grpc = dep.get("portfolio_service_grpc", cfg.dependencies.portfolio_service_grpc)
             cfg.dependencies.order_service_grpc = dep.get("order_service_grpc", cfg.dependencies.order_service_grpc)
             cfg.dependencies.control_panel_service_grpc = dep.get(
                 "control_panel_service_grpc", cfg.dependencies.control_panel_service_grpc
@@ -245,7 +245,7 @@ class Config:
             or os.environ.get("CORE_SERVICE_GRPC_ADDR")
         )
         if v:
-            self.dependencies.account_service_grpc = v
+            self.dependencies.portfolio_service_grpc = v
         v = os.environ.get("DEPENDENCIES_ORDER_SERVICE_GRPC") or os.environ.get("ORDER_SERVICE_GRPC_ADDR")
         if v:
             self.dependencies.order_service_grpc = v

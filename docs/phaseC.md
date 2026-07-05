@@ -112,9 +112,9 @@ wallet sync（历史旧路径）
   └─ 旧钱包快照 RPC(local wallet, snapshot_reason)
                                            │
                                            │ 主流程
-                                           ├─ 1. 读取 account.environment
+                                           ├─ 1. 读取 portfolio.environment
                                            ├─ 2. demo/live 交易所环境拉一次 exchange authoritative snapshot
-                                           ├─ 3. 持久化 authoritative wallet / account snapshot
+                                           ├─ 3. 持久化 authoritative wallet / portfolio snapshot
                                            ├─ 4. 组织 compare payload:
                                            │      - local snapshot（来自 request）
                                            │      - exchange snapshot（来自本次 authoritative fetch）
@@ -248,7 +248,7 @@ exchange:
 ```sql
 CREATE TABLE reconciliation_runs (
     time              TIMESTAMPTZ      NOT NULL,
-    account_id        BIGINT           NOT NULL,
+    portfolio_id        BIGINT           NOT NULL,
     user_id           BIGINT           NOT NULL,
     session_id        TEXT             NULL,
     strategy_id       BIGINT           NULL,
@@ -261,7 +261,7 @@ CREATE TABLE reconciliation_runs (
     advisory_diffs    JSONB            NOT NULL,
     hard_pass         BOOLEAN          NOT NULL,
     soft_pass         BOOLEAN          NOT NULL,
-    PRIMARY KEY (time, account_id)
+    PRIMARY KEY (time, portfolio_id)
 );
 ```
 
@@ -406,13 +406,13 @@ grep -r "BinanceParityWallet" strategy-service/ --exclude-dir=docs --exclude-dir
 
 **状态 (2026-04-18):** 全绿。Phase C2b 的代码清理已在主 phase-c change 中
 完成 (`LegacyWalletAdapter` 删除、`BinanceParityWallet` 短期别名删除);
-legacy harness (`future.py` / `account.py` / legacy 入口脚本 / 5 个测试 fixture)
+legacy harness (`future.py` / `portfolio.py` / legacy 入口脚本 / 5 个测试 fixture)
 由独立的 change `strategy-wallet-legacy-cleanup` (本轮) 完成。具体 grep 结果:
 
 - `LegacyWalletAdapter` / `legacy_adapter` —— 零命中(含测试)
 - `from strategy_service.wallet.future` —— 零命中(文件本身已删)
 - `BinanceParityWallet` —— 零命中(别名已删)
-- `FutureWallet` / `Position` / `Account` / `Wallet` / `FuturesPosition`
+- `FutureWallet` / `Position` / `Portfolio` / `Wallet` / `FuturesPosition`
   作为导出符号 —— 零命中(`wallet/__init__.py` 已精简)
 
 ## 8. C3：全量回归 + 阈值校准
@@ -444,13 +444,13 @@ legacy harness (`future.py` / `account.py` / legacy 入口脚本 / 5 个测试 f
 cd strategy-service
 export HUSHINE_USERNAME=<PORTAL_USERNAME>
 export HUSHINE_PASSWORD=<PORTAL_PASSWORD>
-python scripts/submit_eth_pyramid_strategy.py --account-id <MODE2_ACCOUNT_ID> --activate
+python scripts/submit_eth_pyramid_strategy.py --portfolio-id <MODE2_PORTFOLIO_ID> --activate
 ```
 
 - 启动 live `mode=2` session:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8090/api/accounts/<MODE2_ACCOUNT_ID>/run-strategy \
+curl -s -X POST http://127.0.0.1:8090/api/portfolios/<MODE2_PORTFOLIO_ID>/run-strategy \
   -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"strategy_path":"","interval":"1m"}'

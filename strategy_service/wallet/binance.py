@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import math
 
 from .canonical import (
-    CanonicalAccountState,
+    CanonicalPortfolioState,
     CanonicalFuturesPositionState,
     CanonicalFuturesRiskMetadata,
     CanonicalFuturesState,
@@ -328,7 +328,7 @@ class BinanceFuturesBook:
             pos._refresh_derived_fields()
             self.positions[(norm_symbol(pos.symbol), int(pos.direction_key))] = pos
         self.open_orders: dict[str, BinanceOpenOrder] = {}
-        self._refresh_account_fields()
+        self._refresh_portfolio_fields()
 
     def _get_positions_for_symbol(self, symbol: str) -> list[tuple[tuple[str, int], BinancePosition]]:
         sym = norm_symbol(symbol)
@@ -601,7 +601,7 @@ class BinanceFuturesBook:
         else:
             self.total_open_order_initial_margin = float(self.oracle_total_open_order_initial_margin or 0.0)
 
-    def _refresh_account_fields(self) -> None:
+    def _refresh_portfolio_fields(self) -> None:
         for pos in self.positions.values():
             pos._refresh_derived_fields()
         for pos in self.positions.values():
@@ -658,7 +658,7 @@ class BinanceFuturesBook:
         for _key, pos in affected:
             pos.update_mark_price(float(price))
         if affected or any(order.symbol == norm_symbol(symbol) for order in self.open_orders.values()):
-            self._refresh_account_fields()
+            self._refresh_portfolio_fields()
 
     def _extract_fill_delta(
         self,
@@ -845,7 +845,7 @@ class BinanceFuturesBook:
         else:
             self.open_orders[order.order_id] = order
             self._ensure_position(order.symbol, order.direction_key, order.position_side)
-        self._refresh_account_fields()
+        self._refresh_portfolio_fields()
 
     def on_ledger_event(self, event: object) -> None:
         event_type = str(
@@ -865,13 +865,13 @@ class BinanceFuturesBook:
         position_side = str(getattr(event, "position_side", "") or "").strip().upper()
         if symbol:
             # In hedge mode the per-position update requires an explicit
-            # position_side. Account-level ledger events (e.g. a funding_fee
+            # position_side. Portfolio-level ledger events (e.g. a funding_fee
             # or transfer that aren't bound to LONG vs SHORT) legitimately
             # arrive without it. Apply only the wallet-level delta (already
             # added to wallet_balance above) and skip per-position work,
             # rather than raising inside _position_key_from_order.
             if self.position_mode == "hedge" and position_side not in {"LONG", "SHORT"}:
-                self._refresh_account_fields()
+                self._refresh_portfolio_fields()
                 return
             direction_key = self._position_key_from_order(
                 norm_symbol(symbol), position_side,
@@ -893,7 +893,7 @@ class BinanceFuturesBook:
                 pos.carry_cost = float(pos.carry_cost or 0.0) - amount
                 pos._refresh_derived_fields()
 
-        self._refresh_account_fields()
+        self._refresh_portfolio_fields()
 
     def to_canonical(self) -> CanonicalFuturesState:
         return CanonicalFuturesState(
@@ -947,7 +947,7 @@ class BinanceWalletRuntime:
         *,
         futures: BinanceFuturesBook,
         spot: SpotWallet,
-        source_state: CanonicalAccountState,
+        source_state: CanonicalPortfolioState,
         environment_code: int = 1,
     ) -> None:
         self.futures = futures
@@ -956,7 +956,7 @@ class BinanceWalletRuntime:
         self._source_state = source_state
 
     @classmethod
-    def from_canonical(cls, state: CanonicalAccountState) -> "BinanceWalletRuntime":
+    def from_canonical(cls, state: CanonicalPortfolioState) -> "BinanceWalletRuntime":
         return cls(
             futures=BinanceFuturesBook(state.futures),
             spot=_build_spot_wallet(state.spot),
@@ -1017,8 +1017,8 @@ class BinanceWalletRuntime:
     def on_ledger_event(self, event: object) -> None:
         self.futures.on_ledger_event(event)
 
-    def to_canonical_state(self) -> CanonicalAccountState:
-        return CanonicalAccountState(
+    def to_canonical_state(self) -> CanonicalPortfolioState:
+        return CanonicalPortfolioState(
             environment=self.environment_code,
             futures=self.futures.to_canonical(),
             spot=CanonicalSpotState(

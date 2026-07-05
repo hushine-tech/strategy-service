@@ -39,7 +39,7 @@ def _runtime_client_cert(runtime_id: str) -> str:
 
 def test_runtime_channel_startup_ignores_internal_platform_dependencies():
     cfg = Config()
-    cfg.dependencies.account_service_grpc = "127.0.0.1:50051"
+    cfg.dependencies.portfolio_service_grpc = "127.0.0.1:50051"
     cfg.dependencies.order_service_grpc = "127.0.0.1:50051"
     cfg.dependencies.control_panel_service_grpc = "127.0.0.1:50054"
     cfg.dependencies.runtime_channel_grpc = "127.0.0.1:50055"
@@ -52,7 +52,7 @@ def test_runtime_channel_startup_ignores_internal_platform_dependencies():
 
     _force_runtime_channel_boundary(cfg)
 
-    assert cfg.dependencies.account_service_grpc == ""
+    assert cfg.dependencies.portfolio_service_grpc == ""
     assert cfg.dependencies.order_service_grpc == ""
     assert cfg.dependencies.control_panel_service_grpc == ""
     assert cfg.dependencies.runtime_channel_grpc == "127.0.0.1:50055"

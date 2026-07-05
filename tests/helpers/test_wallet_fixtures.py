@@ -2,7 +2,7 @@
 
 These pin down the helper's contract so the broader test rewrite below can
 trust: "calling make_testnet_wallet / make_backtest_wallet is equivalent to
-the production path build_wallet_from_account(...)". If this file ever goes
+the production path build_wallet_from_portfolio(...)". If this file ever goes
 red, every downstream test that uses the helper is suspect.
 """
 
@@ -26,7 +26,7 @@ def test_make_testnet_wallet_returns_binance_runtime_with_mode_2():
     assert wallet.environment_code == 1
 
 
-def test_helper_default_account_is_usable():
+def test_helper_default_portfolio_is_usable():
     """Default starting state: $10k cross / one_way / zero positions."""
     wallet = make_testnet_wallet()
     assert wallet.futures.margin_mode == "cross"
@@ -104,7 +104,7 @@ def test_helper_spot_assets_hydrated():
 
 def test_helper_backtest_isolated_uses_position_seeds_for_wallet_balance():
     """Bootstrap rule: isolated mode uses sum of per-position initial_balance
-    as the seed, not account initial_balance."""
+    as the seed, not portfolio initial_balance."""
     wallet = make_backtest_wallet(
         margin_mode="isolated",
         wallet_balance=0.0,  # ignored in isolated mode
@@ -119,10 +119,10 @@ def test_helper_backtest_isolated_uses_position_seeds_for_wallet_balance():
         ],
         initial_balance=500.0,  # not actually used in isolated path
     )
-    # With zero per-position initial_balance and zero account
+    # With zero per-position initial_balance and zero portfolio
     # deposit/withdrawal, hydration gets wallet_balance=0. That's correct:
     # this test pins the intent that isolated bootstrap uses position seeds,
-    # not account initial_balance.
+    # not portfolio initial_balance.
     assert wallet.futures.margin_mode == "isolated"
 
 

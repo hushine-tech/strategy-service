@@ -20,7 +20,7 @@ class RecordingWallet:
 def test_get_returns_unique_declared_route_wallet_after_normalization():
     wallet = RecordingWallet()
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={("binance", "perpetual_futures", 11): wallet},
     )
@@ -30,7 +30,7 @@ def test_get_returns_unique_declared_route_wallet_after_normalization():
 
 def test_get_rejects_undeclared_route_fail_closed():
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={},
     )
@@ -41,7 +41,7 @@ def test_get_rejects_undeclared_route_fail_closed():
 
 def test_get_requires_route_to_be_uniquely_available():
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={
             ("binance", "perpetual_futures", 11): RecordingWallet(),
@@ -55,7 +55,7 @@ def test_get_requires_route_to_be_uniquely_available():
 
 def test_get_rejects_declared_route_without_wallet():
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={},
     )
@@ -67,7 +67,7 @@ def test_get_rejects_declared_route_without_wallet():
 def test_on_market_data_routes_to_unique_declared_wallet():
     wallet = RecordingWallet()
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={("binance", "perpetual_futures", 11): wallet},
     )
@@ -81,7 +81,7 @@ def test_on_order_routes_by_full_venue_key():
     wallet = RecordingWallet()
     order_resp = object()
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={
             ("binance", "perpetual_futures", 11): RecordingWallet(),
@@ -103,7 +103,7 @@ def test_on_order_routes_by_full_venue_key():
 
 def test_on_order_rejects_undeclared_route_fail_closed():
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={("okx", "spot", 21): RecordingWallet()},
     )
@@ -114,7 +114,7 @@ def test_on_order_rejects_undeclared_route_fail_closed():
 
 def test_on_order_rejects_missing_venue_wallet_fail_closed():
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={("binance", "perpetual_futures", 11): RecordingWallet()},
     )
@@ -125,7 +125,7 @@ def test_on_order_rejects_missing_venue_wallet_fail_closed():
 
 def test_portfolio_runtime_has_no_legacy_single_wallet_shortcuts():
     runtime = PortfolioWalletRuntime(
-        account_id=7,
+        portfolio_id=7,
         allowed_routes={("binance", "perpetual_futures")},
         wallets={("binance", "perpetual_futures", 11): RecordingWallet()},
     )

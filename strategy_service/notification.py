@@ -31,7 +31,7 @@ class ControlPanelNotificationClient:
         message: str,
         severity: str = "info",
         title: str = "",
-        account_id: int = 0,
+        portfolio_id: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
         dedupe_key: str = "",
@@ -50,7 +50,7 @@ class ControlPanelNotificationClient:
                     user_id=self._user_id,
                     runtime_id=self._runtime_id,
                     session_id=str(session_id or ""),
-                    account_id=int(account_id or 0),
+                    portfolio_id=int(portfolio_id or 0),
                     strategy_id=int(strategy_id or 0),
                     category=str(category or "custom"),
                     severity=_normalize_severity(severity),
@@ -68,7 +68,7 @@ class ControlPanelNotificationClient:
 
 @dataclass(frozen=True)
 class _NotificationContext:
-    account_id: int = 0
+    portfolio_id: int = 0
     strategy_id: int = 0
     session_id: str = ""
 
@@ -81,14 +81,14 @@ class StrategyNotifier:
     def bind_context(
         self,
         *,
-        account_id: int = 0,
+        portfolio_id: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
     ) -> "StrategyNotifier":
         return StrategyNotifier(
             self._client,
             _NotificationContext(
-                account_id=int(account_id or 0),
+                portfolio_id=int(portfolio_id or 0),
                 strategy_id=int(strategy_id or 0),
                 session_id=str(session_id or ""),
             ),
@@ -112,7 +112,7 @@ class StrategyNotifier:
                 message=str(message or ""),
                 severity=_normalize_severity(severity),
                 title=str(title or ""),
-                account_id=int(kwargs.get("account_id", self._context.account_id) or 0),
+                portfolio_id=int(kwargs.get("portfolio_id", self._context.portfolio_id) or 0),
                 strategy_id=int(kwargs.get("strategy_id", self._context.strategy_id) or 0),
                 session_id=str(kwargs.get("session_id", self._context.session_id) or ""),
                 dedupe_key=str(kwargs.get("dedupe_key", "") or ""),

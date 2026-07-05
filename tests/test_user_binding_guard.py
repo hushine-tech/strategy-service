@@ -23,7 +23,7 @@ def _build_servicer(bound_user_id: int) -> StrategyServiceServicer:
     patched to a no-op so tests don't need a live core-service."""
     with patch.object(StrategyServiceServicer, "_restore_running_sessions", lambda self: None):
         return StrategyServiceServicer(
-            account_service_addr="acct:1",
+            portfolio_service_addr="acct:1",
             order_service_addr="order:1",
             timescale_config={},
             kafka_brokers="kafka:9092",
@@ -73,7 +73,7 @@ def test_bound_user_id_zero_when_constructor_omits_kwarg():
     """Backwards compatibility: existing callers don't pass bound_user_id."""
     with patch.object(StrategyServiceServicer, "_restore_running_sessions", lambda self: None):
         s = StrategyServiceServicer(
-            account_service_addr="acct:1",
+            portfolio_service_addr="acct:1",
             order_service_addr="order:1",
             timescale_config={},
             kafka_brokers="kafka:9092",

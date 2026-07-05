@@ -111,7 +111,7 @@ def start_runtime(
                 source = ""
 
         servicer = StrategyServiceServicer(
-            account_service_addr="",
+            portfolio_service_addr="",
             order_service_addr="",
             timescale_config=cfg.timescale_dict(),
             kafka_brokers="",
@@ -202,9 +202,9 @@ def start_runtime(
 
 def _force_runtime_channel_boundary(cfg: Config) -> None:
     ignored: list[str] = []
-    if cfg.dependencies.account_service_grpc:
-        ignored.append("dependencies.account_service_grpc")
-        cfg.dependencies.account_service_grpc = ""
+    if cfg.dependencies.portfolio_service_grpc:
+        ignored.append("dependencies.portfolio_service_grpc")
+        cfg.dependencies.portfolio_service_grpc = ""
     if cfg.dependencies.order_service_grpc:
         ignored.append("dependencies.order_service_grpc")
         cfg.dependencies.order_service_grpc = ""

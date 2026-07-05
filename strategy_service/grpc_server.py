@@ -1,4 +1,4 @@
-"""strategy-service gRPC servicer：统一 RunStrategy 入口，按 account environment 路由数据源。"""
+"""strategy-service gRPC servicer：统一 RunStrategy 入口，按 portfolio environment 路由数据源。"""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ class _StopOrder:
     exchange: str
     venue_id: int
     symbol: str
-    account_symbol: str
+    portfolio_symbol: str
     market: str
     side: str
     qty: float
@@ -122,9 +122,9 @@ class _EffectiveRiskControls:
 
 
 def _sync_strategy_snapshot(
-    account_client: Any,
+    portfolio_client: Any,
     *,
-    account_id: int,
+    portfolio_id: int,
     user_id: int,
     environment: int,
     wallet: Any,
@@ -134,23 +134,23 @@ def _sync_strategy_snapshot(
     snapshot_time: object | None = None,
 ) -> Any:
     kwargs = {
-        "account_id": account_id,
+        "portfolio_id": portfolio_id,
         "snapshot_reason": snapshot_reason,
         "strategy_id": strategy_id,
         "session_id": session_id,
     }
     if _snapshot_time_present(snapshot_time):
         kwargs["snapshot_time"] = snapshot_time
-    future_wallet, spot_wallet = _wallet_parts_for_account_sync(wallet)
+    future_wallet, spot_wallet = _wallet_parts_for_portfolio_sync(wallet)
     kwargs["user_id"] = user_id
     kwargs["future_wallet"] = future_wallet
     kwargs["spot_wallet"] = spot_wallet
-    result = account_client.update_account_wallet_state(
+    result = portfolio_client.update_portfolio_wallet_state(
         **kwargs,
     )
     if result is None:
         raise RuntimeError(
-            f"UpdateAccountWalletState returned no response for account_id={account_id} session_id={session_id}"
+            f"UpdatePortfolioWalletState returned no response for portfolio_id={portfolio_id} session_id={session_id}"
         )
     return result
 
@@ -179,7 +179,7 @@ def _safe_send_session_status_patch(
         logger.warning("session %s: failed to send final status patch", session_id, exc_info=True)
 
 
-def _wallet_parts_for_account_sync(wallet: Any) -> tuple[Any | None, Any | None]:
+def _wallet_parts_for_portfolio_sync(wallet: Any) -> tuple[Any | None, Any | None]:
     futures_wallet = None
     spot_wallet = None
     if isinstance(wallet, PortfolioWalletRuntime):
@@ -493,24 +493,24 @@ def _portfolio_snapshot_environment(snapshot: Any) -> int:
 
 def _get_portfolio_snapshot(
     acct_client: Any,
-    account_id: int,
+    portfolio_id: int,
     user_id: int,
     required_symbols: set[tuple[str, str, str]] | None = None,
 ):
     getter = getattr(acct_client, "get_portfolio_snapshot")
     if required_symbols:
         try:
-            return getter(account_id, user_id, required_symbols=sorted(required_symbols))
+            return getter(portfolio_id, user_id, required_symbols=sorted(required_symbols))
         except TypeError:
-            logger.debug("account client does not accept required_symbols; using legacy snapshot call")
-    return getter(account_id, user_id)
+            logger.debug("portfolio client does not accept required_symbols; using legacy snapshot call")
+    return getter(portfolio_id, user_id)
 
 
 class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
     def __init__(
         self,
-        account_service_addr: str,
+        portfolio_service_addr: str,
         order_service_addr: str,
         timescale_config: dict[str, Any],
         kafka_brokers: str,
@@ -525,7 +525,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         platform_proxy: Any | None = None,
         notification_client: Any | None = None,
     ) -> None:
-        self._account_addr = account_service_addr
+        self._portfolio_addr = portfolio_service_addr
         self._market_data_addr = market_data_control_panel_addr
         self._order_addr = order_service_addr
         self._ts_config = timescale_config
@@ -572,10 +572,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     def set_runtime_data_source(self, runtime_data_source: Any) -> None:
         self._runtime_data_source = runtime_data_source
 
-    def _account_client(self):
+    def _portfolio_client(self):
         if self._platform_proxy is None:
             raise RuntimeError("RuntimeChannel platform proxy client is not configured")
-        return self._platform_proxy.account_client()
+        return self._platform_proxy.portfolio_client()
 
     def _order_client(self):
         if self._platform_proxy is None:
@@ -641,7 +641,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 "unfiltered recovery is disabled"
             )
             return
-        acct_client = self._account_client()
+        acct_client = self._portfolio_client()
         sessions = None
         last_error: Exception | None = None
         for attempt in range(1, RESTORE_RUNNING_SESSIONS_RETRIES + 1):
@@ -662,7 +662,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if sessions is None:
             raise RuntimeError(
                 f"startup session recovery failed: cannot list running sessions "
-                f"from core-service at {self._account_addr}"
+                f"from core-service at {self._portfolio_addr}"
             ) from last_error
 
         orphaned = 0
@@ -792,7 +792,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 detail = self._error_details(exc)
                 context.set_details(
-                    "account already has an active session; stop or recover the existing "
+                    "portfolio already has an active session; stop or recover the existing "
                     f"session before starting a new one ({detail})"
                 )
             else:
@@ -867,7 +867,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
         context.set_details(
             f"{operation} unavailable in RuntimeChannel runtime for "
-            f"profile={profile.value}: account/order/control-plane proxy is wired, "
+            f"profile={profile.value}: portfolio/order/control-plane proxy is wired, "
             "but strategy market-data execution still needs an approved platform "
             "data proxy"
         )
@@ -887,24 +887,24 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.RunStrategyResponse()
         if not self._require_platform_proxy(context, "RunStrategy"):
             return pb2.RunStrategyResponse()
-        account_id = request.account_id
-        if account_id == 0:
+        portfolio_id = request.portfolio_id
+        if portfolio_id == 0:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("account_id is required")
+            context.set_details("portfolio_id is required")
             return pb2.RunStrategyResponse()
 
         # 1. 从 core-service 获取组合快照（environment + 多 venue 钱包）
-        acct_client = self._account_client()
-        snapshot = _get_portfolio_snapshot(acct_client, account_id, user_id)
+        acct_client = self._portfolio_client()
+        snapshot = _get_portfolio_snapshot(acct_client, portfolio_id, user_id)
         if snapshot is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"account {account_id} not found or core-service unreachable")
+            context.set_details(f"portfolio {portfolio_id} not found or core-service unreachable")
             return pb2.RunStrategyResponse()
 
         environment = _portfolio_snapshot_environment(snapshot)
 
         # 2. Resolve the runtime source profile FIRST (pre_C3 gate 2 §4).
-        # This is an internal runtime-source mapping, not a strategy/account
+        # This is an internal runtime-source mapping, not a strategy/portfolio
         # compatibility signal. Unsupported profiles (today: live environment)
         # fail-fast here with a structured PROFILE failure, *before* we try
         # to build a wallet or load a strategy — so the error surfaces the
@@ -927,7 +927,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         strategy_path = request.strategy_path  # may be empty in production
         strategy_hot_reload = False
 
-        active = acct_client.get_active_strategy(account_id)
+        active = acct_client.get_active_strategy(portfolio_id)
         if active is not None and active.strategy_id != 0:
             strategy_id = active.strategy_id
             strategy_code = active.code
@@ -936,7 +936,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_path = f"<db:{strategy_name}@{strategy_version}>"
         elif not strategy_path:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details("account has no active strategy; mount and activate one first")
+            context.set_details("portfolio has no active strategy; mount and activate one first")
             return pb2.RunStrategyResponse()
         try:
             strategy_path, strategy_code, strategy_hot_reload = self._debug_strategy_source_for_db_code(
@@ -985,9 +985,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         } | set(declarations.order_target_keys)
         preflight_session_id = uuid.uuid4().hex
 
-        account_preflight = self._run_account_preflight(
+        portfolio_preflight = self._run_portfolio_preflight(
             acct_client=acct_client,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
@@ -995,24 +995,24 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_id=strategy_id,
             leverage=effective_risk.leverage,
         )
-        if account_preflight is not None:
+        if portfolio_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             try:
                 context.set_trailing_metadata((("preflight-session-id", preflight_session_id),))
             except Exception:  # noqa: BLE001
                 logger.debug("context does not support trailing metadata for preflight failure")
-            context.set_details(f"{account_preflight}; preflight_session_id={preflight_session_id}")
+            context.set_details(f"{portfolio_preflight}; preflight_session_id={preflight_session_id}")
             return pb2.RunStrategyResponse()
 
         snapshot = _get_portfolio_snapshot(
             acct_client,
-            account_id,
+            portfolio_id,
             user_id,
             required_symbols=required_symbols,
         )
         if snapshot is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"account {account_id} not found or core-service unreachable")
+            context.set_details(f"portfolio {portfolio_id} not found or core-service unreachable")
             return pb2.RunStrategyResponse()
 
         try:
@@ -1090,14 +1090,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         session_id, state = self._sessions.create(
             environment=environment,
             user_id=user_id,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             runtime_id=runtime_id,
             runtime_source=runtime_source,
             runtime_name=runtime_name,
         )
         if environment == 1:
             state.configure_live_runtime(
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 strategy_id=strategy_id,
                 required_streams=required_streams,
                 consumer_group=_live_consumer_group(strategy_id, session_id),
@@ -1114,7 +1114,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 )
                 return pb2.RunStrategyResponse()
         else:
-            state.account_id = account_id
+            state.portfolio_id = portfolio_id
             state.strategy_id = strategy_id
         state.configure_risk_runtime(
             order_target_keys=set(declarations.order_target_keys),
@@ -1129,7 +1129,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             acct_client,
             context,
             session_id=session_id,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             strategy_id=strategy_id,
             environment=environment,
             interval=request.interval or "1m",
@@ -1150,7 +1150,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         try:
             _sync_strategy_snapshot(
                 acct_client,
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 user_id=user_id,
                 environment=environment,
                 wallet=wallet,
@@ -1189,7 +1189,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 otel_parent_context,
                 f"StrategySession/{session_id}",
                 lambda: self._run_session(
-                    session_id, state, request, wallet, environment, account_id, user_id,
+                    session_id, state, request, wallet, environment, portfolio_id, user_id,
                     declared_inputs, strategy_path, strategy_id, strategy_code,
                     strategy_hot_reload=strategy_hot_reload,
                     backtest_restore_wallet=backtest_restore_wallet,
@@ -1212,7 +1212,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         request: Any,
         wallet: Any,
         environment: int,
-        account_id: int,
+        portfolio_id: int,
         user_id: int,
         declared_inputs: list[StrategyInput],
         strategy_path: str,
@@ -1224,7 +1224,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         user_strategy: Any | None = None
         try:
             order_client = self._order_client()
-            acct_client = self._account_client()
+            acct_client = self._portfolio_client()
             engine = StrategyEngine()
 
             def _persist_runtime_error(message: str) -> None:
@@ -1242,7 +1242,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 strategy_path=strategy_path,
                 wallet=wallet,
                 order_client=order_client,
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 strategy_id=strategy_id,
                 session_id=session_id,
                 strategy_code=strategy_code,
@@ -1257,7 +1257,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             def _on_order_sync() -> None:
                 _sync_strategy_snapshot(
                     acct_client,
-                    account_id=account_id,
+                    portfolio_id=portfolio_id,
                     user_id=user_id,
                     environment=environment,
                     wallet=wallet,
@@ -1275,12 +1275,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if environment == 1:
                 self._install_periodic_sample_trigger(
                     engine=engine,
-                    account_id=account_id,
+                    portfolio_id=portfolio_id,
                     user_id=user_id,
                     strategy_id=strategy_id,
                     session_id=session_id,
                     wallet=wallet,
-                    account_client=acct_client,
+                    portfolio_client=acct_client,
                     every_n_bars=DEFAULT_PERIODIC_SAMPLE_EVERY_BARS,
                     max_idle_seconds=float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS),
                 )
@@ -1296,7 +1296,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             elif environment == 1:
                 self._run_live(session_id, state, engine, declared_inputs, strategy_id)
             else:
-                raise ValueError(f"unsupported account environment: {environment}")
+                raise ValueError(f"unsupported portfolio environment: {environment}")
 
         except Exception as e:
             logger.exception("session %s failed", session_id)
@@ -1311,11 +1311,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             self._release_session_market_data_subscriptions(session_id, state)
             finalization_errors: list[str] = []
             try:
-                acct_client = self._account_client()
+                acct_client = self._portfolio_client()
                 try:
                     _sync_strategy_snapshot(
                         acct_client,
-                        account_id=account_id,
+                        portfolio_id=portfolio_id,
                         user_id=user_id,
                         environment=environment,
                         wallet=wallet,
@@ -1336,7 +1336,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         # 恢复启动前账户状态，避免下一次回测继承本次 PnL/仓位。
                         _sync_strategy_snapshot(
                             acct_client,
-                            account_id=account_id,
+                            portfolio_id=portfolio_id,
                             user_id=user_id,
                             environment=environment,
                             wallet=backtest_restore_wallet,
@@ -1346,11 +1346,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         )
                     except Exception as e:
                         logger.warning(
-                            "session %s: failed to restore backtest account wallet state",
+                            "session %s: failed to restore backtest portfolio wallet state",
                             session_id,
                             exc_info=True,
                         )
-                        finalization_errors.append(f"failed to restore backtest account wallet state: {e}")
+                        finalization_errors.append(f"failed to restore backtest portfolio wallet state: {e}")
                 if finalization_errors:
                     with state._lock:
                         if state.status not in {"failed", "stop_failed"}:
@@ -1379,10 +1379,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 logger.warning("session %s: failed to finalize", session_id, exc_info=True)
 
     @staticmethod
-    def _run_account_preflight(
+    def _run_portfolio_preflight(
         *,
         acct_client: Any,
-        account_id: int,
+        portfolio_id: int,
         user_id: int,
         required_routes: set[tuple[str, str]],
         required_symbols: set[tuple[str, str, str]],
@@ -1392,9 +1392,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     ) -> str | None:
         preflight = getattr(acct_client, "preflight_strategy_session", None)
         if not callable(preflight):
-            return "account preflight unavailable: client does not support PreflightStrategySession"
+            return "portfolio preflight unavailable: client does not support PreflightStrategySession"
         resp = preflight(
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             user_id=user_id,
             required_routes=sorted(required_routes),
             required_symbols=sorted(required_symbols),
@@ -1403,7 +1403,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             leverage=float(leverage or 0.0),
         )
         if resp is None:
-            return "account preflight unavailable: core-service did not return a result"
+            return "portfolio preflight unavailable: core-service did not return a result"
         if bool(getattr(resp, "ok", False)):
             return None
         issue_messages: list[str] = []
@@ -1418,8 +1418,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 route = f"{route} symbol={symbol}"
             issue_messages.append(f"{code}: {message}{route}".strip())
         if issue_messages:
-            return "account preflight failed: " + "; ".join(issue_messages)
-        return "account preflight failed"
+            return "portfolio preflight failed: " + "; ".join(issue_messages)
+        return "portfolio preflight failed"
 
     def _run_profile_preflight(
         self,
@@ -1505,12 +1505,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self,
         *,
         engine: StrategyEngine,
-        account_id: int,
+        portfolio_id: int,
         user_id: int,
         strategy_id: int,
         session_id: str,
         wallet: Any,
-        account_client: AccountClient,
+        portfolio_client: PortfolioClient,
         every_n_bars: int,
         max_idle_seconds: float,
         now_fn: Callable[[], float] | None = None,
@@ -1542,8 +1542,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             state["last_compare_at"] = now
             try:
                 _sync_strategy_snapshot(
-                    account_client,
-                    account_id=account_id,
+                    portfolio_client,
+                    portfolio_id=portfolio_id,
                     user_id=user_id,
                     environment=1,
                     wallet=wallet,
@@ -1623,7 +1623,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._persist_session_status(session_id, state)
         self._halt_session_runtime(state, finalize=False)
 
-        ok, close_reason = self._stop_and_close_account(session_id, state)
+        ok, close_reason = self._stop_and_close_portfolio(session_id, state)
         if ok:
             state.transition("stopped", error=reason)
         else:
@@ -1647,9 +1647,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return lambda: None
 
         try:
-            account_client = self._account_client()
+            portfolio_client = self._portfolio_client()
         except Exception:  # noqa: BLE001
-            logger.warning("strategy indicator collection disabled: account client unavailable", exc_info=True)
+            logger.warning("strategy indicator collection disabled: portfolio client unavailable", exc_info=True)
             return lambda: None
 
         user_id = int(getattr(request, "user_id", 0) or getattr(state, "user_id", 0) or 0)
@@ -1658,9 +1658,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         def save_payload(*, definitions: list[Any] | None = None, chunks: list[Any] | None = None) -> None:
             if not definitions and not chunks:
                 return
-            save = getattr(account_client, "save_strategy_indicators", None)
+            save = getattr(portfolio_client, "save_strategy_indicators", None)
             if not callable(save):
-                logger.warning("strategy indicator collection disabled: account client cannot save indicators")
+                logger.warning("strategy indicator collection disabled: portfolio client cannot save indicators")
                 return
             try:
                 save(
@@ -1745,7 +1745,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         start = int(getattr(request, "start_time_ms", 0) or 0)
         end = int(getattr(request, "end_time_ms", 0) or 0)
         if start == 0 or end == 0:
-            state.transition("failed", error="start_time_ms and end_time_ms are required for backtest accounts")
+            state.transition("failed", error="start_time_ms and end_time_ms are required for backtest portfolios")
             return
 
         from strategy_service.data_loop import _adapt_kline
@@ -1849,7 +1849,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 "platform live delivery is not configured; "
                 "FetchKlines fallback is disabled for demo/live execution"
             )
-        acct_client = self._account_client()
+        acct_client = self._portfolio_client()
         canonical_by_stream = {
             _stream_key(stream.market, stream.symbol, stream.interval): (
                 stream.canonical_market or stream.market
@@ -1917,7 +1917,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             ok = marketdata_client.create_or_renew_market_data_lease(
                 session_id=session_id,
                 strategy_id=state.strategy_id,
-                account_id=state.account_id,
+                portfolio_id=state.portfolio_id,
                 stream_id=binding.stream_id,
                 ttl_seconds=self._lease_ttl_seconds,
             )
@@ -2083,7 +2083,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._persist_session_status(request.session_id, state)
         self._halt_session_runtime(state, finalize=False)
 
-        ok, reason = self._stop_and_close_account(request.session_id, state)
+        ok, reason = self._stop_and_close_portfolio(request.session_id, state)
         if not ok:
             state.transition("stop_failed", error=reason)
             self._persist_session_status(request.session_id, state)
@@ -2098,7 +2098,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         return pb2.StopStrategyResponse(stopped=True)
 
     def _persist_session_status(self, session_id: str, state: SessionState) -> None:
-        acct_client = self._account_client()
+        acct_client = self._portfolio_client()
         if not acct_client.update_session(
             session_id=session_id,
             status=state.status,
@@ -2119,7 +2119,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if stop_event is not None:
                 stop_event.set()
 
-    def _stop_and_close_account(self, session_id: str, state: SessionState) -> tuple[bool, str]:
+    def _stop_and_close_portfolio(self, session_id: str, state: SessionState) -> tuple[bool, str]:
         wallet = state.wallet
         order_client = state.order_client
         if wallet is None or order_client is None:
@@ -2130,7 +2130,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if reason:
             return False, reason
 
-        acct_client = self._account_client()
+        acct_client = self._portfolio_client()
         for index, order in enumerate(orders, start=1):
             if time.monotonic() - started_at > DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS:
                 return False, (
@@ -2139,10 +2139,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 )
             decision = self._build_stop_order_decision(order)
             order_resp = order_client.place_order(
-                state.account_id,
+                state.portfolio_id,
                 decision,
                 order.mark_price,
-                account_symbol=order.account_symbol,
+                portfolio_symbol=order.portfolio_symbol,
                 strategy_id=state.strategy_id,
                 market=order.market,
                 session_id=session_id,
@@ -2157,13 +2157,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 order.exchange,
                 order.market,
                 order.venue_id,
-                order.account_symbol,
+                order.portfolio_symbol,
                 _marketdata_market(order.market),
                 order_resp,
             )
             _sync_strategy_snapshot(
                 acct_client,
-                account_id=state.account_id,
+                portfolio_id=state.portfolio_id,
                 user_id=state.user_id,
                 environment=state.environment,
                 wallet=wallet,
@@ -2172,7 +2172,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 session_id=session_id,
             )
 
-        flat, flat_reason = self._account_is_flat(wallet, state)
+        flat, flat_reason = self._portfolio_is_flat(wallet, state)
         if not flat:
             return False, flat_reason
         return True, ""
@@ -2240,7 +2240,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         exchange=exchange,
                         venue_id=venue_id,
                         symbol=symbol,
-                        account_symbol=symbol,
+                        portfolio_symbol=symbol,
                         market=market,
                         side=side,
                         qty=qty,
@@ -2265,7 +2265,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         exchange=exchange,
                         venue_id=venue_id,
                         symbol=f"{sym}USDT",
-                        account_symbol=sym,
+                        portfolio_symbol=sym,
                         market=market,
                         side="SELL",
                         qty=qty,
@@ -2275,7 +2275,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         return orders, ""
 
     @staticmethod
-    def _account_is_flat(wallet: Any, state: SessionState) -> tuple[bool, str]:
+    def _portfolio_is_flat(wallet: Any, state: SessionState) -> tuple[bool, str]:
         if not isinstance(wallet, PortfolioWalletRuntime):
             return False, "stop_and_close_failed:portfolio_wallet_required"
         for (exchange, market, _venue_id), route_wallet in sorted(wallet.wallets.items()):
@@ -2375,17 +2375,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.PreviewRunStrategyResponse()
         if not self._require_platform_proxy(context, "PreviewRunStrategy"):
             return pb2.PreviewRunStrategyResponse()
-        account_id = int(getattr(request, "account_id", 0) or 0)
-        if account_id == 0:
+        portfolio_id = int(getattr(request, "portfolio_id", 0) or 0)
+        if portfolio_id == 0:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("account_id is required")
+            context.set_details("portfolio_id is required")
             return pb2.PreviewRunStrategyResponse()
 
-        acct_client = self._account_client()
-        snapshot = _get_portfolio_snapshot(acct_client, account_id, user_id)
+        acct_client = self._portfolio_client()
+        snapshot = _get_portfolio_snapshot(acct_client, portfolio_id, user_id)
         if snapshot is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"account {account_id} not found or core-service unreachable")
+            context.set_details(f"portfolio {portfolio_id} not found or core-service unreachable")
             return pb2.PreviewRunStrategyResponse()
 
         environment = _portfolio_snapshot_environment(snapshot)
@@ -2478,7 +2478,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         strategy_version = ""
         strategy_path = getattr(request, "strategy_path", "") or ""
 
-        active = acct_client.get_active_strategy(account_id)
+        active = acct_client.get_active_strategy(portfolio_id)
         if active is not None and int(getattr(active, "strategy_id", 0) or 0) != 0:
             strategy_id = int(getattr(active, "strategy_id", 0) or 0)
             strategy_code = active.code
@@ -2488,7 +2488,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         elif not strategy_path:
             # No active strategy and no explicit strategy_path.
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details("account has no active strategy; mount and activate one first")
+            context.set_details("portfolio has no active strategy; mount and activate one first")
             return pb2.PreviewRunStrategyResponse()
         try:
             strategy_path, strategy_code, _strategy_hot_reload = self._debug_strategy_source_for_db_code(
@@ -2531,29 +2531,29 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             for entry in declarations.inputs
         } | set(declarations.order_target_keys)
 
-        account_preflight = self._run_account_preflight(
+        portfolio_preflight = self._run_portfolio_preflight(
             acct_client=acct_client,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
             leverage=effective_risk.leverage,
         )
-        if account_preflight is not None:
+        if portfolio_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(account_preflight)
+            context.set_details(portfolio_preflight)
             return pb2.PreviewRunStrategyResponse()
 
         snapshot = _get_portfolio_snapshot(
             acct_client,
-            account_id,
+            portfolio_id,
             user_id,
             required_symbols=required_symbols,
         )
         if snapshot is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"account {account_id} not found or core-service unreachable")
+            context.set_details(f"portfolio {portfolio_id} not found or core-service unreachable")
             return pb2.PreviewRunStrategyResponse()
 
         try:
@@ -2605,9 +2605,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 pb2.LiveSessionDiagnostic(
                     session_id=session_id,
                     user_id=state.user_id,
-                    account_id=state.account_id,
+                    portfolio_id=state.portfolio_id,
                     strategy_id=state.strategy_id,
-                    account_environment=state.environment,
+                    portfolio_environment=state.environment,
                     status=state.status,
                     bars_processed=state.bars_processed,
                     error=state.error,

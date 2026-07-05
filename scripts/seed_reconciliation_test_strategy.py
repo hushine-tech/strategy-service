@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed a reconciliation-test strategy into the ``account`` database.
+"""Seed a reconciliation-test strategy into the ``portfolio`` database.
 
 ETHUSDT futures 1m 触发式对账压测策略:
 
@@ -23,7 +23,7 @@ local wallet ↔ 交易所 wallet 的漂移会立刻出现在 reconciliation_run
 
     PGHOST        默认 192.168.88.10
     PGPORT        默认 5432
-    PGDATABASE    默认 account
+    PGDATABASE    默认 portfolio
     PGUSER        默认 postgres
     PGPASSWORD    默认 postgres
     SEED_USERNAME 默认 test-user         (仅在该 user 不存在时创建)
@@ -33,8 +33,8 @@ local wallet ↔ 交易所 wallet 的漂移会立刻出现在 reconciliation_run
 
 挂载 + 激活示例:
 
-    POST /api/accounts/ACCOUNT_ID/strategies         {strategy_id: N}
-    POST /api/accounts/ACCOUNT_ID/strategies/active  {strategy_id: N}
+    POST /api/portfolios/PORTFOLIO_ID/strategies         {strategy_id: N}
+    POST /api/portfolios/PORTFOLIO_ID/strategies/active  {strategy_id: N}
 
 账号要求:
 
@@ -56,7 +56,7 @@ import psycopg2
 
 HOST = os.environ.get("PGHOST", "192.168.88.10")
 PORT = int(os.environ.get("PGPORT", "5432"))
-DB = os.environ.get("PGDATABASE", "account")
+DB = os.environ.get("PGDATABASE", "portfolio")
 USER = os.environ.get("PGUSER", "postgres")
 PASSWORD = os.environ.get("PGPASSWORD", "postgres")
 
@@ -275,9 +275,9 @@ def main() -> None:
         conn.close()
 
     print()
-    print("Done. 挂载 + 激活示例 (替换 ACCOUNT_ID / STRATEGY_ID):")
-    print("  POST /api/accounts/ACCOUNT_ID/strategies         {strategy_id: STRATEGY_ID}")
-    print("  POST /api/accounts/ACCOUNT_ID/strategies/active  {strategy_id: STRATEGY_ID}")
+    print("Done. 挂载 + 激活示例 (替换 PORTFOLIO_ID / STRATEGY_ID):")
+    print("  POST /api/portfolios/PORTFOLIO_ID/strategies         {strategy_id: STRATEGY_ID}")
+    print("  POST /api/portfolios/PORTFOLIO_ID/strategies/active  {strategy_id: STRATEGY_ID}")
     print()
     print("对账测试前置条件:")
     print("  - 账号 mode = 2 (Binance testnet), 才会走 reconciliation compare 路径")

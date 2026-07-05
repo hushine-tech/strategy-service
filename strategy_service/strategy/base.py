@@ -335,7 +335,7 @@ class BaseStrategy:
         strategy_path: str,
         wallet: PortfolioWalletRuntime,
         order_client: OrderClient | None = None,
-        account_id: int = 0,
+        portfolio_id: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
         strategy_code: str | None = None,
@@ -351,7 +351,7 @@ class BaseStrategy:
         self.on_order_callback: Any | None = None
         self.on_indicator_frame: Callable[[str, int, int, IndicatorFrame], None] | None = None
         self._order_client: OrderClient = order_client or OrderClient()
-        self._account_id: int = account_id
+        self._portfolio_id: int = portfolio_id
         self._strategy_id: int = strategy_id
         self._session_id: str = session_id
         self._strategy_code: str | None = strategy_code
@@ -361,7 +361,7 @@ class BaseStrategy:
         self._on_user_code_error = on_user_code_error
         self._on_user_code_recovered = on_user_code_recovered
         self._notifier = (notifier or StrategyNotifier()).bind_context(
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             strategy_id=strategy_id,
             session_id=session_id,
         )
@@ -1070,8 +1070,8 @@ class BaseStrategy:
             )
         intent_id = uuid.uuid4().hex
         feedback = self._coerce_execution_feedback(self._order_client.place_order(
-            self._account_id, signal, item.mark_price,
-            account_symbol=sig_sym,
+            self._portfolio_id, signal, item.mark_price,
+            portfolio_symbol=sig_sym,
             strategy_id=self._strategy_id,
             market=sig_market,
             session_id=self._session_id,

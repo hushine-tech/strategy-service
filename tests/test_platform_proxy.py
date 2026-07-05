@@ -5,13 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from strategy_service.gen import account_service_pb2, marketdata_service_pb2, order_service_pb2
+from strategy_service.gen import portfolio_service_pb2, marketdata_service_pb2, order_service_pb2
 from strategy_service.platform_proxy import (
-    ACCOUNT_PREFLIGHT_STRATEGY_SESSION,
-    ACCOUNT_GET_PORTFOLIO,
-    ACCOUNT_SAVE_SESSION,
-    ACCOUNT_SAVE_STRATEGY_INDICATORS,
-    ACCOUNT_UPDATE_WALLET_STATE,
+    PORTFOLIO_PREFLIGHT_STRATEGY_SESSION,
+    PORTFOLIO_GET_PORTFOLIO,
+    PORTFOLIO_SAVE_SESSION,
+    PORTFOLIO_SAVE_STRATEGY_INDICATORS,
+    PORTFOLIO_UPDATE_WALLET_STATE,
     LOGS_EMIT,
     MARKETDATA_FETCH_BACKTEST_PAGE,
     MARKETDATA_FETCH_KLINES,
@@ -24,13 +24,13 @@ from strategy_service.indicators import IndicatorChunk, IndicatorDefinition
 from strategy_service.types import OrderDecision
 
 
-def test_proxy_account_client_sends_save_session_over_runtime_channel():
+def test_proxy_portfolio_client_sends_save_session_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
     proxy = RuntimeChannelPlatformProxy(runtime)
 
-    ok = proxy.account_client().save_session(
+    ok = proxy.portfolio_client().save_session(
         session_id="sess-1",
-        account_id=7,
+        portfolio_id=7,
         strategy_id=9,
         environment=1,
         runtime_id="runtime-1",
@@ -41,21 +41,21 @@ def test_proxy_account_client_sends_save_session_over_runtime_channel():
 
     assert ok is True
     method, req = runtime.calls[-1]
-    assert method == ACCOUNT_SAVE_SESSION
+    assert method == PORTFOLIO_SAVE_SESSION
     assert req.session_id == "sess-1"
     assert req.runtime_id == "runtime-1"
     assert req.leverage == 4
 
 
-def test_proxy_account_client_sends_strategy_indicators_over_runtime_channel():
+def test_proxy_portfolio_client_sends_strategy_indicators_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
-    runtime.responses[ACCOUNT_SAVE_STRATEGY_INDICATORS] = account_service_pb2.SaveStrategyIndicatorsResponse(
+    runtime.responses[PORTFOLIO_SAVE_STRATEGY_INDICATORS] = portfolio_service_pb2.SaveStrategyIndicatorsResponse(
         definitions_saved=1,
         chunks_saved=1,
     )
     proxy = RuntimeChannelPlatformProxy(runtime)
 
-    saved = proxy.account_client().save_strategy_indicators(
+    saved = proxy.portfolio_client().save_strategy_indicators(
         session_id="sess-1",
         user_id=6,
         definitions=[
@@ -85,7 +85,7 @@ def test_proxy_account_client_sends_strategy_indicators_over_runtime_channel():
 
     method, req = runtime.calls[-1]
     assert saved == (1, 1)
-    assert method == ACCOUNT_SAVE_STRATEGY_INDICATORS
+    assert method == PORTFOLIO_SAVE_STRATEGY_INDICATORS
     assert req.session_id == "sess-1"
     assert req.user_id == 6
     assert req.definitions[0].stream_key == "binance:perpetual_futures:ETHUSDT:1m"
@@ -94,35 +94,35 @@ def test_proxy_account_client_sends_strategy_indicators_over_runtime_channel():
     assert req.chunks[0].values_json == '{"values":[0.12,0.15],"times":null}'
 
 
-def test_proxy_account_client_fetches_portfolio_snapshot_over_runtime_channel():
+def test_proxy_portfolio_client_fetches_portfolio_snapshot_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
-    runtime.responses[ACCOUNT_GET_PORTFOLIO] = account_service_pb2.GetPortfolioSnapshotResponse(
-        snapshot=account_service_pb2.PortfolioSnapshot(account_id=7, user_id=3)
+    runtime.responses[PORTFOLIO_GET_PORTFOLIO] = portfolio_service_pb2.GetPortfolioSnapshotResponse(
+        snapshot=portfolio_service_pb2.PortfolioSnapshot(portfolio_id=7, user_id=3)
     )
     proxy = RuntimeChannelPlatformProxy(runtime)
 
-    snapshot = proxy.account_client().get_portfolio_snapshot(
-        account_id=7,
+    snapshot = proxy.portfolio_client().get_portfolio_snapshot(
+        portfolio_id=7,
         user_id=3,
         required_symbols={("binance", "perpetual_futures", "ethusdt")},
     )
 
     method, req = runtime.calls[-1]
-    assert method == ACCOUNT_GET_PORTFOLIO
-    assert req.account_id == 7
+    assert method == PORTFOLIO_GET_PORTFOLIO
+    assert req.portfolio_id == 7
     assert req.user_id == 3
     assert len(req.required_symbols) == 1
     assert req.required_symbols[0].symbol == "ETHUSDT"
-    assert snapshot.account_id == 7
+    assert snapshot.portfolio_id == 7
 
 
-def test_proxy_account_client_updates_portfolio_snapshot_over_runtime_channel():
+def test_proxy_portfolio_client_updates_portfolio_snapshot_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
     proxy = RuntimeChannelPlatformProxy(runtime)
 
     with pytest.raises(RuntimeError, match="deprecated"):
-        proxy.account_client().update_portfolio_snapshot(
-            account_id=7,
+        proxy.portfolio_client().update_portfolio_snapshot(
+            portfolio_id=7,
             user_id=3,
             snapshot_reason=2,
             strategy_id=9,
@@ -133,10 +133,10 @@ def test_proxy_account_client_updates_portfolio_snapshot_over_runtime_channel():
     assert runtime.calls == []
 
 
-def test_proxy_account_client_updates_backtest_wallet_state_over_runtime_channel():
+def test_proxy_portfolio_client_updates_backtest_wallet_state_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
-    runtime.responses[ACCOUNT_UPDATE_WALLET_STATE] = account_service_pb2.UpdateAccountWalletStateResponse(
-        wallet=account_service_pb2.AccountWalletState(total_value=1200)
+    runtime.responses[PORTFOLIO_UPDATE_WALLET_STATE] = portfolio_service_pb2.UpdatePortfolioWalletStateResponse(
+        wallet=portfolio_service_pb2.PortfolioWalletState(total_value=1200)
     )
     proxy = RuntimeChannelPlatformProxy(runtime)
     future_wallet = SimpleNamespace(
@@ -148,8 +148,8 @@ def test_proxy_account_client_updates_backtest_wallet_state_over_runtime_channel
         margin_balance=1200.0,
     )
 
-    wallet = proxy.account_client().update_account_wallet_state(
-        account_id=7,
+    wallet = proxy.portfolio_client().update_portfolio_wallet_state(
+        portfolio_id=7,
         user_id=3,
         future_wallet=future_wallet,
         snapshot_reason=1,
@@ -159,8 +159,8 @@ def test_proxy_account_client_updates_backtest_wallet_state_over_runtime_channel
     )
 
     method, req = runtime.calls[-1]
-    assert method == ACCOUNT_UPDATE_WALLET_STATE
-    assert req.account_id == 7
+    assert method == PORTFOLIO_UPDATE_WALLET_STATE
+    assert req.portfolio_id == 7
     assert req.user_id == 3
     assert req.futures.wallet_balance == 1100.0
     assert req.total_value == 1200.0
@@ -169,9 +169,9 @@ def test_proxy_account_client_updates_backtest_wallet_state_over_runtime_channel
     assert wallet.total_value == 1200
 
 
-def test_proxy_account_client_surfaces_wallet_state_update_errors():
+def test_proxy_portfolio_client_surfaces_wallet_state_update_errors():
     runtime = _FakeRuntimeChannel()
-    runtime.errors[ACCOUNT_UPDATE_WALLET_STATE] = RuntimeError(
+    runtime.errors[PORTFOLIO_UPDATE_WALLET_STATE] = RuntimeError(
         "Unavailable: save snapshot: duplicate key"
     )
     proxy = RuntimeChannelPlatformProxy(runtime)
@@ -185,8 +185,8 @@ def test_proxy_account_client_surfaces_wallet_state_update_errors():
     )
 
     with pytest.raises(RuntimeError, match="duplicate key"):
-        proxy.account_client().update_account_wallet_state(
-            account_id=7,
+        proxy.portfolio_client().update_portfolio_wallet_state(
+            portfolio_id=7,
             user_id=3,
             future_wallet=future_wallet,
             snapshot_reason=1,
@@ -195,15 +195,15 @@ def test_proxy_account_client_surfaces_wallet_state_update_errors():
         )
 
 
-def test_proxy_account_client_preflight_sends_session_metadata_over_runtime_channel():
+def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
-    runtime.responses[ACCOUNT_PREFLIGHT_STRATEGY_SESSION] = (
-        account_service_pb2.PreflightStrategySessionResponse(ok=True)
+    runtime.responses[PORTFOLIO_PREFLIGHT_STRATEGY_SESSION] = (
+        portfolio_service_pb2.PreflightStrategySessionResponse(ok=True)
     )
     proxy = RuntimeChannelPlatformProxy(runtime)
 
-    resp = proxy.account_client().preflight_strategy_session(
-        account_id=7,
+    resp = proxy.portfolio_client().preflight_strategy_session(
+        portfolio_id=7,
         user_id=3,
         required_routes={("binance", "perpetual_futures")},
         required_symbols={("binance", "perpetual_futures", "btcusdt")},
@@ -213,7 +213,7 @@ def test_proxy_account_client_preflight_sends_session_metadata_over_runtime_chan
     )
 
     method, req = runtime.calls[-1]
-    assert method == ACCOUNT_PREFLIGHT_STRATEGY_SESSION
+    assert method == PORTFOLIO_PREFLIGHT_STRATEGY_SESSION
     assert resp.ok is True
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 9
@@ -268,7 +268,7 @@ def test_proxy_order_client_places_order_without_direct_stub():
 
     method, req = runtime.calls[-1]
     assert method == ORDER_PLACE
-    assert req.account_id == 7
+    assert req.portfolio_id == 7
     assert req.session_id == "sess-1"
     assert req.exchange == 1
     assert req.market == 2
@@ -472,7 +472,7 @@ class _FakeRuntimeChannel:
         self.calls = []
         self.errors = {}
         self.responses = {
-            ACCOUNT_SAVE_SESSION: account_service_pb2.SaveSessionResponse(),
+            PORTFOLIO_SAVE_SESSION: portfolio_service_pb2.SaveSessionResponse(),
             ORDER_PLACE: order_service_pb2.PlaceOrderResponse(),
             MARKETDATA_GET_STATUS: marketdata_service_pb2.GetMarketDataStreamStatusResponse(),
         }

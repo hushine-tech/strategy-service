@@ -1,6 +1,6 @@
 """C2a cutover smoke tests: environment=0 backtest routed through BinanceWalletRuntime.
 
-These tests drive the registry-based path (canonical state → build_wallet_from_account)
+These tests drive the registry-based path (canonical state → build_wallet_from_portfolio)
 which is what RunStrategy actually uses in production. The legacy-backed
 test_strategy_engine.py fixtures bypass this path by constructing wallet objects
 directly; this file closes that gap by exercising the actual cutover contract.
@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import pytest
 
-from strategy_service.gen import account_service_pb2
+from strategy_service.gen import portfolio_service_pb2
 from strategy_service.wallet import BinanceWalletRuntime
-from strategy_service.wallet_adapter import proto_to_account_spec
-from strategy_service.wallet_factory import build_wallet_from_account
+from strategy_service.wallet_adapter import proto_to_portfolio_spec
+from strategy_service.wallet_factory import build_wallet_from_portfolio
 
 
 def _canonical_mode0(
@@ -28,8 +28,8 @@ def _canonical_mode0(
     initial_balance: float = 10_000.0,
     positions: list | None = None,
 ):
-    """Build a canonical AccountWalletState proto representing a environment=0 account."""
-    futures = account_service_pb2.FuturesWallet(
+    """Build a canonical PortfolioWalletState proto representing a environment=0 portfolio."""
+    futures = portfolio_service_pb2.FuturesWallet(
         margin_mode=margin_mode,
         position_mode=position_mode,
         initial_balance=initial_balance,
@@ -52,34 +52,34 @@ def _canonical_mode0(
             fp.leverage = float(p.get("leverage", 10.0))
             fp.margin_mode = p.get("margin_mode", margin_mode)
             fp.margin_type = fp.margin_mode
-    return account_service_pb2.AccountWalletState(
+    return portfolio_service_pb2.PortfolioWalletState(
         environment=0,
         total_value=wallet_balance,
         spot_estimated_value=0.0,
         futures_position_equity=wallet_balance,
         futures=futures,
-        spot=account_service_pb2.SpotWallet(),
+        spot=portfolio_service_pb2.SpotWallet(),
     )
 
 
 # ── Routing correctness ─────────────────────────────────────────────────
 
 def test_mode0_cross_routes_to_binance_runtime():
-    wallet = build_wallet_from_account(proto_to_account_spec(_canonical_mode0(margin_mode="cross")))
+    wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(_canonical_mode0(margin_mode="cross")))
     assert isinstance(wallet, BinanceWalletRuntime)
     assert wallet.environment_code == 0
 
 
 def test_mode0_isolated_routes_to_binance_runtime():
-    wallet = build_wallet_from_account(proto_to_account_spec(_canonical_mode0(margin_mode="isolated")))
+    wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(_canonical_mode0(margin_mode="isolated")))
     assert isinstance(wallet, BinanceWalletRuntime)
     assert wallet.environment_code == 0
     assert wallet.futures.margin_mode == "isolated"
 
 
 def test_mode0_hedge_routes_to_binance_runtime():
-    wallet = build_wallet_from_account(
-        proto_to_account_spec(_canonical_mode0(position_mode="hedge"))
+    wallet = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(_canonical_mode0(position_mode="hedge"))
     )
     assert isinstance(wallet, BinanceWalletRuntime)
     assert wallet.environment_code == 0
@@ -90,8 +90,8 @@ def test_mode0_hedge_routes_to_binance_runtime():
 
 def test_mode0_cross_wallet_balance_bootstrap_preserved():
     """cross mode: wallet_balance from canonical state surfaces unchanged."""
-    wallet = build_wallet_from_account(
-        proto_to_account_spec(_canonical_mode0(margin_mode="cross", wallet_balance=15_000.0))
+    wallet = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(_canonical_mode0(margin_mode="cross", wallet_balance=15_000.0))
     )
     assert wallet.get_wallet_balance() == pytest.approx(15_000.0)
 
@@ -102,8 +102,8 @@ def test_mode0_available_balance_uses_parity_formula():
     positions and no open orders, collapses to wallet_balance (cross) or
     margin_balance (isolated). This locks in the expected post-cutover value.
     """
-    wallet = build_wallet_from_account(
-        proto_to_account_spec(
+    wallet = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(
             _canonical_mode0(
                 margin_mode="cross",
                 wallet_balance=10_000.0,
@@ -118,8 +118,8 @@ def test_mode0_available_balance_uses_parity_formula():
 # ── Position hydration works end-to-end ─────────────────────────────────
 
 def test_mode0_position_hydration_through_canonical_ingress():
-    wallet = build_wallet_from_account(
-        proto_to_account_spec(
+    wallet = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(
             _canonical_mode0(
                 positions=[{
                     "symbol": "BTCUSDT",
@@ -142,8 +142,8 @@ def test_mode0_position_hydration_through_canonical_ingress():
 
 
 def test_mode0_multi_symbol_state_bootstrap():
-    wallet = build_wallet_from_account(
-        proto_to_account_spec(
+    wallet = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(
             _canonical_mode0(
                 margin_mode="cross",
                 wallet_balance=20_000.0,
@@ -182,8 +182,8 @@ def test_mode0_parity_runtime_accepts_market_data_tick():
     """Parity runtime's on_market_data must work when fed a backtest tick
     without exchange-provided oracle values. This is the core of what C2a
     enables."""
-    wallet = build_wallet_from_account(
-        proto_to_account_spec(
+    wallet = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(
             _canonical_mode0(
                 positions=[{
                     "symbol": "BTCUSDT",

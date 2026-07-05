@@ -21,7 +21,7 @@ _MARKET_ENUMS = {
 }
 
 
-class AccountClient:
+class PortfolioClient:
     """Thin wrapper around core-service gRPC stubs.
 
     If *grpc_address* is empty, all methods return ``None`` immediately (noop mode).
@@ -37,7 +37,7 @@ class AccountClient:
     def _connect(self) -> None:
         try:
             import grpc
-            from strategy_service.gen import account_service_pb2_grpc
+            from strategy_service.gen import portfolio_service_pb2_grpc
 
             channel = grpc.insecure_channel(self._address)
 
@@ -54,38 +54,38 @@ class AccountClient:
                     channel, ClientExtInterceptor(target_service=self._address)
                 )
             except Exception:  # noqa: BLE001
-                logger.debug("ClientExtInterceptor unavailable; no grpc_ext log for AccountClient")
+                logger.debug("ClientExtInterceptor unavailable; no grpc_ext log for PortfolioClient")
 
-            self._stub = account_service_pb2_grpc.AccountServiceStub(channel)
+            self._stub = portfolio_service_pb2_grpc.PortfolioServiceStub(channel)
 
-            logger.info("AccountClient connected to %s", self._address)
+            logger.info("PortfolioClient connected to %s", self._address)
         except Exception:
-            logger.warning("AccountClient: failed to connect to %s", self._address, exc_info=True)
+            logger.warning("PortfolioClient: failed to connect to %s", self._address, exc_info=True)
             self._stub = None
 
     def get_portfolio_snapshot(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
     ):
-        """Fetch the account portfolio snapshot from core-service."""
+        """Fetch the portfolio portfolio snapshot from core-service."""
         if not self._stub:
             return None
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
-            req = account_service_pb2.GetPortfolioSnapshotRequest(
-                account_id=int(account_id),
+            req = portfolio_service_pb2.GetPortfolioSnapshotRequest(
+                portfolio_id=int(portfolio_id),
                 user_id=int(user_id),
-                required_symbols=_required_symbol_protos(account_service_pb2, required_symbols),
+                required_symbols=_required_symbol_protos(portfolio_service_pb2, required_symbols),
             )
             resp = self._stub.GetPortfolioSnapshot(req)
             return resp.snapshot
         except Exception:
             logger.warning(
-                "GetPortfolioSnapshot failed for account_id=%s user_id=%s",
-                account_id,
+                "GetPortfolioSnapshot failed for portfolio_id=%s user_id=%s",
+                portfolio_id,
                 user_id,
                 exc_info=True,
             )
@@ -93,7 +93,7 @@ class AccountClient:
 
     def update_portfolio_snapshot(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         snapshot_reason: int = 0,
         strategy_id: int = 0,
@@ -104,10 +104,10 @@ class AccountClient:
         if not self._stub:
             return None
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
             kwargs = {
-                "account_id": int(account_id),
+                "portfolio_id": int(portfolio_id),
                 "user_id": int(user_id),
                 "snapshot_reason": int(snapshot_reason),
                 "strategy_id": int(strategy_id),
@@ -116,13 +116,13 @@ class AccountClient:
             snapshot_time_pb = _market_time_to_proto(snapshot_time)
             if snapshot_time_pb is not None:
                 kwargs["snapshot_time"] = snapshot_time_pb
-            req = account_service_pb2.UpdatePortfolioSnapshotRequest(**kwargs)
+            req = portfolio_service_pb2.UpdatePortfolioSnapshotRequest(**kwargs)
             resp = self._stub.UpdatePortfolioSnapshot(req)
             return resp.snapshot
         except Exception:
             logger.warning(
-                "UpdatePortfolioSnapshot failed for account_id=%s user_id=%s",
-                account_id,
+                "UpdatePortfolioSnapshot failed for portfolio_id=%s user_id=%s",
+                portfolio_id,
                 user_id,
                 exc_info=True,
             )
@@ -130,7 +130,7 @@ class AccountClient:
 
     def preflight_strategy_session(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
@@ -142,50 +142,50 @@ class AccountClient:
         if not self._stub:
             return None
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
-            req = account_service_pb2.PreflightStrategySessionRequest(
-                account_id=int(account_id),
+            req = portfolio_service_pb2.PreflightStrategySessionRequest(
+                portfolio_id=int(portfolio_id),
                 user_id=int(user_id),
                 session_id=str(session_id or ""),
                 strategy_id=int(strategy_id),
                 leverage=float(leverage or 0.0),
                 required_routes=[
-                    account_service_pb2.RequiredRoute(
+                    portfolio_service_pb2.RequiredRoute(
                         exchange=_exchange_enum(exchange),
                         market=_market_enum(market),
                     )
                     for exchange, market in sorted(required_routes or [])
                 ],
-                required_symbols=_required_symbol_protos(account_service_pb2, required_symbols),
+                required_symbols=_required_symbol_protos(portfolio_service_pb2, required_symbols),
             )
             return self._stub.PreflightStrategySession(req)
         except Exception:
             logger.warning(
-                "PreflightStrategySession failed for account_id=%s user_id=%s",
-                account_id,
+                "PreflightStrategySession failed for portfolio_id=%s user_id=%s",
+                portfolio_id,
                 user_id,
                 exc_info=True,
             )
             return None
 
-    def get_active_strategy(self, account_id: int):
-        """Fetch the active strategy for an account. Returns proto GetActiveStrategyResponse or None."""
+    def get_active_strategy(self, portfolio_id: int):
+        """Fetch the active strategy for an portfolio. Returns proto GetActiveStrategyResponse or None."""
         if not self._stub:
             return None
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
-            req = account_service_pb2.GetActiveStrategyRequest(account_id=int(account_id))
+            req = portfolio_service_pb2.GetActiveStrategyRequest(portfolio_id=int(portfolio_id))
             return self._stub.GetActiveStrategy(req)
         except Exception:
-            logger.warning("GetActiveStrategy failed for account_id=%s", account_id, exc_info=True)
+            logger.warning("GetActiveStrategy failed for portfolio_id=%s", portfolio_id, exc_info=True)
             return None
 
     def save_session(
         self,
         session_id: str,
-        account_id: int,
+        portfolio_id: int,
         strategy_id: int,
         environment: int,
         interval: str = "1m",
@@ -203,7 +203,7 @@ class AccountClient:
         try:
             self.require_save_session(
                 session_id=session_id,
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 strategy_id=strategy_id,
                 environment=environment,
                 interval=interval,
@@ -225,7 +225,7 @@ class AccountClient:
     def require_save_session(
         self,
         session_id: str,
-        account_id: int,
+        portfolio_id: int,
         strategy_id: int,
         environment: int,
         interval: str = "1m",
@@ -241,11 +241,11 @@ class AccountClient:
     ) -> None:
         """Create a session record and raise on core-service errors."""
         if not self._stub:
-            raise RuntimeError("AccountClient is not connected")
-        from strategy_service.gen import account_service_pb2
+            raise RuntimeError("PortfolioClient is not connected")
+        from strategy_service.gen import portfolio_service_pb2
 
-        req = account_service_pb2.SaveSessionRequest(
-            session_id=session_id, account_id=int(account_id),
+        req = portfolio_service_pb2.SaveSessionRequest(
+            session_id=session_id, portfolio_id=int(portfolio_id),
             strategy_id=int(strategy_id), environment=int(environment),
             interval=interval, start_time_ms=int(start_time_ms), end_time_ms=int(end_time_ms),
             runtime_id=str(runtime_id or ""),
@@ -270,8 +270,8 @@ class AccountClient:
         if not self._stub:
             return False
         try:
-            from strategy_service.gen import account_service_pb2
-            req = account_service_pb2.UpdateSessionRequest(
+            from strategy_service.gen import portfolio_service_pb2
+            req = portfolio_service_pb2.UpdateSessionRequest(
                 session_id=session_id, status=status,
                 bars_processed=int(bars_processed), error=error,
                 runtime_id=str(runtime_id or ""),
@@ -299,11 +299,11 @@ class AccountClient:
         if not self._stub:
             if not self._address:
                 return []
-            raise RuntimeError(f"AccountClient is not connected to {self._address}")
+            raise RuntimeError(f"PortfolioClient is not connected to {self._address}")
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
             resp = self._stub.ListRunningSessions(
-                account_service_pb2.ListRunningSessionsRequest(
+                portfolio_service_pb2.ListRunningSessionsRequest(
                     runtime_id=str(runtime_id or ""),
                 )
             )
@@ -315,9 +315,9 @@ class AccountClient:
     # release_market_data_lease moved to MarketDataClient (control-panel-service).
     # See strategy_service/marketdata_client.py.
 
-    def update_account_wallet_state(
+    def update_portfolio_wallet_state(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         future_wallet: Optional[Any] = None,
         spot_wallet: Optional[Any] = None,
@@ -328,17 +328,17 @@ class AccountClient:
     ):
         """Push strategy-computed wallet state for snapshot/audit sync.
 
-        Backtest accounts persist this local wallet as authoritative state.
-        Exchange-backed accounts use the payload as the local side of
+        Backtest portfolios persist this local wallet as authoritative state.
+        Exchange-backed portfolios use the payload as the local side of
         reconciliation while core-service refreshes the exchange snapshot.
         """
         if not self._stub:
             return None
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
             kwargs = {
-                "account_id": int(account_id),
+                "portfolio_id": int(portfolio_id),
                 "user_id": int(user_id),
                 "futures": _serialize_future_wallet(future_wallet) if future_wallet else None,
                 "spot": _serialize_spot_wallet(spot_wallet) if spot_wallet else None,
@@ -352,18 +352,18 @@ class AccountClient:
             snapshot_time_pb = _market_time_to_proto(snapshot_time)
             if snapshot_time_pb is not None:
                 kwargs["snapshot_time"] = snapshot_time_pb
-            req = account_service_pb2.UpdateAccountWalletStateRequest(**kwargs)
-            resp = self._stub.UpdateAccountWalletState(req)
+            req = portfolio_service_pb2.UpdatePortfolioWalletStateRequest(**kwargs)
+            resp = self._stub.UpdatePortfolioWalletState(req)
             return resp.wallet
         except Exception as exc:
             logger.warning(
-                "UpdateAccountWalletState failed for account_id=%s user_id=%s",
-                account_id,
+                "UpdatePortfolioWalletState failed for portfolio_id=%s user_id=%s",
+                portfolio_id,
                 user_id,
                 exc_info=True,
             )
             raise RuntimeError(
-                f"UpdateAccountWalletState failed for account_id={account_id} user_id={user_id}: {exc}"
+                f"UpdatePortfolioWalletState failed for portfolio_id={portfolio_id} user_id={user_id}: {exc}"
             ) from exc
 
 
@@ -381,9 +381,9 @@ def _market_enum(market: str) -> int:
     return _MARKET_ENUMS[key]
 
 
-def _required_symbol_protos(account_service_pb2, required_symbols):
+def _required_symbol_protos(portfolio_service_pb2, required_symbols):
     return [
-        account_service_pb2.RequiredSymbol(
+        portfolio_service_pb2.RequiredSymbol(
             exchange=_exchange_enum(exchange),
             market=_market_enum(market),
             symbol=str(symbol or "").strip().upper(),
@@ -437,7 +437,7 @@ def _get_margin_balance(fw: Any) -> float:
 
 def _serialize_future_wallet(fw: Any):
     """Map strategy-service futures runtime to proto FuturesWallet."""
-    from strategy_service.gen import account_service_pb2
+    from strategy_service.gen import portfolio_service_pb2
 
     positions = []
     position_mode = str(getattr(fw, "position_mode", "") or "").strip().lower()
@@ -460,7 +460,7 @@ def _serialize_future_wallet(fw: Any):
             unrealized_pnl = float(upnl_getter())
         else:
             unrealized_pnl = float(getattr(pos, "unrealized_pnl", 0.0) or 0.0)
-        pf = account_service_pb2.FuturesPosition(
+        pf = portfolio_service_pb2.FuturesPosition(
             symbol=symbol,
             direction=direction,
             initial_balance=float(getattr(pos, "initial_balance", 0.0) or 0.0),
@@ -495,7 +495,7 @@ def _serialize_future_wallet(fw: Any):
     for item in metadata_items:
         brackets = []
         for bracket in getattr(item, "brackets", []) or []:
-            brackets.append(account_service_pb2.FuturesRiskBracket(
+            brackets.append(portfolio_service_pb2.FuturesRiskBracket(
                 bracket=int(getattr(bracket, "bracket", 0) or 0),
                 notional_floor=float(getattr(bracket, "notional_floor", 0.0) or 0.0),
                 notional_cap=float(getattr(bracket, "notional_cap", 0.0) or 0.0),
@@ -503,7 +503,7 @@ def _serialize_future_wallet(fw: Any):
                 maint_margin_ratio=float(getattr(bracket, "maint_margin_ratio", 0.0) or 0.0),
                 cumulative=float(getattr(bracket, "cumulative", 0.0) or 0.0),
             ))
-        risk_metadata.append(account_service_pb2.FuturesRiskMetadata(
+        risk_metadata.append(portfolio_service_pb2.FuturesRiskMetadata(
             symbol=str(getattr(item, "symbol", "") or ""),
             configured_leverage=float(getattr(item, "configured_leverage", 0.0) or 0.0),
             configured_margin_mode=str(getattr(item, "configured_margin_mode", "") or ""),
@@ -514,7 +514,7 @@ def _serialize_future_wallet(fw: Any):
             brackets=brackets,
         ))
 
-    return account_service_pb2.FuturesWallet(
+    return portfolio_service_pb2.FuturesWallet(
         margin_mode=str(getattr(fw, "margin_mode", "") or ""),
         position_mode=str(getattr(fw, "position_mode", "") or ""),
         initial_balance=float(getattr(fw, "initial_balance", 0.0) or 0.0),
@@ -540,7 +540,7 @@ def _serialize_future_wallet(fw: Any):
 
 def _serialize_spot_wallet(sw: Any):
     """Map strategy-service SpotWallet to proto SpotWallet."""
-    from strategy_service.gen import account_service_pb2
+    from strategy_service.gen import portfolio_service_pb2
 
     assets = []
     for symbol, asset in sw.assets.items():
@@ -552,9 +552,9 @@ def _serialize_spot_wallet(sw: Any):
         )
         if asset.price is not None:
             kwargs["price"] = asset.price
-        assets.append(account_service_pb2.SpotAsset(**kwargs))
+        assets.append(portfolio_service_pb2.SpotAsset(**kwargs))
 
-    return account_service_pb2.SpotWallet(
+    return portfolio_service_pb2.SpotWallet(
         free=sw.free,
         locked=sw.locked,
         assets=assets,

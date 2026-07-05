@@ -71,7 +71,7 @@ class StrategyServiceServicer(object):
 
     def RunStrategy(self, request, context):
         """RunStrategy starts strategy execution. Returns immediately with a session_id.
-        Data source is determined by account environment (fetched from core-service):
+        Data source is determined by portfolio environment (fetched from core-service):
         environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
         environment=1 (demo)     → LiveDataLoop (Kafka)
         environment=2 (live)     → LiveDataLoop (Kafka; currently fail-closed)

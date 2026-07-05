@@ -64,7 +64,7 @@ log:
     enabled: true
     brokers: ["192.168.88.10:19092"]
     topic_prefix: "app-logs"
-  # Tracing uses the same key path as account/order/handler's config.yaml.
+  # Tracing uses the same key path as portfolio/order/handler's config.yaml.
   # When enabled=true, `hushine-runtime start` calls
   # `utils.log.tracer.init_tracer(service_name, endpoint)` on boot so gRPC
   # spans join the cross-service Jaeger trace. When disabled the tracer is

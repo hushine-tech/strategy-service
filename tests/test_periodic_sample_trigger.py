@@ -30,7 +30,7 @@ def _wallet():
     The periodic-sample trigger is a Phase C `environment=1` feature; returning a
     environment=1-tagged runtime keeps ``wallet.environment_code`` aligned with the scenario
     being tested. For tests that simulate environment=0 / environment=2 paths the trigger
-    installation is gated on ``account_mode`` (a separate test parameter),
+    installation is gated on ``portfolio_mode`` (a separate test parameter),
     not on ``wallet.environment_code``, so this wallet instance is fine across all cases.
     """
     return make_testnet_wallet(
@@ -51,16 +51,16 @@ def _wallet():
     )
 
 
-class _RecordingAccountClient:
+class _RecordingPortfolioClient:
     """Captures PeriodicSample wallet sync calls."""
 
     def __init__(self, fail: bool = False) -> None:
         self.calls: list[dict[str, Any]] = []
         self._fail = fail
 
-    def update_account_wallet_state(
+    def update_portfolio_wallet_state(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         future_wallet: Any | None = None,
         spot_wallet: Any | None = None,
@@ -71,7 +71,7 @@ class _RecordingAccountClient:
     ) -> None:
         self.calls.append({
             "kind": "wallet",
-            "account_id": account_id,
+            "portfolio_id": portfolio_id,
             "user_id": user_id,
             "future_wallet": future_wallet,
             "spot_wallet": spot_wallet,
@@ -106,7 +106,7 @@ def _make_servicer() -> StrategyServiceServicer:
 def _install_and_get_engine(
     *,
     servicer: StrategyServiceServicer,
-    account_client: _RecordingAccountClient,
+    portfolio_client: _RecordingPortfolioClient,
     clock: _FakeClock,
     every_n_bars: int = DEFAULT_PERIODIC_SAMPLE_EVERY_BARS,
     max_idle_seconds: float = DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS,
@@ -124,12 +124,12 @@ def _install_and_get_engine(
 
     servicer._install_periodic_sample_trigger(
         engine=engine,
-        account_id=101,
+        portfolio_id=101,
         user_id=17,
         strategy_id=202,
         session_id="sess-test",
         wallet=_wallet(),
-        account_client=account_client,
+        portfolio_client=portfolio_client,
         every_n_bars=every_n_bars,
         max_idle_seconds=max_idle_seconds,
         now_fn=clock,
@@ -148,13 +148,13 @@ def _fake_md(i: int = 0) -> Any:
 def test_periodic_sample_fires_after_n_bars_under_time_limit():
     """environment=1 path: 20 bars processed in <5min → trigger fires exactly once, counters reset."""
     servicer = _make_servicer()
-    account_client = _RecordingAccountClient()
+    portfolio_client = _RecordingPortfolioClient()
     clock = _FakeClock()
     original_calls: list[Any] = []
 
     engine = _install_and_get_engine(
         servicer=servicer,
-        account_client=account_client,
+        portfolio_client=portfolio_client,
         clock=clock,
         original_calls=original_calls,
     )
@@ -167,11 +167,11 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
     # Original called every bar.
     assert len(original_calls) == 20
     # Exactly one PeriodicSample push.
-    assert len(account_client.calls) == 1
-    call = account_client.calls[0]
+    assert len(portfolio_client.calls) == 1
+    call = portfolio_client.calls[0]
     assert call["kind"] == "wallet"
     assert call["snapshot_reason"] == SNAPSHOT_REASON_PERIODIC_SAMPLE
-    assert call["account_id"] == 101
+    assert call["portfolio_id"] == 101
     assert call["user_id"] == 17
     assert call["strategy_id"] == 202
     assert call["session_id"] == "sess-test"
@@ -180,44 +180,44 @@ def test_periodic_sample_fires_after_n_bars_under_time_limit():
     for i in range(19):
         engine.running_strategy(_fake_md(i))
         clock.advance(1.0)
-    assert len(account_client.calls) == 1
+    assert len(portfolio_client.calls) == 1
 
     # 20th bar after reset → fires again.
     engine.running_strategy(_fake_md(100))
-    assert len(account_client.calls) == 2
+    assert len(portfolio_client.calls) == 2
 
 def test_periodic_sample_fires_after_idle_threshold_with_few_bars():
     """environment=1 path: 3 bars but 6 minutes elapse → trigger fires on the bar after the idle trip."""
     servicer = _make_servicer()
-    account_client = _RecordingAccountClient()
+    portfolio_client = _RecordingPortfolioClient()
     clock = _FakeClock()
 
     engine = _install_and_get_engine(
         servicer=servicer,
-        account_client=account_client,
+        portfolio_client=portfolio_client,
         clock=clock,
     )
 
     # Bar 1 immediately — no idle elapsed yet, no fire.
     engine.running_strategy(_fake_md(0))
-    assert len(account_client.calls) == 0
+    assert len(portfolio_client.calls) == 0
 
     # Advance 6 minutes (> 300s idle threshold).
     clock.advance(360.0)
 
     # Bar 2 after long idle → fires on this bar.
     engine.running_strategy(_fake_md(1))
-    assert len(account_client.calls) == 1
-    assert account_client.calls[0]["snapshot_reason"] == SNAPSHOT_REASON_PERIODIC_SAMPLE
+    assert len(portfolio_client.calls) == 1
+    assert portfolio_client.calls[0]["snapshot_reason"] == SNAPSHOT_REASON_PERIODIC_SAMPLE
 
     # Bar 3 right after: counter was reset, no immediate re-fire.
     engine.running_strategy(_fake_md(2))
-    assert len(account_client.calls) == 1
+    assert len(portfolio_client.calls) == 1
 
     # Advance another 6 minutes → next bar fires again.
     clock.advance(360.0)
     engine.running_strategy(_fake_md(3))
-    assert len(account_client.calls) == 2
+    assert len(portfolio_client.calls) == 2
 
 
 def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
@@ -245,11 +245,11 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
     request = SimpleNamespace(interval="1m", start_time_ms=1, end_time_ms=2)
     snapshot_calls: list[tuple] = []
 
-    class FakeAccountClient:
+    class FakePortfolioClient:
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_account_wallet_state(self, **kwargs):
+        def update_portfolio_wallet_state(self, **kwargs):
             snapshot_calls.append(("wallet_sync", kwargs.get("snapshot_reason")))
             return SimpleNamespace(ok=True)
 
@@ -279,7 +279,7 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
             engine.running_strategy(_fake_md(i))
 
     monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
-    monkeypatch.setattr(servicer, "_account_client", lambda: FakeAccountClient(""))
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: FakePortfolioClient(""))
     monkeypatch.setattr(servicer, "_order_client", lambda: FakeOrderClient(""))
     monkeypatch.setattr(servicer, "_run_backtest", fake_run_backtest)
 
@@ -290,7 +290,7 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
         request=request,
         wallet=wallet,
         environment=0,
-        account_id=101,
+        portfolio_id=101,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
         strategy_path="strategies.buy_once",
@@ -327,11 +327,11 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
     request = SimpleNamespace(interval="1m", start_time_ms=1, end_time_ms=2)
     snapshot_calls: list[tuple] = []
 
-    class FakeAccountClient:
+    class FakePortfolioClient:
         def __init__(self, _addr: str) -> None:
             pass
 
-        def update_account_wallet_state(self, **kwargs):
+        def update_portfolio_wallet_state(self, **kwargs):
             snapshot_calls.append(("wallet_sync", kwargs.get("snapshot_reason")))
             return SimpleNamespace(ok=True)
 
@@ -358,7 +358,7 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
             engine.running_strategy(_fake_md(i))
 
     monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
-    monkeypatch.setattr(servicer, "_account_client", lambda: FakeAccountClient(""))
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: FakePortfolioClient(""))
     monkeypatch.setattr(servicer, "_order_client", lambda: FakeOrderClient(""))
     monkeypatch.setattr(servicer, "_run_live", fake_run_live)
 
@@ -369,7 +369,7 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
         request=request,
         wallet=wallet,
         environment=2,
-        account_id=101,
+        portfolio_id=101,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
         strategy_path="strategies.buy_once",
@@ -385,13 +385,13 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
 def test_periodic_sample_push_failure_does_not_interrupt_strategy():
     """Push failure MUST be swallowed (logged as warn) and counters MUST still reset."""
     servicer = _make_servicer()
-    account_client = _RecordingAccountClient(fail=True)
+    portfolio_client = _RecordingPortfolioClient(fail=True)
     clock = _FakeClock()
     original_calls: list[Any] = []
 
     engine = _install_and_get_engine(
         servicer=servicer,
-        account_client=account_client,
+        portfolio_client=portfolio_client,
         clock=clock,
         original_calls=original_calls,
     )
@@ -404,4 +404,4 @@ def test_periodic_sample_push_failure_does_not_interrupt_strategy():
     # Original still called all 40 times (strategy not interrupted).
     assert len(original_calls) == 40
     # Push attempted twice (once per 20-bar window, counter reset on failure).
-    assert len(account_client.calls) == 2
+    assert len(portfolio_client.calls) == 2

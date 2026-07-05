@@ -9,7 +9,7 @@ import pytest
 import strategy_service.debug_replay as debug_replay_module
 from strategy_service.debug_control_server import DebugReplayRequest
 from strategy_service.debug_replay import DebugReplayRunner, _with_debug_inputs_if_missing
-from strategy_service.gen import account_service_pb2, control_panel_service_pb2
+from strategy_service.gen import portfolio_service_pb2, control_panel_service_pb2
 from strategy_service.runtime_agent import DebugDataset, RuntimeBusyError, _kline_from_mapping
 from tests.helpers.wallet_fixtures import _build_wallet_proto
 
@@ -31,7 +31,7 @@ class MyStrategy:
     dataset = DebugDataset(
         dataset_id="dbg-1",
         user_id=7,
-        account_id=10,
+        portfolio_id=10,
         runtime_id="rt-debug",
         market="perpetual_futures",
         symbol="ETHUSDT",
@@ -67,8 +67,8 @@ class MyStrategy:
         ],
     )
     agent = _FakeAgent(dataset)
-    account = _FakeAccountClient()
-    proxy = _FakePlatformProxy(account=account, dataset=dataset)
+    portfolio = _FakePortfolioClient()
+    proxy = _FakePlatformProxy(portfolio=portfolio, dataset=dataset)
     runner = DebugReplayRunner(agent=agent, platform_proxy=proxy, workspace_path=str(tmp_path), progress_every_bars=1)
 
     result = runner.run(DebugReplayRequest(name="manual-debug"))
@@ -77,14 +77,14 @@ class MyStrategy:
     assert result.status == "finished"
     assert result.bars_processed == 2
     assert agent.released is True
-    assert account.saved["session_type"] == "debugging"
-    assert account.saved["strategy_id"] == 0
-    assert account.saved["session_name"] == "manual-debug"
-    final_session_idx = account.events.index(("session", "finished"))
-    final_portfolio_idx = account.events.index(("portfolio", 3))
+    assert portfolio.saved["session_type"] == "debugging"
+    assert portfolio.saved["strategy_id"] == 0
+    assert portfolio.saved["session_name"] == "manual-debug"
+    final_session_idx = portfolio.events.index(("session", "finished"))
+    final_portfolio_idx = portfolio.events.index(("portfolio", 3))
     assert final_portfolio_idx < final_session_idx
-    assert account.updates[-1]["status"] == "finished"
-    assert account.updates[-1]["bars_processed"] == 2
+    assert portfolio.updates[-1]["status"] == "finished"
+    assert portfolio.updates[-1]["bars_processed"] == 2
     assert proxy.invocations[0].method == "debug.StartDebugReplay"
 
 
@@ -93,7 +93,7 @@ def test_debug_replay_rejects_concurrent_run(tmp_path):
     dataset = DebugDataset(
         dataset_id="dbg-1",
         user_id=7,
-        account_id=10,
+        portfolio_id=10,
         runtime_id="rt-debug",
         market="perpetual_futures",
         symbol="ETHUSDT",
@@ -117,7 +117,7 @@ def test_debug_replay_rejects_concurrent_run(tmp_path):
     agent = _FakeAgent(dataset, acquire=False)
     runner = DebugReplayRunner(
         agent=agent,
-        platform_proxy=_FakePlatformProxy(account=_FakeAccountClient(), dataset=dataset),
+        platform_proxy=_FakePlatformProxy(portfolio=_FakePortfolioClient(), dataset=dataset),
         workspace_path=str(tmp_path),
     )
 
@@ -298,8 +298,8 @@ class _FakeAgent:
 
 
 class _FakePlatformProxy:
-    def __init__(self, *, account: "_FakeAccountClient", dataset: DebugDataset) -> None:
-        self._account = account
+    def __init__(self, *, portfolio: "_FakePortfolioClient", dataset: DebugDataset) -> None:
+        self._portfolio = portfolio
         self._dataset = dataset
         self.invocations: list[_Invocation] = []
 
@@ -310,7 +310,7 @@ class _FakePlatformProxy:
         ds = control_panel_service_pb2.DebugDatasetState(
             dataset_id=self._dataset.dataset_id,
             user_id=self._dataset.user_id,
-            account_id=self._dataset.account_id,
+            portfolio_id=self._dataset.portfolio_id,
             runtime_id=self._dataset.runtime_id,
             market=self._dataset.market,
             symbol=self._dataset.symbol,
@@ -327,8 +327,8 @@ class _FakePlatformProxy:
             dataset=ds,
         )
 
-    def account_client(self):
-        return self._account
+    def portfolio_client(self):
+        return self._portfolio
 
     def order_client(self):
         return _FakeOrderClient()
@@ -337,18 +337,18 @@ class _FakePlatformProxy:
         return None
 
 
-class _FakeAccountClient:
+class _FakePortfolioClient:
     def __init__(self) -> None:
         self.saved = {}
         self.updates = []
         self.portfolio_updates = []
         self.events = []
 
-    def get_portfolio_snapshot(self, account_id: int, user_id: int):
-        assert account_id == 10
+    def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        assert portfolio_id == 10
         assert user_id == 7
-        return account_service_pb2.PortfolioSnapshot(
-            account_id=account_id,
+        return portfolio_service_pb2.PortfolioSnapshot(
+            portfolio_id=portfolio_id,
             user_id=user_id,
             wallet=_build_wallet_proto(
                 environment=0,
@@ -377,7 +377,7 @@ class _FakeAccountClient:
 
     def require_save_session(self, **kwargs):
         self.saved = kwargs
-        return account_service_pb2.SaveSessionResponse()
+        return portfolio_service_pb2.SaveSessionResponse()
 
     def update_session(self, **kwargs):
         self.updates.append(kwargs)

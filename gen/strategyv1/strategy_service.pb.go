@@ -78,10 +78,10 @@ func (StopAction) EnumDescriptor() ([]byte, []int) {
 
 type RunStrategyRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
-	AccountId    int64                  `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	PortfolioId  int64                  `protobuf:"varint,1,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
 	StrategyPath string                 `protobuf:"bytes,2,opt,name=strategy_path,json=strategyPath,proto3" json:"strategy_path,omitempty"` // Python import path (Phase 2 后由 active strategy 替代)
 	Interval     string                 `protobuf:"bytes,5,opt,name=interval,proto3" json:"interval,omitempty"`                             // "1m", "5m", "15m", "1h", "4h", "1d"
-	// Backtest only (used when account environment=0; ignored for demo/live)
+	// Backtest only (used when portfolio environment=0; ignored for demo/live)
 	StartTimeMs int64  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"`
 	EndTimeMs   int64  `protobuf:"varint,7,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
 	UserId      int64  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -126,9 +126,9 @@ func (*RunStrategyRequest) Descriptor() ([]byte, []int) {
 	return file_strategy_service_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *RunStrategyRequest) GetAccountId() int64 {
+func (x *RunStrategyRequest) GetPortfolioId() int64 {
 	if x != nil {
-		return x.AccountId
+		return x.PortfolioId
 	}
 	return 0
 }
@@ -679,7 +679,7 @@ func (x *ValidateStrategyCodeResponse) GetAllowedThirdPartyModules() []string {
 
 type PreviewRunStrategyRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
-	AccountId    int64                  `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	PortfolioId  int64                  `protobuf:"varint,1,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
 	StrategyPath string                 `protobuf:"bytes,2,opt,name=strategy_path,json=strategyPath,proto3" json:"strategy_path,omitempty"` // same semantics as RunStrategy (may be empty)
 	StartTimeMs  int64                  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"` // backtest-only; ignored for demo/live
 	EndTimeMs    int64                  `protobuf:"varint,7,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
@@ -725,9 +725,9 @@ func (*PreviewRunStrategyRequest) Descriptor() ([]byte, []int) {
 	return file_strategy_service_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *PreviewRunStrategyRequest) GetAccountId() int64 {
+func (x *PreviewRunStrategyRequest) GetPortfolioId() int64 {
 	if x != nil {
-		return x.AccountId
+		return x.PortfolioId
 	}
 	return 0
 }
@@ -929,7 +929,7 @@ type PreviewRunStrategyResponse struct {
 	DeclaredInputs []*LiveStreamBinding `protobuf:"bytes,6,rep,name=declared_inputs,json=declaredInputs,proto3" json:"declared_inputs,omitempty"`
 	// Strategy ORDER_TARGETS exactly as declared by user strategy code.
 	DeclaredOrderTargets []*StrategyOrderTargetBinding `protobuf:"bytes,7,rep,name=declared_order_targets,json=declaredOrderTargets,proto3" json:"declared_order_targets,omitempty"`
-	// Union of INPUTS and ORDER_TARGETS routes required by the account/session.
+	// Union of INPUTS and ORDER_TARGETS routes required by the portfolio/session.
 	RequiredRoutes []*StrategyRouteBinding `protobuf:"bytes,8,rep,name=required_routes,json=requiredRoutes,proto3" json:"required_routes,omitempty"`
 	// Effective risk settings after strategy declaration and request defaults
 	// have been resolved.
@@ -1335,9 +1335,9 @@ type LiveSessionDiagnostic struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	SessionId              string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	UserId                 int64                  `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	AccountId              int64                  `protobuf:"varint,3,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	PortfolioId            int64                  `protobuf:"varint,3,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
 	StrategyId             int64                  `protobuf:"varint,4,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
-	AccountEnvironment     int32                  `protobuf:"varint,5,opt,name=account_environment,json=accountEnvironment,proto3" json:"account_environment,omitempty"`
+	PortfolioEnvironment   int32                  `protobuf:"varint,5,opt,name=portfolio_environment,json=portfolioEnvironment,proto3" json:"portfolio_environment,omitempty"`
 	Status                 string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
 	BarsProcessed          int32                  `protobuf:"varint,7,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
 	Error                  string                 `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
@@ -1395,9 +1395,9 @@ func (x *LiveSessionDiagnostic) GetUserId() int64 {
 	return 0
 }
 
-func (x *LiveSessionDiagnostic) GetAccountId() int64 {
+func (x *LiveSessionDiagnostic) GetPortfolioId() int64 {
 	if x != nil {
-		return x.AccountId
+		return x.PortfolioId
 	}
 	return 0
 }
@@ -1409,9 +1409,9 @@ func (x *LiveSessionDiagnostic) GetStrategyId() int64 {
 	return 0
 }
 
-func (x *LiveSessionDiagnostic) GetAccountEnvironment() int32 {
+func (x *LiveSessionDiagnostic) GetPortfolioEnvironment() int32 {
 	if x != nil {
-		return x.AccountEnvironment
+		return x.PortfolioEnvironment
 	}
 	return 0
 }
@@ -1527,10 +1527,9 @@ var File_strategy_service_proto protoreflect.FileDescriptor
 
 const file_strategy_service_proto_rawDesc = "" +
 	"\n" +
-	"\x16strategy_service.proto\x12\vstrategy.v1\"\xda\x02\n" +
-	"\x12RunStrategyRequest\x12\x1d\n" +
-	"\n" +
-	"account_id\x18\x01 \x01(\x03R\taccountId\x12#\n" +
+	"\x16strategy_service.proto\x12\vstrategy.v1\"\xde\x02\n" +
+	"\x12RunStrategyRequest\x12!\n" +
+	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12#\n" +
 	"\rstrategy_path\x18\x02 \x01(\tR\fstrategyPath\x12\x1a\n" +
 	"\binterval\x18\x05 \x01(\tR\binterval\x12\"\n" +
 	"\rstart_time_ms\x18\x06 \x01(\x03R\vstartTimeMs\x12\x1e\n" +
@@ -1578,10 +1577,9 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06issues\x18\x02 \x03(\v2$.strategy.v1.StrategyValidationIssueR\x06issues\x12'\n" +
 	"\x0fruntime_version\x18\x03 \x01(\tR\x0eruntimeVersion\x12'\n" +
 	"\x0fruntime_profile\x18\x04 \x01(\tR\x0eruntimeProfile\x12=\n" +
-	"\x1ballowed_third_party_modules\x18\x05 \x03(\tR\x18allowedThirdPartyModules\"\xa4\x02\n" +
-	"\x19PreviewRunStrategyRequest\x12\x1d\n" +
-	"\n" +
-	"account_id\x18\x01 \x01(\x03R\taccountId\x12#\n" +
+	"\x1ballowed_third_party_modules\x18\x05 \x03(\tR\x18allowedThirdPartyModules\"\xa8\x02\n" +
+	"\x19PreviewRunStrategyRequest\x12!\n" +
+	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12#\n" +
 	"\rstrategy_path\x18\x02 \x01(\tR\fstrategyPath\x12\"\n" +
 	"\rstart_time_ms\x18\x06 \x01(\x03R\vstartTimeMs\x12\x1e\n" +
 	"\vend_time_ms\x18\a \x01(\x03R\tendTimeMs\x12\x17\n" +
@@ -1627,16 +1625,15 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06market\x18\x03 \x01(\tR\x06market\x12\x12\n" +
 	"\x04kind\x18\x04 \x01(\tR\x04kind\x12\x16\n" +
 	"\x06symbol\x18\x05 \x01(\tR\x06symbol\x12\x1a\n" +
-	"\binterval\x18\x06 \x01(\tR\binterval\"\xc8\x04\n" +
+	"\binterval\x18\x06 \x01(\tR\binterval\"\xd0\x04\n" +
 	"\x15LiveSessionDiagnostic\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12\x1d\n" +
-	"\n" +
-	"account_id\x18\x03 \x01(\x03R\taccountId\x12\x1f\n" +
+	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12!\n" +
+	"\fportfolio_id\x18\x03 \x01(\x03R\vportfolioId\x12\x1f\n" +
 	"\vstrategy_id\x18\x04 \x01(\x03R\n" +
-	"strategyId\x12/\n" +
-	"\x13account_environment\x18\x05 \x01(\x05R\x12accountEnvironment\x12\x16\n" +
+	"strategyId\x123\n" +
+	"\x15portfolio_environment\x18\x05 \x01(\x05R\x14portfolioEnvironment\x12\x16\n" +
 	"\x06status\x18\x06 \x01(\tR\x06status\x12%\n" +
 	"\x0ebars_processed\x18\a \x01(\x05R\rbarsProcessed\x12\x14\n" +
 	"\x05error\x18\b \x01(\tR\x05error\x12%\n" +

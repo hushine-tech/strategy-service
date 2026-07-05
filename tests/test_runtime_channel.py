@@ -30,7 +30,7 @@ from strategy_service.runtime_channel import (
     load_runtime_credential,
 )
 from strategy_service.gen import control_panel_service_pb2 as cp_pb2
-from strategy_service.gen import account_service_pb2, strategy_service_pb2
+from strategy_service.gen import portfolio_service_pb2, strategy_service_pb2
 
 
 def test_runtime_channel_default_heartbeat_leaves_watchdog_margin():
@@ -496,9 +496,9 @@ def test_runtime_channel_client_invokes_platform_unary():
 
     def call():
         result.append(client.invoke_platform_unary(
-            "account.SaveSession",
-            account_service_pb2.SaveSessionRequest(session_id="sess-1", account_id=7),
-            account_service_pb2.SaveSessionResponse,
+            "portfolio.SaveSession",
+            portfolio_service_pb2.SaveSessionRequest(session_id="sess-1", portfolio_id=7),
+            portfolio_service_pb2.SaveSessionResponse,
             timeout_seconds=1,
         ))
 
@@ -507,13 +507,13 @@ def test_runtime_channel_client_invokes_platform_unary():
     frame = outbound.get(timeout=1)
 
     assert frame.frame_type == cp_pb2.FRAME_TYPE_REQUEST
-    assert frame.request.method == "account.SaveSession"
-    unpacked = account_service_pb2.SaveSessionRequest()
+    assert frame.request.method == "portfolio.SaveSession"
+    unpacked = portfolio_service_pb2.SaveSessionRequest()
     assert frame.request.request.Unpack(unpacked)
     assert unpacked.session_id == "sess-1"
 
     packed = Any()
-    packed.Pack(account_service_pb2.SaveSessionResponse())
+    packed.Pack(portfolio_service_pb2.SaveSessionResponse())
     client._handle_inbound_frame(
         cp_pb2.RuntimeFrame(
             correlation_id=frame.correlation_id,
@@ -525,7 +525,7 @@ def test_runtime_channel_client_invokes_platform_unary():
     thread.join(timeout=1)
 
     assert len(result) == 1
-    assert isinstance(result[0], account_service_pb2.SaveSessionResponse)
+    assert isinstance(result[0], portfolio_service_pb2.SaveSessionResponse)
 
 
 def test_runtime_channel_client_sends_data_backpressure_frame():
@@ -612,9 +612,9 @@ def test_runtime_channel_client_injects_trace_context_into_platform_request():
             token = otel_context.attach(trace.set_span_in_context(NonRecordingSpan(span_context)))
             try:
                 result.append(client.invoke_platform_unary(
-                    "account.SaveSession",
-                    account_service_pb2.SaveSessionRequest(session_id="sess-1", account_id=7),
-                    account_service_pb2.SaveSessionResponse,
+                    "portfolio.SaveSession",
+                    portfolio_service_pb2.SaveSessionRequest(session_id="sess-1", portfolio_id=7),
+                    portfolio_service_pb2.SaveSessionResponse,
                     timeout_seconds=1,
                 ))
             except BaseException as exc:
@@ -631,7 +631,7 @@ def test_runtime_channel_client_injects_trace_context_into_platform_request():
         assert frame.request.trace_context["traceparent"].startswith("00-4bf92f3577b34da6a3ce929d0e0e4736-")
 
         packed = Any()
-        packed.Pack(account_service_pb2.SaveSessionResponse())
+        packed.Pack(portfolio_service_pb2.SaveSessionResponse())
         client._handle_inbound_frame(
             cp_pb2.RuntimeFrame(
                 correlation_id=frame.correlation_id,
@@ -661,9 +661,9 @@ def test_runtime_channel_request_handler_can_call_platform_proxy_without_deadloc
 
     def handler(frame):
         client.invoke_platform_unary(
-            "account.SaveSession",
-            account_service_pb2.SaveSessionRequest(session_id="sess-1", account_id=7),
-            account_service_pb2.SaveSessionResponse,
+            "portfolio.SaveSession",
+            portfolio_service_pb2.SaveSessionRequest(session_id="sess-1", portfolio_id=7),
+            portfolio_service_pb2.SaveSessionResponse,
             timeout_seconds=1,
         )
         packed = Any()
@@ -699,10 +699,10 @@ def test_runtime_channel_request_handler_can_call_platform_proxy_without_deadloc
     )
     platform_req = outbound.get(timeout=1)
     assert platform_req.frame_type == cp_pb2.FRAME_TYPE_REQUEST
-    assert platform_req.request.method == "account.SaveSession"
+    assert platform_req.request.method == "portfolio.SaveSession"
 
     packed = Any()
-    packed.Pack(account_service_pb2.SaveSessionResponse())
+    packed.Pack(portfolio_service_pb2.SaveSessionResponse())
     client._handle_inbound_frame(
         cp_pb2.RuntimeFrame(
             correlation_id=platform_req.correlation_id,
@@ -866,14 +866,14 @@ def test_runtime_channel_client_handles_shutdown_frame():
 def test_runtime_channel_dispatcher_calls_existing_servicer_path():
     class FakeContextServicer:
         def RunStrategy(self, request, context):
-            assert request.account_id == 7
+            assert request.portfolio_id == 7
             return strategy_pb2.RunStrategyResponse(session_id="sess-1")
 
     from google.protobuf.any_pb2 import Any
     from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 
     packed = Any()
-    packed.Pack(strategy_pb2.RunStrategyRequest(account_id=7, user_id=42))
+    packed.Pack(strategy_pb2.RunStrategyRequest(portfolio_id=7, user_id=42))
     dispatcher = RuntimeChannelStrategyDispatcher(FakeContextServicer())
 
     frame = dispatcher(cp_pb2.RuntimeFrame(
@@ -910,7 +910,7 @@ def test_runtime_channel_dispatcher_extracts_trace_context_for_servicer_call():
     from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 
     packed = Any()
-    packed.Pack(strategy_pb2.RunStrategyRequest(account_id=7, user_id=42))
+    packed.Pack(strategy_pb2.RunStrategyRequest(portfolio_id=7, user_id=42))
     dispatcher = RuntimeChannelStrategyDispatcher(FakeContextServicer())
 
     try:

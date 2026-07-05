@@ -17,9 +17,9 @@ ACCT_PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"
   -I "$ACCT_PROTO_SRC" \
   --python_out="$OUT_DIR" \
   --grpc_python_out="$OUT_DIR" \
-  "$ACCT_PROTO_SRC/account_service.proto"
+  "$ACCT_PROTO_SRC/portfolio_service.proto"
 
-sed -i '' 's/^import account_service_pb2/from . import account_service_pb2/' "$OUT_DIR/account_service_pb2_grpc.py"
+sed -i '' 's/^import portfolio_service_pb2/from . import portfolio_service_pb2/' "$OUT_DIR/portfolio_service_pb2_grpc.py"
 
 # --- order.v1 proto (Python stubs only) ---
 ORDER_PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"

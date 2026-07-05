@@ -45,7 +45,7 @@ docker run --rm \
   hushine/strategy-runtime:executor-dev
 ```
 
-The process ignores account/order/Kafka/database endpoints from the local config
+The process ignores portfolio/order/Kafka/database endpoints from the local config
 and talks to the platform through RuntimeChannel proxy calls.
 
 ## RuntimeChannel Data Path
@@ -81,8 +81,63 @@ uv run hushine-runtime start --config config.local.yaml \
 After that, runtime traffic uses `--runtime-channel-addr` with the issued mTLS
 client certificate.
 
+For VS Code/debugpy attach mode, use the runtime-owned shortcut script:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh 123
+```
+
+To connect a local bare runtime to another platform machine, pass the platform
+host. The script derives core-service, control-panel, and RuntimeChannel ports:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh 123 192.168.88.6
+```
+
+Equivalent explicit form:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh \
+  --user-id 123 \
+  --platform-host 192.168.88.6
+```
+
+When ports are non-standard, pass full addresses:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh \
+  --user-id 123 \
+  --core-service-addr 192.168.88.6:50051 \
+  --control-panel-addr 192.168.88.6:50054 \
+  --runtime-channel-addr 192.168.88.6:50055
+```
+
+`core-service` is exported for config compatibility. Runtime traffic still goes
+through RuntimeChannel; direct core-service calls are ignored after startup.
+
+Optional environment overrides include `DEBUG_HOST`, `DEBUG_PORT`,
+`DEBUG_WAIT`, `PLATFORM_HOST`, `CORE_SERVICE_ADDR`, `CONTROL_PANEL_ADDR`,
+`RUNTIME_CHANNEL_ADDR`, and `CONFIG_PATH`.
+
 The existing debug replay helper remains available through uv:
 
 ```bash
 uv run hushine-debug replay --debugpy --wait
 ```
+
+When a bare debug run materializes strategy code locally, edits live under
+`.hushine-runtime/strategies`. Upload them back to the remote portfolio database
+with:
+
+```bash
+uv run python scripts/upload_debug_strategies.py --user-id 123
+```
+
+Preview without writing:
+
+```bash
+uv run python scripts/upload_debug_strategies.py --user-id 123 --dry-run
+```
+
+Use `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` or the matching
+`--db-*` flags when the target database is not the local default.

@@ -41,7 +41,7 @@ class StubOrderClient:
 
     def place_order(
         self,
-        _account_id: int,
+        _portfolio_id: int,
         decision: OrderDecision,
         mark_price: float,
         **kwargs: Any,
@@ -94,7 +94,7 @@ class RecoveringFirstOrderClient(StubOrderClient):
 
     def place_order(
         self,
-        _account_id: int,
+        _portfolio_id: int,
         decision: OrderDecision,
         mark_price: float,
         **kwargs: Any,
@@ -131,7 +131,7 @@ class RecoveringFirstOrderClient(StubOrderClient):
 class ExpiredNoFillOrderClient(StubOrderClient):
     def place_order(
         self,
-        _account_id: int,
+        _portfolio_id: int,
         decision: OrderDecision,
         mark_price: float,
         **kwargs: Any,
@@ -160,7 +160,7 @@ class ExpiredNoFillOrderClient(StubOrderClient):
 class IocPartialExpiredOrderClient(StubOrderClient):
     def place_order(
         self,
-        _account_id: int,
+        _portfolio_id: int,
         decision: OrderDecision,
         mark_price: float,
         **kwargs: Any,
@@ -286,7 +286,7 @@ def _order_update_event(
     return OrderUpdateEvent(
         event_id=event_id,
         session_id=session_id,
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange=Exchange.BINANCE,
         market=Market.PERPETUAL_FUTURES,
@@ -317,7 +317,7 @@ def test_base_strategy_requires_portfolio_wallet_runtime() -> None:
             "inline.py",
             RouteWallet(),  # type: ignore[arg-type]
             StubOrderClient(),
-            account_id=1,
+            portfolio_id=1,
             strategy_code=_strategy("        return None\n", order_targets="[]"),
         )
 
@@ -329,7 +329,7 @@ def test_order_targets_empty_but_strategy_returns_order_raises() -> None:
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET)\n',
             order_targets="[]",
@@ -351,7 +351,7 @@ def test_list_order_decisions_are_all_placed_independently() -> None:
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             '        return [\n'
             '            OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET),\n'
@@ -377,7 +377,7 @@ def test_list_order_decisions_are_all_placed_independently() -> None:
     ]
 
 
-def test_unresolved_order_blocks_only_same_account_route_symbol() -> None:
+def test_unresolved_order_blocks_only_same_portfolio_route_symbol() -> None:
     wallet = _portfolio(
         (Exchange.BINANCE, Market.PERPETUAL_FUTURES),
         (Exchange.BINANCE, Market.SPOT),
@@ -401,7 +401,7 @@ def test_unresolved_order_blocks_only_same_account_route_symbol() -> None:
         '            OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="BTCUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET, price="50000"),\n'
         "        ]\n"
     )
-    svc = BaseStrategy("inline.py", wallet, client, account_id=1, strategy_code=code)
+    svc = BaseStrategy("inline.py", wallet, client, portfolio_id=1, strategy_code=code)
 
     svc.running_strategy(_tick(price=2500.0))
 
@@ -422,7 +422,7 @@ def test_terminal_zero_fill_order_is_normal_noop(caplog: pytest.LogCaptureFixtur
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         session_id="session-expired",
         strategy_code=_strategy(
             '        if not hasattr(self, "sent"):\n'
@@ -454,7 +454,7 @@ def test_ioc_partial_expired_settles_filled_qty_without_open_order() -> None:
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         session_id="session-ioc",
         strategy_code=_strategy(
             '        if not hasattr(self, "sent"):\n'
@@ -486,7 +486,7 @@ def test_on_order_response_exception_is_logged_without_raising(caplog: pytest.Lo
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         session_id="session-response-callback",
         strategy_code=_strategy(
             '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.02", order_type=OrderType.MARKET)\n',
@@ -513,7 +513,7 @@ def test_handle_order_update_invokes_callback_without_market_data_tick() -> None
         "inline.py",
         wallet,
         FailingOrderClient(),
-        account_id=1,
+        portfolio_id=1,
         session_id="session-push",
         strategy_code=_strategy_with_order_update_callback(),
     )
@@ -533,7 +533,7 @@ def test_handle_order_update_ignores_replayed_event_before_cursor() -> None:
         "inline.py",
         wallet,
         FailingOrderClient(),
-        account_id=1,
+        portfolio_id=1,
         session_id="session-push",
         strategy_code=_strategy_with_order_update_callback(),
     )
@@ -553,7 +553,7 @@ def test_liquidation_order_update_reaches_user_strategy_callback() -> None:
         "inline.py",
         wallet,
         FailingOrderClient(),
-        account_id=1,
+        portfolio_id=1,
         session_id="session-liquidation",
         strategy_code=_strategy_with_order_update_callback(),
     )
@@ -581,7 +581,7 @@ def test_batch_decisions_are_validated_before_any_order_is_placed() -> None:
         "inline.py",
         wallet,
         FailingOrderClient(),
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             '        return [\n'
             '            OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.MARKET),\n'
@@ -614,7 +614,7 @@ def test_decision_for_other_route_uses_cached_route_mark_price() -> None:
         "            return None\n"
         '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET)\n'
     )
-    svc = BaseStrategy("inline.py", wallet, client, account_id=1, strategy_code=code)
+    svc = BaseStrategy("inline.py", wallet, client, portfolio_id=1, strategy_code=code)
 
     svc.running_strategy(_tick(market=Market.SPOT, price=101.0))
     svc.running_strategy(_tick(market=Market.PERPETUAL_FUTURES, price=2500.0))
@@ -636,7 +636,7 @@ def test_decision_without_route_tick_or_price_fails_before_order() -> None:
         "inline.py",
         wallet,
         FailingOrderClient(),
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET)\n',
             order_targets='[{"exchange": Exchange.BINANCE, "market": Market.SPOT, "symbol": "ETHUSDT"}]',
@@ -657,7 +657,7 @@ def test_strategy_receives_portfolio_wallet_and_uses_get() -> None:
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             "        assert not hasattr(wallet, 'futures')\n"
             "        wallet.get(Exchange.BINANCE, Market.PERPETUAL_FUTURES)\n"
@@ -682,7 +682,7 @@ def test_invalid_decision_return_type_fails_closed() -> None:
         "inline.py",
         _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
         StubOrderClient(),
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy('        return {"side": "BUY"}\n'),
     )
 
@@ -700,7 +700,7 @@ def test_qty_must_be_positive_decimal_string(qty: object) -> None:
         "inline.py",
         _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
         client,
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty={qty!r}, order_type=OrderType.MARKET)\n'
         ),
@@ -721,7 +721,7 @@ def test_price_when_present_must_be_positive_decimal_string(price: object) -> No
         "inline.py",
         _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
         client,
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.LIMIT, price={price!r})\n'
         ),
@@ -739,7 +739,7 @@ def test_qty_and_price_must_be_finite_decimal_strings(value: str) -> None:
         "inline.py",
         _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
         client,
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty={value!r}, order_type=OrderType.MARKET)\n'
         ),
@@ -754,7 +754,7 @@ def test_qty_and_price_must_be_finite_decimal_strings(value: str) -> None:
         "inline.py",
         _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
         price_client,
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.LIMIT, price={value!r})\n'
         ),
@@ -771,7 +771,7 @@ def test_qty_and_price_must_not_underflow_to_zero(value: str) -> None:
         "inline.py",
         _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
         StubOrderClient(),
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty={value!r}, order_type=OrderType.MARKET)\n'
         ),
@@ -783,7 +783,7 @@ def test_qty_and_price_must_not_underflow_to_zero(value: str) -> None:
         "inline.py",
         _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
         StubOrderClient(),
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             f'        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.LIMIT, price={value!r})\n'
         ),
@@ -796,7 +796,7 @@ def test_lifecycle_fill_missing_route_does_not_update_wallet_or_unblock() -> Non
     event = OrderUpdateEvent(
         event_id=1,
         session_id="session-1",
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange="",
         market="",
@@ -815,7 +815,7 @@ def test_lifecycle_fill_missing_route_does_not_update_wallet_or_unblock() -> Non
         "inline.py",
         wallet,
         LifecycleOrderClient([event]),
-        account_id=1,
+        portfolio_id=1,
         session_id="session-1",
         strategy_code=_strategy("        return None\n", order_targets="[]"),
     )
@@ -833,7 +833,7 @@ def test_lifecycle_updates_settle_into_matching_venue_wallets() -> None:
         OrderUpdateEvent(
             event_id=1,
             session_id="session-1",
-            account_id=1,
+            portfolio_id=1,
             venue_id=10,
             exchange=Exchange.BINANCE,
             market=Market.PERPETUAL_FUTURES,
@@ -850,7 +850,7 @@ def test_lifecycle_updates_settle_into_matching_venue_wallets() -> None:
         OrderUpdateEvent(
             event_id=2,
             session_id="session-1",
-            account_id=1,
+            portfolio_id=1,
             venue_id=11,
             exchange=Exchange.BINANCE,
             market=Market.SPOT,
@@ -873,7 +873,7 @@ def test_lifecycle_updates_settle_into_matching_venue_wallets() -> None:
         "inline.py",
         wallet,
         LifecycleOrderClient(events),
-        account_id=1,
+        portfolio_id=1,
         session_id="session-1",
         strategy_code=_strategy("        return None\n", order_targets="[]"),
     )
@@ -893,7 +893,7 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
         OrderUpdateEvent(
             event_id=1,
             session_id="session-1",
-            account_id=1,
+            portfolio_id=1,
             venue_id=10,
             exchange=Exchange.BINANCE,
             market=Market.PERPETUAL_FUTURES,
@@ -910,7 +910,7 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
         OrderUpdateEvent(
             event_id=2,
             session_id="session-1",
-            account_id=1,
+            portfolio_id=1,
             venue_id=10,
             exchange=Exchange.BINANCE,
             market=Market.PERPETUAL_FUTURES,
@@ -930,7 +930,7 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
         "inline.py",
         wallet,
         LifecycleOrderClient(events),
-        account_id=1,
+        portfolio_id=1,
         session_id="session-1",
         strategy_code=_strategy("        return None\n", order_targets="[]"),
     )
@@ -945,7 +945,7 @@ def test_lifecycle_replay_of_synchronous_fill_is_not_settled_twice() -> None:
     event = OrderUpdateEvent(
         event_id=1,
         session_id="session-1",
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange=Exchange.BINANCE,
         market=Market.PERPETUAL_FUTURES,
@@ -970,7 +970,7 @@ def test_lifecycle_replay_of_synchronous_fill_is_not_settled_twice() -> None:
                 return []
             return super().list_order_lifecycle_events(session_id=session_id, after_event_id=after_event_id, limit=limit)
 
-        def place_order(self, _account_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
+        def place_order(self, _portfolio_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
             self.place_calls += 1
             return ExecutionFeedback(
                 attempt_status="ACCEPTED",
@@ -995,7 +995,7 @@ def test_lifecycle_replay_of_synchronous_fill_is_not_settled_twice() -> None:
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         session_id="session-1",
         strategy_code=_strategy(
             '        if not hasattr(self, "sent"):\n'
@@ -1018,7 +1018,7 @@ def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
     event = OrderUpdateEvent(
         event_id=1,
         session_id="session-1",
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange=Exchange.BINANCE,
         market=Market.PERPETUAL_FUTURES,
@@ -1043,7 +1043,7 @@ def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
                 return []
             return super().list_order_lifecycle_events(session_id=session_id, after_event_id=after_event_id, limit=limit)
 
-        def place_order(self, _account_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
+        def place_order(self, _portfolio_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
             self.place_calls += 1
             return ExecutionFeedback(
                 attempt_status="ACCEPTED",
@@ -1068,7 +1068,7 @@ def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         session_id="session-1",
         strategy_code=_strategy(
             '        if not hasattr(self, "sent"):\n'
@@ -1091,7 +1091,7 @@ def test_lifecycle_after_partial_close_short_applies_rest_recovery_fill() -> Non
     event = OrderUpdateEvent(
         event_id=1,
         session_id="session-1",
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange=Exchange.BINANCE,
         market=Market.PERPETUAL_FUTURES,
@@ -1117,7 +1117,7 @@ def test_lifecycle_after_partial_close_short_applies_rest_recovery_fill() -> Non
                 return []
             return super().list_order_lifecycle_events(session_id=session_id, after_event_id=after_event_id, limit=limit)
 
-        def place_order(self, _account_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
+        def place_order(self, _portfolio_id: int, decision: OrderDecision, mark_price: float, **_kwargs: Any) -> ExecutionFeedback:
             self.place_calls += 1
             return ExecutionFeedback(
                 attempt_status="ACCEPTED",
@@ -1148,7 +1148,7 @@ def test_lifecycle_after_partial_close_short_applies_rest_recovery_fill() -> Non
         "inline.py",
         wallet,
         client,
-        account_id=1,
+        portfolio_id=1,
         session_id="session-1",
         strategy_code=_strategy(
             '        if not hasattr(self, "sent"):\n'
@@ -1188,7 +1188,7 @@ def test_limit_order_with_ambiguous_cached_mark_price_fails_even_with_price() ->
         "            return None\n"
         '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.LIMIT, price="99")\n'
     )
-    svc = BaseStrategy("inline.py", wallet, FailingOrderClient(), account_id=1, strategy_code=code)
+    svc = BaseStrategy("inline.py", wallet, FailingOrderClient(), portfolio_id=1, strategy_code=code)
     svc.running_strategy(_tick(market=Market.SPOT, interval="1m", price=100.0))
     svc.running_strategy(_tick(market=Market.SPOT, interval="5m", price=101.0))
 
@@ -1205,7 +1205,7 @@ def test_undeclared_order_target_fails_closed() -> None:
             (Exchange.BINANCE, Market.SPOT),
         ),
         client,
-        account_id=1,
+        portfolio_id=1,
         strategy_code=_strategy(
             '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="ETHUSDT", side=OrderSide.BUY, qty="1", order_type=OrderType.MARKET)\n'
         ),

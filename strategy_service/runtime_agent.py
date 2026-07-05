@@ -47,7 +47,7 @@ class RuntimeBusyError(RuntimeError):
 class DebugDataset:
     dataset_id: str
     user_id: int
-    account_id: int
+    portfolio_id: int
     runtime_id: str
     market: str
     symbol: str
@@ -747,7 +747,7 @@ def _debug_dataset_from_payload(payload: bytes) -> DebugDataset:
     return DebugDataset(
         dataset_id=dataset_id,
         user_id=int(raw.get("user_id") or 0),
-        account_id=int(raw.get("account_id") or 0),
+        portfolio_id=int(raw.get("portfolio_id") or 0),
         runtime_id=str(raw.get("runtime_id") or "").strip(),
         market=str(raw.get("market") or "").strip().lower(),
         symbol=str(raw.get("symbol") or "").strip().upper(),

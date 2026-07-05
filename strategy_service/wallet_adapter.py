@@ -7,11 +7,11 @@ siblings) travel on the same proto but are NEVER read during this
 conversion — they would be dead bytes here if the gRPC layer didn't also
 forward them unchanged for display consumers upstream.
 
-The fields copied off the proto into ``CanonicalAccountState`` below that
+The fields copied off the proto into ``CanonicalPortfolioState`` below that
 LOOK display-ish (``total_value``, ``spot_estimated_value``,
 ``futures_position_equity``, ``metrics_authoritative``) are there for
 snapshot round-trip fidelity only; runtime risk / precheck / reconciliation
-code must NOT read them (see ``CanonicalAccountState`` docstring).
+code must NOT read them (see ``CanonicalPortfolioState`` docstring).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from strategy_service.wallet.canonical import (
-    CanonicalAccountState,
+    CanonicalPortfolioState,
     CanonicalFuturesPositionState,
     CanonicalFuturesRiskBracket,
     CanonicalFuturesRiskMetadata,
@@ -70,7 +70,7 @@ def _strict_unrealized_pnl(fw: Any) -> float:
     return unrealized_pnl
 
 
-def proto_to_account_spec(wallet_proto: Any) -> CanonicalAccountState:
+def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
     """Convert a core-service wallet proto into canonical wallet state."""
     fw = wallet_proto.futures if wallet_proto.futures else None
     sw = wallet_proto.spot if wallet_proto.spot else None
@@ -172,7 +172,7 @@ def proto_to_account_spec(wallet_proto: Any) -> CanonicalAccountState:
             ],
         )
 
-    return CanonicalAccountState(
+    return CanonicalPortfolioState(
         environment=int(wallet_proto.environment),
         futures=futures_state,
         spot=spot_state,

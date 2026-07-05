@@ -122,7 +122,7 @@ def order_update_any(event_id: int) -> Any:
     item = order_service_pb2.OrderLifecycleEventEntry(
         event_id=event_id,
         session_id="sess-1",
-        account_id=10,
+        portfolio_id=10,
         venue_id=1,
         order_id="order-1",
         exchange_order_id="exchange-order-1",

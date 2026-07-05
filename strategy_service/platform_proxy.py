@@ -20,7 +20,7 @@ from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct
 from google.protobuf.any_pb2 import Any as ProtoAny
 
-from strategy_service.account_client import (
+from strategy_service.portfolio_client import (
     _compute_total_value,
     _exchange_enum,
     _get_available_balance,
@@ -36,13 +36,13 @@ from strategy_service.types import ExecutionFeedback, OrderDecision
 logger = logging.getLogger(__name__)
 
 
-ACCOUNT_GET_PORTFOLIO = "account.GetPortfolioSnapshot"
-ACCOUNT_UPDATE_WALLET_STATE = "account.UpdateAccountWalletState"
-ACCOUNT_PREFLIGHT_STRATEGY_SESSION = "account.PreflightStrategySession"
-ACCOUNT_GET_ACTIVE_STRATEGY = "account.GetActiveStrategy"
-ACCOUNT_SAVE_SESSION = "account.SaveSession"
-ACCOUNT_SAVE_STRATEGY_INDICATORS = "account.SaveStrategyIndicators"
-ACCOUNT_UPDATE_SESSION = "account.UpdateSession"
+PORTFOLIO_GET_PORTFOLIO = "portfolio.GetPortfolioSnapshot"
+PORTFOLIO_UPDATE_WALLET_STATE = "portfolio.UpdatePortfolioWalletState"
+PORTFOLIO_PREFLIGHT_STRATEGY_SESSION = "portfolio.PreflightStrategySession"
+PORTFOLIO_GET_ACTIVE_STRATEGY = "portfolio.GetActiveStrategy"
+PORTFOLIO_SAVE_SESSION = "portfolio.SaveSession"
+PORTFOLIO_SAVE_STRATEGY_INDICATORS = "portfolio.SaveStrategyIndicators"
+PORTFOLIO_UPDATE_SESSION = "portfolio.UpdateSession"
 ORDER_PLACE = "order.PlaceOrder"
 ORDER_RESOLVE_ATTEMPT = "order.ResolveOrderAttempt"
 MARKETDATA_GET_STATUS = "marketdata.GetMarketDataStreamStatus"
@@ -72,8 +72,8 @@ class RuntimeChannelPlatformProxy:
             timeout_seconds=timeout_seconds,
         )
 
-    def account_client(self) -> "ProxyAccountClient":
-        return ProxyAccountClient(self)
+    def portfolio_client(self) -> "ProxyPortfolioClient":
+        return ProxyPortfolioClient(self)
 
     def order_client(self) -> "ProxyOrderClient":
         return ProxyOrderClient(self)
@@ -96,9 +96,9 @@ class RuntimeChannelPlatformProxy:
         error: str = "",
         runtime_id: str = "",
     ) -> None:
-        from strategy_service.gen import account_service_pb2
+        from strategy_service.gen import portfolio_service_pb2
 
-        req = account_service_pb2.UpdateSessionRequest(
+        req = portfolio_service_pb2.UpdateSessionRequest(
             session_id=str(session_id or ""),
             status=str(status or ""),
             bars_processed=int(bars_processed or 0),
@@ -116,33 +116,33 @@ class RuntimeChannelPlatformProxy:
         )
 
 
-class ProxyAccountClient:
+class ProxyPortfolioClient:
     def __init__(self, proxy: RuntimeChannelPlatformProxy) -> None:
         self._proxy = proxy
 
     def get_portfolio_snapshot(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
     ):
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
             resp = self._proxy.invoke(
-                ACCOUNT_GET_PORTFOLIO,
-                account_service_pb2.GetPortfolioSnapshotRequest(
-                    account_id=int(account_id),
+                PORTFOLIO_GET_PORTFOLIO,
+                portfolio_service_pb2.GetPortfolioSnapshotRequest(
+                    portfolio_id=int(portfolio_id),
                     user_id=int(user_id),
-                    required_symbols=_required_symbol_protos(account_service_pb2, required_symbols),
+                    required_symbols=_required_symbol_protos(portfolio_service_pb2, required_symbols),
                 ),
-                account_service_pb2.GetPortfolioSnapshotResponse,
+                portfolio_service_pb2.GetPortfolioSnapshotResponse,
             )
             return resp.snapshot
         except Exception:
             logger.warning(
-                "Proxy GetPortfolioSnapshot failed for account_id=%s user_id=%s",
-                account_id,
+                "Proxy GetPortfolioSnapshot failed for portfolio_id=%s user_id=%s",
+                portfolio_id,
                 user_id,
                 exc_info=True,
             )
@@ -150,21 +150,21 @@ class ProxyAccountClient:
 
     def update_portfolio_snapshot(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         snapshot_reason: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
         snapshot_time: object | None = None,
     ):
-        del account_id, user_id, snapshot_reason, strategy_id, session_id, snapshot_time
+        del portfolio_id, user_id, snapshot_reason, strategy_id, session_id, snapshot_time
         raise RuntimeError(
-            "UpdatePortfolioSnapshot is deprecated for runtime sessions; use UpdateAccountWalletState"
+            "UpdatePortfolioSnapshot is deprecated for runtime sessions; use UpdatePortfolioWalletState"
         )
 
-    def update_account_wallet_state(
+    def update_portfolio_wallet_state(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         future_wallet: Optional[Any] = None,
         spot_wallet: Optional[Any] = None,
@@ -175,10 +175,10 @@ class ProxyAccountClient:
     ):
         """Push strategy-computed wallet state for snapshot/audit sync."""
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
             kwargs = {
-                "account_id": int(account_id),
+                "portfolio_id": int(portfolio_id),
                 "user_id": int(user_id),
                 "futures": _serialize_future_wallet(future_wallet) if future_wallet else None,
                 "spot": _serialize_spot_wallet(spot_wallet) if spot_wallet else None,
@@ -193,25 +193,25 @@ class ProxyAccountClient:
             if snapshot_time_pb is not None:
                 kwargs["snapshot_time"] = snapshot_time_pb
             resp = self._proxy.invoke(
-                ACCOUNT_UPDATE_WALLET_STATE,
-                account_service_pb2.UpdateAccountWalletStateRequest(**kwargs),
-                account_service_pb2.UpdateAccountWalletStateResponse,
+                PORTFOLIO_UPDATE_WALLET_STATE,
+                portfolio_service_pb2.UpdatePortfolioWalletStateRequest(**kwargs),
+                portfolio_service_pb2.UpdatePortfolioWalletStateResponse,
             )
             return resp.wallet
         except Exception as exc:
             logger.warning(
-                "Proxy UpdateAccountWalletState failed for account_id=%s user_id=%s",
-                account_id,
+                "Proxy UpdatePortfolioWalletState failed for portfolio_id=%s user_id=%s",
+                portfolio_id,
                 user_id,
                 exc_info=True,
             )
             raise RuntimeError(
-                f"Proxy UpdateAccountWalletState failed for account_id={account_id} user_id={user_id}: {exc}"
+                f"Proxy UpdatePortfolioWalletState failed for portfolio_id={portfolio_id} user_id={user_id}: {exc}"
             ) from exc
 
     def preflight_strategy_session(
         self,
-        account_id: int,
+        portfolio_id: int,
         user_id: int = 0,
         required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
@@ -220,54 +220,54 @@ class ProxyAccountClient:
         leverage: float = 0.0,
     ):
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
-            req = account_service_pb2.PreflightStrategySessionRequest(
-                account_id=int(account_id),
+            req = portfolio_service_pb2.PreflightStrategySessionRequest(
+                portfolio_id=int(portfolio_id),
                 user_id=int(user_id),
                 session_id=str(session_id or ""),
                 strategy_id=int(strategy_id),
                 leverage=float(leverage or 0.0),
                 required_routes=[
-                    account_service_pb2.RequiredRoute(
+                    portfolio_service_pb2.RequiredRoute(
                         exchange=_exchange_enum(exchange),
                         market=_market_enum(market),
                     )
                     for exchange, market in sorted(required_routes or [])
                 ],
-                required_symbols=_required_symbol_protos(account_service_pb2, required_symbols),
+                required_symbols=_required_symbol_protos(portfolio_service_pb2, required_symbols),
             )
             return self._proxy.invoke(
-                ACCOUNT_PREFLIGHT_STRATEGY_SESSION,
+                PORTFOLIO_PREFLIGHT_STRATEGY_SESSION,
                 req,
-                account_service_pb2.PreflightStrategySessionResponse,
+                portfolio_service_pb2.PreflightStrategySessionResponse,
             )
         except Exception:
             logger.warning(
-                "Proxy PreflightStrategySession failed for account_id=%s user_id=%s",
-                account_id,
+                "Proxy PreflightStrategySession failed for portfolio_id=%s user_id=%s",
+                portfolio_id,
                 user_id,
                 exc_info=True,
             )
             return None
 
-    def get_active_strategy(self, account_id: int):
+    def get_active_strategy(self, portfolio_id: int):
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
             return self._proxy.invoke(
-                ACCOUNT_GET_ACTIVE_STRATEGY,
-                account_service_pb2.GetActiveStrategyRequest(account_id=int(account_id)),
-                account_service_pb2.GetActiveStrategyResponse,
+                PORTFOLIO_GET_ACTIVE_STRATEGY,
+                portfolio_service_pb2.GetActiveStrategyRequest(portfolio_id=int(portfolio_id)),
+                portfolio_service_pb2.GetActiveStrategyResponse,
             )
         except Exception:
-            logger.warning("Proxy GetActiveStrategy failed for account_id=%s", account_id, exc_info=True)
+            logger.warning("Proxy GetActiveStrategy failed for portfolio_id=%s", portfolio_id, exc_info=True)
             return None
 
     def save_session(
         self,
         session_id: str,
-        account_id: int,
+        portfolio_id: int,
         strategy_id: int,
         environment: int,
         interval: str = "1m",
@@ -284,7 +284,7 @@ class ProxyAccountClient:
         try:
             self.require_save_session(
                 session_id=session_id,
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 strategy_id=strategy_id,
                 environment=environment,
                 interval=interval,
@@ -306,7 +306,7 @@ class ProxyAccountClient:
     def require_save_session(
         self,
         session_id: str,
-        account_id: int,
+        portfolio_id: int,
         strategy_id: int,
         environment: int,
         interval: str = "1m",
@@ -320,11 +320,11 @@ class ProxyAccountClient:
         session_name: str = "",
         leverage: float = 1.0,
     ) -> None:
-        from strategy_service.gen import account_service_pb2
+        from strategy_service.gen import portfolio_service_pb2
 
-        req = account_service_pb2.SaveSessionRequest(
+        req = portfolio_service_pb2.SaveSessionRequest(
             session_id=session_id,
-            account_id=int(account_id),
+            portfolio_id=int(portfolio_id),
             strategy_id=int(strategy_id),
             environment=int(environment),
             interval=interval,
@@ -338,7 +338,7 @@ class ProxyAccountClient:
             session_name=str(session_name or ""),
             leverage=float(leverage or 1.0),
         )
-        self._proxy.invoke(ACCOUNT_SAVE_SESSION, req, account_service_pb2.SaveSessionResponse)
+        self._proxy.invoke(PORTFOLIO_SAVE_SESSION, req, portfolio_service_pb2.SaveSessionResponse)
 
     def save_strategy_indicators(
         self,
@@ -348,9 +348,9 @@ class ProxyAccountClient:
         definitions: list[Any] | None = None,
         chunks: list[Any] | None = None,
     ) -> tuple[int, int]:
-        from strategy_service.gen import account_service_pb2
+        from strategy_service.gen import portfolio_service_pb2
 
-        req = account_service_pb2.SaveStrategyIndicatorsRequest(
+        req = portfolio_service_pb2.SaveStrategyIndicatorsRequest(
             session_id=str(session_id or ""),
             user_id=int(user_id or 0),
         )
@@ -381,9 +381,9 @@ class ProxyAccountClient:
                 values_json=json.dumps(getattr(chunk, "values_json", {}) or {}, separators=(",", ":")),
             )
         resp = self._proxy.invoke(
-            ACCOUNT_SAVE_STRATEGY_INDICATORS,
+            PORTFOLIO_SAVE_STRATEGY_INDICATORS,
             req,
-            account_service_pb2.SaveStrategyIndicatorsResponse,
+            portfolio_service_pb2.SaveStrategyIndicatorsResponse,
         )
         return int(resp.definitions_saved), int(resp.chunks_saved)
 
@@ -396,9 +396,9 @@ class ProxyAccountClient:
         runtime_id: str = "",
     ) -> bool:
         try:
-            from strategy_service.gen import account_service_pb2
+            from strategy_service.gen import portfolio_service_pb2
 
-            req = account_service_pb2.UpdateSessionRequest(
+            req = portfolio_service_pb2.UpdateSessionRequest(
                 session_id=session_id,
                 status=status,
                 bars_processed=int(bars_processed),
@@ -406,9 +406,9 @@ class ProxyAccountClient:
                 runtime_id=str(runtime_id or ""),
             )
             self._proxy.invoke(
-                ACCOUNT_UPDATE_SESSION,
+                PORTFOLIO_UPDATE_SESSION,
                 req,
-                account_service_pb2.UpdateSessionResponse,
+                portfolio_service_pb2.UpdateSessionResponse,
                 timeout_seconds=60.0,
             )
             return True
@@ -483,7 +483,7 @@ class ProxyMarketDataClient:
         *,
         session_id: str,
         strategy_id: int = 0,
-        account_id: int = 0,
+        portfolio_id: int = 0,
         stream_id: int,
         ttl_seconds: int,
     ) -> bool:
@@ -493,7 +493,7 @@ class ProxyMarketDataClient:
             req = marketdata_service_pb2.CreateOrRenewMarketDataLeaseRequest(
                 session_id=session_id,
                 strategy_id=int(strategy_id),
-                account_id=int(account_id),
+                portfolio_id=int(portfolio_id),
                 stream_id=int(stream_id),
                 ttl_seconds=int(ttl_seconds),
             )
@@ -750,18 +750,18 @@ class ProxyOrderClient(OrderClient):
 
     def place_order(
         self,
-        account_id: int,
+        portfolio_id: int,
         decision: OrderDecision,
         mark_price: float,
         *,
-        account_symbol: str | None = None,
+        portfolio_symbol: str | None = None,
         strategy_id: int = 0,
         market: str | None = None,
         session_id: str = "",
         intent_id: str = "",
         market_time: object | None = None,
     ) -> ExecutionFeedback:
-        symbol = account_symbol or decision.symbol
+        symbol = portfolio_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
         effective_market = str(getattr(decision, "market", None) or "").strip()
         exchange_code = self._exchange_code(getattr(decision, "exchange", None))
@@ -777,7 +777,7 @@ class ProxyOrderClient(OrderClient):
             from strategy_service.gen import order_service_pb2
 
             kwargs: dict[str, Any] = dict(
-                account_id=int(account_id),
+                portfolio_id=int(portfolio_id),
                 symbol=symbol,
                 side=decision.side,
                 qty=float(decision.qty),
@@ -813,9 +813,9 @@ class ProxyOrderClient(OrderClient):
             )
             return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
         except Exception as exc:
-            logger.warning("Proxy OrderClient.place_order failed for %d/%s", account_id, symbol, exc_info=True)
+            logger.warning("Proxy OrderClient.place_order failed for %d/%s", portfolio_id, symbol, exc_info=True)
             return self._resolve_unknown_attempt(
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 intent_id=intent,
                 error_message=str(exc),
                 decision=decision,
@@ -826,7 +826,7 @@ class ProxyOrderClient(OrderClient):
     def _resolve_unknown_attempt(
         self,
         *,
-        account_id: int,
+        portfolio_id: int,
         intent_id: str,
         error_message: str,
         decision: OrderDecision,
@@ -839,7 +839,7 @@ class ProxyOrderClient(OrderClient):
             resp = self._proxy.invoke(
                 ORDER_RESOLVE_ATTEMPT,
                 order_service_pb2.ResolveOrderAttemptRequest(
-                    account_id=int(account_id),
+                    portfolio_id=int(portfolio_id),
                     intent_id=intent_id,
                 ),
                 order_service_pb2.ResolveOrderAttemptResponse,
@@ -849,7 +849,7 @@ class ProxyOrderClient(OrderClient):
                 feedback.error_message = error_message
             return feedback
         except Exception:
-            logger.warning("Proxy OrderClient.resolve_unknown_attempt failed for %d/%s", account_id, symbol, exc_info=True)
+            logger.warning("Proxy OrderClient.resolve_unknown_attempt failed for %d/%s", portfolio_id, symbol, exc_info=True)
             return ExecutionFeedback(
                 intent_id=intent_id,
                 attempt_status="UNKNOWN",
@@ -872,7 +872,7 @@ class ProxyLogClient:
         message: str,
         log_type: str = "root",
         created_at_unix_ms: int = 0,
-        account_id: int = 0,
+        portfolio_id: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
         extra: Optional[dict[str, Any]] = None,
@@ -884,7 +884,7 @@ class ProxyLogClient:
             "message": message,
             "log_type": log_type,
             "created_at_unix_ms": float(int(created_at_unix_ms or 0)),
-            "account_id": float(int(account_id or 0)),
+            "portfolio_id": float(int(portfolio_id or 0)),
             "strategy_id": float(int(strategy_id or 0)),
             "session_id": session_id,
         }
@@ -911,7 +911,7 @@ class ProxyNotificationClient:
         message: str,
         severity: str = "info",
         title: str = "",
-        account_id: int = 0,
+        portfolio_id: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
         dedupe_key: str = "",
@@ -926,7 +926,7 @@ class ProxyNotificationClient:
             "severity": _normalize_notification_severity(severity),
             "title": str(title or ""),
             "message": message,
-            "account_id": float(int(account_id or 0)),
+            "portfolio_id": float(int(portfolio_id or 0)),
             "strategy_id": float(int(strategy_id or 0)),
             "session_id": str(session_id or ""),
             "dedupe_key": str(dedupe_key or ""),
@@ -996,7 +996,7 @@ class RuntimeChannelLogHandler(logging.Handler):
                 message=message,
                 log_type=getattr(record, "log_type", "root") or "root",
                 created_at_unix_ms=int(record.created * 1000),
-                account_id=int(getattr(record, "account_id", 0) or 0),
+                portfolio_id=int(getattr(record, "portfolio_id", 0) or 0),
                 strategy_id=int(getattr(record, "strategy_id", 0) or 0),
                 session_id=str(getattr(record, "session_id", "") or ""),
                 extra=extra,

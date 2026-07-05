@@ -11,11 +11,11 @@ class FilledOrderClient:
 
     def place_order(
         self,
-        account_id: int,
+        portfolio_id: int,
         decision,
         mark_price: float,
         *,
-        account_symbol: str | None = None,
+        portfolio_symbol: str | None = None,
         strategy_id: int = 0,
         market: str | None = None,
         session_id: str = "",
@@ -23,17 +23,17 @@ class FilledOrderClient:
         market_time=None,
     ) -> ExecutionFeedback:
         self.calls.append({
-            "account_id": account_id,
+            "portfolio_id": portfolio_id,
             "decision": decision,
             "mark_price": mark_price,
-            "account_symbol": account_symbol,
+            "portfolio_symbol": portfolio_symbol,
             "strategy_id": strategy_id,
             "market": market,
             "session_id": session_id,
             "intent_id": intent_id,
             "market_time": market_time,
         })
-        symbol = str(account_symbol or decision.symbol).strip().upper()
+        symbol = str(portfolio_symbol or decision.symbol).strip().upper()
         route_market = str(market or getattr(decision, "market", "") or "").strip().lower()
         raw_qty = abs(float(decision.qty))
         side = str(decision.side or "").strip().upper()

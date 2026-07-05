@@ -47,7 +47,7 @@ echo "    -e RUNTIME_CREDENTIAL_PATH=/etc/hushine/runtime.cred \\"
 echo "    -e RUNTIME_CHANNEL_GRPC_ADDR=host.docker.internal:50055 \\"
 echo "    ${EXECUTOR_IMAGE}"
 echo
-echo "  RuntimeChannel startup ignores account/order/Kafka/database"
+echo "  RuntimeChannel startup ignores portfolio/order/Kafka/database"
 echo "  config and uses only RuntimeChannel platform proxy calls."
 echo
 echo "  # 3. Local bare debug on a machine with uv installed:"

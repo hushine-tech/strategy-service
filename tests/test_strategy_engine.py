@@ -74,7 +74,7 @@ def _wallet_with_futures_slot(
     ``(sym, +1)``/``(sym, -1)`` for hedge).
     """
     sym = symbol.strip().upper()
-    account_initial_balance = initial_balance if margin_mode == "cross" else 0.0
+    portfolio_initial_balance = initial_balance if margin_mode == "cross" else 0.0
     position_initial_balance = initial_balance if margin_mode == "isolated" else 0.0
 
     if position_mode == "hedge":
@@ -120,8 +120,8 @@ def _wallet_with_futures_slot(
     wallet = make_backtest_wallet(
         margin_mode=margin_mode,
         position_mode=position_mode,
-        wallet_balance=account_initial_balance,
-        initial_balance=account_initial_balance,
+        wallet_balance=portfolio_initial_balance,
+        initial_balance=portfolio_initial_balance,
         futures_positions=futures_positions,
     )
     return _portfolio_wallet(wallet, ("binance", "perpetual_futures"), ("binance", "spot"))
@@ -242,7 +242,7 @@ def test_bare_hot_reload_runs_before_order_update_callback(tmp_path: Path):
     delivered = svc.handle_order_update(OrderUpdateEvent(
         event_id=8,
         session_id="session-1",
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange="binance",
         market="perpetual_futures",
@@ -459,7 +459,7 @@ def test_order_update_event_updates_wallet_before_callback():
                 OrderUpdateEvent(
                     event_id=1,
                     session_id="session-1",
-                    account_id=1,
+                    portfolio_id=1,
                     venue_id=10,
                     exchange="binance",
                     market="perpetual_futures",
@@ -526,7 +526,7 @@ def test_strategy_engine_routes_order_update_to_matching_session():
     delivered = svc.handle_order_update(OrderUpdateEvent(
         event_id=5,
         session_id="session-1",
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange="binance",
         market="perpetual_futures",
@@ -570,7 +570,7 @@ def test_async_order_update_unblocks_symbol_and_triggers_snapshot_callback():
                 OrderUpdateEvent(
                     event_id=1,
                     session_id=session_id,
-                    account_id=1,
+                    portfolio_id=1,
                     venue_id=10,
                     exchange="binance",
                     market="perpetual_futures",
@@ -646,7 +646,7 @@ def test_async_partial_order_update_keeps_symbol_blocked():
                 OrderUpdateEvent(
                     event_id=1,
                     session_id=session_id,
-                    account_id=1,
+                    portfolio_id=1,
                     venue_id=10,
                     exchange="binance",
                     market="perpetual_futures",
@@ -705,7 +705,7 @@ def test_force_close_terminal_event_unblocks_route_without_wallet_settlement():
                 OrderUpdateEvent(
                     event_id=7,
                     session_id=session_id,
-                    account_id=1,
+                    portfolio_id=1,
                     venue_id=10,
                     exchange="binance",
                     market="perpetual_futures",
@@ -755,7 +755,7 @@ def test_incremental_fill_event_updates_wallet_once():
     event = OrderUpdateEvent(
         event_id=8,
         session_id="session-1",
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange="binance",
         market="perpetual_futures",
@@ -814,7 +814,7 @@ def test_order_update_callback_error_does_not_block_market_tick():
                 OrderUpdateEvent(
                     event_id=1,
                     session_id=session_id,
-                    account_id=1,
+                    portfolio_id=1,
                     venue_id=10,
                     exchange="binance",
                     market="perpetual_futures",
@@ -855,7 +855,7 @@ def test_existing_order_events_seed_cursor_without_replaying_wallet():
     old_event = OrderUpdateEvent(
         event_id=7,
         session_id="session-1",
-        account_id=1,
+        portfolio_id=1,
         venue_id=10,
         exchange="binance",
         market="perpetual_futures",
@@ -1026,7 +1026,7 @@ def test_order_decision_inherits_declared_exchange_before_place_order():
         def __init__(self) -> None:
             self.decision = None
 
-        def place_order(self, _account_id, decision, _mark_price, **_kwargs):
+        def place_order(self, _portfolio_id, decision, _mark_price, **_kwargs):
             self.decision = decision
             return ExecutionFeedback(
                 intent_id="intent-okx",
@@ -1328,7 +1328,7 @@ def test_limit_order_passes_market_tick_as_mark_price_not_limit_price():
         def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
             return []
 
-        def place_order(self, _account_id, _decision, mark_price, **_kwargs):
+        def place_order(self, _portfolio_id, _decision, mark_price, **_kwargs):
             captured["mark_price"] = mark_price
             return ExecutionFeedback(attempt_status="FAILED", error_message="stop after capture")
 

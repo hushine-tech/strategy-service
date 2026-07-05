@@ -135,7 +135,7 @@ class CanonicalSpotState:
 
 
 @dataclass(slots=True)
-class CanonicalAccountState:
+class CanonicalPortfolioState:
     """Canonical wallet state — the sole runtime contract.
 
     Per ``canonical-wallet-display-boundary``, this dataclass is the ONLY
@@ -149,7 +149,7 @@ class CanonicalAccountState:
     **Runtime-authoritative** (strategy engine / precheck / reconciliation
     read these directly):
 
-    - ``environment`` — account environment (backtest / demo / live)
+    - ``environment`` — portfolio environment (backtest / demo / live)
     - ``futures`` — canonical futures state (single-asset USDT@-M)
     - ``spot``   — canonical spot state (USDT-mediated)
     - ``updated_at`` — snapshot time

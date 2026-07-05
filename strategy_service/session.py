@@ -33,7 +33,7 @@ class SessionState:
     error: str = ""
     environment: int = 0
     user_id: int = 0
-    account_id: int = 0
+    portfolio_id: int = 0
     strategy_id: int = 0
     runtime_id: str = ""
     runtime_source: str = ""
@@ -92,13 +92,13 @@ class SessionState:
     def configure_live_runtime(
         self,
         *,
-        account_id: int,
+        portfolio_id: int,
         strategy_id: int,
         required_streams: list[StreamBinding],
         consumer_group: str,
     ) -> None:
         with self._lock:
-            self.account_id = account_id
+            self.portfolio_id = portfolio_id
             self.strategy_id = strategy_id
             self.required_streams = list(required_streams)
             self.live_consumer_group = consumer_group
@@ -203,7 +203,7 @@ class SessionManager:
         self,
         environment: int = 0,
         user_id: int = 0,
-        account_id: int = 0,
+        portfolio_id: int = 0,
         runtime_id: str = "",
         runtime_source: str = "",
         runtime_name: str = "",
@@ -212,7 +212,7 @@ class SessionManager:
         state = SessionState(
             environment=environment,
             user_id=user_id,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             runtime_id=str(runtime_id or ""),
             runtime_source=str(runtime_source or ""),
             runtime_name=str(runtime_name or ""),
@@ -235,10 +235,10 @@ class SessionManager:
             self._sessions.pop(session_id, None)
             self._completed_at.pop(session_id, None)
 
-    def find_active_session_for_account(self, account_id: int) -> tuple[str, SessionState] | None:
+    def find_active_session_for_portfolio(self, portfolio_id: int) -> tuple[str, SessionState] | None:
         with self._lock:
             for session_id, state in self._sessions.items():
-                if int(state.account_id) != int(account_id):
+                if int(state.portfolio_id) != int(portfolio_id):
                     continue
                 if state.status in _ACTIVE_STATUSES:
                     return session_id, state

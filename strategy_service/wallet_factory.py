@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from strategy_service.wallet.canonical import (
-    CanonicalAccountState,
+    CanonicalPortfolioState,
     CanonicalFuturesPositionState,
     CanonicalFuturesState,
     CanonicalSpotAssetState,
@@ -33,14 +33,14 @@ def _estimate_spot_value(state: CanonicalSpotState) -> float:
     return total
 
 
-def account_dict_to_canonical_state(account: dict[str, Any]) -> CanonicalAccountState:
+def portfolio_dict_to_canonical_state(portfolio: dict[str, Any]) -> CanonicalPortfolioState:
     """Convert the HTTP/backtest request body to strict canonical state.
 
     The HTTP API is a backtest-only entrypoint, so dict payloads are treated as
     ``environment=backtest`` and routed through the same Binance runtime used
     by the gRPC backtest path.
     """
-    fa = account.get("futures") or {}
+    fa = portfolio.get("futures") or {}
     margin_mode = str(fa.get("margin_mode", "isolated")).strip().lower()
     position_mode = str(fa.get("position_mode", "one_way")).strip().lower()
 
@@ -77,7 +77,7 @@ def account_dict_to_canonical_state(account: dict[str, Any]) -> CanonicalAccount
         positions=futures_positions,
     )
 
-    sa = account.get("spot") or {}
+    sa = portfolio.get("spot") or {}
     spot_state = CanonicalSpotState(
         free=float(sa.get("free", 0.0) or 0.0),
         locked=float(sa.get("locked", 0.0) or 0.0),
@@ -95,7 +95,7 @@ def account_dict_to_canonical_state(account: dict[str, Any]) -> CanonicalAccount
 
     futures_equity = _bootstrap_futures_equity(futures_state)
     spot_value = _estimate_spot_value(spot_state)
-    return CanonicalAccountState(
+    return CanonicalPortfolioState(
         environment=0,
         futures=futures_state,
         spot=spot_state,
@@ -105,13 +105,13 @@ def account_dict_to_canonical_state(account: dict[str, Any]) -> CanonicalAccount
     )
 
 
-# Provider + environment registry for canonical account state.
+# Provider + environment registry for canonical portfolio state.
 #
 # Keys are ``(provider, environment)`` tuples; values are runtime classes that
 # expose a ``from_canonical`` classmethod. The live registry target is
 # intentionally NOT registered: live runtime remains disabled
 # and the registry miss is how we fail closed. Additional exchanges (OKX etc.)
-# plug in here without touching ``build_wallet_from_account``.
+# plug in here without touching ``build_wallet_from_portfolio``.
 #
 RUNTIME_REGISTRY: dict[tuple[str, str], type] = {}
 _QTY_EPS = 1e-12
@@ -132,7 +132,7 @@ def _populate_runtime_registry() -> None:
 
 
 def resolve_target(environment: int) -> tuple[str, str]:
-    """Map a numeric account environment to a ``(provider, environment)`` registry key.
+    """Map a numeric portfolio environment to a ``(provider, environment)`` registry key.
 
     - ``0`` -> ``("local", "backtest")`` — backtest runtime
     - ``1`` -> ``("binance", "demo")`` — exchange demo runtime
@@ -145,20 +145,20 @@ def resolve_target(environment: int) -> tuple[str, str]:
         return ("binance", "demo")
     if environment == 2:
         return ("binance", "live")
-    raise ValueError(f"unsupported account environment: {environment}")
+    raise ValueError(f"unsupported portfolio environment: {environment}")
 
 
-def _validate_exchange_leverage_contract(account: CanonicalAccountState) -> None:
+def _validate_exchange_leverage_contract(portfolio: CanonicalPortfolioState) -> None:
     """Exchange-backed runtime must receive explicit leverage facts."""
-    if int(account.environment) != 1:
+    if int(portfolio.environment) != 1:
         return
 
     configured_by_symbol = {
         item.normalized_symbol(): float(item.configured_leverage or 0.0)
-        for item in account.futures.risk_metadata
+        for item in portfolio.futures.risk_metadata
     }
     missing: list[str] = []
-    for pos in account.futures.positions:
+    for pos in portfolio.futures.positions:
         if abs(float(pos.position_qty or 0.0)) <= _QTY_EPS:
             continue
         if float(pos.leverage or 0.0) > 0.0:
@@ -175,23 +175,23 @@ def _validate_exchange_leverage_contract(account: CanonicalAccountState) -> None
         )
 
 
-def build_wallet_from_account(account: dict[str, Any] | CanonicalAccountState):
+def build_wallet_from_portfolio(portfolio: dict[str, Any] | CanonicalPortfolioState):
     """Build the appropriate wallet runtime.
 
     - ``dict`` input is normalized to canonical backtest state first
-    - ``CanonicalAccountState`` input resolves ``(provider, environment)`` from
-      ``account.environment`` and dispatches through ``RUNTIME_REGISTRY``
+    - ``CanonicalPortfolioState`` input resolves ``(provider, environment)`` from
+      ``portfolio.environment`` and dispatches through ``RUNTIME_REGISTRY``
     """
-    if not isinstance(account, CanonicalAccountState):
-        account = account_dict_to_canonical_state(account)
+    if not isinstance(portfolio, CanonicalPortfolioState):
+        portfolio = portfolio_dict_to_canonical_state(portfolio)
 
     _populate_runtime_registry()
-    provider, environment_name = resolve_target(int(account.environment))
+    provider, environment_name = resolve_target(int(portfolio.environment))
     runtime_cls = RUNTIME_REGISTRY.get((provider, environment_name))
     if runtime_cls is None:
         raise ValueError(
             f"no wallet runtime registered for ({provider!r}, {environment_name!r}); "
-            f"environment={account.environment} is not enabled"
+            f"environment={portfolio.environment} is not enabled"
         )
 
     # Canonical runtime is intentionally constrained to single-asset USDT@-M
@@ -205,16 +205,16 @@ def build_wallet_from_account(account: dict[str, Any] | CanonicalAccountState):
     from strategy_service.wallet.binance import BinanceWalletRuntime
 
     if runtime_cls is BinanceWalletRuntime or issubclass(runtime_cls, BinanceWalletRuntime):
-        if bool(getattr(account.futures, "multi_assets_mode", False)):
+        if bool(getattr(portfolio.futures, "multi_assets_mode", False)):
             raise ValueError(
                 "unsupported wallet state: multi-assets mode is outside the "
                 "canonical single-asset USDT@-M runtime contract"
             )
-        if bool(getattr(account.futures, "portfolio_margin", False)):
+        if bool(getattr(portfolio.futures, "portfolio_margin", False)):
             raise ValueError(
                 "unsupported wallet state: portfolio margin is outside the "
                 "canonical single-asset USDT@-M runtime contract"
             )
-        _validate_exchange_leverage_contract(account)
+        _validate_exchange_leverage_contract(portfolio)
 
-    return runtime_cls.from_canonical(account)
+    return runtime_cls.from_canonical(portfolio)
