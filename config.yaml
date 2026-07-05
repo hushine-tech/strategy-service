@@ -1,28 +1,20 @@
-server:
-  grpc_addr: "0.0.0.0:50053"
-
-database:
-  host: "192.168.88.10"
-  port: 5432
-  database: "binance_{year}"
-  user: "postgres"
-  password: "postgres"
+# RuntimeChannel executor config.
+#
+# Do not put database, Kafka, portfolio/core-service, or order-service endpoints
+# here. Hosted, self-hosted, and bare runtimes reach platform services through
+# RuntimeChannel proxy calls.
 
 dependencies:
-  # Normal control-panel gRPC is used by platform services / market-data
-  # control-plane calls. Runtime startup uses runtime_channel_grpc only.
-  control_panel_service_grpc: "127.0.0.1:50054"
-  market_data_control_panel_grpc: "127.0.0.1:50054"
   # Dedicated RuntimeChannel listener on control-panel-service.
+  # Override with RUNTIME_CHANNEL_GRPC_ADDR or --runtime-channel-addr.
   runtime_channel_grpc: "127.0.0.1:50055"
 
 runtime:
-  # Empty uses /etc/hushine/runtime.cred. Override with RUNTIME_CREDENTIAL_PATH.
+  # Empty uses /etc/hushine/runtime.cred for self-hosted runtimes.
+  # Bare debug uses `hushine-runtime start --user-id ...` instead.
   credential_path: ""
-  # Empty lets control-panel infer hosted/self_hosted from the credential.
-  # Use `bare` only through `hushine-runtime start --user-id ...`.
   source: ""
-  runtime_id: ""              # empty → control panel generates one
+  runtime_id: ""
   name: ""
   capabilities: ["strategy", "spot", "futures"]
   resource_profile: "small"
@@ -34,22 +26,9 @@ runtime_channel_tls:
   root_cert_file: ""
   server_name: ""
 
-kafka:
-  brokers:
-    - "192.168.88.10:19092"
-
 market_data:
-  # Rollout toggles:
-  # - preflight_enabled=false lets mode=2 sessions bypass control-plane readiness checks.
-  # - lease_management_enabled=false disables lease create/renew/release.
-  # Use both together as the fast rollback path if control-plane rollout is unstable.
-  # For testnet C3 these should stay true.
   preflight_enabled: true
   lease_management_enabled: true
-  # mode=2 control-plane policy:
-  # - strategy-service preflight rejects streams older than interval*2 + freshness_grace_seconds
-  # - live sessions renew stream leases every lease_heartbeat_seconds
-  # - leases expire lease_ttl_seconds after the last successful renewal
   lease_heartbeat_seconds: 30
   lease_ttl_seconds: 90
   freshness_grace_seconds: 30
@@ -59,17 +38,7 @@ notification:
   timeout_seconds: 2
 
 log:
-  output_dir: "./logs"
-  kafka:
-    enabled: true
-    brokers: ["192.168.88.10:19092"]
-    topic_prefix: "app-logs"
-  # Tracing uses the same key path as portfolio/order/handler's config.yaml.
-  # When enabled=true, `hushine-runtime start` calls
-  # `utils.log.tracer.init_tracer(service_name, endpoint)` on boot so gRPC
-  # spans join the cross-service Jaeger trace. When disabled the tracer is
-  # a noop and trace_id fields in log entries are empty.
   tracing:
-    enabled: true
-    endpoint: "http://192.168.88.10:4318"
+    enabled: false
+    endpoint: ""
     service_name: "strategy-service"

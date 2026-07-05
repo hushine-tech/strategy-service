@@ -18,17 +18,17 @@ class ServerConfig:
 
 @dataclass
 class DatabaseConfig:
-    host: str = "192.168.88.10"
+    host: str = ""
     port: int = 5432
-    database: str = "binance_{year}"
-    user: str = "postgres"
-    password: str = "postgres"
+    database: str = ""
+    user: str = ""
+    password: str = ""
 
 
 @dataclass
 class DependenciesConfig:
-    portfolio_service_grpc: str = "localhost:50051"
-    order_service_grpc: str = "127.0.0.1:50051"
+    portfolio_service_grpc: str = ""
+    order_service_grpc: str = ""
     control_panel_service_grpc: str = ""
     runtime_channel_grpc: str = ""
     # Phase D2: market-data control-plane RPCs moved out of core-service.
@@ -69,7 +69,7 @@ class RuntimeChannelTLSConfig:
 
 @dataclass
 class KafkaConfig:
-    brokers: str = "192.168.88.10:19092"
+    brokers: str = ""
 
 
 @dataclass
@@ -97,8 +97,8 @@ class TracingConfig:
 @dataclass
 class LogConfig:
     output_dir: str = "./logs"
-    kafka_enabled: bool = True
-    kafka_brokers: list[str] = field(default_factory=lambda: ["192.168.88.10:19092"])
+    kafka_enabled: bool = False
+    kafka_brokers: list[str] = field(default_factory=list)
     topic_prefix: str = "app-logs"
     tracing: TracingConfig = field(default_factory=TracingConfig)
 

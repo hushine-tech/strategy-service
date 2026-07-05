@@ -45,8 +45,9 @@ docker run --rm \
   hushine/strategy-runtime:executor-dev
 ```
 
-The process ignores portfolio/order/Kafka/database endpoints from the local config
-and talks to the platform through RuntimeChannel proxy calls.
+`config.yaml` is intentionally runtime-only. Do not put portfolio/order,
+Kafka, or database endpoints in this repository's default config; executor
+runtimes talk to the platform through RuntimeChannel proxy calls.
 
 ## RuntimeChannel Data Path
 
