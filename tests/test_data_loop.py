@@ -225,7 +225,7 @@ def _wallet_with_spot_slot(symbol: str = "BTCUSDT", *, spot_free: float = 0.0):
     """Build a backtest wallet with one spot asset slot preconfigured.
 
     Post-Phase-C2b this goes through the canonical proto path:
-    ``make_backtest_wallet`` → ``build_wallet_from_account`` →
+    ``make_backtest_wallet`` → ``build_wallet_from_portfolio`` →
     ``BinanceWalletRuntime``. The returned runtime exposes the same
     ``wallet.spot.assets[SYMBOL]`` dict interface the previous legacy
     ``Wallet`` aggregate did, so downstream test assertions are unchanged.

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import math
 
 from .canonical import (
-    CanonicalAccountState,
+    CanonicalPortfolioState,
     CanonicalFuturesPositionState,
     CanonicalFuturesRiskMetadata,
     CanonicalFuturesState,
@@ -328,7 +328,7 @@ class BinanceFuturesBook:
             pos._refresh_derived_fields()
             self.positions[(norm_symbol(pos.symbol), int(pos.direction_key))] = pos
         self.open_orders: dict[str, BinanceOpenOrder] = {}
-        self._refresh_account_fields()
+        self._refresh_portfolio_fields()
 
     def _get_positions_for_symbol(self, symbol: str) -> list[tuple[tuple[str, int], BinancePosition]]:
         sym = norm_symbol(symbol)
@@ -445,15 +445,27 @@ class BinanceFuturesBook:
         cumulative = float(getattr(bracket, "cumulative", 0.0) or 0.0)
         return max(0.0, abs(float(pos.notional or 0.0)) * mmr - cumulative)
 
-    def _compute_liquidation_price(self, key: tuple[str, int], pos: BinancePosition) -> float:
-        if abs(pos.position_qty) <= _QTY_EPS:
+    def _infer_maint_margin_ratio(self, pos: BinancePosition) -> float:
+        notional = abs(float(pos.notional or 0.0))
+        maint_margin = float(pos.oracle_maint_margin or pos.maint_margin or 0.0)
+        if notional <= _QTY_EPS or maint_margin <= 0.0:
             return 0.0
-        bracket = self._select_bracket(pos)
-        if bracket is None:
-            return float(pos.oracle_liquidation_price or 0.0)
+        return max(0.0, maint_margin / notional)
 
-        mmr = float(getattr(bracket, "maint_margin_ratio", 0.0) or 0.0)
-        cumulative = float(getattr(bracket, "cumulative", 0.0) or 0.0)
+    def _round_price(self, symbol: str, price: float) -> float:
+        metadata = self._resolve_metadata(symbol)
+        if metadata is not None and metadata.price_precision > 0:
+            return round(price, int(metadata.price_precision))
+        return price
+
+    def _compute_liquidation_formula(
+        self,
+        key: tuple[str, int],
+        pos: BinancePosition,
+        *,
+        mmr: float,
+        cumulative: float,
+    ) -> float:
         qty = abs(float(pos.position_qty or 0.0))
         if qty <= _QTY_EPS:
             return 0.0
@@ -502,10 +514,29 @@ class BinanceFuturesBook:
                     - maint_margin_others
                 ) / denom
 
-        metadata = self._resolve_metadata(pos.symbol)
-        if metadata is not None and metadata.price_precision > 0:
-            price = round(price, int(metadata.price_precision))
-        return max(0.0, float(price))
+        return max(0.0, float(self._round_price(pos.symbol, price)))
+
+    def _compute_liquidation_price(self, key: tuple[str, int], pos: BinancePosition) -> float:
+        if abs(pos.position_qty) <= _QTY_EPS:
+            return 0.0
+        bracket = self._select_bracket(pos)
+        if bracket is None:
+            oracle = float(pos.oracle_liquidation_price or 0.0)
+            if oracle > 0.0:
+                return self._round_price(pos.symbol, oracle)
+            return self._compute_liquidation_formula(
+                key,
+                pos,
+                mmr=self._infer_maint_margin_ratio(pos),
+                cumulative=0.0,
+            )
+
+        return self._compute_liquidation_formula(
+            key,
+            pos,
+            mmr=float(getattr(bracket, "maint_margin_ratio", 0.0) or 0.0),
+            cumulative=float(getattr(bracket, "cumulative", 0.0) or 0.0),
+        )
 
     def _resolve_effective_leverage(self, order: BinanceOpenOrder, pos: BinancePosition | None) -> float:
         if pos is not None:
@@ -570,7 +601,7 @@ class BinanceFuturesBook:
         else:
             self.total_open_order_initial_margin = float(self.oracle_total_open_order_initial_margin or 0.0)
 
-    def _refresh_account_fields(self) -> None:
+    def _refresh_portfolio_fields(self) -> None:
         for pos in self.positions.values():
             pos._refresh_derived_fields()
         for pos in self.positions.values():
@@ -627,7 +658,7 @@ class BinanceFuturesBook:
         for _key, pos in affected:
             pos.update_mark_price(float(price))
         if affected or any(order.symbol == norm_symbol(symbol) for order in self.open_orders.values()):
-            self._refresh_account_fields()
+            self._refresh_portfolio_fields()
 
     def _extract_fill_delta(
         self,
@@ -814,7 +845,7 @@ class BinanceFuturesBook:
         else:
             self.open_orders[order.order_id] = order
             self._ensure_position(order.symbol, order.direction_key, order.position_side)
-        self._refresh_account_fields()
+        self._refresh_portfolio_fields()
 
     def on_ledger_event(self, event: object) -> None:
         event_type = str(
@@ -834,13 +865,13 @@ class BinanceFuturesBook:
         position_side = str(getattr(event, "position_side", "") or "").strip().upper()
         if symbol:
             # In hedge mode the per-position update requires an explicit
-            # position_side. Account-level ledger events (e.g. a funding_fee
+            # position_side. Portfolio-level ledger events (e.g. a funding_fee
             # or transfer that aren't bound to LONG vs SHORT) legitimately
             # arrive without it. Apply only the wallet-level delta (already
             # added to wallet_balance above) and skip per-position work,
             # rather than raising inside _position_key_from_order.
             if self.position_mode == "hedge" and position_side not in {"LONG", "SHORT"}:
-                self._refresh_account_fields()
+                self._refresh_portfolio_fields()
                 return
             direction_key = self._position_key_from_order(
                 norm_symbol(symbol), position_side,
@@ -862,7 +893,7 @@ class BinanceFuturesBook:
                 pos.carry_cost = float(pos.carry_cost or 0.0) - amount
                 pos._refresh_derived_fields()
 
-        self._refresh_account_fields()
+        self._refresh_portfolio_fields()
 
     def to_canonical(self) -> CanonicalFuturesState:
         return CanonicalFuturesState(
@@ -916,7 +947,7 @@ class BinanceWalletRuntime:
         *,
         futures: BinanceFuturesBook,
         spot: SpotWallet,
-        source_state: CanonicalAccountState,
+        source_state: CanonicalPortfolioState,
         environment_code: int = 1,
     ) -> None:
         self.futures = futures
@@ -925,7 +956,7 @@ class BinanceWalletRuntime:
         self._source_state = source_state
 
     @classmethod
-    def from_canonical(cls, state: CanonicalAccountState) -> "BinanceWalletRuntime":
+    def from_canonical(cls, state: CanonicalPortfolioState) -> "BinanceWalletRuntime":
         return cls(
             futures=BinanceFuturesBook(state.futures),
             spot=_build_spot_wallet(state.spot),
@@ -986,8 +1017,8 @@ class BinanceWalletRuntime:
     def on_ledger_event(self, event: object) -> None:
         self.futures.on_ledger_event(event)
 
-    def to_canonical_state(self) -> CanonicalAccountState:
-        return CanonicalAccountState(
+    def to_canonical_state(self) -> CanonicalPortfolioState:
+        return CanonicalPortfolioState(
             environment=self.environment_code,
             futures=self.futures.to_canonical(),
             spot=CanonicalSpotState(

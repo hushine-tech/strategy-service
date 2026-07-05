@@ -32,7 +32,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StrategyServiceClient interface {
 	// RunStrategy starts strategy execution. Returns immediately with a session_id.
-	// Data source is determined by account environment (fetched from core-service):
+	// Data source is determined by portfolio environment (fetched from core-service):
 	//
 	//	environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
 	//	environment=1 (demo)     → LiveDataLoop (Kafka)
@@ -130,7 +130,7 @@ func (c *strategyServiceClient) ValidateStrategyCode(ctx context.Context, in *Va
 // for forward compatibility.
 type StrategyServiceServer interface {
 	// RunStrategy starts strategy execution. Returns immediately with a session_id.
-	// Data source is determined by account environment (fetched from core-service):
+	// Data source is determined by portfolio environment (fetched from core-service):
 	//
 	//	environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
 	//	environment=1 (demo)     → LiveDataLoop (Kafka)

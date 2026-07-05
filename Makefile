@@ -1,4 +1,5 @@
 PYTHON?=$(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; elif [ -x /opt/anaconda3/bin/python3 ]; then echo /opt/anaconda3/bin/python3; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
+UV?=$(shell if command -v uv >/dev/null 2>&1; then command -v uv; else echo uv; fi)
 PYTHONPATH_VAL=.:./strategy-library
 CONFIG?=./config.yaml
 PID_FILE=.run.pid
@@ -8,17 +9,17 @@ DEV_NO_PROXY := env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u
 .PHONY: build dev start stop clean test
 
 test:
-	PYTHONPATH=$(PYTHONPATH_VAL) $(PYTHON) -m pytest tests/ -q
+	PYTHONPATH=$(PYTHONPATH_VAL) $(UV) run --extra dev pytest tests/ -q
 
 build:
 	@echo "Python: no build step (use 'make dev' or 'make start')"
 
 dev:
-	$(DEV_NO_PROXY) PYTHONPATH=$(PYTHONPATH_VAL) $(PYTHON) run_grpc_server.py -config $(CONFIG)
+	$(DEV_NO_PROXY) PYTHONPATH=$(PYTHONPATH_VAL) $(UV) run hushine-runtime start --config $(CONFIG)
 
 start:
 	mkdir -p logs
-	python3 -c 'import os, subprocess; env=os.environ.copy(); [env.pop(k, None) for k in ("http_proxy","https_proxy","HTTP_PROXY","HTTPS_PROXY","all_proxy","ALL_PROXY")]; env["NO_PROXY"]="$(DEV_NO_PROXY_HOSTS),"+env.get("NO_PROXY",""); env["no_proxy"]="$(DEV_NO_PROXY_HOSTS),"+env.get("no_proxy",""); env["PYTHONPATH"]="$(PYTHONPATH_VAL)"; out=open("logs/strategy-service.out","ab",buffering=0); p=subprocess.Popen(["$(PYTHON)","run_grpc_server.py","-config","$(CONFIG)"], stdout=out, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True, env=env); open("$(PID_FILE)","w").write(str(p.pid)+"\n")'
+	python3 -c 'import os, subprocess; env=os.environ.copy(); [env.pop(k, None) for k in ("http_proxy","https_proxy","HTTP_PROXY","HTTPS_PROXY","all_proxy","ALL_PROXY")]; env["NO_PROXY"]="$(DEV_NO_PROXY_HOSTS),"+env.get("NO_PROXY",""); env["no_proxy"]="$(DEV_NO_PROXY_HOSTS),"+env.get("no_proxy",""); env["PYTHONPATH"]="$(PYTHONPATH_VAL)"; out=open("logs/strategy-service.out","ab",buffering=0); p=subprocess.Popen(["$(UV)","run","hushine-runtime","start","--config","$(CONFIG)"], stdout=out, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True, env=env); open("$(PID_FILE)","w").write(str(p.pid)+"\n")'
 	@echo "✓ strategy-service started (pid=$$(cat $(PID_FILE))), logs at strategy-service/logs/strategy-service.out"
 
 stop:

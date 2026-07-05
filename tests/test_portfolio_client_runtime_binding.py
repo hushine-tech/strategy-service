@@ -2,29 +2,30 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from strategy_service.account_client import AccountClient
-from strategy_service.gen import account_service_pb2
+from strategy_service.portfolio_client import PortfolioClient
+from strategy_service.gen import portfolio_service_pb2
 
 
-def test_account_client_save_session_sends_runtime_binding():
+def test_portfolio_client_save_session_sends_runtime_binding():
     captured: dict[str, object] = {}
 
     class FakeStub:
         def SaveSession(self, req):
             captured["req"] = req
-            return account_service_pb2.SaveSessionResponse()
+            return portfolio_service_pb2.SaveSessionResponse()
 
-    client = AccountClient("")
+    client = PortfolioClient("")
     client._stub = FakeStub()
 
     ok = client.save_session(
         session_id="sess-1",
-        account_id=11,
+        portfolio_id=11,
         strategy_id=22,
         environment=1,
         runtime_id="rt-1",
         runtime_source="hosted",
         runtime_name="default",
+        leverage=5,
     )
 
     assert ok is True
@@ -32,17 +33,18 @@ def test_account_client_save_session_sends_runtime_binding():
     assert req.runtime_id == "rt-1"
     assert req.runtime_source == "hosted"
     assert req.runtime_name == "default"
+    assert req.leverage == 5
 
 
-def test_account_client_update_session_sends_runtime_guard():
+def test_portfolio_client_update_session_sends_runtime_guard():
     captured: dict[str, object] = {}
 
     class FakeStub:
         def UpdateSession(self, req):
             captured["req"] = req
-            return account_service_pb2.UpdateSessionResponse()
+            return portfolio_service_pb2.UpdateSessionResponse()
 
-    client = AccountClient("")
+    client = PortfolioClient("")
     client._stub = FakeStub()
 
     ok = client.update_session("sess-1", "stopped", runtime_id="rt-1")
@@ -54,15 +56,15 @@ def test_account_client_update_session_sends_runtime_guard():
     assert req.runtime_id == "rt-1"
 
 
-def test_account_client_list_running_sessions_filters_by_runtime():
+def test_portfolio_client_list_running_sessions_filters_by_runtime():
     captured: dict[str, object] = {}
 
     class FakeStub:
         def ListRunningSessions(self, req):
             captured["req"] = req
-            return account_service_pb2.ListRunningSessionsResponse()
+            return portfolio_service_pb2.ListRunningSessionsResponse()
 
-    client = AccountClient("")
+    client = PortfolioClient("")
     client._stub = FakeStub()
 
     sessions = client.require_running_sessions(runtime_id="rt-1")
@@ -72,42 +74,69 @@ def test_account_client_list_running_sessions_filters_by_runtime():
     assert req.runtime_id == "rt-1"
 
 
-def test_account_client_get_portfolio_snapshot_uses_portfolio_api():
+def test_portfolio_client_get_portfolio_snapshot_uses_portfolio_api():
     captured: dict[str, object] = {}
 
     class FakeStub:
         def GetPortfolioSnapshot(self, req):
             captured["req"] = req
-            return account_service_pb2.GetPortfolioSnapshotResponse(
-                snapshot=account_service_pb2.PortfolioSnapshot(account_id=11, user_id=5)
+            return portfolio_service_pb2.GetPortfolioSnapshotResponse(
+                snapshot=portfolio_service_pb2.PortfolioSnapshot(portfolio_id=11, user_id=5)
             )
 
-    client = AccountClient("")
+    client = PortfolioClient("")
     client._stub = FakeStub()
 
-    snapshot = client.get_portfolio_snapshot(account_id=11, user_id=5)
+    snapshot = client.get_portfolio_snapshot(portfolio_id=11, user_id=5)
 
     req = captured["req"]
-    assert req.account_id == 11
+    assert req.portfolio_id == 11
     assert req.user_id == 5
-    assert snapshot.account_id == 11
+    assert snapshot.portfolio_id == 11
 
 
-def test_account_client_update_portfolio_snapshot_uses_portfolio_api():
+def test_portfolio_client_get_portfolio_snapshot_sends_required_symbols():
+    captured: dict[str, object] = {}
+
+    class FakeStub:
+        def GetPortfolioSnapshot(self, req):
+            captured["req"] = req
+            return portfolio_service_pb2.GetPortfolioSnapshotResponse(
+                snapshot=portfolio_service_pb2.PortfolioSnapshot(portfolio_id=11, user_id=5)
+            )
+
+    client = PortfolioClient("")
+    client._stub = FakeStub()
+
+    snapshot = client.get_portfolio_snapshot(
+        portfolio_id=11,
+        user_id=5,
+        required_symbols={("binance", "perpetual_futures", "ethusdt")},
+    )
+
+    req = captured["req"]
+    assert snapshot.portfolio_id == 11
+    assert len(req.required_symbols) == 1
+    assert req.required_symbols[0].exchange == 1
+    assert req.required_symbols[0].market == 2
+    assert req.required_symbols[0].symbol == "ETHUSDT"
+
+
+def test_portfolio_client_update_portfolio_snapshot_uses_portfolio_api():
     captured: dict[str, object] = {}
 
     class FakeStub:
         def UpdatePortfolioSnapshot(self, req):
             captured["req"] = req
-            return account_service_pb2.UpdatePortfolioSnapshotResponse(
-                snapshot=account_service_pb2.PortfolioSnapshot(account_id=11, user_id=5)
+            return portfolio_service_pb2.UpdatePortfolioSnapshotResponse(
+                snapshot=portfolio_service_pb2.PortfolioSnapshot(portfolio_id=11, user_id=5)
             )
 
-    client = AccountClient("")
+    client = PortfolioClient("")
     client._stub = FakeStub()
 
     snapshot = client.update_portfolio_snapshot(
-        account_id=11,
+        portfolio_id=11,
         user_id=5,
         snapshot_reason=2,
         strategy_id=22,
@@ -116,36 +145,38 @@ def test_account_client_update_portfolio_snapshot_uses_portfolio_api():
     )
 
     req = captured["req"]
-    assert req.account_id == 11
+    assert req.portfolio_id == 11
     assert req.user_id == 5
     assert req.snapshot_reason == 2
     assert req.strategy_id == 22
     assert req.session_id == "sess-1"
     assert req.snapshot_time.ToDatetime(tzinfo=timezone.utc) == datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
-    assert snapshot.account_id == 11
+    assert snapshot.portfolio_id == 11
 
 
-def test_account_client_preflight_sends_session_metadata():
+def test_portfolio_client_preflight_sends_session_metadata():
     captured: dict[str, object] = {}
 
     class FakeStub:
         def PreflightStrategySession(self, req):
             captured["req"] = req
-            return account_service_pb2.PreflightStrategySessionResponse(ok=True)
+            return portfolio_service_pb2.PreflightStrategySessionResponse(ok=True)
 
-    client = AccountClient("")
+    client = PortfolioClient("")
     client._stub = FakeStub()
 
     resp = client.preflight_strategy_session(
-        account_id=11,
+        portfolio_id=11,
         user_id=5,
         required_routes={("binance", "perpetual_futures")},
         required_symbols={("binance", "perpetual_futures", "ethusdt")},
         session_id="preflight-session-1",
         strategy_id=22,
+        leverage=1,
     )
 
     req = captured["req"]
     assert resp.ok is True
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 22
+    assert req.leverage == 1

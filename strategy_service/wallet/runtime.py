@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from .canonical import CanonicalAccountState
+from .canonical import CanonicalPortfolioState
 
 
 @runtime_checkable
@@ -25,7 +25,7 @@ class WalletRuntime(Protocol):
 
     def on_ledger_event(self, event: object) -> None: ...
 
-    def to_canonical_state(self) -> CanonicalAccountState: ...
+    def to_canonical_state(self) -> CanonicalPortfolioState: ...
 
 
 @runtime_checkable
@@ -35,7 +35,7 @@ class ExchangeWalletRuntime(WalletRuntime, Protocol):
     Concrete implementations MUST set the class attributes ``provider`` (e.g.
     ``"binance"``, ``"okx"``) and ``environment`` (e.g. ``"demo"``,
     ``"live"``, ``"backtest"``). These identifiers are the lookup key used by
-    ``wallet_factory.RUNTIME_REGISTRY`` to route canonical account state to the
+    ``wallet_factory.RUNTIME_REGISTRY`` to route canonical portfolio state to the
     right runtime class.
     """
 

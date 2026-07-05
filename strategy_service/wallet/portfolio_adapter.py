@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from strategy_service.inputs import _normalize_exchange, _normalize_market
-from strategy_service.wallet_adapter import proto_to_account_spec
+from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
@@ -66,11 +66,11 @@ def _build_binance_wallet_from_venue_snapshot(
     if market == "spot":
         if wallet is None:
             raise ValueError("spot VenueSnapshot requires full canonical wallet")
-        return BinanceWalletRuntime.from_canonical(proto_to_account_spec(wallet))
+        return BinanceWalletRuntime.from_canonical(proto_to_portfolio_spec(wallet))
     if market == "perpetual_futures":
         if wallet is None:
             raise ValueError("futures VenueSnapshot requires full canonical wallet")
-        return BinanceWalletRuntime.from_canonical(proto_to_account_spec(wallet))
+        return BinanceWalletRuntime.from_canonical(proto_to_portfolio_spec(wallet))
     raise ValueError(f"unsupported portfolio wallet market for binance: {market}")
 
 
@@ -171,7 +171,7 @@ def build_portfolio_wallet_from_snapshot(
         )
 
     return PortfolioWalletRuntime(
-        account_id=int(getattr(snapshot, "account_id", 0) or 0),
+        portfolio_id=int(getattr(snapshot, "portfolio_id", 0) or 0),
         allowed_routes=normalized_allowed_routes,
         wallets=wallets,
     )

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Seed a reconciliation-test strategy into the ``account`` database.
+"""Seed a reconciliation-test strategy into the ``portfolio`` database.
 
 ETHUSDT futures 1m 触发式对账压测策略:
 
   - 声明输入: ``(binance, perpetual_futures, ETHUSDT, 1m)``
   - 每 tick 计算和参考价的涨跌幅 Δ:
-      * Δ >= +0.1%  → SELL  (做空) 1% 钱包余额的 ETH, 重置参考价
-      * Δ <= -0.1%  → BUY   (做多) 1% 钱包余额的 ETH, 重置参考价
+      * Δ >= +0.1%  → BUY   (追涨) 1% 钱包余额的 ETH, 重置参考价
+      * Δ <= -0.1%  → SELL  (杀跌) 1% 钱包余额的 ETH, 重置参考价
       * 其它         → 不动作
   - 订单量 = wallet_balance × 1% / price, 向下取整到 0.001 ETH (Binance ETHUSDT 步长)
+  - 若 1% 钱包余额低于 20 USDT 最小成交名义金额, 跳过本次信号
 
 设计目的: 为 ``mode=2`` (testnet) session 持续产生订单流, 让对账模块
 (reconciliation runs + snapshot diff) 每 ~20 bar 都有新成交可以比对 —
@@ -22,7 +23,7 @@ local wallet ↔ 交易所 wallet 的漂移会立刻出现在 reconciliation_run
 
     PGHOST        默认 192.168.88.10
     PGPORT        默认 5432
-    PGDATABASE    默认 account
+    PGDATABASE    默认 portfolio
     PGUSER        默认 postgres
     PGPASSWORD    默认 postgres
     SEED_USERNAME 默认 test-user         (仅在该 user 不存在时创建)
@@ -32,14 +33,14 @@ local wallet ↔ 交易所 wallet 的漂移会立刻出现在 reconciliation_run
 
 挂载 + 激活示例:
 
-    POST /api/accounts/ACCOUNT_ID/strategies         {strategy_id: N}
-    POST /api/accounts/ACCOUNT_ID/strategies/active  {strategy_id: N}
+    POST /api/portfolios/PORTFOLIO_ID/strategies         {strategy_id: N}
+    POST /api/portfolios/PORTFOLIO_ID/strategies/active  {strategy_id: N}
 
 账号要求:
 
   - ``mode = 2`` (Binance testnet) 才会触发对账
   - futures 钱包里要有 ``ETHUSDT`` 的 position 槽位 (one-way 即可) +
-    足够的 USDT 余额 (≥ 500 USDT 建议, 让 1% = 5 USDT 足够下单)
+    足够的 USDT 余额 (≥ 2000 USDT 建议, 让 1% ≥ 20 USDT 通过 minNotional)
   - 要启动一条 live K-line 流 (``POST /api/market-data/requests``
     symbol=ETHUSDT market=perpetual_futures kind=kline interval=1m)
 """
@@ -50,13 +51,12 @@ import os
 import sys
 import textwrap
 
-import bcrypt
 import psycopg2
 
 
 HOST = os.environ.get("PGHOST", "192.168.88.10")
 PORT = int(os.environ.get("PGPORT", "5432"))
-DB = os.environ.get("PGDATABASE", "account")
+DB = os.environ.get("PGDATABASE", "portfolio")
 USER = os.environ.get("PGUSER", "postgres")
 PASSWORD = os.environ.get("PGPASSWORD", "postgres")
 
@@ -74,7 +74,7 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
     """ETHUSDT futures 对账压测策略.
 
     - 无持仓 + 第一 tick 只记录参考价
-    - 每 +0.1% → SELL 1% 钱包; 每 -0.1% → BUY 1% 钱包
+    - 每 +0.1% → BUY 1% 钱包; 每 -0.1% → SELL 1% 钱包
     - 每次触发后重置参考价, 需要再一次 ±0.1% 才会再下单
 
     INPUTS 声明决定运行时 router 只路由 (binance, perpetual_futures, ETHUSDT, 1m); 其它 ticks
@@ -86,16 +86,54 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
     class MyStrategy:
         INPUTS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT", "interval": "1m"}]
         ORDER_TARGETS = [{"exchange": Exchange.BINANCE, "market": Market.PERPETUAL_FUTURES, "symbol": "ETHUSDT"}]
+        INDICATORS = {
+            "bb_upper": {"name": "BB Upper", "type": "line", "pane": "price", "color": "#2563eb", "unit": "USDT"},
+            "bb_middle": {"name": "BB Middle", "type": "line", "pane": "price", "color": "#64748b", "unit": "USDT"},
+            "bb_lower": {"name": "BB Lower", "type": "line", "pane": "price", "color": "#2563eb", "unit": "USDT"},
+            "alpha_score": {"name": "Alpha Score", "type": "line", "pane": "strategy", "color": "#7c3aed"},
+            "entry_signal": {"name": "Entry Signal", "type": "marker", "pane": "price", "color": "#0f766e"},
+        }
 
         # 触发阈值: ±0.1% (千分之一).
         TRIGGER_PCT = 0.001
         # 每笔订单名义值 = 钱包余额 × 1%.
         SIZE_PCT = 0.01
+        # Binance futures 最小成交名义金额. 低于该值交易所会拒单, 策略侧直接跳过.
+        MIN_NOTIONAL_USDT = 20.0
         # Binance ETHUSDT USDT-M 期货的 step_size = 0.001 ETH.
         QTY_PRECISION = 3
 
         def __init__(self):
             self._ref_price = None
+            self._prices = []
+
+        def _record_indicators(self, price, change):
+            self._prices.append(float(price))
+            if len(self._prices) > 20:
+                self._prices = self._prices[-20:]
+
+            indicators = getattr(self, "indicators", None)
+            if indicators is None:
+                return
+
+            if len(self._prices) >= 2:
+                middle = sum(self._prices) / len(self._prices)
+                variance = sum((item - middle) ** 2 for item in self._prices) / len(self._prices)
+                band = 2.0 * (variance ** 0.5)
+                indicators.set("bb_upper", middle + band)
+                indicators.set("bb_middle", middle)
+                indicators.set("bb_lower", middle - band)
+            else:
+                indicators.set("bb_upper", None)
+                indicators.set("bb_middle", None)
+                indicators.set("bb_lower", None)
+            indicators.set("alpha_score", float(change) * 10000.0)
+
+        def _mark_signal(self, side, price):
+            indicators = getattr(self, "indicators", None)
+            if indicators is None:
+                return
+            indicators.mark("entry_signal", text=str(side), price=float(price))
 
         def on_market_data(self, data, wallet):
             tick = data.exchange[Exchange.BINANCE].market[Market.PERPETUAL_FUTURES].symbol["ETHUSDT"].interval["1m"]
@@ -108,9 +146,11 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
             # 首 tick: 只初始化参考价, 不下单 (避免 session 一启动就发订单).
             if self._ref_price is None:
                 self._ref_price = price
+                self._record_indicators(price, 0.0)
                 return None
 
             change = (price - self._ref_price) / self._ref_price
+            self._record_indicators(price, change)
             if abs(change) < self.TRIGGER_PCT:
                 return None
 
@@ -125,28 +165,34 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
 
             # 1% 钱包名义值 → ETH 数量, 向下取整到 step_size 防止 Binance minQty 拒单.
             notional_usdt = wallet_balance * self.SIZE_PCT
+            if notional_usdt < self.MIN_NOTIONAL_USDT:
+                self._ref_price = price
+                return None
             qty = notional_usdt / price
             step = 10 ** (-self.QTY_PRECISION)
             qty = int(qty / step) * step
             qty = round(qty, self.QTY_PRECISION)
             if qty <= 0:
+                self._ref_price = price
                 return None
 
             # 触发 → 先重置参考价 (否则一个大 tick 会让连续几条 tick 反复下单).
             self._ref_price = price
 
             if change > 0:
-                # 涨了 → 做空 1%
-                return OrderDecision(
-                    exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES,
-                    symbol="ETHUSDT", side=OrderSide.SELL, qty=str(qty),
-                    order_type=OrderType.MARKET, position_side=PositionSide.BOTH,
-                )
-            else:
-                # 跌了 → 做多 1%
+                # 涨了 → 追涨做多 1%
+                self._mark_signal("BUY", price)
                 return OrderDecision(
                     exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES,
                     symbol="ETHUSDT", side=OrderSide.BUY, qty=str(qty),
+                    order_type=OrderType.MARKET, position_side=PositionSide.BOTH,
+                )
+            else:
+                # 跌了 → 杀跌做空 1%
+                self._mark_signal("SELL", price)
+                return OrderDecision(
+                    exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES,
+                    symbol="ETHUSDT", side=OrderSide.SELL, qty=str(qty),
                     order_type=OrderType.MARKET, position_side=PositionSide.BOTH,
                 )
 ''')
@@ -154,10 +200,10 @@ RECONCILIATION_TEST_CODE = textwrap.dedent('''\
 
 STRATEGIES: list[dict] = [
     {
-        "name": "ethusdt-reconciliation-test",
+        "name": "ethusdt-reconciliation-momentum",
         "version": "1.0.0",
         "description": (
-            "ETHUSDT 1m futures; 每 +0.1% 做空 1%, 每 -0.1% 做多 1%; "
+            "ETHUSDT 1m futures; 每 +0.1% 追涨做多 1%, 每 -0.1% 杀跌做空 1%; "
             "用于 mode=2 对账压测 (持续产生订单流, 触发 order_fill + periodic_sample 对账)"
         ),
         "code": RECONCILIATION_TEST_CODE,
@@ -171,6 +217,10 @@ def ensure_user(cur, username: str, password: str) -> int:
     row = cur.fetchone()
     if row:
         return int(row[0])
+    try:
+        import bcrypt
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("bcrypt is required when creating a seed user") from exc
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     cur.execute(
         "INSERT INTO users (username, password_hash, created_at) "
@@ -225,13 +275,13 @@ def main() -> None:
         conn.close()
 
     print()
-    print("Done. 挂载 + 激活示例 (替换 ACCOUNT_ID / STRATEGY_ID):")
-    print("  POST /api/accounts/ACCOUNT_ID/strategies         {strategy_id: STRATEGY_ID}")
-    print("  POST /api/accounts/ACCOUNT_ID/strategies/active  {strategy_id: STRATEGY_ID}")
+    print("Done. 挂载 + 激活示例 (替换 PORTFOLIO_ID / STRATEGY_ID):")
+    print("  POST /api/portfolios/PORTFOLIO_ID/strategies         {strategy_id: STRATEGY_ID}")
+    print("  POST /api/portfolios/PORTFOLIO_ID/strategies/active  {strategy_id: STRATEGY_ID}")
     print()
     print("对账测试前置条件:")
     print("  - 账号 mode = 2 (Binance testnet), 才会走 reconciliation compare 路径")
-    print("  - 账号 futures 余额 ≥ 500 USDT (1% = 5 USDT > Binance minNotional)")
+    print("  - 账号 futures 余额 ≥ 2000 USDT (1% ≥ 20 USDT, so orders pass Binance minNotional)")
     print("  - 账号 futures.positions 里要有 ETHUSDT one-way 槽位")
     print("  - 已声明 ETHUSDT 1m futures K 线流 (market-data request + stream running)")
     print()

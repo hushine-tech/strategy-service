@@ -13,7 +13,7 @@ Typical usage:
 
     python scripts/submit_eth_pyramid_strategy.py \
         --username <user> --password <pass> \
-        --account-id 13 --activate
+        --portfolio-id 13 --activate
 
 When the same user already has the same ``name`` + ``version`` strategy, the
 script reuses it instead of creating a duplicate.
@@ -168,19 +168,19 @@ def create_or_reuse_strategy(
     raise AssertionError("unreachable")
 
 
-def mount_strategy(handler_url: str, token: str, *, account_id: int, strategy_id: int) -> None:
+def mount_strategy(handler_url: str, token: str, *, portfolio_id: int, strategy_id: int) -> None:
     status, body = _json_request(
         "POST",
-        f"{handler_url}/api/accounts/{account_id}/strategies/{strategy_id}",
+        f"{handler_url}/api/portfolios/{portfolio_id}/strategies/{strategy_id}",
         token=token,
     )
     _must_succeed(status, body, action="mount strategy", expected=(200,))
 
 
-def activate_strategy(handler_url: str, token: str, *, account_id: int, strategy_id: int) -> None:
+def activate_strategy(handler_url: str, token: str, *, portfolio_id: int, strategy_id: int) -> None:
     status, body = _json_request(
         "POST",
-        f"{handler_url}/api/accounts/{account_id}/strategies/{strategy_id}/activate",
+        f"{handler_url}/api/portfolios/{portfolio_id}/strategies/{strategy_id}/activate",
         token=token,
     )
     _must_succeed(status, body, action="activate strategy", expected=(200,))
@@ -227,15 +227,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"path to the strategy source file (default: {DEFAULT_CODE_PATH})",
     )
     parser.add_argument(
-        "--account-id",
+        "--portfolio-id",
         type=int,
         default=0,
-        help="optional account_id to mount the strategy onto",
+        help="optional portfolio_id to mount the strategy onto",
     )
     parser.add_argument(
         "--activate",
         action="store_true",
-        help="after mounting, mark the strategy active on the given account",
+        help="after mounting, mark the strategy active on the given portfolio",
     )
     return parser
 
@@ -248,8 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.password:
         print("error: --password is required (or set HUSHINE_PASSWORD)", file=sys.stderr)
         return 2
-    if args.activate and args.account_id <= 0:
-        print("error: --activate requires --account-id", file=sys.stderr)
+    if args.activate and args.portfolio_id <= 0:
+        print("error: --activate requires --portfolio-id", file=sys.stderr)
         return 2
 
     code = load_strategy_code(args.code_path)
@@ -274,32 +274,32 @@ def main(argv: list[str] | None = None) -> int:
         print(f"strategy_version={strategy.get('version')}")
         print(f"create_action={'created' if created else 'reused'}")
 
-        if args.account_id > 0:
+        if args.portfolio_id > 0:
             mount_strategy(
                 args.handler_url.rstrip("/"),
                 token,
-                account_id=args.account_id,
+                portfolio_id=args.portfolio_id,
                 strategy_id=strategy_id,
             )
-            print(f"mounted_account_id={args.account_id}")
+            print(f"mounted_portfolio_id={args.portfolio_id}")
             if args.activate:
                 activate_strategy(
                     args.handler_url.rstrip("/"),
                     token,
-                    account_id=args.account_id,
+                    portfolio_id=args.portfolio_id,
                     strategy_id=strategy_id,
                 )
-                print(f"activated_account_id={args.account_id}")
+                print(f"activated_portfolio_id={args.portfolio_id}")
                 print("next_run=")
                 print(
                     "curl -s -X POST "
-                    f"{args.handler_url.rstrip('/')}/api/accounts/{args.account_id}/run-strategy "
+                    f"{args.handler_url.rstrip('/')}/api/portfolios/{args.portfolio_id}/run-strategy "
                     "-H 'Authorization: Bearer <TOKEN>' "
                     "-H 'Content-Type: application/json' "
                     "-d '{\"strategy_path\":\"\",\"interval\":\"1m\"}'"
                 )
         else:
-            print("account_action=none")
+            print("portfolio_action=none")
     except APIError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

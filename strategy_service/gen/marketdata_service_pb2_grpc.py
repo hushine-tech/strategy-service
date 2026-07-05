@@ -36,7 +36,7 @@ class MarketDataControlPlaneServiceStub(object):
     and the canonical caller for scraper, quant-handler, and strategy-service.
 
     Scope: kline only (v1). Field shapes preserved verbatim from the
-    original account.v1 definitions so the migration is wire-compatible —
+    original portfolio.v1 definitions so the migration is wire-compatible —
     callers only repoint their gRPC channel; their request / response
     handling is unchanged.
     ── User-facing request RPCs ─────────────────────────────────────────
@@ -166,7 +166,7 @@ class MarketDataControlPlaneServiceServicer(object):
     and the canonical caller for scraper, quant-handler, and strategy-service.
 
     Scope: kline only (v1). Field shapes preserved verbatim from the
-    original account.v1 definitions so the migration is wire-compatible —
+    original portfolio.v1 definitions so the migration is wire-compatible —
     callers only repoint their gRPC channel; their request / response
     handling is unchanged.
     ── User-facing request RPCs ─────────────────────────────────────────
@@ -462,7 +462,7 @@ class MarketDataControlPlaneService(object):
     and the canonical caller for scraper, quant-handler, and strategy-service.
 
     Scope: kline only (v1). Field shapes preserved verbatim from the
-    original account.v1 definitions so the migration is wire-compatible —
+    original portfolio.v1 definitions so the migration is wire-compatible —
     callers only repoint their gRPC channel; their request / response
     handling is unchanged.
     ── User-facing request RPCs ─────────────────────────────────────────

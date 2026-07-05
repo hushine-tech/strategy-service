@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import account_service_pb2 as account__service__pb2
+from . import portfolio_service_pb2 as portfolio__service__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
@@ -18,15 +18,15 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in account_service_pb2_grpc.py depends on'
+        + ' but the generated code in portfolio_service_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class AccountServiceStub(object):
-    """Account registry RPCs for BFFs (e.g. quant-handler); wallet RPCs for strategy-service.
+class PortfolioServiceStub(object):
+    """Portfolio registry RPCs for BFFs (e.g. quant-handler); wallet RPCs for strategy-service.
     """
 
     def __init__(self, channel):
@@ -36,238 +36,253 @@ class AccountServiceStub(object):
             channel: A grpc.Channel.
         """
         self.CreateUser = channel.unary_unary(
-                '/account.v1.AccountService/CreateUser',
-                request_serializer=account__service__pb2.CreateUserRequest.SerializeToString,
-                response_deserializer=account__service__pb2.CreateUserResponse.FromString,
+                '/portfolio.v1.PortfolioService/CreateUser',
+                request_serializer=portfolio__service__pb2.CreateUserRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.CreateUserResponse.FromString,
                 _registered_method=True)
         self.VerifyUserPassword = channel.unary_unary(
-                '/account.v1.AccountService/VerifyUserPassword',
-                request_serializer=account__service__pb2.VerifyUserPasswordRequest.SerializeToString,
-                response_deserializer=account__service__pb2.VerifyUserPasswordResponse.FromString,
+                '/portfolio.v1.PortfolioService/VerifyUserPassword',
+                request_serializer=portfolio__service__pb2.VerifyUserPasswordRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.VerifyUserPasswordResponse.FromString,
                 _registered_method=True)
         self.GetUser = channel.unary_unary(
-                '/account.v1.AccountService/GetUser',
-                request_serializer=account__service__pb2.GetUserRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetUserResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetUser',
+                request_serializer=portfolio__service__pb2.GetUserRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetUserResponse.FromString,
                 _registered_method=True)
-        self.CreateAccount = channel.unary_unary(
-                '/account.v1.AccountService/CreateAccount',
-                request_serializer=account__service__pb2.CreateAccountRequest.SerializeToString,
-                response_deserializer=account__service__pb2.CreateAccountResponse.FromString,
+        self.CreatePortfolio = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/CreatePortfolio',
+                request_serializer=portfolio__service__pb2.CreatePortfolioRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.CreatePortfolioResponse.FromString,
                 _registered_method=True)
-        self.ListAccounts = channel.unary_unary(
-                '/account.v1.AccountService/ListAccounts',
-                request_serializer=account__service__pb2.ListAccountsRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListAccountsResponse.FromString,
+        self.ListPortfolios = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/ListPortfolios',
+                request_serializer=portfolio__service__pb2.ListPortfoliosRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListPortfoliosResponse.FromString,
                 _registered_method=True)
-        self.GetAccount = channel.unary_unary(
-                '/account.v1.AccountService/GetAccount',
-                request_serializer=account__service__pb2.GetAccountRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetAccountResponse.FromString,
+        self.GetPortfolio = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/GetPortfolio',
+                request_serializer=portfolio__service__pb2.GetPortfolioRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetPortfolioResponse.FromString,
                 _registered_method=True)
         self.CreateVenue = channel.unary_unary(
-                '/account.v1.AccountService/CreateVenue',
-                request_serializer=account__service__pb2.CreateVenueRequest.SerializeToString,
-                response_deserializer=account__service__pb2.CreateVenueResponse.FromString,
+                '/portfolio.v1.PortfolioService/CreateVenue',
+                request_serializer=portfolio__service__pb2.CreateVenueRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.CreateVenueResponse.FromString,
                 _registered_method=True)
         self.ListVenues = channel.unary_unary(
-                '/account.v1.AccountService/ListVenues',
-                request_serializer=account__service__pb2.ListVenuesRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListVenuesResponse.FromString,
+                '/portfolio.v1.PortfolioService/ListVenues',
+                request_serializer=portfolio__service__pb2.ListVenuesRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListVenuesResponse.FromString,
                 _registered_method=True)
         self.GetVenue = channel.unary_unary(
-                '/account.v1.AccountService/GetVenue',
-                request_serializer=account__service__pb2.GetVenueRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetVenueResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetVenue',
+                request_serializer=portfolio__service__pb2.GetVenueRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetVenueResponse.FromString,
                 _registered_method=True)
         self.GetVenueOnlineInfo = channel.unary_unary(
-                '/account.v1.AccountService/GetVenueOnlineInfo',
-                request_serializer=account__service__pb2.GetVenueOnlineInfoRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetVenueOnlineInfoResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetVenueOnlineInfo',
+                request_serializer=portfolio__service__pb2.GetVenueOnlineInfoRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetVenueOnlineInfoResponse.FromString,
                 _registered_method=True)
         self.BindVenue = channel.unary_unary(
-                '/account.v1.AccountService/BindVenue',
-                request_serializer=account__service__pb2.BindVenueRequest.SerializeToString,
-                response_deserializer=account__service__pb2.BindVenueResponse.FromString,
+                '/portfolio.v1.PortfolioService/BindVenue',
+                request_serializer=portfolio__service__pb2.BindVenueRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.BindVenueResponse.FromString,
                 _registered_method=True)
         self.ReleaseVenue = channel.unary_unary(
-                '/account.v1.AccountService/ReleaseVenue',
-                request_serializer=account__service__pb2.ReleaseVenueRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ReleaseVenueResponse.FromString,
+                '/portfolio.v1.PortfolioService/ReleaseVenue',
+                request_serializer=portfolio__service__pb2.ReleaseVenueRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ReleaseVenueResponse.FromString,
                 _registered_method=True)
         self.ArchiveVenue = channel.unary_unary(
-                '/account.v1.AccountService/ArchiveVenue',
-                request_serializer=account__service__pb2.ArchiveVenueRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ArchiveVenueResponse.FromString,
+                '/portfolio.v1.PortfolioService/ArchiveVenue',
+                request_serializer=portfolio__service__pb2.ArchiveVenueRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ArchiveVenueResponse.FromString,
                 _registered_method=True)
         self.PreflightStrategySession = channel.unary_unary(
-                '/account.v1.AccountService/PreflightStrategySession',
-                request_serializer=account__service__pb2.PreflightStrategySessionRequest.SerializeToString,
-                response_deserializer=account__service__pb2.PreflightStrategySessionResponse.FromString,
+                '/portfolio.v1.PortfolioService/PreflightStrategySession',
+                request_serializer=portfolio__service__pb2.PreflightStrategySessionRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.PreflightStrategySessionResponse.FromString,
                 _registered_method=True)
         self.GetVenueRouteMeta = channel.unary_unary(
-                '/account.v1.AccountService/GetVenueRouteMeta',
-                request_serializer=account__service__pb2.GetVenueRouteMetaRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetVenueRouteMetaResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetVenueRouteMeta',
+                request_serializer=portfolio__service__pb2.GetVenueRouteMetaRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetVenueRouteMetaResponse.FromString,
                 _registered_method=True)
         self.GetPortfolioSnapshot = channel.unary_unary(
-                '/account.v1.AccountService/GetPortfolioSnapshot',
-                request_serializer=account__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetPortfolioSnapshotResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetPortfolioSnapshot',
+                request_serializer=portfolio__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetPortfolioSnapshotResponse.FromString,
                 _registered_method=True)
         self.UpdatePortfolioSnapshot = channel.unary_unary(
-                '/account.v1.AccountService/UpdatePortfolioSnapshot',
-                request_serializer=account__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
-                response_deserializer=account__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
+                '/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot',
+                request_serializer=portfolio__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
                 _registered_method=True)
-        self.UpdateAccountWalletState = channel.unary_unary(
-                '/account.v1.AccountService/UpdateAccountWalletState',
-                request_serializer=account__service__pb2.UpdateAccountWalletStateRequest.SerializeToString,
-                response_deserializer=account__service__pb2.UpdateAccountWalletStateResponse.FromString,
+        self.UpdatePortfolioWalletState = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/UpdatePortfolioWalletState',
+                request_serializer=portfolio__service__pb2.UpdatePortfolioWalletStateRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.UpdatePortfolioWalletStateResponse.FromString,
                 _registered_method=True)
         self.ListSymbols = channel.unary_unary(
-                '/account.v1.AccountService/ListSymbols',
-                request_serializer=account__service__pb2.ListSymbolsRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListSymbolsResponse.FromString,
+                '/portfolio.v1.PortfolioService/ListSymbols',
+                request_serializer=portfolio__service__pb2.ListSymbolsRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListSymbolsResponse.FromString,
                 _registered_method=True)
-        self.GetAccountMeta = channel.unary_unary(
-                '/account.v1.AccountService/GetAccountMeta',
-                request_serializer=account__service__pb2.GetAccountMetaRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetAccountMetaResponse.FromString,
+        self.GetPortfolioMeta = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/GetPortfolioMeta',
+                request_serializer=portfolio__service__pb2.GetPortfolioMetaRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetPortfolioMetaResponse.FromString,
                 _registered_method=True)
         self.CreateStrategy = channel.unary_unary(
-                '/account.v1.AccountService/CreateStrategy',
-                request_serializer=account__service__pb2.CreateStrategyRequest.SerializeToString,
-                response_deserializer=account__service__pb2.CreateStrategyResponse.FromString,
+                '/portfolio.v1.PortfolioService/CreateStrategy',
+                request_serializer=portfolio__service__pb2.CreateStrategyRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.CreateStrategyResponse.FromString,
                 _registered_method=True)
         self.ListStrategies = channel.unary_unary(
-                '/account.v1.AccountService/ListStrategies',
-                request_serializer=account__service__pb2.ListStrategiesRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListStrategiesResponse.FromString,
+                '/portfolio.v1.PortfolioService/ListStrategies',
+                request_serializer=portfolio__service__pb2.ListStrategiesRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListStrategiesResponse.FromString,
                 _registered_method=True)
         self.GetStrategy = channel.unary_unary(
-                '/account.v1.AccountService/GetStrategy',
-                request_serializer=account__service__pb2.GetStrategyRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetStrategyResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetStrategy',
+                request_serializer=portfolio__service__pb2.GetStrategyRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetStrategyResponse.FromString,
                 _registered_method=True)
         self.ArchiveStrategy = channel.unary_unary(
-                '/account.v1.AccountService/ArchiveStrategy',
-                request_serializer=account__service__pb2.ArchiveStrategyRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ArchiveStrategyResponse.FromString,
+                '/portfolio.v1.PortfolioService/ArchiveStrategy',
+                request_serializer=portfolio__service__pb2.ArchiveStrategyRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ArchiveStrategyResponse.FromString,
                 _registered_method=True)
         self.MountStrategy = channel.unary_unary(
-                '/account.v1.AccountService/MountStrategy',
-                request_serializer=account__service__pb2.MountStrategyRequest.SerializeToString,
-                response_deserializer=account__service__pb2.MountStrategyResponse.FromString,
+                '/portfolio.v1.PortfolioService/MountStrategy',
+                request_serializer=portfolio__service__pb2.MountStrategyRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.MountStrategyResponse.FromString,
                 _registered_method=True)
         self.UnmountStrategy = channel.unary_unary(
-                '/account.v1.AccountService/UnmountStrategy',
-                request_serializer=account__service__pb2.UnmountStrategyRequest.SerializeToString,
-                response_deserializer=account__service__pb2.UnmountStrategyResponse.FromString,
+                '/portfolio.v1.PortfolioService/UnmountStrategy',
+                request_serializer=portfolio__service__pb2.UnmountStrategyRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.UnmountStrategyResponse.FromString,
                 _registered_method=True)
         self.ActivateStrategy = channel.unary_unary(
-                '/account.v1.AccountService/ActivateStrategy',
-                request_serializer=account__service__pb2.ActivateStrategyRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ActivateStrategyResponse.FromString,
+                '/portfolio.v1.PortfolioService/ActivateStrategy',
+                request_serializer=portfolio__service__pb2.ActivateStrategyRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ActivateStrategyResponse.FromString,
                 _registered_method=True)
         self.DeactivateStrategy = channel.unary_unary(
-                '/account.v1.AccountService/DeactivateStrategy',
-                request_serializer=account__service__pb2.DeactivateStrategyRequest.SerializeToString,
-                response_deserializer=account__service__pb2.DeactivateStrategyResponse.FromString,
+                '/portfolio.v1.PortfolioService/DeactivateStrategy',
+                request_serializer=portfolio__service__pb2.DeactivateStrategyRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.DeactivateStrategyResponse.FromString,
                 _registered_method=True)
-        self.ListAccountStrategies = channel.unary_unary(
-                '/account.v1.AccountService/ListAccountStrategies',
-                request_serializer=account__service__pb2.ListAccountStrategiesRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListAccountStrategiesResponse.FromString,
+        self.ListPortfolioStrategies = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/ListPortfolioStrategies',
+                request_serializer=portfolio__service__pb2.ListPortfolioStrategiesRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListPortfolioStrategiesResponse.FromString,
                 _registered_method=True)
         self.GetActiveStrategy = channel.unary_unary(
-                '/account.v1.AccountService/GetActiveStrategy',
-                request_serializer=account__service__pb2.GetActiveStrategyRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetActiveStrategyResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetActiveStrategy',
+                request_serializer=portfolio__service__pb2.GetActiveStrategyRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetActiveStrategyResponse.FromString,
                 _registered_method=True)
         self.SaveSession = channel.unary_unary(
-                '/account.v1.AccountService/SaveSession',
-                request_serializer=account__service__pb2.SaveSessionRequest.SerializeToString,
-                response_deserializer=account__service__pb2.SaveSessionResponse.FromString,
+                '/portfolio.v1.PortfolioService/SaveSession',
+                request_serializer=portfolio__service__pb2.SaveSessionRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.SaveSessionResponse.FromString,
                 _registered_method=True)
         self.UpdateSession = channel.unary_unary(
-                '/account.v1.AccountService/UpdateSession',
-                request_serializer=account__service__pb2.UpdateSessionRequest.SerializeToString,
-                response_deserializer=account__service__pb2.UpdateSessionResponse.FromString,
+                '/portfolio.v1.PortfolioService/UpdateSession',
+                request_serializer=portfolio__service__pb2.UpdateSessionRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.UpdateSessionResponse.FromString,
                 _registered_method=True)
         self.GetSession = channel.unary_unary(
-                '/account.v1.AccountService/GetSession',
-                request_serializer=account__service__pb2.GetSessionRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetSessionResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetSession',
+                request_serializer=portfolio__service__pb2.GetSessionRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetSessionResponse.FromString,
                 _registered_method=True)
         self.ListSessions = channel.unary_unary(
-                '/account.v1.AccountService/ListSessions',
-                request_serializer=account__service__pb2.ListSessionsRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListSessionsResponse.FromString,
+                '/portfolio.v1.PortfolioService/ListSessions',
+                request_serializer=portfolio__service__pb2.ListSessionsRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListSessionsResponse.FromString,
                 _registered_method=True)
         self.ListRunningSessions = channel.unary_unary(
-                '/account.v1.AccountService/ListRunningSessions',
-                request_serializer=account__service__pb2.ListRunningSessionsRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListRunningSessionsResponse.FromString,
+                '/portfolio.v1.PortfolioService/ListRunningSessions',
+                request_serializer=portfolio__service__pb2.ListRunningSessionsRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListRunningSessionsResponse.FromString,
                 _registered_method=True)
         self.MarkRuntimeSessionsRecoverable = channel.unary_unary(
-                '/account.v1.AccountService/MarkRuntimeSessionsRecoverable',
-                request_serializer=account__service__pb2.MarkRuntimeSessionsRecoverableRequest.SerializeToString,
-                response_deserializer=account__service__pb2.MarkRuntimeSessionsRecoverableResponse.FromString,
+                '/portfolio.v1.PortfolioService/MarkRuntimeSessionsRecoverable',
+                request_serializer=portfolio__service__pb2.MarkRuntimeSessionsRecoverableRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.MarkRuntimeSessionsRecoverableResponse.FromString,
                 _registered_method=True)
         self.ListSessionSnapshots = channel.unary_unary(
-                '/account.v1.AccountService/ListSessionSnapshots',
-                request_serializer=account__service__pb2.ListSessionSnapshotsRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListSessionSnapshotsResponse.FromString,
+                '/portfolio.v1.PortfolioService/ListSessionSnapshots',
+                request_serializer=portfolio__service__pb2.ListSessionSnapshotsRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListSessionSnapshotsResponse.FromString,
                 _registered_method=True)
         self.ListReconciliationRuns = channel.unary_unary(
-                '/account.v1.AccountService/ListReconciliationRuns',
-                request_serializer=account__service__pb2.ListReconciliationRunsRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ListReconciliationRunsResponse.FromString,
+                '/portfolio.v1.PortfolioService/ListReconciliationRuns',
+                request_serializer=portfolio__service__pb2.ListReconciliationRunsRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListReconciliationRunsResponse.FromString,
                 _registered_method=True)
         self.GetSessionReconciliationSummary = channel.unary_unary(
-                '/account.v1.AccountService/GetSessionReconciliationSummary',
-                request_serializer=account__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetSessionReconciliationSummary',
+                request_serializer=portfolio__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
+                _registered_method=True)
+        self.SaveStrategyIndicators = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/SaveStrategyIndicators',
+                request_serializer=portfolio__service__pb2.SaveStrategyIndicatorsRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.SaveStrategyIndicatorsResponse.FromString,
+                _registered_method=True)
+        self.ListStrategyIndicators = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/ListStrategyIndicators',
+                request_serializer=portfolio__service__pb2.ListStrategyIndicatorsRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListStrategyIndicatorsResponse.FromString,
+                _registered_method=True)
+        self.ListStrategyIndicatorChunks = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/ListStrategyIndicatorChunks',
+                request_serializer=portfolio__service__pb2.ListStrategyIndicatorChunksRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListStrategyIndicatorChunksResponse.FromString,
                 _registered_method=True)
         self.GetNotificationSettings = channel.unary_unary(
-                '/account.v1.AccountService/GetNotificationSettings',
-                request_serializer=account__service__pb2.GetNotificationSettingsRequest.SerializeToString,
-                response_deserializer=account__service__pb2.GetNotificationSettingsResponse.FromString,
+                '/portfolio.v1.PortfolioService/GetNotificationSettings',
+                request_serializer=portfolio__service__pb2.GetNotificationSettingsRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetNotificationSettingsResponse.FromString,
                 _registered_method=True)
         self.UpdateNotificationPreferences = channel.unary_unary(
-                '/account.v1.AccountService/UpdateNotificationPreferences',
-                request_serializer=account__service__pb2.UpdateNotificationPreferencesRequest.SerializeToString,
-                response_deserializer=account__service__pb2.UpdateNotificationPreferencesResponse.FromString,
+                '/portfolio.v1.PortfolioService/UpdateNotificationPreferences',
+                request_serializer=portfolio__service__pb2.UpdateNotificationPreferencesRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.UpdateNotificationPreferencesResponse.FromString,
                 _registered_method=True)
         self.CreateNotificationBindCode = channel.unary_unary(
-                '/account.v1.AccountService/CreateNotificationBindCode',
-                request_serializer=account__service__pb2.CreateNotificationBindCodeRequest.SerializeToString,
-                response_deserializer=account__service__pb2.CreateNotificationBindCodeResponse.FromString,
+                '/portfolio.v1.PortfolioService/CreateNotificationBindCode',
+                request_serializer=portfolio__service__pb2.CreateNotificationBindCodeRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.CreateNotificationBindCodeResponse.FromString,
                 _registered_method=True)
         self.ConfirmNotificationBinding = channel.unary_unary(
-                '/account.v1.AccountService/ConfirmNotificationBinding',
-                request_serializer=account__service__pb2.ConfirmNotificationBindingRequest.SerializeToString,
-                response_deserializer=account__service__pb2.ConfirmNotificationBindingResponse.FromString,
+                '/portfolio.v1.PortfolioService/ConfirmNotificationBinding',
+                request_serializer=portfolio__service__pb2.ConfirmNotificationBindingRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ConfirmNotificationBindingResponse.FromString,
                 _registered_method=True)
         self.UnbindNotificationChannel = channel.unary_unary(
-                '/account.v1.AccountService/UnbindNotificationChannel',
-                request_serializer=account__service__pb2.UnbindNotificationChannelRequest.SerializeToString,
-                response_deserializer=account__service__pb2.UnbindNotificationChannelResponse.FromString,
+                '/portfolio.v1.PortfolioService/UnbindNotificationChannel',
+                request_serializer=portfolio__service__pb2.UnbindNotificationChannelRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.UnbindNotificationChannelResponse.FromString,
                 _registered_method=True)
         self.SendTestNotification = channel.unary_unary(
-                '/account.v1.AccountService/SendTestNotification',
-                request_serializer=account__service__pb2.SendTestNotificationRequest.SerializeToString,
-                response_deserializer=account__service__pb2.SendTestNotificationResponse.FromString,
+                '/portfolio.v1.PortfolioService/SendTestNotification',
+                request_serializer=portfolio__service__pb2.SendTestNotificationRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.SendTestNotificationResponse.FromString,
                 _registered_method=True)
 
 
-class AccountServiceServicer(object):
-    """Account registry RPCs for BFFs (e.g. quant-handler); wallet RPCs for strategy-service.
+class PortfolioServiceServicer(object):
+    """Portfolio registry RPCs for BFFs (e.g. quant-handler); wallet RPCs for strategy-service.
     """
 
     def CreateUser(self, request, context):
-        """Create a user account (internal auth store for quant-handler).
+        """Create a user portfolio (internal auth store for quant-handler).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -289,22 +304,22 @@ class AccountServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def CreateAccount(self, request, context):
-        """Create a trading account (same rules as HTTP POST /accounts).
+    def CreatePortfolio(self, request, context):
+        """Create a trading portfolio (same rules as HTTP POST /portfolios).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ListAccounts(self, request, context):
-        """List accounts; credentials are never returned.
+    def ListPortfolios(self, request, context):
+        """List portfolios; credentials are never returned.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetAccount(self, request, context):
-        """Get one account by id; credentials are never returned.
+    def GetPortfolio(self, request, context):
+        """Get one portfolio by id; credentials are never returned.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -365,8 +380,8 @@ class AccountServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def GetPortfolioSnapshot(self, request, context):
-        """Phase 2 canonical portfolio snapshot API. It reads active account venues
-        through the exchange capability registry and returns account-level summary
+        """Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
+        through the exchange capability registry and returns portfolio-level summary
         plus per-venue balances/positions.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -375,16 +390,16 @@ class AccountServiceServicer(object):
 
     def UpdatePortfolioSnapshot(self, request, context):
         """Refresh and persist the current portfolio snapshot. Exchange-backed
-        accounts read from active venues; backtest accounts read local state.
+        portfolios read from active venues; backtest portfolios read local state.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def UpdateAccountWalletState(self, request, context):
+    def UpdatePortfolioWalletState(self, request, context):
         """Push strategy-computed wallet state for snapshot/audit sync.
-        Backtest accounts persist it as authoritative local state; exchange-backed
-        accounts use it as the local side of reconciliation.
+        Backtest portfolios persist it as authoritative local state; exchange-backed
+        portfolios use it as the local side of reconciliation.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -397,8 +412,8 @@ class AccountServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetAccountMeta(self, request, context):
-        """Internal RPC: returns full account config including API credentials.
+    def GetPortfolioMeta(self, request, context):
+        """Internal RPC: returns full portfolio config including API credentials.
         Intended for the internal order module only; NOT exposed to BFFs/portals.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -465,7 +480,7 @@ class AccountServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ListAccountStrategies(self, request, context):
+    def ListPortfolioStrategies(self, request, context):
         """列出帐号上所有已挂载策略
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -545,6 +560,27 @@ class AccountServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SaveStrategyIndicators(self, request, context):
+        """保存 strategy runtime 输出的 session 级自定义指标声明和 chunk 数据。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListStrategyIndicators(self, request, context):
+        """列出 session 自定义指标声明。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListStrategyIndicatorChunks(self, request, context):
+        """按时间窗口列出 session 自定义指标 chunk。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetNotificationSettings(self, request, context):
         """── 通知管理（Notification Management）────────────────────────────────────
 
@@ -590,243 +626,258 @@ class AccountServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
 
-def add_AccountServiceServicer_to_server(servicer, server):
+def add_PortfolioServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'CreateUser': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateUser,
-                    request_deserializer=account__service__pb2.CreateUserRequest.FromString,
-                    response_serializer=account__service__pb2.CreateUserResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.CreateUserRequest.FromString,
+                    response_serializer=portfolio__service__pb2.CreateUserResponse.SerializeToString,
             ),
             'VerifyUserPassword': grpc.unary_unary_rpc_method_handler(
                     servicer.VerifyUserPassword,
-                    request_deserializer=account__service__pb2.VerifyUserPasswordRequest.FromString,
-                    response_serializer=account__service__pb2.VerifyUserPasswordResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.VerifyUserPasswordRequest.FromString,
+                    response_serializer=portfolio__service__pb2.VerifyUserPasswordResponse.SerializeToString,
             ),
             'GetUser': grpc.unary_unary_rpc_method_handler(
                     servicer.GetUser,
-                    request_deserializer=account__service__pb2.GetUserRequest.FromString,
-                    response_serializer=account__service__pb2.GetUserResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetUserRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetUserResponse.SerializeToString,
             ),
-            'CreateAccount': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateAccount,
-                    request_deserializer=account__service__pb2.CreateAccountRequest.FromString,
-                    response_serializer=account__service__pb2.CreateAccountResponse.SerializeToString,
+            'CreatePortfolio': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreatePortfolio,
+                    request_deserializer=portfolio__service__pb2.CreatePortfolioRequest.FromString,
+                    response_serializer=portfolio__service__pb2.CreatePortfolioResponse.SerializeToString,
             ),
-            'ListAccounts': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListAccounts,
-                    request_deserializer=account__service__pb2.ListAccountsRequest.FromString,
-                    response_serializer=account__service__pb2.ListAccountsResponse.SerializeToString,
+            'ListPortfolios': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListPortfolios,
+                    request_deserializer=portfolio__service__pb2.ListPortfoliosRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListPortfoliosResponse.SerializeToString,
             ),
-            'GetAccount': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetAccount,
-                    request_deserializer=account__service__pb2.GetAccountRequest.FromString,
-                    response_serializer=account__service__pb2.GetAccountResponse.SerializeToString,
+            'GetPortfolio': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPortfolio,
+                    request_deserializer=portfolio__service__pb2.GetPortfolioRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetPortfolioResponse.SerializeToString,
             ),
             'CreateVenue': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateVenue,
-                    request_deserializer=account__service__pb2.CreateVenueRequest.FromString,
-                    response_serializer=account__service__pb2.CreateVenueResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.CreateVenueRequest.FromString,
+                    response_serializer=portfolio__service__pb2.CreateVenueResponse.SerializeToString,
             ),
             'ListVenues': grpc.unary_unary_rpc_method_handler(
                     servicer.ListVenues,
-                    request_deserializer=account__service__pb2.ListVenuesRequest.FromString,
-                    response_serializer=account__service__pb2.ListVenuesResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ListVenuesRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListVenuesResponse.SerializeToString,
             ),
             'GetVenue': grpc.unary_unary_rpc_method_handler(
                     servicer.GetVenue,
-                    request_deserializer=account__service__pb2.GetVenueRequest.FromString,
-                    response_serializer=account__service__pb2.GetVenueResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetVenueRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetVenueResponse.SerializeToString,
             ),
             'GetVenueOnlineInfo': grpc.unary_unary_rpc_method_handler(
                     servicer.GetVenueOnlineInfo,
-                    request_deserializer=account__service__pb2.GetVenueOnlineInfoRequest.FromString,
-                    response_serializer=account__service__pb2.GetVenueOnlineInfoResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetVenueOnlineInfoRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetVenueOnlineInfoResponse.SerializeToString,
             ),
             'BindVenue': grpc.unary_unary_rpc_method_handler(
                     servicer.BindVenue,
-                    request_deserializer=account__service__pb2.BindVenueRequest.FromString,
-                    response_serializer=account__service__pb2.BindVenueResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.BindVenueRequest.FromString,
+                    response_serializer=portfolio__service__pb2.BindVenueResponse.SerializeToString,
             ),
             'ReleaseVenue': grpc.unary_unary_rpc_method_handler(
                     servicer.ReleaseVenue,
-                    request_deserializer=account__service__pb2.ReleaseVenueRequest.FromString,
-                    response_serializer=account__service__pb2.ReleaseVenueResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ReleaseVenueRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ReleaseVenueResponse.SerializeToString,
             ),
             'ArchiveVenue': grpc.unary_unary_rpc_method_handler(
                     servicer.ArchiveVenue,
-                    request_deserializer=account__service__pb2.ArchiveVenueRequest.FromString,
-                    response_serializer=account__service__pb2.ArchiveVenueResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ArchiveVenueRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ArchiveVenueResponse.SerializeToString,
             ),
             'PreflightStrategySession': grpc.unary_unary_rpc_method_handler(
                     servicer.PreflightStrategySession,
-                    request_deserializer=account__service__pb2.PreflightStrategySessionRequest.FromString,
-                    response_serializer=account__service__pb2.PreflightStrategySessionResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.PreflightStrategySessionRequest.FromString,
+                    response_serializer=portfolio__service__pb2.PreflightStrategySessionResponse.SerializeToString,
             ),
             'GetVenueRouteMeta': grpc.unary_unary_rpc_method_handler(
                     servicer.GetVenueRouteMeta,
-                    request_deserializer=account__service__pb2.GetVenueRouteMetaRequest.FromString,
-                    response_serializer=account__service__pb2.GetVenueRouteMetaResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetVenueRouteMetaRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetVenueRouteMetaResponse.SerializeToString,
             ),
             'GetPortfolioSnapshot': grpc.unary_unary_rpc_method_handler(
                     servicer.GetPortfolioSnapshot,
-                    request_deserializer=account__service__pb2.GetPortfolioSnapshotRequest.FromString,
-                    response_serializer=account__service__pb2.GetPortfolioSnapshotResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetPortfolioSnapshotRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetPortfolioSnapshotResponse.SerializeToString,
             ),
             'UpdatePortfolioSnapshot': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdatePortfolioSnapshot,
-                    request_deserializer=account__service__pb2.UpdatePortfolioSnapshotRequest.FromString,
-                    response_serializer=account__service__pb2.UpdatePortfolioSnapshotResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.UpdatePortfolioSnapshotRequest.FromString,
+                    response_serializer=portfolio__service__pb2.UpdatePortfolioSnapshotResponse.SerializeToString,
             ),
-            'UpdateAccountWalletState': grpc.unary_unary_rpc_method_handler(
-                    servicer.UpdateAccountWalletState,
-                    request_deserializer=account__service__pb2.UpdateAccountWalletStateRequest.FromString,
-                    response_serializer=account__service__pb2.UpdateAccountWalletStateResponse.SerializeToString,
+            'UpdatePortfolioWalletState': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdatePortfolioWalletState,
+                    request_deserializer=portfolio__service__pb2.UpdatePortfolioWalletStateRequest.FromString,
+                    response_serializer=portfolio__service__pb2.UpdatePortfolioWalletStateResponse.SerializeToString,
             ),
             'ListSymbols': grpc.unary_unary_rpc_method_handler(
                     servicer.ListSymbols,
-                    request_deserializer=account__service__pb2.ListSymbolsRequest.FromString,
-                    response_serializer=account__service__pb2.ListSymbolsResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ListSymbolsRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListSymbolsResponse.SerializeToString,
             ),
-            'GetAccountMeta': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetAccountMeta,
-                    request_deserializer=account__service__pb2.GetAccountMetaRequest.FromString,
-                    response_serializer=account__service__pb2.GetAccountMetaResponse.SerializeToString,
+            'GetPortfolioMeta': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPortfolioMeta,
+                    request_deserializer=portfolio__service__pb2.GetPortfolioMetaRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetPortfolioMetaResponse.SerializeToString,
             ),
             'CreateStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateStrategy,
-                    request_deserializer=account__service__pb2.CreateStrategyRequest.FromString,
-                    response_serializer=account__service__pb2.CreateStrategyResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.CreateStrategyRequest.FromString,
+                    response_serializer=portfolio__service__pb2.CreateStrategyResponse.SerializeToString,
             ),
             'ListStrategies': grpc.unary_unary_rpc_method_handler(
                     servicer.ListStrategies,
-                    request_deserializer=account__service__pb2.ListStrategiesRequest.FromString,
-                    response_serializer=account__service__pb2.ListStrategiesResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ListStrategiesRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListStrategiesResponse.SerializeToString,
             ),
             'GetStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.GetStrategy,
-                    request_deserializer=account__service__pb2.GetStrategyRequest.FromString,
-                    response_serializer=account__service__pb2.GetStrategyResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetStrategyRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetStrategyResponse.SerializeToString,
             ),
             'ArchiveStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.ArchiveStrategy,
-                    request_deserializer=account__service__pb2.ArchiveStrategyRequest.FromString,
-                    response_serializer=account__service__pb2.ArchiveStrategyResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ArchiveStrategyRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ArchiveStrategyResponse.SerializeToString,
             ),
             'MountStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.MountStrategy,
-                    request_deserializer=account__service__pb2.MountStrategyRequest.FromString,
-                    response_serializer=account__service__pb2.MountStrategyResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.MountStrategyRequest.FromString,
+                    response_serializer=portfolio__service__pb2.MountStrategyResponse.SerializeToString,
             ),
             'UnmountStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.UnmountStrategy,
-                    request_deserializer=account__service__pb2.UnmountStrategyRequest.FromString,
-                    response_serializer=account__service__pb2.UnmountStrategyResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.UnmountStrategyRequest.FromString,
+                    response_serializer=portfolio__service__pb2.UnmountStrategyResponse.SerializeToString,
             ),
             'ActivateStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.ActivateStrategy,
-                    request_deserializer=account__service__pb2.ActivateStrategyRequest.FromString,
-                    response_serializer=account__service__pb2.ActivateStrategyResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ActivateStrategyRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ActivateStrategyResponse.SerializeToString,
             ),
             'DeactivateStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.DeactivateStrategy,
-                    request_deserializer=account__service__pb2.DeactivateStrategyRequest.FromString,
-                    response_serializer=account__service__pb2.DeactivateStrategyResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.DeactivateStrategyRequest.FromString,
+                    response_serializer=portfolio__service__pb2.DeactivateStrategyResponse.SerializeToString,
             ),
-            'ListAccountStrategies': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListAccountStrategies,
-                    request_deserializer=account__service__pb2.ListAccountStrategiesRequest.FromString,
-                    response_serializer=account__service__pb2.ListAccountStrategiesResponse.SerializeToString,
+            'ListPortfolioStrategies': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListPortfolioStrategies,
+                    request_deserializer=portfolio__service__pb2.ListPortfolioStrategiesRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListPortfolioStrategiesResponse.SerializeToString,
             ),
             'GetActiveStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.GetActiveStrategy,
-                    request_deserializer=account__service__pb2.GetActiveStrategyRequest.FromString,
-                    response_serializer=account__service__pb2.GetActiveStrategyResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetActiveStrategyRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetActiveStrategyResponse.SerializeToString,
             ),
             'SaveSession': grpc.unary_unary_rpc_method_handler(
                     servicer.SaveSession,
-                    request_deserializer=account__service__pb2.SaveSessionRequest.FromString,
-                    response_serializer=account__service__pb2.SaveSessionResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.SaveSessionRequest.FromString,
+                    response_serializer=portfolio__service__pb2.SaveSessionResponse.SerializeToString,
             ),
             'UpdateSession': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdateSession,
-                    request_deserializer=account__service__pb2.UpdateSessionRequest.FromString,
-                    response_serializer=account__service__pb2.UpdateSessionResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.UpdateSessionRequest.FromString,
+                    response_serializer=portfolio__service__pb2.UpdateSessionResponse.SerializeToString,
             ),
             'GetSession': grpc.unary_unary_rpc_method_handler(
                     servicer.GetSession,
-                    request_deserializer=account__service__pb2.GetSessionRequest.FromString,
-                    response_serializer=account__service__pb2.GetSessionResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetSessionRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetSessionResponse.SerializeToString,
             ),
             'ListSessions': grpc.unary_unary_rpc_method_handler(
                     servicer.ListSessions,
-                    request_deserializer=account__service__pb2.ListSessionsRequest.FromString,
-                    response_serializer=account__service__pb2.ListSessionsResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ListSessionsRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListSessionsResponse.SerializeToString,
             ),
             'ListRunningSessions': grpc.unary_unary_rpc_method_handler(
                     servicer.ListRunningSessions,
-                    request_deserializer=account__service__pb2.ListRunningSessionsRequest.FromString,
-                    response_serializer=account__service__pb2.ListRunningSessionsResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ListRunningSessionsRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListRunningSessionsResponse.SerializeToString,
             ),
             'MarkRuntimeSessionsRecoverable': grpc.unary_unary_rpc_method_handler(
                     servicer.MarkRuntimeSessionsRecoverable,
-                    request_deserializer=account__service__pb2.MarkRuntimeSessionsRecoverableRequest.FromString,
-                    response_serializer=account__service__pb2.MarkRuntimeSessionsRecoverableResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.MarkRuntimeSessionsRecoverableRequest.FromString,
+                    response_serializer=portfolio__service__pb2.MarkRuntimeSessionsRecoverableResponse.SerializeToString,
             ),
             'ListSessionSnapshots': grpc.unary_unary_rpc_method_handler(
                     servicer.ListSessionSnapshots,
-                    request_deserializer=account__service__pb2.ListSessionSnapshotsRequest.FromString,
-                    response_serializer=account__service__pb2.ListSessionSnapshotsResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ListSessionSnapshotsRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListSessionSnapshotsResponse.SerializeToString,
             ),
             'ListReconciliationRuns': grpc.unary_unary_rpc_method_handler(
                     servicer.ListReconciliationRuns,
-                    request_deserializer=account__service__pb2.ListReconciliationRunsRequest.FromString,
-                    response_serializer=account__service__pb2.ListReconciliationRunsResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ListReconciliationRunsRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListReconciliationRunsResponse.SerializeToString,
             ),
             'GetSessionReconciliationSummary': grpc.unary_unary_rpc_method_handler(
                     servicer.GetSessionReconciliationSummary,
-                    request_deserializer=account__service__pb2.GetSessionReconciliationSummaryRequest.FromString,
-                    response_serializer=account__service__pb2.GetSessionReconciliationSummaryResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetSessionReconciliationSummaryRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetSessionReconciliationSummaryResponse.SerializeToString,
+            ),
+            'SaveStrategyIndicators': grpc.unary_unary_rpc_method_handler(
+                    servicer.SaveStrategyIndicators,
+                    request_deserializer=portfolio__service__pb2.SaveStrategyIndicatorsRequest.FromString,
+                    response_serializer=portfolio__service__pb2.SaveStrategyIndicatorsResponse.SerializeToString,
+            ),
+            'ListStrategyIndicators': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListStrategyIndicators,
+                    request_deserializer=portfolio__service__pb2.ListStrategyIndicatorsRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListStrategyIndicatorsResponse.SerializeToString,
+            ),
+            'ListStrategyIndicatorChunks': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListStrategyIndicatorChunks,
+                    request_deserializer=portfolio__service__pb2.ListStrategyIndicatorChunksRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListStrategyIndicatorChunksResponse.SerializeToString,
             ),
             'GetNotificationSettings': grpc.unary_unary_rpc_method_handler(
                     servicer.GetNotificationSettings,
-                    request_deserializer=account__service__pb2.GetNotificationSettingsRequest.FromString,
-                    response_serializer=account__service__pb2.GetNotificationSettingsResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.GetNotificationSettingsRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetNotificationSettingsResponse.SerializeToString,
             ),
             'UpdateNotificationPreferences': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdateNotificationPreferences,
-                    request_deserializer=account__service__pb2.UpdateNotificationPreferencesRequest.FromString,
-                    response_serializer=account__service__pb2.UpdateNotificationPreferencesResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.UpdateNotificationPreferencesRequest.FromString,
+                    response_serializer=portfolio__service__pb2.UpdateNotificationPreferencesResponse.SerializeToString,
             ),
             'CreateNotificationBindCode': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateNotificationBindCode,
-                    request_deserializer=account__service__pb2.CreateNotificationBindCodeRequest.FromString,
-                    response_serializer=account__service__pb2.CreateNotificationBindCodeResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.CreateNotificationBindCodeRequest.FromString,
+                    response_serializer=portfolio__service__pb2.CreateNotificationBindCodeResponse.SerializeToString,
             ),
             'ConfirmNotificationBinding': grpc.unary_unary_rpc_method_handler(
                     servicer.ConfirmNotificationBinding,
-                    request_deserializer=account__service__pb2.ConfirmNotificationBindingRequest.FromString,
-                    response_serializer=account__service__pb2.ConfirmNotificationBindingResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.ConfirmNotificationBindingRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ConfirmNotificationBindingResponse.SerializeToString,
             ),
             'UnbindNotificationChannel': grpc.unary_unary_rpc_method_handler(
                     servicer.UnbindNotificationChannel,
-                    request_deserializer=account__service__pb2.UnbindNotificationChannelRequest.FromString,
-                    response_serializer=account__service__pb2.UnbindNotificationChannelResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.UnbindNotificationChannelRequest.FromString,
+                    response_serializer=portfolio__service__pb2.UnbindNotificationChannelResponse.SerializeToString,
             ),
             'SendTestNotification': grpc.unary_unary_rpc_method_handler(
                     servicer.SendTestNotification,
-                    request_deserializer=account__service__pb2.SendTestNotificationRequest.FromString,
-                    response_serializer=account__service__pb2.SendTestNotificationResponse.SerializeToString,
+                    request_deserializer=portfolio__service__pb2.SendTestNotificationRequest.FromString,
+                    response_serializer=portfolio__service__pb2.SendTestNotificationResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'account.v1.AccountService', rpc_method_handlers)
+            'portfolio.v1.PortfolioService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('account.v1.AccountService', rpc_method_handlers)
+    server.add_registered_method_handlers('portfolio.v1.PortfolioService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class AccountService(object):
-    """Account registry RPCs for BFFs (e.g. quant-handler); wallet RPCs for strategy-service.
+class PortfolioService(object):
+    """Portfolio registry RPCs for BFFs (e.g. quant-handler); wallet RPCs for strategy-service.
     """
 
     @staticmethod
@@ -843,9 +894,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/CreateUser',
-            account__service__pb2.CreateUserRequest.SerializeToString,
-            account__service__pb2.CreateUserResponse.FromString,
+            '/portfolio.v1.PortfolioService/CreateUser',
+            portfolio__service__pb2.CreateUserRequest.SerializeToString,
+            portfolio__service__pb2.CreateUserResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -870,9 +921,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/VerifyUserPassword',
-            account__service__pb2.VerifyUserPasswordRequest.SerializeToString,
-            account__service__pb2.VerifyUserPasswordResponse.FromString,
+            '/portfolio.v1.PortfolioService/VerifyUserPassword',
+            portfolio__service__pb2.VerifyUserPasswordRequest.SerializeToString,
+            portfolio__service__pb2.VerifyUserPasswordResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -897,9 +948,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetUser',
-            account__service__pb2.GetUserRequest.SerializeToString,
-            account__service__pb2.GetUserResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetUser',
+            portfolio__service__pb2.GetUserRequest.SerializeToString,
+            portfolio__service__pb2.GetUserResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -911,7 +962,7 @@ class AccountService(object):
             _registered_method=True)
 
     @staticmethod
-    def CreateAccount(request,
+    def CreatePortfolio(request,
             target,
             options=(),
             channel_credentials=None,
@@ -924,9 +975,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/CreateAccount',
-            account__service__pb2.CreateAccountRequest.SerializeToString,
-            account__service__pb2.CreateAccountResponse.FromString,
+            '/portfolio.v1.PortfolioService/CreatePortfolio',
+            portfolio__service__pb2.CreatePortfolioRequest.SerializeToString,
+            portfolio__service__pb2.CreatePortfolioResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -938,7 +989,7 @@ class AccountService(object):
             _registered_method=True)
 
     @staticmethod
-    def ListAccounts(request,
+    def ListPortfolios(request,
             target,
             options=(),
             channel_credentials=None,
@@ -951,9 +1002,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListAccounts',
-            account__service__pb2.ListAccountsRequest.SerializeToString,
-            account__service__pb2.ListAccountsResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListPortfolios',
+            portfolio__service__pb2.ListPortfoliosRequest.SerializeToString,
+            portfolio__service__pb2.ListPortfoliosResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -965,7 +1016,7 @@ class AccountService(object):
             _registered_method=True)
 
     @staticmethod
-    def GetAccount(request,
+    def GetPortfolio(request,
             target,
             options=(),
             channel_credentials=None,
@@ -978,9 +1029,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetAccount',
-            account__service__pb2.GetAccountRequest.SerializeToString,
-            account__service__pb2.GetAccountResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetPortfolio',
+            portfolio__service__pb2.GetPortfolioRequest.SerializeToString,
+            portfolio__service__pb2.GetPortfolioResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1005,9 +1056,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/CreateVenue',
-            account__service__pb2.CreateVenueRequest.SerializeToString,
-            account__service__pb2.CreateVenueResponse.FromString,
+            '/portfolio.v1.PortfolioService/CreateVenue',
+            portfolio__service__pb2.CreateVenueRequest.SerializeToString,
+            portfolio__service__pb2.CreateVenueResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1032,9 +1083,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListVenues',
-            account__service__pb2.ListVenuesRequest.SerializeToString,
-            account__service__pb2.ListVenuesResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListVenues',
+            portfolio__service__pb2.ListVenuesRequest.SerializeToString,
+            portfolio__service__pb2.ListVenuesResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1059,9 +1110,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetVenue',
-            account__service__pb2.GetVenueRequest.SerializeToString,
-            account__service__pb2.GetVenueResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetVenue',
+            portfolio__service__pb2.GetVenueRequest.SerializeToString,
+            portfolio__service__pb2.GetVenueResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1086,9 +1137,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetVenueOnlineInfo',
-            account__service__pb2.GetVenueOnlineInfoRequest.SerializeToString,
-            account__service__pb2.GetVenueOnlineInfoResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetVenueOnlineInfo',
+            portfolio__service__pb2.GetVenueOnlineInfoRequest.SerializeToString,
+            portfolio__service__pb2.GetVenueOnlineInfoResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1113,9 +1164,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/BindVenue',
-            account__service__pb2.BindVenueRequest.SerializeToString,
-            account__service__pb2.BindVenueResponse.FromString,
+            '/portfolio.v1.PortfolioService/BindVenue',
+            portfolio__service__pb2.BindVenueRequest.SerializeToString,
+            portfolio__service__pb2.BindVenueResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1140,9 +1191,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ReleaseVenue',
-            account__service__pb2.ReleaseVenueRequest.SerializeToString,
-            account__service__pb2.ReleaseVenueResponse.FromString,
+            '/portfolio.v1.PortfolioService/ReleaseVenue',
+            portfolio__service__pb2.ReleaseVenueRequest.SerializeToString,
+            portfolio__service__pb2.ReleaseVenueResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1167,9 +1218,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ArchiveVenue',
-            account__service__pb2.ArchiveVenueRequest.SerializeToString,
-            account__service__pb2.ArchiveVenueResponse.FromString,
+            '/portfolio.v1.PortfolioService/ArchiveVenue',
+            portfolio__service__pb2.ArchiveVenueRequest.SerializeToString,
+            portfolio__service__pb2.ArchiveVenueResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1194,9 +1245,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/PreflightStrategySession',
-            account__service__pb2.PreflightStrategySessionRequest.SerializeToString,
-            account__service__pb2.PreflightStrategySessionResponse.FromString,
+            '/portfolio.v1.PortfolioService/PreflightStrategySession',
+            portfolio__service__pb2.PreflightStrategySessionRequest.SerializeToString,
+            portfolio__service__pb2.PreflightStrategySessionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1221,9 +1272,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetVenueRouteMeta',
-            account__service__pb2.GetVenueRouteMetaRequest.SerializeToString,
-            account__service__pb2.GetVenueRouteMetaResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetVenueRouteMeta',
+            portfolio__service__pb2.GetVenueRouteMetaRequest.SerializeToString,
+            portfolio__service__pb2.GetVenueRouteMetaResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1248,9 +1299,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetPortfolioSnapshot',
-            account__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
-            account__service__pb2.GetPortfolioSnapshotResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetPortfolioSnapshot',
+            portfolio__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
+            portfolio__service__pb2.GetPortfolioSnapshotResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1275,9 +1326,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/UpdatePortfolioSnapshot',
-            account__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
-            account__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
+            '/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot',
+            portfolio__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
+            portfolio__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1289,7 +1340,7 @@ class AccountService(object):
             _registered_method=True)
 
     @staticmethod
-    def UpdateAccountWalletState(request,
+    def UpdatePortfolioWalletState(request,
             target,
             options=(),
             channel_credentials=None,
@@ -1302,9 +1353,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/UpdateAccountWalletState',
-            account__service__pb2.UpdateAccountWalletStateRequest.SerializeToString,
-            account__service__pb2.UpdateAccountWalletStateResponse.FromString,
+            '/portfolio.v1.PortfolioService/UpdatePortfolioWalletState',
+            portfolio__service__pb2.UpdatePortfolioWalletStateRequest.SerializeToString,
+            portfolio__service__pb2.UpdatePortfolioWalletStateResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1329,9 +1380,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListSymbols',
-            account__service__pb2.ListSymbolsRequest.SerializeToString,
-            account__service__pb2.ListSymbolsResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListSymbols',
+            portfolio__service__pb2.ListSymbolsRequest.SerializeToString,
+            portfolio__service__pb2.ListSymbolsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1343,7 +1394,7 @@ class AccountService(object):
             _registered_method=True)
 
     @staticmethod
-    def GetAccountMeta(request,
+    def GetPortfolioMeta(request,
             target,
             options=(),
             channel_credentials=None,
@@ -1356,9 +1407,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetAccountMeta',
-            account__service__pb2.GetAccountMetaRequest.SerializeToString,
-            account__service__pb2.GetAccountMetaResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetPortfolioMeta',
+            portfolio__service__pb2.GetPortfolioMetaRequest.SerializeToString,
+            portfolio__service__pb2.GetPortfolioMetaResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1383,9 +1434,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/CreateStrategy',
-            account__service__pb2.CreateStrategyRequest.SerializeToString,
-            account__service__pb2.CreateStrategyResponse.FromString,
+            '/portfolio.v1.PortfolioService/CreateStrategy',
+            portfolio__service__pb2.CreateStrategyRequest.SerializeToString,
+            portfolio__service__pb2.CreateStrategyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1410,9 +1461,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListStrategies',
-            account__service__pb2.ListStrategiesRequest.SerializeToString,
-            account__service__pb2.ListStrategiesResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListStrategies',
+            portfolio__service__pb2.ListStrategiesRequest.SerializeToString,
+            portfolio__service__pb2.ListStrategiesResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1437,9 +1488,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetStrategy',
-            account__service__pb2.GetStrategyRequest.SerializeToString,
-            account__service__pb2.GetStrategyResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetStrategy',
+            portfolio__service__pb2.GetStrategyRequest.SerializeToString,
+            portfolio__service__pb2.GetStrategyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1464,9 +1515,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ArchiveStrategy',
-            account__service__pb2.ArchiveStrategyRequest.SerializeToString,
-            account__service__pb2.ArchiveStrategyResponse.FromString,
+            '/portfolio.v1.PortfolioService/ArchiveStrategy',
+            portfolio__service__pb2.ArchiveStrategyRequest.SerializeToString,
+            portfolio__service__pb2.ArchiveStrategyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1491,9 +1542,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/MountStrategy',
-            account__service__pb2.MountStrategyRequest.SerializeToString,
-            account__service__pb2.MountStrategyResponse.FromString,
+            '/portfolio.v1.PortfolioService/MountStrategy',
+            portfolio__service__pb2.MountStrategyRequest.SerializeToString,
+            portfolio__service__pb2.MountStrategyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1518,9 +1569,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/UnmountStrategy',
-            account__service__pb2.UnmountStrategyRequest.SerializeToString,
-            account__service__pb2.UnmountStrategyResponse.FromString,
+            '/portfolio.v1.PortfolioService/UnmountStrategy',
+            portfolio__service__pb2.UnmountStrategyRequest.SerializeToString,
+            portfolio__service__pb2.UnmountStrategyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1545,9 +1596,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ActivateStrategy',
-            account__service__pb2.ActivateStrategyRequest.SerializeToString,
-            account__service__pb2.ActivateStrategyResponse.FromString,
+            '/portfolio.v1.PortfolioService/ActivateStrategy',
+            portfolio__service__pb2.ActivateStrategyRequest.SerializeToString,
+            portfolio__service__pb2.ActivateStrategyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1572,9 +1623,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/DeactivateStrategy',
-            account__service__pb2.DeactivateStrategyRequest.SerializeToString,
-            account__service__pb2.DeactivateStrategyResponse.FromString,
+            '/portfolio.v1.PortfolioService/DeactivateStrategy',
+            portfolio__service__pb2.DeactivateStrategyRequest.SerializeToString,
+            portfolio__service__pb2.DeactivateStrategyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1586,7 +1637,7 @@ class AccountService(object):
             _registered_method=True)
 
     @staticmethod
-    def ListAccountStrategies(request,
+    def ListPortfolioStrategies(request,
             target,
             options=(),
             channel_credentials=None,
@@ -1599,9 +1650,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListAccountStrategies',
-            account__service__pb2.ListAccountStrategiesRequest.SerializeToString,
-            account__service__pb2.ListAccountStrategiesResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListPortfolioStrategies',
+            portfolio__service__pb2.ListPortfolioStrategiesRequest.SerializeToString,
+            portfolio__service__pb2.ListPortfolioStrategiesResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1626,9 +1677,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetActiveStrategy',
-            account__service__pb2.GetActiveStrategyRequest.SerializeToString,
-            account__service__pb2.GetActiveStrategyResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetActiveStrategy',
+            portfolio__service__pb2.GetActiveStrategyRequest.SerializeToString,
+            portfolio__service__pb2.GetActiveStrategyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1653,9 +1704,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/SaveSession',
-            account__service__pb2.SaveSessionRequest.SerializeToString,
-            account__service__pb2.SaveSessionResponse.FromString,
+            '/portfolio.v1.PortfolioService/SaveSession',
+            portfolio__service__pb2.SaveSessionRequest.SerializeToString,
+            portfolio__service__pb2.SaveSessionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1680,9 +1731,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/UpdateSession',
-            account__service__pb2.UpdateSessionRequest.SerializeToString,
-            account__service__pb2.UpdateSessionResponse.FromString,
+            '/portfolio.v1.PortfolioService/UpdateSession',
+            portfolio__service__pb2.UpdateSessionRequest.SerializeToString,
+            portfolio__service__pb2.UpdateSessionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1707,9 +1758,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetSession',
-            account__service__pb2.GetSessionRequest.SerializeToString,
-            account__service__pb2.GetSessionResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetSession',
+            portfolio__service__pb2.GetSessionRequest.SerializeToString,
+            portfolio__service__pb2.GetSessionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1734,9 +1785,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListSessions',
-            account__service__pb2.ListSessionsRequest.SerializeToString,
-            account__service__pb2.ListSessionsResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListSessions',
+            portfolio__service__pb2.ListSessionsRequest.SerializeToString,
+            portfolio__service__pb2.ListSessionsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1761,9 +1812,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListRunningSessions',
-            account__service__pb2.ListRunningSessionsRequest.SerializeToString,
-            account__service__pb2.ListRunningSessionsResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListRunningSessions',
+            portfolio__service__pb2.ListRunningSessionsRequest.SerializeToString,
+            portfolio__service__pb2.ListRunningSessionsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1788,9 +1839,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/MarkRuntimeSessionsRecoverable',
-            account__service__pb2.MarkRuntimeSessionsRecoverableRequest.SerializeToString,
-            account__service__pb2.MarkRuntimeSessionsRecoverableResponse.FromString,
+            '/portfolio.v1.PortfolioService/MarkRuntimeSessionsRecoverable',
+            portfolio__service__pb2.MarkRuntimeSessionsRecoverableRequest.SerializeToString,
+            portfolio__service__pb2.MarkRuntimeSessionsRecoverableResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1815,9 +1866,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListSessionSnapshots',
-            account__service__pb2.ListSessionSnapshotsRequest.SerializeToString,
-            account__service__pb2.ListSessionSnapshotsResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListSessionSnapshots',
+            portfolio__service__pb2.ListSessionSnapshotsRequest.SerializeToString,
+            portfolio__service__pb2.ListSessionSnapshotsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1842,9 +1893,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ListReconciliationRuns',
-            account__service__pb2.ListReconciliationRunsRequest.SerializeToString,
-            account__service__pb2.ListReconciliationRunsResponse.FromString,
+            '/portfolio.v1.PortfolioService/ListReconciliationRuns',
+            portfolio__service__pb2.ListReconciliationRunsRequest.SerializeToString,
+            portfolio__service__pb2.ListReconciliationRunsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1869,9 +1920,90 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetSessionReconciliationSummary',
-            account__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
-            account__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetSessionReconciliationSummary',
+            portfolio__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
+            portfolio__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SaveStrategyIndicators(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/SaveStrategyIndicators',
+            portfolio__service__pb2.SaveStrategyIndicatorsRequest.SerializeToString,
+            portfolio__service__pb2.SaveStrategyIndicatorsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListStrategyIndicators(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/ListStrategyIndicators',
+            portfolio__service__pb2.ListStrategyIndicatorsRequest.SerializeToString,
+            portfolio__service__pb2.ListStrategyIndicatorsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListStrategyIndicatorChunks(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/ListStrategyIndicatorChunks',
+            portfolio__service__pb2.ListStrategyIndicatorChunksRequest.SerializeToString,
+            portfolio__service__pb2.ListStrategyIndicatorChunksResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1896,9 +2028,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/GetNotificationSettings',
-            account__service__pb2.GetNotificationSettingsRequest.SerializeToString,
-            account__service__pb2.GetNotificationSettingsResponse.FromString,
+            '/portfolio.v1.PortfolioService/GetNotificationSettings',
+            portfolio__service__pb2.GetNotificationSettingsRequest.SerializeToString,
+            portfolio__service__pb2.GetNotificationSettingsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1923,9 +2055,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/UpdateNotificationPreferences',
-            account__service__pb2.UpdateNotificationPreferencesRequest.SerializeToString,
-            account__service__pb2.UpdateNotificationPreferencesResponse.FromString,
+            '/portfolio.v1.PortfolioService/UpdateNotificationPreferences',
+            portfolio__service__pb2.UpdateNotificationPreferencesRequest.SerializeToString,
+            portfolio__service__pb2.UpdateNotificationPreferencesResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1950,9 +2082,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/CreateNotificationBindCode',
-            account__service__pb2.CreateNotificationBindCodeRequest.SerializeToString,
-            account__service__pb2.CreateNotificationBindCodeResponse.FromString,
+            '/portfolio.v1.PortfolioService/CreateNotificationBindCode',
+            portfolio__service__pb2.CreateNotificationBindCodeRequest.SerializeToString,
+            portfolio__service__pb2.CreateNotificationBindCodeResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1977,9 +2109,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/ConfirmNotificationBinding',
-            account__service__pb2.ConfirmNotificationBindingRequest.SerializeToString,
-            account__service__pb2.ConfirmNotificationBindingResponse.FromString,
+            '/portfolio.v1.PortfolioService/ConfirmNotificationBinding',
+            portfolio__service__pb2.ConfirmNotificationBindingRequest.SerializeToString,
+            portfolio__service__pb2.ConfirmNotificationBindingResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -2004,9 +2136,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/UnbindNotificationChannel',
-            account__service__pb2.UnbindNotificationChannelRequest.SerializeToString,
-            account__service__pb2.UnbindNotificationChannelResponse.FromString,
+            '/portfolio.v1.PortfolioService/UnbindNotificationChannel',
+            portfolio__service__pb2.UnbindNotificationChannelRequest.SerializeToString,
+            portfolio__service__pb2.UnbindNotificationChannelResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -2031,9 +2163,9 @@ class AccountService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/account.v1.AccountService/SendTestNotification',
-            account__service__pb2.SendTestNotificationRequest.SerializeToString,
-            account__service__pb2.SendTestNotificationResponse.FromString,
+            '/portfolio.v1.PortfolioService/SendTestNotification',
+            portfolio__service__pb2.SendTestNotificationRequest.SerializeToString,
+            portfolio__service__pb2.SendTestNotificationResponse.FromString,
             options,
             channel_credentials,
             insecure,

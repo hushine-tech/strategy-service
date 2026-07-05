@@ -24,16 +24,35 @@ from strategy_service.runtime_channel import (
     RuntimeCredentialError,
     RuntimeHelloArgs,
     RuntimeChannelStrategyDispatcher,
+    build_bare_hello,
     build_signed_hello,
     canonical_hello_payload,
     load_runtime_credential,
 )
 from strategy_service.gen import control_panel_service_pb2 as cp_pb2
-from strategy_service.gen import account_service_pb2, strategy_service_pb2
+from strategy_service.gen import portfolio_service_pb2, strategy_service_pb2
 
 
 def test_runtime_channel_default_heartbeat_leaves_watchdog_margin():
     assert DEFAULT_HEARTBEAT_SECONDS == 10
+
+
+def test_runtime_channel_proto_has_order_update_batch_frame() -> None:
+    frame = cp_pb2.RuntimeFrame(
+        frame_type=cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH,
+        order_update_batch=cp_pb2.RuntimeOrderUpdateBatch(
+            session_id="sess-1",
+            stream_key="order_lifecycle",
+            sequence=42,
+            events=[Any(type_url="type.googleapis.com/order.v1.OrderLifecycleEventEntry")],
+        ),
+    )
+
+    assert frame.HasField("order_update_batch")
+    assert frame.order_update_batch.session_id == "sess-1"
+    assert frame.order_update_batch.stream_key == "order_lifecycle"
+    assert frame.order_update_batch.sequence == 42
+    assert len(frame.order_update_batch.events) == 1
 
 
 def test_build_signed_hello_signs_canonical_payload():
@@ -76,12 +95,52 @@ def test_build_signed_hello_signs_canonical_payload():
         '"resource_profile":"small",'
         '"runtime_id":"runtime-1",'
         '"name":"custom-steady-river",'
+        '"source":"",'
+        '"user_id":0,'
         '"version":"0.1.0"}'
     )
 
     signature = base64.urlsafe_b64decode(hello.signature + "==")
     public_key = private_key.public_key()
     public_key.verify(signature, canonical_hello_payload(hello))
+
+
+def test_build_bare_hello_uses_debug_user_without_signature():
+    hello = build_bare_hello(
+        RuntimeHelloArgs(
+            source="bare",
+            user_id=42,
+            runtime_id="bare-42-dev",
+            name="desk-debug",
+            capabilities=("strategy", "futures"),
+        ),
+        now_ms=1_700_000_000_000,
+    )
+
+    assert hello.source == "bare"
+    assert hello.user_id == 42
+    assert hello.runtime_id == "bare-42-dev"
+    assert hello.name == "desk-debug"
+    assert hello.issued_at_unix_ms == 1_700_000_000_000
+    assert hello.key_id == ""
+    assert hello.nonce == ""
+    assert hello.signature == ""
+
+    assert canonical_hello_payload(hello).decode("utf-8") == (
+        '{"capabilities":["strategy","futures"],'
+        '"debug_port":0,'
+        '"endpoint_host":"",'
+        '"grpc_port":0,'
+        '"issued_at_unix_ms":1700000000000,'
+        '"key_id":"",'
+        '"nonce":"",'
+        '"resource_profile":"small",'
+        '"runtime_id":"bare-42-dev",'
+        '"name":"desk-debug",'
+        '"source":"bare",'
+        '"user_id":42,'
+        '"version":"0.1.0"}'
+    )
 
 
 def test_build_signed_hello_rejects_non_ed25519_key():
@@ -165,7 +224,7 @@ def test_runtime_channel_client_aborts_inflight_callbacks():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -191,7 +250,7 @@ def test_runtime_channel_client_disconnect_aborts_inflight_execution():
     ).decode("utf-8")
     aborts: list[str] = []
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -221,7 +280,7 @@ def test_runtime_channel_client_reconnects_after_transient_disconnect():
     ).decode("utf-8")
     stub = _ReconnectOnceStub()
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -251,7 +310,7 @@ def test_runtime_channel_client_reconnects_with_resume_after_hello_ack():
     ).decode("utf-8")
     stub = _AckThenDisconnectThenResumeStub()
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -285,7 +344,7 @@ def test_runtime_channel_client_stops_after_terminal_disconnect():
     ).decode("utf-8")
     stub = _TerminalDisconnectStub()
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -315,7 +374,7 @@ def test_runtime_channel_client_stops_after_terminal_credential_error():
     ).decode("utf-8")
     stub = _CredentialTerminalDisconnectStub()
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -344,7 +403,7 @@ def test_runtime_channel_heartbeat_loop_keeps_idle_stream_alive():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -375,7 +434,7 @@ def test_runtime_channel_heartbeat_uses_latest_ack_fingerprint():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -419,7 +478,7 @@ def test_runtime_channel_client_invokes_platform_unary():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -437,9 +496,9 @@ def test_runtime_channel_client_invokes_platform_unary():
 
     def call():
         result.append(client.invoke_platform_unary(
-            "account.SaveSession",
-            account_service_pb2.SaveSessionRequest(session_id="sess-1", account_id=7),
-            account_service_pb2.SaveSessionResponse,
+            "portfolio.SaveSession",
+            portfolio_service_pb2.SaveSessionRequest(session_id="sess-1", portfolio_id=7),
+            portfolio_service_pb2.SaveSessionResponse,
             timeout_seconds=1,
         ))
 
@@ -448,13 +507,13 @@ def test_runtime_channel_client_invokes_platform_unary():
     frame = outbound.get(timeout=1)
 
     assert frame.frame_type == cp_pb2.FRAME_TYPE_REQUEST
-    assert frame.request.method == "account.SaveSession"
-    unpacked = account_service_pb2.SaveSessionRequest()
+    assert frame.request.method == "portfolio.SaveSession"
+    unpacked = portfolio_service_pb2.SaveSessionRequest()
     assert frame.request.request.Unpack(unpacked)
     assert unpacked.session_id == "sess-1"
 
     packed = Any()
-    packed.Pack(account_service_pb2.SaveSessionResponse())
+    packed.Pack(portfolio_service_pb2.SaveSessionResponse())
     client._handle_inbound_frame(
         cp_pb2.RuntimeFrame(
             correlation_id=frame.correlation_id,
@@ -466,7 +525,43 @@ def test_runtime_channel_client_invokes_platform_unary():
     thread.join(timeout=1)
 
     assert len(result) == 1
-    assert isinstance(result[0], account_service_pb2.SaveSessionResponse)
+    assert isinstance(result[0], portfolio_service_pb2.SaveSessionResponse)
+
+
+def test_runtime_channel_client_sends_data_backpressure_frame():
+    private_key = Ed25519PrivateKey.generate()
+    private_pem = private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.PKCS8,
+        encryption_algorithm=NoEncryption(),
+    ).decode("utf-8")
+    client = RuntimeChannelClient(
+        "control-panel:50055",
+        RuntimeCredential(
+            key_id="key-1",
+            private_key_pem=private_pem,
+            private_key=private_key,
+            path="/tmp/runtime.cred",
+        ),
+        RuntimeHelloArgs(key_id="key-1", private_key_pem=private_pem),
+    )
+    outbound: queue.Queue[cp_pb2.RuntimeFrame | None] = queue.Queue()
+    with client._outbound_lock:
+        client._outbound = outbound
+
+    client.send_data_backpressure(
+        session_id="sess-1",
+        stream_key="binance:futures:kline:ETHUSDT:1m",
+        reason="runtime_debug_worker_slow: queue_depth=1",
+        resume_after_unix_ms=1234,
+    )
+
+    frame = outbound.get_nowait()
+    assert frame.frame_type == cp_pb2.FRAME_TYPE_DATA_BACKPRESSURE
+    assert frame.data_backpressure.session_id == "sess-1"
+    assert frame.data_backpressure.stream_key == "binance:futures:kline:ETHUSDT:1m"
+    assert frame.data_backpressure.reason == "runtime_debug_worker_slow: queue_depth=1"
+    assert frame.data_backpressure.resume_after_unix_ms == 1234
 
 
 def test_runtime_channel_client_injects_trace_context_into_platform_request():
@@ -496,7 +591,7 @@ def test_runtime_channel_client_injects_trace_context_into_platform_request():
             encryption_algorithm=NoEncryption(),
         ).decode("utf-8")
         client = RuntimeChannelClient(
-            "control-panel:50054",
+            "control-panel:50055",
             RuntimeCredential(
                 key_id="key-1",
                 private_key_pem=private_pem,
@@ -517,9 +612,9 @@ def test_runtime_channel_client_injects_trace_context_into_platform_request():
             token = otel_context.attach(trace.set_span_in_context(NonRecordingSpan(span_context)))
             try:
                 result.append(client.invoke_platform_unary(
-                    "account.SaveSession",
-                    account_service_pb2.SaveSessionRequest(session_id="sess-1", account_id=7),
-                    account_service_pb2.SaveSessionResponse,
+                    "portfolio.SaveSession",
+                    portfolio_service_pb2.SaveSessionRequest(session_id="sess-1", portfolio_id=7),
+                    portfolio_service_pb2.SaveSessionResponse,
                     timeout_seconds=1,
                 ))
             except BaseException as exc:
@@ -536,7 +631,7 @@ def test_runtime_channel_client_injects_trace_context_into_platform_request():
         assert frame.request.trace_context["traceparent"].startswith("00-4bf92f3577b34da6a3ce929d0e0e4736-")
 
         packed = Any()
-        packed.Pack(account_service_pb2.SaveSessionResponse())
+        packed.Pack(portfolio_service_pb2.SaveSessionResponse())
         client._handle_inbound_frame(
             cp_pb2.RuntimeFrame(
                 correlation_id=frame.correlation_id,
@@ -566,9 +661,9 @@ def test_runtime_channel_request_handler_can_call_platform_proxy_without_deadloc
 
     def handler(frame):
         client.invoke_platform_unary(
-            "account.SaveSession",
-            account_service_pb2.SaveSessionRequest(session_id="sess-1", account_id=7),
-            account_service_pb2.SaveSessionResponse,
+            "portfolio.SaveSession",
+            portfolio_service_pb2.SaveSessionRequest(session_id="sess-1", portfolio_id=7),
+            portfolio_service_pb2.SaveSessionResponse,
             timeout_seconds=1,
         )
         packed = Any()
@@ -580,7 +675,7 @@ def test_runtime_channel_request_handler_can_call_platform_proxy_without_deadloc
         )
 
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -604,10 +699,10 @@ def test_runtime_channel_request_handler_can_call_platform_proxy_without_deadloc
     )
     platform_req = outbound.get(timeout=1)
     assert platform_req.frame_type == cp_pb2.FRAME_TYPE_REQUEST
-    assert platform_req.request.method == "account.SaveSession"
+    assert platform_req.request.method == "portfolio.SaveSession"
 
     packed = Any()
-    packed.Pack(account_service_pb2.SaveSessionResponse())
+    packed.Pack(portfolio_service_pb2.SaveSessionResponse())
     client._handle_inbound_frame(
         cp_pb2.RuntimeFrame(
             correlation_id=platform_req.correlation_id,
@@ -636,7 +731,7 @@ def test_runtime_channel_request_deadline_is_honored_before_dispatch():
         raise AssertionError("expired requests must not dispatch")
 
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -672,7 +767,7 @@ def test_runtime_channel_client_replies_unimplemented_before_dispatch_is_wired()
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -707,7 +802,7 @@ def test_runtime_channel_client_handles_shutdown_command_without_worker():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -747,7 +842,7 @@ def test_runtime_channel_client_handles_shutdown_frame():
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     client = RuntimeChannelClient(
-        "control-panel:50054",
+        "control-panel:50055",
         RuntimeCredential(
             key_id="key-1",
             private_key_pem=private_pem,
@@ -771,14 +866,14 @@ def test_runtime_channel_client_handles_shutdown_frame():
 def test_runtime_channel_dispatcher_calls_existing_servicer_path():
     class FakeContextServicer:
         def RunStrategy(self, request, context):
-            assert request.account_id == 7
+            assert request.portfolio_id == 7
             return strategy_pb2.RunStrategyResponse(session_id="sess-1")
 
     from google.protobuf.any_pb2 import Any
     from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 
     packed = Any()
-    packed.Pack(strategy_pb2.RunStrategyRequest(account_id=7, user_id=42))
+    packed.Pack(strategy_pb2.RunStrategyRequest(portfolio_id=7, user_id=42))
     dispatcher = RuntimeChannelStrategyDispatcher(FakeContextServicer())
 
     frame = dispatcher(cp_pb2.RuntimeFrame(
@@ -815,7 +910,7 @@ def test_runtime_channel_dispatcher_extracts_trace_context_for_servicer_call():
     from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 
     packed = Any()
-    packed.Pack(strategy_pb2.RunStrategyRequest(account_id=7, user_id=42))
+    packed.Pack(strategy_pb2.RunStrategyRequest(portfolio_id=7, user_id=42))
     dispatcher = RuntimeChannelStrategyDispatcher(FakeContextServicer())
 
     try:

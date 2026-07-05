@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from strategy_service.gen import account_service_pb2
+from strategy_service.gen import portfolio_service_pb2
 from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
 
@@ -17,7 +17,7 @@ MARKET_DELIVERY_FUTURES = 3
 
 
 def _balance(asset: str, wallet_balance: float, available_balance: float, locked: float = 0.0):
-    return account_service_pb2.BalanceEntry(
+    return portfolio_service_pb2.BalanceEntry(
         asset=asset,
         wallet_balance=wallet_balance,
         available_balance=available_balance,
@@ -36,7 +36,7 @@ def _position(
     margin_balance: float = 1025.0,
     liquidation_price: float = 2200.0,
 ):
-    return account_service_pb2.PositionEntry(
+    return portfolio_service_pb2.PositionEntry(
         symbol=symbol,
         position_side=position_side,
         qty=qty,
@@ -56,9 +56,9 @@ def _futures_wallet(
     positions=None,
     risk_metadata=None,
 ):
-    return account_service_pb2.AccountWalletState(
+    return portfolio_service_pb2.PortfolioWalletState(
         environment=1,
-        futures=account_service_pb2.FuturesWallet(
+        futures=portfolio_service_pb2.FuturesWallet(
             margin_mode="cross",
             position_mode="one_way",
             wallet_balance=wallet_balance,
@@ -73,9 +73,9 @@ def _futures_wallet(
 
 
 def _spot_wallet(*, free: float = 90.0, locked: float = 10.0, assets=None):
-    return account_service_pb2.AccountWalletState(
+    return portfolio_service_pb2.PortfolioWalletState(
         environment=1,
-        spot=account_service_pb2.SpotWallet(
+        spot=portfolio_service_pb2.SpotWallet(
             free=free,
             locked=locked,
             assets=list(assets or []),
@@ -93,7 +93,7 @@ def _futures_position(
     leverage: float = 20.0,
     liquidation_price: float = 2200.0,
 ):
-    return account_service_pb2.FuturesPosition(
+    return portfolio_service_pb2.FuturesPosition(
         symbol=symbol,
         position_side=position_side,
         position_qty=position_qty,
@@ -133,7 +133,7 @@ def _venue(
             wallet=wallet,
         )
 
-    venue = account_service_pb2.VenueSnapshot(
+    venue = portfolio_service_pb2.VenueSnapshot(
         venue_id=venue_id,
         exchange=exchange,
         market=market,
@@ -149,8 +149,8 @@ def _venue(
 
 
 def _snapshot(*venues):
-    return account_service_pb2.PortfolioSnapshot(
-        account_id=7,
+    return portfolio_service_pb2.PortfolioSnapshot(
+        portfolio_id=7,
         user_id=3,
         total_value=1200.0,
         wallet_balance=1100.0,
@@ -174,7 +174,7 @@ def test_build_portfolio_wallet_from_spot_and_futures_venues():
                 free=90.0,
                 locked=10.0,
                 assets=[
-                    account_service_pb2.SpotAsset(
+                    portfolio_service_pb2.SpotAsset(
                         symbol="BTC",
                         qty=0.5,
                         locked=0.1,
@@ -223,7 +223,7 @@ def test_unrequested_venue_snapshot_is_ignored_before_wallet_validation():
             total_value=0.0,
             wallet_balance=0.0,
             available_balance=0.0,
-            wallet=account_service_pb2.AccountWalletState(environment=1),
+            wallet=portfolio_service_pb2.PortfolioWalletState(environment=1),
         ),
         _venue(
             venue_id=11,
@@ -299,9 +299,9 @@ def test_futures_position_and_balance_fields_are_readable_after_mapping():
 
 
 def test_futures_venue_uses_full_canonical_wallet_instead_of_compact_position_defaults():
-    full_wallet = account_service_pb2.AccountWalletState(
+    full_wallet = portfolio_service_pb2.PortfolioWalletState(
         environment=1,
-        futures=account_service_pb2.FuturesWallet(
+        futures=portfolio_service_pb2.FuturesWallet(
             margin_mode="cross",
             position_mode="one_way",
             wallet_balance=1000.0,
@@ -310,14 +310,14 @@ def test_futures_venue_uses_full_canonical_wallet_instead_of_compact_position_de
             total_cross_wallet_balance=1000.0,
             total_cross_un_pnl=15.0,
             risk_metadata=[
-                account_service_pb2.FuturesRiskMetadata(
+                portfolio_service_pb2.FuturesRiskMetadata(
                     symbol="ETHUSDT",
                     configured_leverage=20.0,
                     configured_margin_mode="cross",
                 )
             ],
             positions=[
-                account_service_pb2.FuturesPosition(
+                portfolio_service_pb2.FuturesPosition(
                     symbol="ETHUSDT",
                     position_side="BOTH",
                     position_qty=0.3,
@@ -444,7 +444,7 @@ def test_spot_empty_full_wallet_with_compact_balances_fails_closed():
                 _balance("USDT", wallet_balance=100.0, available_balance=90.0, locked=10.0),
                 _balance("BTC", wallet_balance=0.5, available_balance=0.4, locked=0.1),
             ],
-            wallet=account_service_pb2.AccountWalletState(environment=1),
+            wallet=portfolio_service_pb2.PortfolioWalletState(environment=1),
         )
     )
 
@@ -461,7 +461,7 @@ def test_futures_empty_full_wallet_with_compact_positions_fails_closed():
             venue_id=11,
             market=MARKET_PERPETUAL_FUTURES,
             positions=[_position()],
-            wallet=account_service_pb2.AccountWalletState(environment=1),
+            wallet=portfolio_service_pb2.PortfolioWalletState(environment=1),
         )
     )
 

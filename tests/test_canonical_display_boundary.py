@@ -12,9 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from strategy_service.gen import account_service_pb2
-from strategy_service.wallet_adapter import proto_to_account_spec
-from strategy_service.wallet_factory import build_wallet_from_account
+from strategy_service.gen import portfolio_service_pb2
+from strategy_service.wallet_adapter import proto_to_portfolio_spec
+from strategy_service.wallet_factory import build_wallet_from_portfolio
 
 
 def _wallet_proto(
@@ -26,20 +26,20 @@ def _wallet_proto(
     spot_estimated_value: float = 0.0,
     futures_position_equity: float = 0.0,
     metrics_authoritative: bool = False,
-) -> account_service_pb2.AccountWalletState:
+) -> portfolio_service_pb2.PortfolioWalletState:
     """Build a wallet proto with configurable display fields + fixed canonical fields.
 
     Canonical fields are always identical so any runtime difference between
     two calls can only be attributed to a display-field mutation.
     """
-    return account_service_pb2.AccountWalletState(
+    return portfolio_service_pb2.PortfolioWalletState(
         environment=1,
         # Display fields (the surface under test).
         total_value=total_value,
         spot_estimated_value=spot_estimated_value,
         futures_position_equity=futures_position_equity,
         metrics_authoritative=metrics_authoritative,
-        futures=account_service_pb2.FuturesWallet(
+        futures=portfolio_service_pb2.FuturesWallet(
             # Canonical fields — fixed.
             margin_mode="cross",
             position_mode="one_way",
@@ -54,7 +54,7 @@ def _wallet_proto(
             display_margin_balance_usd=display_margin_balance_usd,
             display_unrealized_pnl_usd=display_unrealized_pnl_usd,
         ),
-        spot=account_service_pb2.SpotWallet(free=0.0, locked=0.0, assets=[]),
+        spot=portfolio_service_pb2.SpotWallet(free=0.0, locked=0.0, assets=[]),
     )
 
 
@@ -91,9 +91,9 @@ def _runtime_snapshot(wallet) -> dict:
 
 def test_display_usd_fields_do_not_affect_runtime_state():
     """Mutating ``display_*_usd`` must not change any runtime-facing value."""
-    baseline = build_wallet_from_account(proto_to_account_spec(_wallet_proto()))
-    mutated = build_wallet_from_account(
-        proto_to_account_spec(
+    baseline = build_wallet_from_portfolio(proto_to_portfolio_spec(_wallet_proto()))
+    mutated = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(
             _wallet_proto(
                 display_wallet_balance_usd=99_999.0,
                 display_margin_balance_usd=88_888.0,
@@ -110,9 +110,9 @@ def test_display_total_value_and_equity_do_not_affect_runtime_state():
     runtime state. This is the boundary property that lets core-service
     populate display totals without risk of polluting the strategy runtime.
     """
-    baseline = build_wallet_from_account(proto_to_account_spec(_wallet_proto()))
-    mutated = build_wallet_from_account(
-        proto_to_account_spec(
+    baseline = build_wallet_from_portfolio(proto_to_portfolio_spec(_wallet_proto()))
+    mutated = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(
             _wallet_proto(
                 total_value=123_456.0,
                 spot_estimated_value=55.0,
@@ -128,9 +128,9 @@ def test_available_balance_ignores_display_usd_totals():
     """Risk/precheck's ONLY input on the futures side is ``get_available_balance``.
     Setting provider display totals far larger than the canonical available
     balance MUST NOT lift the available balance reported to the engine."""
-    baseline = build_wallet_from_account(proto_to_account_spec(_wallet_proto()))
-    mutated = build_wallet_from_account(
-        proto_to_account_spec(
+    baseline = build_wallet_from_portfolio(proto_to_portfolio_spec(_wallet_proto()))
+    mutated = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(
             _wallet_proto(
                 display_wallet_balance_usd=1_000_000.0,
                 display_margin_balance_usd=1_000_000.0,
@@ -145,7 +145,7 @@ def test_available_balance_ignores_display_usd_totals():
         == mutated.futures.get_available_balance()
     )
     # And that common value is derived from canonical ingress (~wallet_balance
-    # for a position-free account), NOT from the provider display USD total.
+    # for a position-free portfolio), NOT from the provider display USD total.
     assert mutated.futures.get_available_balance() < 100_000.0
 
 
@@ -155,13 +155,11 @@ def test_session_restore_cleanup_does_not_consume_wallet_fields():
     state. That cleanup path must stay wallet-agnostic — pulling wallet
     display fields into startup cleanup would silently break the
     canonical-wallet-display-boundary invariant."""
-    import threading
     from strategy_service.grpc_server import StrategyServiceServicer
-    from strategy_service import grpc_server
 
     captured: dict = {}
 
-    class FakeAccountClient:
+    class FakePortfolioClient:
         def __init__(self, _addr):
             pass
 
@@ -177,7 +175,7 @@ def test_session_restore_cleanup_does_not_consume_wallet_fields():
                     error="",
                     environment=1,
                     user_id=7,
-                    account_id=101,
+                    portfolio_id=101,
                     strategy_id=33,
                     # Poisoned display fields — must never reach the runtime.
                     display_wallet_balance_usd=999_999.0,
@@ -195,13 +193,13 @@ def test_session_restore_cleanup_does_not_consume_wallet_fields():
             }
             return True
 
-    import strategy_service.grpc_server as gs
-    original = gs.AccountClient
-    gs.AccountClient = FakeAccountClient
-    try:
-        servicer = StrategyServiceServicer("", "", {}, "kafka:9092", runtime_id="rt-restore")
-    finally:
-        gs.AccountClient = original
+    class FakePlatformProxy:
+        def portfolio_client(self):
+            return FakePortfolioClient("")
+
+    servicer = StrategyServiceServicer(
+        "", "", {}, "kafka:9092", runtime_id="rt-restore", platform_proxy=FakePlatformProxy()
+    )
 
     assert servicer._sessions.get("sess-restore-1") is None
     assert captured["update"]["session_id"] == "sess-restore-1"

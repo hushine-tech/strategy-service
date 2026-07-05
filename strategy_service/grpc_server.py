@@ -1,12 +1,14 @@
-"""strategy-service gRPC servicer：统一 RunStrategy 入口，按 account environment 路由数据源。"""
+"""strategy-service gRPC servicer：统一 RunStrategy 入口，按 portfolio environment 路由数据源。"""
 
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal, ROUND_FLOOR
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -25,10 +27,8 @@ except Exception:  # noqa: BLE001
 from strategy_service.gen import strategy_service_pb2 as pb2
 from strategy_service.gen import strategy_service_pb2_grpc as pb2_grpc
 
-from strategy_service.account_client import AccountClient
-from strategy_service.marketdata_client import MarketDataClient
+from strategy_service.indicators import IndicatorChunkBuffer
 from strategy_service.notification import StrategyNotifier
-from strategy_service.order_client import OrderClient
 from strategy_service.service import StrategyEngine
 from strategy_service.session import SessionManager, SessionState, StreamBinding
 from strategy_service.inputs import (
@@ -44,12 +44,18 @@ from strategy_service.preflight import (
     RuntimeSourceProfile,
     backtest_preflight,
     check_profile_supported,
-    default_backtest_availability,
     live_stream_preflight,
     _marketdata_market,
     resolve_profile,
 )
-from strategy_service.strategy.base import extract_strategy_declarations
+from strategy_service.debug_strategy_sources import (
+    DebugStrategySourceError,
+    ensure_bare_strategy_source,
+)
+from strategy_service.strategy.base import (
+    USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX,
+    extract_strategy_declarations,
+)
 from strategy_service.strategy_validator import validate_strategy_code
 from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
@@ -71,9 +77,9 @@ DEFAULT_LEASE_TTL_SECONDS = 90
 DEFAULT_FRESHNESS_GRACE_SECONDS = 30
 DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
+DEFAULT_SESSION_LEVERAGE = 1.0
 RESTORE_RUNNING_SESSIONS_RETRIES = 5
 RESTORE_RUNNING_SESSIONS_RETRY_SECONDS = 1.0
-PLATFORM_ACCESS_DIRECT = "direct"
 PLATFORM_ACCESS_PROXY_ONLY = "proxy_only"
 
 
@@ -100,7 +106,7 @@ class _StopOrder:
     exchange: str
     venue_id: int
     symbol: str
-    account_symbol: str
+    portfolio_symbol: str
     market: str
     side: str
     qty: float
@@ -111,12 +117,14 @@ class _StopOrder:
 class _EffectiveRiskControls:
     max_loss_close_pct: float
     max_loss_close_source: str
+    leverage: float
+    leverage_source: str
 
 
 def _sync_strategy_snapshot(
-    account_client: Any,
+    portfolio_client: Any,
     *,
-    account_id: int,
+    portfolio_id: int,
     user_id: int,
     environment: int,
     wallet: Any,
@@ -126,32 +134,52 @@ def _sync_strategy_snapshot(
     snapshot_time: object | None = None,
 ) -> Any:
     kwargs = {
-        "account_id": account_id,
+        "portfolio_id": portfolio_id,
         "snapshot_reason": snapshot_reason,
         "strategy_id": strategy_id,
         "session_id": session_id,
     }
     if _snapshot_time_present(snapshot_time):
         kwargs["snapshot_time"] = snapshot_time
-    future_wallet, spot_wallet = _wallet_parts_for_account_sync(wallet)
+    future_wallet, spot_wallet = _wallet_parts_for_portfolio_sync(wallet)
     kwargs["user_id"] = user_id
     kwargs["future_wallet"] = future_wallet
     kwargs["spot_wallet"] = spot_wallet
-    result = account_client.update_account_wallet_state(
+    result = portfolio_client.update_portfolio_wallet_state(
         **kwargs,
     )
     if result is None:
         raise RuntimeError(
-            f"UpdateAccountWalletState returned no response for account_id={account_id} session_id={session_id}"
+            f"UpdatePortfolioWalletState returned no response for portfolio_id={portfolio_id} session_id={session_id}"
         )
     return result
 
 
-def _force_session_failed(state: SessionState, error: str) -> None:
-    state.force_failed(error)
+def _safe_send_session_status_patch(
+    platform_proxy: Any | None,
+    *,
+    session_id: str,
+    status: str,
+    bars_processed: int,
+    error: str,
+    runtime_id: str,
+) -> None:
+    send = getattr(platform_proxy, "send_session_status_patch", None)
+    if not callable(send):
+        return
+    try:
+        send(
+            session_id=session_id,
+            status=status,
+            bars_processed=bars_processed,
+            error=error,
+            runtime_id=runtime_id,
+        )
+    except Exception:
+        logger.warning("session %s: failed to send final status patch", session_id, exc_info=True)
 
 
-def _wallet_parts_for_account_sync(wallet: Any) -> tuple[Any | None, Any | None]:
+def _wallet_parts_for_portfolio_sync(wallet: Any) -> tuple[Any | None, Any | None]:
     futures_wallet = None
     spot_wallet = None
     if isinstance(wallet, PortfolioWalletRuntime):
@@ -211,20 +239,82 @@ def _spot_asset_target_is_allowed(state: SessionState, exchange: Any, market: An
     )
 
 
-def _effective_risk_controls_from_request(declarations: Any, request_value: Any) -> _EffectiveRiskControls:
+def _futures_stop_metadata(futures_wallet: Any, symbol: str) -> Any | None:
+    metadata = getattr(futures_wallet, "risk_metadata", None) or {}
+    if isinstance(metadata, dict):
+        return metadata.get(str(symbol or "").strip().upper())
+    for item in metadata:
+        if str(getattr(item, "symbol", "") or "").strip().upper() == str(symbol or "").strip().upper():
+            return item
+    return None
+
+
+def _quantize_stop_futures_qty(qty: float, metadata: Any | None) -> float:
+    qty_value = abs(float(qty or 0.0))
+    if qty_value <= 0.0 or metadata is None:
+        return qty_value
+
+    qty_dec = Decimal(str(qty_value))
+    step = float(getattr(metadata, "step_size", 0.0) or 0.0)
+    if step > 0.0:
+        step_dec = Decimal(str(step))
+        units = qty_dec / step_dec
+        nearest_units = units.to_integral_value()
+        nearest = nearest_units * step_dec
+        tolerance = max(Decimal("1e-12"), step_dec * Decimal("1e-9"))
+        if abs(nearest - qty_dec) <= tolerance:
+            return float(nearest)
+        floor_units = units.to_integral_value(rounding=ROUND_FLOOR)
+        return float(floor_units * step_dec)
+
+    precision = int(getattr(metadata, "quantity_precision", 0) or 0)
+    if precision > 0:
+        quantum = Decimal(1).scaleb(-precision)
+        return float(qty_dec.quantize(quantum, rounding=ROUND_FLOOR))
+    return qty_value
+
+
+def _effective_risk_controls_from_request(
+    declarations: Any,
+    request_value: Any,
+    leverage_value: Any = 0.0,
+) -> _EffectiveRiskControls:
     declared_value = getattr(getattr(declarations, "risk_controls", None), "max_loss_close_pct", None)
     if declared_value is not None:
-        return _EffectiveRiskControls(float(declared_value), "strategy")
+        max_loss_close_pct = float(declared_value)
+        max_loss_close_source = "strategy"
+    else:
+        try:
+            raw = float(request_value or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise StrategyDeclarationError("max_loss_close_pct must be a number") from exc
+        if raw < 0.0 or raw > 1.0:
+            raise StrategyDeclarationError("max_loss_close_pct must satisfy 0 < value <= 1")
+        if raw > 0.0:
+            max_loss_close_pct = raw
+            max_loss_close_source = "request_default"
+        else:
+            max_loss_close_pct = DEFAULT_MAX_LOSS_CLOSE_PCT
+            max_loss_close_source = "platform_default"
 
     try:
-        raw = float(request_value or 0.0)
+        raw_leverage = float(leverage_value or 0.0)
     except (TypeError, ValueError) as exc:
-        raise StrategyDeclarationError("max_loss_close_pct must be a number") from exc
-    if raw < 0.0 or raw > 1.0:
-        raise StrategyDeclarationError("max_loss_close_pct must satisfy 0 < value <= 1")
-    if raw > 0.0:
-        return _EffectiveRiskControls(raw, "request_default")
-    return _EffectiveRiskControls(DEFAULT_MAX_LOSS_CLOSE_PCT, "platform_default")
+        raise StrategyDeclarationError("leverage must be a number") from exc
+    if not math.isfinite(raw_leverage) or raw_leverage < 0.0 or math.trunc(raw_leverage) != raw_leverage:
+        raise StrategyDeclarationError("leverage must be a positive whole number")
+    if raw_leverage > 0.0:
+        leverage = raw_leverage
+        leverage_source = "request_default"
+    else:
+        leverage = DEFAULT_SESSION_LEVERAGE
+        leverage_source = "platform_default"
+    return _EffectiveRiskControls(
+        max_loss_close_pct=max_loss_close_pct,
+        max_loss_close_source=max_loss_close_source,
+        leverage=leverage,
+        leverage_source=leverage_source,
+    )
 
 
 def _wallet_margin_balance(wallet: Any) -> float:
@@ -401,11 +491,26 @@ def _portfolio_snapshot_environment(snapshot: Any) -> int:
     return int(getattr(wallet, "environment", 0) or 0) if wallet is not None else 0
 
 
+def _get_portfolio_snapshot(
+    acct_client: Any,
+    portfolio_id: int,
+    user_id: int,
+    required_symbols: set[tuple[str, str, str]] | None = None,
+):
+    getter = getattr(acct_client, "get_portfolio_snapshot")
+    if required_symbols:
+        try:
+            return getter(portfolio_id, user_id, required_symbols=sorted(required_symbols))
+        except TypeError:
+            logger.debug("portfolio client does not accept required_symbols; using legacy snapshot call")
+    return getter(portfolio_id, user_id)
+
+
 class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
     def __init__(
         self,
-        account_service_addr: str,
+        portfolio_service_addr: str,
         order_service_addr: str,
         timescale_config: dict[str, Any],
         kafka_brokers: str,
@@ -414,15 +519,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         runtime_id: str = "",
         runtime_source: str = "",
         runtime_name: str = "",
-        platform_access_mode: str = PLATFORM_ACCESS_DIRECT,
+        platform_access_mode: str = PLATFORM_ACCESS_PROXY_ONLY,
         market_data_control_panel_addr: str = "",
         restore_running_sessions: bool = True,
         platform_proxy: Any | None = None,
         notification_client: Any | None = None,
     ) -> None:
-        self._account_addr = account_service_addr
-        # Phase D2: market-data control plane lives in control-panel-service.
-        # Empty string ⇒ MarketDataClient runs in noop mode (dev / partial env).
+        self._portfolio_addr = portfolio_service_addr
         self._market_data_addr = market_data_control_panel_addr
         self._order_addr = order_service_addr
         self._ts_config = timescale_config
@@ -436,11 +539,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._runtime_id = str(runtime_id or "").strip()
         self._runtime_source = str(runtime_source or "").strip()
         self._runtime_name = str(runtime_name or "").strip()
-        self._platform_access_mode = (
-            PLATFORM_ACCESS_PROXY_ONLY
-            if str(platform_access_mode or "").strip().lower() == PLATFORM_ACCESS_PROXY_ONLY
-            else PLATFORM_ACCESS_DIRECT
-        )
+        if str(platform_access_mode or "").strip().lower() not in ("", PLATFORM_ACCESS_PROXY_ONLY):
+            logger.warning("unsupported platform_access_mode=%s ignored; using RuntimeChannel proxy", platform_access_mode)
+        self._platform_access_mode = PLATFORM_ACCESS_PROXY_ONLY
         self._platform_proxy = platform_proxy
         self._notification_client = notification_client
         self._runtime_data_source = None
@@ -471,26 +572,67 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     def set_runtime_data_source(self, runtime_data_source: Any) -> None:
         self._runtime_data_source = runtime_data_source
 
-    def _account_client(self):
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            if self._platform_proxy is None:
-                raise RuntimeError("self-hosted platform proxy client is not configured")
-            return self._platform_proxy.account_client()
-        return AccountClient(self._account_addr)
+    def _portfolio_client(self):
+        if self._platform_proxy is None:
+            raise RuntimeError("RuntimeChannel platform proxy client is not configured")
+        return self._platform_proxy.portfolio_client()
 
     def _order_client(self):
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            if self._platform_proxy is None:
-                raise RuntimeError("self-hosted platform proxy client is not configured")
-            return self._platform_proxy.order_client()
-        return OrderClient(self._order_addr)
+        if self._platform_proxy is None:
+            raise RuntimeError("RuntimeChannel platform proxy client is not configured")
+        return self._platform_proxy.order_client()
 
     def _marketdata_client(self):
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            if self._platform_proxy is None:
-                raise RuntimeError("self-hosted platform proxy client is not configured")
-            return self._platform_proxy.marketdata_client()
-        return MarketDataClient(self._market_data_addr)
+        if self._platform_proxy is None:
+            raise RuntimeError("RuntimeChannel platform proxy client is not configured")
+        return self._platform_proxy.marketdata_client()
+
+    def _debug_strategy_path_for_db_code(
+        self,
+        *,
+        user_id: int,
+        strategy_id: int,
+        strategy_name: str,
+        strategy_version: str,
+        strategy_path: str,
+        strategy_code: str | None,
+    ) -> str:
+        strategy_path, _strategy_code, _hot_reload = self._debug_strategy_source_for_db_code(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            strategy_name=strategy_name,
+            strategy_version=strategy_version,
+            strategy_path=strategy_path,
+            strategy_code=strategy_code,
+        )
+        return strategy_path
+
+    def _debug_strategy_source_for_db_code(
+        self,
+        *,
+        user_id: int,
+        strategy_id: int,
+        strategy_name: str,
+        strategy_version: str,
+        strategy_path: str,
+        strategy_code: str | None,
+    ) -> tuple[str, str | None, bool]:
+        if self._runtime_source != "bare" or not strategy_code:
+            return strategy_path, strategy_code, False
+        path = ensure_bare_strategy_source(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            name=strategy_name,
+            version=strategy_version,
+            strategy_code=strategy_code,
+        )
+        logger.info(
+            "bare runtime using local strategy source: user_id=%s strategy_id=%s path=%s",
+            user_id,
+            strategy_id,
+            path,
+        )
+        return str(path), None, True
 
     def _restore_running_sessions(self) -> None:
         if not self._runtime_id:
@@ -499,7 +641,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 "unfiltered recovery is disabled"
             )
             return
-        acct_client = self._account_client()
+        acct_client = self._portfolio_client()
         sessions = None
         last_error: Exception | None = None
         for attempt in range(1, RESTORE_RUNNING_SESSIONS_RETRIES + 1):
@@ -520,7 +662,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if sessions is None:
             raise RuntimeError(
                 f"startup session recovery failed: cannot list running sessions "
-                f"from core-service at {self._account_addr}"
+                f"from core-service at {self._portfolio_addr}"
             ) from last_error
 
         orphaned = 0
@@ -561,7 +703,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 orphaned,
             )
 
-    def _list_running_sessions_for_restore(self, acct_client: AccountClient):
+    def _list_running_sessions_for_restore(self, acct_client: Any):
         strict = getattr(acct_client, "require_running_sessions", None)
         if callable(strict):
             return strict(runtime_id=self._runtime_id)
@@ -570,20 +712,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     def _enforce_user_binding(self, request_user_id: int, context) -> bool:
         """Phase D1 section 6.5 cross-check.
 
-        When the runtime is registered with control-panel-service it is
-        bound to a single user (the bind_user_id at registration time).
-        All strategy RPCs MUST carry that user_id in their request. A
-        mismatch means either (a) a caller_token issued for user A is
-        being replayed against user B's runtime, or (b) the handler is
-        wired wrong.
+        Bare debug runtimes can be pinned to one user at startup. All
+        strategy RPCs MUST carry that user_id in their request so a
+        mismatched platform route fails closed.
 
         Returns True if the call should continue, False if it was
         rejected. Caller MUST return immediately on False.
         """
         if self._bound_user_id <= 0:
-            # Unregistered standalone runtime — control-plane attestation is
-            # absent so cross-check has no anchor. Accept and rely on
-            # the direct gRPC trust model.
             return True
         if int(request_user_id) != self._bound_user_id:
             context.set_code(grpc.StatusCode.PERMISSION_DENIED)
@@ -656,7 +792,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 detail = self._error_details(exc)
                 context.set_details(
-                    "account already has an active session; stop or recover the existing "
+                    "portfolio already has an active session; stop or recover the existing "
                     f"session before starting a new one ({detail})"
                 )
             else:
@@ -676,38 +812,43 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return False
         return True
 
-    def _require_direct_platform_access(self, context, operation: str) -> bool:
-        if self._platform_access_mode != PLATFORM_ACCESS_PROXY_ONLY:
-            return True
+    def _require_platform_proxy(self, context, operation: str) -> bool:
         if self._platform_proxy is not None:
             return True
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
         context.set_details(
-            f"{operation} unavailable in self-hosted proxy-only runtime: "
+            f"{operation} unavailable in RuntimeChannel runtime: "
             "platform proxy client is not configured"
         )
         return False
 
     def _require_market_data_execution_path(self, context, operation: str, profile: RuntimeSourceProfile) -> bool:
-        if self._platform_access_mode != PLATFORM_ACCESS_PROXY_ONLY:
-            return True
         if profile in (RuntimeSourceProfile.DEMO, RuntimeSourceProfile.LIVE):
             if callable(getattr(self._runtime_data_source, "iter_live_klines", None)):
                 return True
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(
-                f"{operation} unavailable in self-hosted proxy-only runtime for "
+                f"{operation} unavailable in RuntimeChannel runtime for "
                 f"profile={profile.value}: platform live delivery is not configured; "
                 "FetchKlines fallback is disabled for demo/live execution"
             )
             return False
         if profile is RuntimeSourceProfile.BACKTEST:
-            if callable(getattr(self._runtime_data_source, "iter_dataset_klines", None)):
+            try:
+                client = self._marketdata_client()
+            except Exception as exc:  # noqa: BLE001
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(
+                    f"{operation} unavailable in RuntimeChannel runtime for "
+                    f"profile={profile.value}: market-data proxy client failed to initialize: {exc}"
+                )
+                return False
+            if callable(getattr(client, "fetch_backtest_page", None)):
                 return True
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(
-                f"{operation} unavailable in self-hosted proxy-only runtime for "
-                f"profile={profile.value}: chunked dataset delivery is not configured; "
+                f"{operation} unavailable in RuntimeChannel runtime for "
+                f"profile={profile.value}: paged backtest data proxy is not configured; "
                 "FetchKlines fallback is disabled for backtest execution"
             )
             return False
@@ -717,7 +858,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             except Exception as exc:  # noqa: BLE001
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details(
-                    f"{operation} unavailable in self-hosted proxy-only runtime: "
+                    f"{operation} unavailable in RuntimeChannel runtime: "
                     f"market-data proxy client failed to initialize: {exc}"
                 )
                 return False
@@ -725,10 +866,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 return True
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
         context.set_details(
-            f"{operation} unavailable in self-hosted proxy-only runtime for "
-            f"profile={profile.value}: account/order/control-plane proxy is wired, "
+            f"{operation} unavailable in RuntimeChannel runtime for "
+            f"profile={profile.value}: portfolio/order/control-plane proxy is wired, "
             "but strategy market-data execution still needs an approved platform "
-            "data proxy; direct TimescaleDB/Kafka access is disabled"
+            "data proxy"
         )
         return False
 
@@ -744,26 +885,26 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.RunStrategyResponse()
         if not self._enforce_request_runtime(request, context):
             return pb2.RunStrategyResponse()
-        if not self._require_direct_platform_access(context, "RunStrategy"):
+        if not self._require_platform_proxy(context, "RunStrategy"):
             return pb2.RunStrategyResponse()
-        account_id = request.account_id
-        if account_id == 0:
+        portfolio_id = request.portfolio_id
+        if portfolio_id == 0:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("account_id is required")
+            context.set_details("portfolio_id is required")
             return pb2.RunStrategyResponse()
 
         # 1. 从 core-service 获取组合快照（environment + 多 venue 钱包）
-        acct_client = self._account_client()
-        snapshot = acct_client.get_portfolio_snapshot(account_id, user_id)
+        acct_client = self._portfolio_client()
+        snapshot = _get_portfolio_snapshot(acct_client, portfolio_id, user_id)
         if snapshot is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"account {account_id} not found or core-service unreachable")
+            context.set_details(f"portfolio {portfolio_id} not found or core-service unreachable")
             return pb2.RunStrategyResponse()
 
         environment = _portfolio_snapshot_environment(snapshot)
 
         # 2. Resolve the runtime source profile FIRST (pre_C3 gate 2 §4).
-        # This is an internal runtime-source mapping, not a strategy/account
+        # This is an internal runtime-source mapping, not a strategy/portfolio
         # compatibility signal. Unsupported profiles (today: live environment)
         # fail-fast here with a structured PROFILE failure, *before* we try
         # to build a wallet or load a strategy — so the error surfaces the
@@ -781,16 +922,34 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         # 3. 确定策略来源：优先 GetActiveStrategy（DB 存储），fallback strategy_path（开发/测试）
         strategy_id = 0
         strategy_code: str | None = None
+        strategy_name = ""
+        strategy_version = ""
         strategy_path = request.strategy_path  # may be empty in production
+        strategy_hot_reload = False
 
-        active = acct_client.get_active_strategy(account_id)
+        active = acct_client.get_active_strategy(portfolio_id)
         if active is not None and active.strategy_id != 0:
             strategy_id = active.strategy_id
             strategy_code = active.code
-            strategy_path = f"<db:{active.name}@{active.version}>"
+            strategy_name = str(getattr(active, "name", "") or "")
+            strategy_version = str(getattr(active, "version", "") or "")
+            strategy_path = f"<db:{strategy_name}@{strategy_version}>"
         elif not strategy_path:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details("account has no active strategy; mount and activate one first")
+            context.set_details("portfolio has no active strategy; mount and activate one first")
+            return pb2.RunStrategyResponse()
+        try:
+            strategy_path, strategy_code, strategy_hot_reload = self._debug_strategy_source_for_db_code(
+                user_id=user_id,
+                strategy_id=strategy_id,
+                strategy_name=strategy_name,
+                strategy_version=strategy_version,
+                strategy_path=strategy_path,
+                strategy_code=strategy_code,
+            )
+        except DebugStrategySourceError as e:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(f"failed to materialize bare debug strategy source: {e}")
             return pb2.RunStrategyResponse()
 
         # Resolve the strategy's declared input universe. Per pre_C3
@@ -812,6 +971,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             effective_risk = _effective_risk_controls_from_request(
                 declarations,
                 getattr(request, "max_loss_close_pct", 0.0),
+                getattr(request, "leverage", 0.0),
             )
         except StrategyDeclarationError as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
@@ -825,22 +985,34 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         } | set(declarations.order_target_keys)
         preflight_session_id = uuid.uuid4().hex
 
-        account_preflight = self._run_account_preflight(
+        portfolio_preflight = self._run_portfolio_preflight(
             acct_client=acct_client,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
             session_id=preflight_session_id,
             strategy_id=strategy_id,
+            leverage=effective_risk.leverage,
         )
-        if account_preflight is not None:
+        if portfolio_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             try:
                 context.set_trailing_metadata((("preflight-session-id", preflight_session_id),))
             except Exception:  # noqa: BLE001
                 logger.debug("context does not support trailing metadata for preflight failure")
-            context.set_details(f"{account_preflight}; preflight_session_id={preflight_session_id}")
+            context.set_details(f"{portfolio_preflight}; preflight_session_id={preflight_session_id}")
+            return pb2.RunStrategyResponse()
+
+        snapshot = _get_portfolio_snapshot(
+            acct_client,
+            portfolio_id,
+            user_id,
+            required_symbols=required_symbols,
+        )
+        if snapshot is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(f"portfolio {portfolio_id} not found or core-service unreachable")
             return pb2.RunStrategyResponse()
 
         try:
@@ -891,9 +1063,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         # 2. Readiness gating (optional via ``market_data_policy.preflight_enabled``)
         #    — state/delivery/freshness checks. Disabling this is an operator
         #    bypass for testing; it must NOT disable binding resolution.
-        # Phase D2: market-data RPCs split off into MarketDataClient
-        # (control-panel-service). Build it only after profile/path guards so
-        # proxy-only runtimes cannot accidentally touch direct market-data deps.
+        # Build the control-panel market-data proxy only after profile/path
+        # guards so RuntimeChannel sessions cannot accidentally use local
+        # data sources.
         marketdata_client = self._marketdata_client()
         preflight = self._run_profile_preflight(
             profile=profile,
@@ -918,14 +1090,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         session_id, state = self._sessions.create(
             environment=environment,
             user_id=user_id,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             runtime_id=runtime_id,
             runtime_source=runtime_source,
             runtime_name=runtime_name,
         )
         if environment == 1:
             state.configure_live_runtime(
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 strategy_id=strategy_id,
                 required_streams=required_streams,
                 consumer_group=_live_consumer_group(strategy_id, session_id),
@@ -942,12 +1114,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 )
                 return pb2.RunStrategyResponse()
         else:
-            state.account_id = account_id
+            state.portfolio_id = portfolio_id
             state.strategy_id = strategy_id
         state.configure_risk_runtime(
             order_target_keys=set(declarations.order_target_keys),
             max_loss_close_pct=effective_risk.max_loss_close_pct,
             max_loss_close_source=effective_risk.max_loss_close_source,
+            leverage=effective_risk.leverage,
+            leverage_source=effective_risk.leverage_source,
             initial_margin_balance=initial_margin_balance,
         )
 
@@ -955,7 +1129,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             acct_client,
             context,
             session_id=session_id,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             strategy_id=strategy_id,
             environment=environment,
             interval=request.interval or "1m",
@@ -964,6 +1138,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             runtime_id=runtime_id,
             runtime_source=runtime_source,
             runtime_name=runtime_name,
+            leverage=effective_risk.leverage,
         ):
             if environment == 1:
                 self._release_session_market_data_subscriptions(session_id, state)
@@ -975,7 +1150,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         try:
             _sync_strategy_snapshot(
                 acct_client,
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 user_id=user_id,
                 environment=environment,
                 wallet=wallet,
@@ -1014,8 +1189,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 otel_parent_context,
                 f"StrategySession/{session_id}",
                 lambda: self._run_session(
-                    session_id, state, request, wallet, environment, account_id, user_id,
+                    session_id, state, request, wallet, environment, portfolio_id, user_id,
                     declared_inputs, strategy_path, strategy_id, strategy_code,
+                    strategy_hot_reload=strategy_hot_reload,
                     backtest_restore_wallet=backtest_restore_wallet,
                 ),
             )
@@ -1036,38 +1212,52 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         request: Any,
         wallet: Any,
         environment: int,
-        account_id: int,
+        portfolio_id: int,
         user_id: int,
         declared_inputs: list[StrategyInput],
         strategy_path: str,
         strategy_id: int,
         strategy_code: str | None,
+        strategy_hot_reload: bool = False,
         backtest_restore_wallet: Any | None = None,
     ) -> None:
         user_strategy: Any | None = None
         try:
             order_client = self._order_client()
+            acct_client = self._portfolio_client()
             engine = StrategyEngine()
+
+            def _persist_runtime_error(message: str) -> None:
+                if not state.record_runtime_error(message):
+                    return
+                self._persist_session_status(session_id, state)
+
+            def _clear_runtime_error() -> None:
+                if not state.clear_runtime_error(USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX):
+                    return
+                self._persist_session_status(session_id, state)
 
             user_strategy = engine.create_strategy(
                 user_id=f"user:{user_id}:session:{session_id}",
                 strategy_path=strategy_path,
                 wallet=wallet,
                 order_client=order_client,
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 strategy_id=strategy_id,
                 session_id=session_id,
                 strategy_code=strategy_code,
                 notifier=StrategyNotifier(self._notification_client),
+                hot_reload=strategy_hot_reload,
+                on_user_code_error=_persist_runtime_error if strategy_hot_reload else None,
+                on_user_code_recovered=_clear_runtime_error if strategy_hot_reload else None,
             )
 
             # 注册 on_order 回调：同步钱包到 core-service（带 session_id 审计追溯）
-            acct_client = self._account_client()
 
             def _on_order_sync() -> None:
                 _sync_strategy_snapshot(
                     acct_client,
-                    account_id=account_id,
+                    portfolio_id=portfolio_id,
                     user_id=user_id,
                     environment=environment,
                     wallet=wallet,
@@ -1085,12 +1275,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if environment == 1:
                 self._install_periodic_sample_trigger(
                     engine=engine,
-                    account_id=account_id,
+                    portfolio_id=portfolio_id,
                     user_id=user_id,
                     strategy_id=strategy_id,
                     session_id=session_id,
                     wallet=wallet,
-                    account_client=acct_client,
+                    portfolio_client=acct_client,
                     every_n_bars=DEFAULT_PERIODIC_SAMPLE_EVERY_BARS,
                     max_idle_seconds=float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS),
                 )
@@ -1106,7 +1296,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             elif environment == 1:
                 self._run_live(session_id, state, engine, declared_inputs, strategy_id)
             else:
-                raise ValueError(f"unsupported account environment: {environment}")
+                raise ValueError(f"unsupported portfolio environment: {environment}")
 
         except Exception as e:
             logger.exception("session %s failed", session_id)
@@ -1119,12 +1309,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 lease_stop_event.set()
             self._release_stream_leases(session_id, state)
             self._release_session_market_data_subscriptions(session_id, state)
+            finalization_errors: list[str] = []
             try:
-                acct_client = self._account_client()
+                acct_client = self._portfolio_client()
                 try:
                     _sync_strategy_snapshot(
                         acct_client,
-                        account_id=account_id,
+                        portfolio_id=portfolio_id,
                         user_id=user_id,
                         environment=environment,
                         wallet=wallet,
@@ -1138,14 +1329,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     )
                 except Exception as e:
                     logger.warning("session %s: failed to persist strategy_end snapshot", session_id, exc_info=True)
-                    _force_session_failed(state, f"failed to persist strategy_end snapshot: {e}")
+                    finalization_errors.append(f"failed to persist strategy_end snapshot: {e}")
                 if environment == 0 and backtest_restore_wallet is not None:
                     try:
                         # 回测过程中的 wallet 写入只服务本 session 审计；结束后必须
                         # 恢复启动前账户状态，避免下一次回测继承本次 PnL/仓位。
                         _sync_strategy_snapshot(
                             acct_client,
-                            account_id=account_id,
+                            portfolio_id=portfolio_id,
                             user_id=user_id,
                             environment=environment,
                             wallet=backtest_restore_wallet,
@@ -1155,11 +1346,18 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         )
                     except Exception as e:
                         logger.warning(
-                            "session %s: failed to restore backtest account wallet state",
+                            "session %s: failed to restore backtest portfolio wallet state",
                             session_id,
                             exc_info=True,
                         )
-                        _force_session_failed(state, f"failed to restore backtest account wallet state: {e}")
+                        finalization_errors.append(f"failed to restore backtest portfolio wallet state: {e}")
+                if finalization_errors:
+                    with state._lock:
+                        if state.status not in {"failed", "stop_failed"}:
+                            state.status = "recoverable"
+                            state.error = "; ".join(finalization_errors)
+                        elif not state.error:
+                            state.error = "; ".join(finalization_errors)
                 if not acct_client.update_session(
                     session_id=session_id,
                     status=state.status,
@@ -1168,34 +1366,44 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     runtime_id=state.runtime_id,
                 ):
                     logger.warning("session %s: failed to persist final session status", session_id)
+                    _safe_send_session_status_patch(
+                        self._platform_proxy,
+                        session_id=session_id,
+                        status=state.status,
+                        bars_processed=state.bars_processed,
+                        error=state.error,
+                        runtime_id=state.runtime_id,
+                    )
                 self._sessions.mark_terminal(session_id)
             except Exception:
                 logger.warning("session %s: failed to finalize", session_id, exc_info=True)
 
     @staticmethod
-    def _run_account_preflight(
+    def _run_portfolio_preflight(
         *,
         acct_client: Any,
-        account_id: int,
+        portfolio_id: int,
         user_id: int,
         required_routes: set[tuple[str, str]],
         required_symbols: set[tuple[str, str, str]],
         session_id: str = "",
         strategy_id: int = 0,
+        leverage: float = 0.0,
     ) -> str | None:
         preflight = getattr(acct_client, "preflight_strategy_session", None)
         if not callable(preflight):
-            return "account preflight unavailable: client does not support PreflightStrategySession"
+            return "portfolio preflight unavailable: client does not support PreflightStrategySession"
         resp = preflight(
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             user_id=user_id,
             required_routes=sorted(required_routes),
             required_symbols=sorted(required_symbols),
             session_id=str(session_id or ""),
             strategy_id=int(strategy_id),
+            leverage=float(leverage or 0.0),
         )
         if resp is None:
-            return "account preflight unavailable: core-service did not return a result"
+            return "portfolio preflight unavailable: core-service did not return a result"
         if bool(getattr(resp, "ok", False)):
             return None
         issue_messages: list[str] = []
@@ -1210,15 +1418,15 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 route = f"{route} symbol={symbol}"
             issue_messages.append(f"{code}: {message}{route}".strip())
         if issue_messages:
-            return "account preflight failed: " + "; ".join(issue_messages)
-        return "account preflight failed"
+            return "portfolio preflight failed: " + "; ".join(issue_messages)
+        return "portfolio preflight failed"
 
     def _run_profile_preflight(
         self,
         *,
         profile: RuntimeSourceProfile,
         declared_inputs: list[StrategyInput],
-        marketdata_client: MarketDataClient,
+        marketdata_client: Any,
         start_ms: int,
         end_ms: int,
         require_readiness: bool = True,
@@ -1240,18 +1448,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 # an unconditional pass. Return an empty ok result rather than
                 # burning a DB query on an evaluator whose result we'd ignore.
                 return PreflightResult(profile=profile)
-            if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-                return backtest_preflight(
-                    declared_inputs,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
-                    availability_fn=self._proxy_backtest_availability(marketdata_client),
-                )
             return backtest_preflight(
                 declared_inputs,
                 start_ms=start_ms,
                 end_ms=end_ms,
-                availability_fn=default_backtest_availability(self._ts_config),
+                availability_fn=self._proxy_backtest_availability(marketdata_client),
             )
         if profile in (RuntimeSourceProfile.DEMO, RuntimeSourceProfile.LIVE):
             return live_stream_preflight(
@@ -1283,14 +1484,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         return _check
 
     @staticmethod
-    def _live_stream_lookup(marketdata_client: MarketDataClient):
+    def _live_stream_lookup(marketdata_client: Any):
         """Return a callable that looks up control-plane stream status by key.
 
         Kept as a separate method so tests can patch it cleanly when they
-        want to assert per-declared-input lookups without spinning up a
-        ``MarketDataClient``. (Phase D2 moved this RPC from core-service
-        into control-panel-service; the per-declared-input lookup contract
-        is unchanged.)
+        want to assert per-declared-input lookups without a real platform
+        proxy. The per-declared-input lookup contract is unchanged.
         """
         def _lookup(market: str, symbol: str, interval: str):
             return marketdata_client.get_market_data_stream_status(
@@ -1306,12 +1505,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self,
         *,
         engine: StrategyEngine,
-        account_id: int,
+        portfolio_id: int,
         user_id: int,
         strategy_id: int,
         session_id: str,
         wallet: Any,
-        account_client: AccountClient,
+        portfolio_client: PortfolioClient,
         every_n_bars: int,
         max_idle_seconds: float,
         now_fn: Callable[[], float] | None = None,
@@ -1343,8 +1542,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             state["last_compare_at"] = now
             try:
                 _sync_strategy_snapshot(
-                    account_client,
-                    account_id=account_id,
+                    portfolio_client,
+                    portfolio_id=portfolio_id,
                     user_id=user_id,
                     environment=1,
                     wallet=wallet,
@@ -1424,13 +1623,99 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._persist_session_status(session_id, state)
         self._halt_session_runtime(state, finalize=False)
 
-        ok, close_reason = self._stop_and_close_account(session_id, state)
+        ok, close_reason = self._stop_and_close_portfolio(session_id, state)
         if ok:
             state.transition("stopped", error=reason)
         else:
             state.transition("stop_failed", error=f"{reason}; {close_reason}")
         self._persist_session_status(session_id, state)
         self._halt_session_runtime(state, finalize=True)
+
+    def _install_indicator_collection(
+        self,
+        session_id: str,
+        state: SessionState,
+        engine: StrategyEngine,
+        request: Any | None = None,
+    ) -> Callable[[], None]:
+        strategies = [
+            strategy
+            for strategy in getattr(engine, "strategies", {}).values()
+            if getattr(strategy, "indicator_definitions", None)
+        ]
+        if not strategies:
+            return lambda: None
+
+        try:
+            portfolio_client = self._portfolio_client()
+        except Exception:  # noqa: BLE001
+            logger.warning("strategy indicator collection disabled: portfolio client unavailable", exc_info=True)
+            return lambda: None
+
+        user_id = int(getattr(request, "user_id", 0) or getattr(state, "user_id", 0) or 0)
+        flushers: list[Callable[[], None]] = []
+
+        def save_payload(*, definitions: list[Any] | None = None, chunks: list[Any] | None = None) -> None:
+            if not definitions and not chunks:
+                return
+            save = getattr(portfolio_client, "save_strategy_indicators", None)
+            if not callable(save):
+                logger.warning("strategy indicator collection disabled: portfolio client cannot save indicators")
+                return
+            try:
+                save(
+                    session_id=session_id,
+                    user_id=user_id,
+                    definitions=definitions or [],
+                    chunks=chunks or [],
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "strategy indicator save failed: session=%s definitions=%d chunks=%d",
+                    session_id,
+                    len(definitions or []),
+                    len(chunks or []),
+                    exc_info=True,
+                )
+
+        for strategy in strategies:
+            definitions = list(getattr(strategy, "indicator_definitions", []) or [])
+            buffer = IndicatorChunkBuffer(definitions)
+            definition_streams_saved: set[str] = set()
+
+            def on_frame(
+                stream_key: str,
+                market_time_ms: int,
+                interval_ms: int,
+                frame,
+                *,
+                definitions=definitions,
+                buffer=buffer,
+                definition_streams_saved=definition_streams_saved,
+            ) -> None:
+                if stream_key not in definition_streams_saved:
+                    save_payload(
+                        definitions=[replace(definition, stream_key=stream_key) for definition in definitions],
+                    )
+                    definition_streams_saved.add(stream_key)
+                chunks = buffer.record_bar(stream_key, market_time_ms, interval_ms, frame)
+                if chunks:
+                    save_payload(chunks=chunks)
+
+            strategy.on_indicator_frame = on_frame
+
+            def flush(*, buffer=buffer) -> None:
+                chunks = buffer.flush_open()
+                if chunks:
+                    save_payload(chunks=chunks)
+
+            flushers.append(flush)
+
+        def flush_all() -> None:
+            for flush in flushers:
+                flush()
+
+        return flush_all
 
     def _run_backtest(
         self,
@@ -1440,43 +1725,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         request: Any,
         declared_inputs: list[StrategyInput],
     ) -> None:
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            self._run_backtest_via_platform_proxy(
-                session_id=session_id,
-                state=state,
-                engine=engine,
-                request=request,
-                declared_inputs=declared_inputs,
-            )
-            return
-
-        from market_data.config import TimescaleConfig
-        from strategy_service.data_loop import BacktestDataLoop
-
-        start = request.start_time_ms
-        end = request.end_time_ms
-
-        if start == 0 or end == 0:
-            state.transition("failed", error="start_time_ms and end_time_ms are required for backtest accounts")
-            return
-
-        ts_config = TimescaleConfig.from_dict(self._ts_config)
-        loop = BacktestDataLoop(service=engine, config=ts_config)
-
-        # Multi-input replay — each declared (market, symbol, interval)
-        # gets its own iterator so distinct intervals (e.g. BTCUSDT 1m + 5m)
-        # both reach the strategy.
-        n = loop.run_declared(
-            declared_inputs,
-            start,
-            end,
-            should_stop=lambda: state.status != "running",
+        self._run_backtest_via_platform_proxy(
+            session_id=session_id,
+            state=state,
+            engine=engine,
+            request=request,
+            declared_inputs=declared_inputs,
         )
-        if state.status == "running":
-            state.transition("finished", bars=n)
-        else:
-            state.bars_processed = n
-        logger.info("session %s finished: %d bars", session_id, n)
 
     def _run_backtest_via_platform_proxy(
         self,
@@ -1490,7 +1745,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         start = int(getattr(request, "start_time_ms", 0) or 0)
         end = int(getattr(request, "end_time_ms", 0) or 0)
         if start == 0 or end == 0:
-            state.transition("failed", error="start_time_ms and end_time_ms are required for backtest accounts")
+            state.transition("failed", error="start_time_ms and end_time_ms are required for backtest portfolios")
             return
 
         from strategy_service.data_loop import _adapt_kline
@@ -1513,51 +1768,38 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             )
             for stream in required_streams
         }
-        data_source = self._runtime_data_source
-        iter_dataset = getattr(data_source, "iter_dataset_klines", None)
-        if not callable(iter_dataset):
+        from strategy_service.backtest_pages import BACKTEST_PAGE_SIZE, PagedBacktestDataSource
+
+        marketdata_client = self._marketdata_client()
+        fetch_backtest_page = getattr(marketdata_client, "fetch_backtest_page", None)
+        if not callable(fetch_backtest_page):
             state.transition(
                 "failed",
                 error=(
-                    "chunked dataset delivery is not configured; "
+                    "paged backtest data proxy is not configured; "
                     "FetchKlines fallback is disabled for backtest execution"
                 ),
             )
             return
-        marketdata_client = self._marketdata_client()
-        deliver_dataset = getattr(marketdata_client, "deliver_dataset_klines", None)
-        if not callable(deliver_dataset):
-            state.transition(
-                "failed",
-                error=(
-                    "chunked dataset delivery is not configured; "
-                    "platform dataset delivery request is unavailable"
-                ),
-            )
-            return
-        if not deliver_dataset(
-            session_id=session_id,
-            runtime_id=state.runtime_id,
+        n = 0
+        data_source = PagedBacktestDataSource(
+            marketdata_client,
             start_time_ms=start,
             end_time_ms=end,
             streams=required_streams,
-        ):
-            state.transition(
-                "failed",
-                error="failed to request platform dataset delivery for backtest execution",
-            )
-            return
-        stop_event = threading.Event()
-        n = 0
-        for kline in iter_dataset(
-            session_id=session_id,
-            required_streams=required_streams,
-            stop_event=stop_event,
-        ):
-            if state.status != "running" or stop_event.is_set():
-                break
-            engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
-            n += 1
+        )
+        flush_indicators = self._install_indicator_collection(session_id, state, engine, request)
+        try:
+            for kline in data_source.iter_klines():
+                if state.status != "running":
+                    break
+                engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
+                n += 1
+                state.bars_processed = n
+                if n % BACKTEST_PAGE_SIZE == 0:
+                    self._persist_session_status(session_id, state)
+        finally:
+            flush_indicators()
 
         if state.status == "running":
             state.transition("finished", bars=n)
@@ -1573,92 +1815,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         declared_inputs: list[StrategyInput],
         strategy_id: int,
     ) -> None:
-        if self._platform_access_mode == PLATFORM_ACCESS_PROXY_ONLY:
-            self._run_live_via_platform_proxy(session_id, state, engine)
-            return
-
-        unsupported_exchanges = sorted({inp.exchange for inp in declared_inputs if inp.exchange != "binance"})
-        if unsupported_exchanges:
-            state.transition(
-                "failed",
-                error=(
-                    "unsupported live market-data exchange(s): "
-                    + ", ".join(unsupported_exchanges)
-                ),
-            )
-            return
-
-        import threading as _threading
-        from market_data.config import KafkaBrokerConfig, KafkaConfig, LiveKlineSubscription
-        from strategy_service.data_loop import LiveDataLoop
-
-        # KAFKA_BROKERS 环境变量是逗号分隔的 "host:port" 字符串，
-        # 这里先只负责解析 brokers；topic family / filtering 语义交给 strategy-library.
-        broker_list = []
-        for entry in str(self._kafka_brokers).split(","):
-            entry = entry.strip()
-            if not entry:
-                continue
-            if ":" in entry:
-                host, port_str = entry.rsplit(":", 1)
-                try:
-                    port = int(port_str)
-                except ValueError:
-                    host, port = entry, 9092
-            else:
-                host, port = entry, 9092
-            broker_list.append(KafkaBrokerConfig(host=host, port=port))
-        consumer_group = state.live_consumer_group or _live_consumer_group(strategy_id, session_id)
-        # Multi-interval subscription — one Kafka topic per distinct
-        # (market, interval) pair declared by the strategy. Ensures a
-        # BTCUSDT 1m + 5m strategy consumes both topics, not just one.
-        marketdata_inputs = [
-            SimpleNamespace(
-                exchange=inp.exchange,
-                market=_marketdata_market(inp.market),
-                symbol=inp.symbol,
-                interval=inp.interval,
-            )
-            for inp in declared_inputs
-        ]
-        subscription = LiveKlineSubscription.from_declared_inputs(
-            marketdata_inputs,
-            consumer_group=consumer_group,
-            exchange="binance",
-        )
-        kafka_cfg = KafkaConfig.for_live_kline_subscription(
-            subscription,
-            brokers=broker_list,
-        )
-        if state.environment == 1 and self._lease_management_enabled:
-            if not self._renew_stream_leases_once(session_id, state):
-                raise RuntimeError("failed to create required market-data leases for demo session")
-            lease_stop_event = _threading.Event()
-            lease_thread = _threading.Thread(
-                target=self._lease_heartbeat_loop,
-                args=(session_id, state, lease_stop_event),
-                daemon=True,
-            )
-            state.set_lease_runtime(stop_event=lease_stop_event, lease_thread=lease_thread)
-            lease_thread.start()
-        live_loop = LiveDataLoop(
-            service=engine,
-            config=kafka_cfg,
-            on_unroutable=lambda kline: self._record_unroutable_live_kline(session_id, state, kline),
-            canonical_markets={
-                _stream_key(_marketdata_market(inp.market), inp.symbol, inp.interval): inp.market
-                for inp in declared_inputs
-            },
-        )
-        self._sessions.set_live_loop(session_id, live_loop)
-
-        stop_event = _threading.Event()
-        state._stop_event = stop_event  # type: ignore[attr-defined]
-        live_loop.start()
-        # 每 60 秒唤醒一次检查 session 是否仍为 running（防止孤儿 hang）
-        while not stop_event.wait(timeout=60):
-            if state.status != "running":
-                break
+        del declared_inputs, strategy_id
+        self._run_live_via_platform_proxy(session_id, state, engine)
 
     def _run_live_via_platform_proxy(
         self,
@@ -1684,13 +1842,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         stop_event = _threading.Event()
         state._stop_event = stop_event  # type: ignore[attr-defined]
         data_source = self._runtime_data_source
+        iter_session_events = getattr(data_source, "iter_session_events", None)
         iter_live = getattr(data_source, "iter_live_klines", None)
-        if not callable(iter_live):
+        if not callable(iter_session_events) and not callable(iter_live):
             raise RuntimeError(
                 "platform live delivery is not configured; "
                 "FetchKlines fallback is disabled for demo/live execution"
             )
-        acct_client = self._account_client()
+        acct_client = self._portfolio_client()
         canonical_by_stream = {
             _stream_key(stream.market, stream.symbol, stream.interval): (
                 stream.canonical_market or stream.market
@@ -1698,34 +1857,57 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             for stream in state.required_streams
         }
 
-        for kline in iter_live(
-            session_id=session_id,
-            required_streams=state.required_streams,
-            stop_event=stop_event,
-        ):
-            if state.status != "running" or stop_event.is_set():
-                break
-            routed = engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
-            if routed is False:
-                self._record_unroutable_live_kline(session_id, state, kline)
-            with state._lock:
-                state.bars_processed += 1
-                bars_processed = state.bars_processed
-                status = state.status
-                error = state.error
-                runtime_id = state.runtime_id
-            try:
-                ok = acct_client.update_session(
+        if callable(iter_session_events):
+            live_events = iter_session_events(
+                session_id=session_id,
+                required_streams=state.required_streams,
+                stop_event=stop_event,
+            )
+        else:
+            live_events = (
+                SimpleNamespace(kind="kline", payload=kline)
+                for kline in iter_live(
                     session_id=session_id,
-                    status=status,
-                    bars_processed=bars_processed,
-                    error=error,
-                    runtime_id=runtime_id,
+                    required_streams=state.required_streams,
+                    stop_event=stop_event,
                 )
-                if not ok:
-                    logger.warning("session %s: failed to update live progress", session_id)
-            except Exception:  # noqa: BLE001
-                logger.warning("session %s: failed to update live progress", session_id, exc_info=True)
+            )
+
+        flush_indicators = self._install_indicator_collection(session_id, state, engine)
+        try:
+            for event in live_events:
+                if state.status != "running" or stop_event.is_set():
+                    break
+                event_kind = str(getattr(event, "kind", "") or "").strip().lower()
+                if event_kind == "order_update":
+                    handler = getattr(engine, "handle_order_update", None)
+                    if callable(handler):
+                        handler(getattr(event, "payload", None))
+                    continue
+                kline = getattr(event, "payload", event)
+                routed = engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
+                if routed is False:
+                    self._record_unroutable_live_kline(session_id, state, kline)
+                with state._lock:
+                    state.bars_processed += 1
+                    bars_processed = state.bars_processed
+                    status = state.status
+                    error = state.error
+                    runtime_id = state.runtime_id
+                try:
+                    ok = acct_client.update_session(
+                        session_id=session_id,
+                        status=status,
+                        bars_processed=bars_processed,
+                        error=error,
+                        runtime_id=runtime_id,
+                    )
+                    if not ok:
+                        logger.warning("session %s: failed to update live progress", session_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("session %s: failed to update live progress", session_id, exc_info=True)
+        finally:
+            flush_indicators()
 
     def _renew_stream_leases_once(self, session_id: str, state: SessionState) -> bool:
         if state.environment != 1 or not state.required_streams:
@@ -1735,7 +1917,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             ok = marketdata_client.create_or_renew_market_data_lease(
                 session_id=session_id,
                 strategy_id=state.strategy_id,
-                account_id=state.account_id,
+                portfolio_id=state.portfolio_id,
                 stream_id=binding.stream_id,
                 ttl_seconds=self._lease_ttl_seconds,
             )
@@ -1872,6 +2054,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         action = _resolve_stop_action(request)
         if action == pb2.STOP_ACTION_CANCEL:
             return pb2.StopStrategyResponse(stopped=False)
+        if state.is_terminal():
+            self._persist_session_status(request.session_id, state)
+            self._halt_session_runtime(state, finalize=True)
+            return pb2.StopStrategyResponse(stopped=True)
         if action == pb2.STOP_ACTION_FINISH:
             if not state.transition("stopping"):
                 return pb2.StopStrategyResponse(stopped=False)
@@ -1897,7 +2083,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._persist_session_status(request.session_id, state)
         self._halt_session_runtime(state, finalize=False)
 
-        ok, reason = self._stop_and_close_account(request.session_id, state)
+        ok, reason = self._stop_and_close_portfolio(request.session_id, state)
         if not ok:
             state.transition("stop_failed", error=reason)
             self._persist_session_status(request.session_id, state)
@@ -1912,7 +2098,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         return pb2.StopStrategyResponse(stopped=True)
 
     def _persist_session_status(self, session_id: str, state: SessionState) -> None:
-        acct_client = self._account_client()
+        acct_client = self._portfolio_client()
         if not acct_client.update_session(
             session_id=session_id,
             status=state.status,
@@ -1933,7 +2119,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if stop_event is not None:
                 stop_event.set()
 
-    def _stop_and_close_account(self, session_id: str, state: SessionState) -> tuple[bool, str]:
+    def _stop_and_close_portfolio(self, session_id: str, state: SessionState) -> tuple[bool, str]:
         wallet = state.wallet
         order_client = state.order_client
         if wallet is None or order_client is None:
@@ -1944,7 +2130,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if reason:
             return False, reason
 
-        acct_client = self._account_client()
+        acct_client = self._portfolio_client()
         for index, order in enumerate(orders, start=1):
             if time.monotonic() - started_at > DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS:
                 return False, (
@@ -1953,10 +2139,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 )
             decision = self._build_stop_order_decision(order)
             order_resp = order_client.place_order(
-                state.account_id,
+                state.portfolio_id,
                 decision,
                 order.mark_price,
-                account_symbol=order.account_symbol,
+                portfolio_symbol=order.portfolio_symbol,
                 strategy_id=state.strategy_id,
                 market=order.market,
                 session_id=session_id,
@@ -1971,13 +2157,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 order.exchange,
                 order.market,
                 order.venue_id,
-                order.account_symbol,
+                order.portfolio_symbol,
                 _marketdata_market(order.market),
                 order_resp,
             )
             _sync_strategy_snapshot(
                 acct_client,
-                account_id=state.account_id,
+                portfolio_id=state.portfolio_id,
                 user_id=state.user_id,
                 environment=state.environment,
                 wallet=wallet,
@@ -1986,7 +2172,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 session_id=session_id,
             )
 
-        flat, flat_reason = self._account_is_flat(wallet, state)
+        flat, flat_reason = self._portfolio_is_flat(wallet, state)
         if not flat:
             return False, flat_reason
         return True, ""
@@ -2040,6 +2226,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         return [], "stop_and_close_failed:invalid_futures_symbol"
                     if not _target_is_allowed(state, exchange, market, symbol):
                         continue
+                    metadata = _futures_stop_metadata(route_wallet.futures, symbol)
+                    qty = _quantize_stop_futures_qty(qty, metadata)
+                    if qty <= 1e-12:
+                        return [], f"stop_and_close_failed:futures_qty_below_step_size:{symbol}"
                     side = "SELL" if float(getattr(pos, "position_qty", 0.0) or 0.0) > 0 else "BUY"
                     mark_price = float(
                         getattr(pos, "mark_price", 0.0)
@@ -2050,7 +2240,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         exchange=exchange,
                         venue_id=venue_id,
                         symbol=symbol,
-                        account_symbol=symbol,
+                        portfolio_symbol=symbol,
                         market=market,
                         side=side,
                         qty=qty,
@@ -2075,7 +2265,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         exchange=exchange,
                         venue_id=venue_id,
                         symbol=f"{sym}USDT",
-                        account_symbol=sym,
+                        portfolio_symbol=sym,
                         market=market,
                         side="SELL",
                         qty=qty,
@@ -2085,7 +2275,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         return orders, ""
 
     @staticmethod
-    def _account_is_flat(wallet: Any, state: SessionState) -> tuple[bool, str]:
+    def _portfolio_is_flat(wallet: Any, state: SessionState) -> tuple[bool, str]:
         if not isinstance(wallet, PortfolioWalletRuntime):
             return False, "stop_and_close_failed:portfolio_wallet_required"
         for (exchange, market, _venue_id), route_wallet in sorted(wallet.wallets.items()):
@@ -2183,19 +2373,19 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.PreviewRunStrategyResponse()
         if not self._enforce_request_runtime(request, context):
             return pb2.PreviewRunStrategyResponse()
-        if not self._require_direct_platform_access(context, "PreviewRunStrategy"):
+        if not self._require_platform_proxy(context, "PreviewRunStrategy"):
             return pb2.PreviewRunStrategyResponse()
-        account_id = int(getattr(request, "account_id", 0) or 0)
-        if account_id == 0:
+        portfolio_id = int(getattr(request, "portfolio_id", 0) or 0)
+        if portfolio_id == 0:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("account_id is required")
+            context.set_details("portfolio_id is required")
             return pb2.PreviewRunStrategyResponse()
 
-        acct_client = self._account_client()
-        snapshot = acct_client.get_portfolio_snapshot(account_id, user_id)
+        acct_client = self._portfolio_client()
+        snapshot = _get_portfolio_snapshot(acct_client, portfolio_id, user_id)
         if snapshot is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"account {account_id} not found or core-service unreachable")
+            context.set_details(f"portfolio {portfolio_id} not found or core-service unreachable")
             return pb2.PreviewRunStrategyResponse()
 
         environment = _portfolio_snapshot_environment(snapshot)
@@ -2211,6 +2401,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         ) -> pb2.PreviewRunStrategyResponse:
             effective = risk_controls or _EffectiveRiskControls(
                 DEFAULT_MAX_LOSS_CLOSE_PCT,
+                "platform_default",
+                DEFAULT_SESSION_LEVERAGE,
                 "platform_default",
             )
             failures_proto: list[pb2.PreflightFailureProto] = []
@@ -2267,6 +2459,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 risk_controls=pb2.RiskControls(
                     max_loss_close_pct=effective.max_loss_close_pct,
                     max_loss_close_source=effective.max_loss_close_source,
+                    leverage=effective.leverage,
+                    leverage_source=effective.leverage_source,
                 ),
             )
 
@@ -2278,17 +2472,36 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.PreviewRunStrategyResponse()
 
         # Strategy source resolution (same as RunStrategy).
+        strategy_id = 0
         strategy_code: str | None = None
+        strategy_name = ""
+        strategy_version = ""
         strategy_path = getattr(request, "strategy_path", "") or ""
 
-        active = acct_client.get_active_strategy(account_id)
+        active = acct_client.get_active_strategy(portfolio_id)
         if active is not None and int(getattr(active, "strategy_id", 0) or 0) != 0:
+            strategy_id = int(getattr(active, "strategy_id", 0) or 0)
             strategy_code = active.code
-            strategy_path = f"<db:{active.name}@{active.version}>"
+            strategy_name = str(getattr(active, "name", "") or "")
+            strategy_version = str(getattr(active, "version", "") or "")
+            strategy_path = f"<db:{strategy_name}@{strategy_version}>"
         elif not strategy_path:
             # No active strategy and no explicit strategy_path.
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details("account has no active strategy; mount and activate one first")
+            context.set_details("portfolio has no active strategy; mount and activate one first")
+            return pb2.PreviewRunStrategyResponse()
+        try:
+            strategy_path, strategy_code, _strategy_hot_reload = self._debug_strategy_source_for_db_code(
+                user_id=user_id,
+                strategy_id=strategy_id,
+                strategy_name=strategy_name,
+                strategy_version=strategy_version,
+                strategy_path=strategy_path,
+                strategy_code=strategy_code,
+            )
+        except DebugStrategySourceError as e:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(f"failed to materialize bare debug strategy source: {e}")
             return pb2.PreviewRunStrategyResponse()
 
         try:
@@ -2305,6 +2518,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             effective_risk = _effective_risk_controls_from_request(
                 declarations,
                 getattr(request, "max_loss_close_pct", 0.0),
+                getattr(request, "leverage", 0.0),
             )
         except StrategyDeclarationError as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
@@ -2317,17 +2531,29 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             for entry in declarations.inputs
         } | set(declarations.order_target_keys)
 
-        account_preflight = self._run_account_preflight(
+        portfolio_preflight = self._run_portfolio_preflight(
             acct_client=acct_client,
-            account_id=account_id,
+            portfolio_id=portfolio_id,
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
+            leverage=effective_risk.leverage,
         )
-        if account_preflight is not None:
+        if portfolio_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(account_preflight)
+            context.set_details(portfolio_preflight)
+            return pb2.PreviewRunStrategyResponse()
+
+        snapshot = _get_portfolio_snapshot(
+            acct_client,
+            portfolio_id,
+            user_id,
+            required_symbols=required_symbols,
+        )
+        if snapshot is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(f"portfolio {portfolio_id} not found or core-service unreachable")
             return pb2.PreviewRunStrategyResponse()
 
         try:
@@ -2379,9 +2605,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 pb2.LiveSessionDiagnostic(
                     session_id=session_id,
                     user_id=state.user_id,
-                    account_id=state.account_id,
+                    portfolio_id=state.portfolio_id,
                     strategy_id=state.strategy_id,
-                    account_environment=state.environment,
+                    portfolio_environment=state.environment,
                     status=state.status,
                     bars_processed=state.bars_processed,
                     error=state.error,

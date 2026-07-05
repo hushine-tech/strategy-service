@@ -7,4 +7,4 @@ def test_apply_env_overrides_uses_core_service_grpc_addr(monkeypatch):
     cfg = Config()
     cfg.apply_env_overrides()
 
-    assert cfg.dependencies.account_service_grpc == "core.internal:50051"
+    assert cfg.dependencies.portfolio_service_grpc == "core.internal:50051"

@@ -1,12 +1,16 @@
 # back-test is the legacy implementation, managed separately
 back-test/
-pyproject.toml
 __pycache__/
+.venv/
+.uv-bootstrap/
+.hushine-runtime/
+*.egg-info/
 .deps/
 /logs
 .pytest_cache/
 /.run.pid
 config.local.yaml
+.vscode/
 .claude/
 .cursor/
 .idea/

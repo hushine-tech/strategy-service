@@ -3,23 +3,21 @@
 Python strategy runtime service for Hushine.
 
 `strategy-service` is now the platform executor runtime only. It runs hosted and
-self-hosted executor sessions through the normal gRPC / RuntimeChannel path.
-Local strategy debugging has moved to the standalone `strategy-debugger-cli`
-repository so users can debug strategy code offline without running a
-platform-connected debugger container.
+self-hosted executor sessions through RuntimeChannel. The old standalone gRPC
+runtime mode has been removed.
 
 ## Development
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ./generate_proto.sh
-PYTHONPATH=.:../strategy-library python run_grpc_server.py -config config.yaml
+uv run hushine-runtime start --config config.yaml
 ```
 
 Run tests:
 
 ```bash
-PYTHONPATH=.:../strategy-library pytest -q
+uv run --extra dev pytest -q
 ```
 
 ## Executor Runtime Image
@@ -42,28 +40,104 @@ Self-hosted executor example:
 ```bash
 docker run --rm \
   -v $HOME/.hushine/runtime.cred:/etc/hushine/runtime.cred:ro \
-  -e RUNTIME_INGRESS_MODE=outbound \
   -e RUNTIME_CREDENTIAL_PATH=/etc/hushine/runtime.cred \
-  -e CONTROL_PANEL_SERVICE_GRPC_ADDR=host.docker.internal:50054 \
+  -e RUNTIME_CHANNEL_GRPC_ADDR=host.docker.internal:50055 \
   hushine/strategy-runtime:executor-dev
 ```
 
-In outbound mode the process ignores account/order/Kafka/database endpoints from
-the local config and talks to the platform through RuntimeChannel proxy calls.
+The process ignores portfolio/order/Kafka/database endpoints from the local config
+and talks to the platform through RuntimeChannel proxy calls.
+
+## RuntimeChannel Data Path
+
+- Backtests call `marketdata.FetchBacktestPage` through the platform proxy.
+  control-panel-service reads `{exchange}_{year}` market-data tables and returns
+  fixed pages of `8192` bars; the runtime streams those pages into the strategy
+  and does not hold a full multi-year dataset in memory.
+- Demo/live sessions receive authorized market-data frames through
+  RuntimeChannel and consume them from local queues. Order updates have their
+  own queue and are handled before the next market-data callback, so
+  `on_order_update` and `on_market_data` remain serialized.
+- If demo/live market data becomes stale while a strategy is blocked or under a
+  breakpoint, stale bars are dropped by lag time and the runtime reports
+  `DATA_BACKPRESSURE`. Repeated drops mark the session failed via status patch.
 
 ## Local Strategy Debugging
 
-Use `strategy-debugger-cli` for local debugging:
+When control-panel is deployed with debug bare runtime enabled, a local process
+can connect without a runtime credential by naming the debug user explicitly:
 
 ```bash
-hushine-debug init --dir hushine-debug-workspace
-hushine-debug import debug-package.zip --dir hushine-debug-workspace
-cd hushine-debug-workspace
-cp strategy.py.template strategy.py
-hushine-debug replay
+RUNTIME_CHANNEL_TLS_ENABLED=true \
+RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE=../hushine-deploy/certs/runtime-channel-server.pem \
+RUNTIME_CHANNEL_TLS_SERVER_NAME=runtime-channel.local \
+uv run hushine-runtime start --config config.local.yaml \
+  --control-panel-addr 127.0.0.1:50054 \
+  --runtime-channel-addr 127.0.0.1:50055 \
+  --user-id 123
 ```
 
-The debug package is generated from Account Detail -> Local Debug in the
-frontend. It contains historical futures bars, wallet config, and a strategy
-template. VSCode/PyCharm attach to the local CLI process instead of a
-strategy-service runtime container.
+`--control-panel-addr` is used only for the debug-gated certificate bootstrap.
+After that, runtime traffic uses `--runtime-channel-addr` with the issued mTLS
+client certificate.
+
+For VS Code/debugpy attach mode, use the runtime-owned shortcut script:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh 123
+```
+
+To connect a local bare runtime to another platform machine, pass the platform
+host. The script derives core-service, control-panel, and RuntimeChannel ports:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh 123 192.168.88.6
+```
+
+Equivalent explicit form:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh \
+  --user-id 123 \
+  --platform-host 192.168.88.6
+```
+
+When ports are non-standard, pass full addresses:
+
+```bash
+scripts/start-bare-runtime-debugpy.sh \
+  --user-id 123 \
+  --core-service-addr 192.168.88.6:50051 \
+  --control-panel-addr 192.168.88.6:50054 \
+  --runtime-channel-addr 192.168.88.6:50055
+```
+
+`core-service` is exported for config compatibility. Runtime traffic still goes
+through RuntimeChannel; direct core-service calls are ignored after startup.
+
+Optional environment overrides include `DEBUG_HOST`, `DEBUG_PORT`,
+`DEBUG_WAIT`, `PLATFORM_HOST`, `CORE_SERVICE_ADDR`, `CONTROL_PANEL_ADDR`,
+`RUNTIME_CHANNEL_ADDR`, and `CONFIG_PATH`.
+
+The existing debug replay helper remains available through uv:
+
+```bash
+uv run hushine-debug replay --debugpy --wait
+```
+
+When a bare debug run materializes strategy code locally, edits live under
+`.hushine-runtime/strategies`. Upload them back to the remote portfolio database
+with:
+
+```bash
+uv run python scripts/upload_debug_strategies.py --user-id 123
+```
+
+Preview without writing:
+
+```bash
+uv run python scripts/upload_debug_strategies.py --user-id 123 --dry-run
+```
+
+Use `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` or the matching
+`--db-*` flags when the target database is not the local default.

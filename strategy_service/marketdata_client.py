@@ -1,7 +1,7 @@
 """gRPC client for control-panel-service market-data control plane (Phase D2).
 
 Before D2, these RPCs lived on core-service and were proxied through
-:class:`AccountClient`. The control plane was migrated to control-panel-service
+:class:`PortfolioClient`. The control plane was migrated to control-panel-service
 along with the underlying tables (`market_data_*` in the `control_panel`
 database). This client owns the strategy-service side of that subset:
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class MarketDataClient:
     """Thin wrapper around control-panel-service marketdata gRPC stubs.
 
-    Mirrors the soft-dependency contract of :class:`AccountClient`:
+    Mirrors the soft-dependency contract of :class:`PortfolioClient`:
     empty address ⇒ noop mode; transient gRPC failures ⇒ warning + None/False.
     """
 
@@ -44,7 +44,7 @@ class MarketDataClient:
 
             channel = grpc.insecure_channel(self._address)
 
-            # Wire grpc_ext access logging the same way AccountClient does.
+            # Wire grpc_ext access logging the same way PortfolioClient does.
             try:
                 from utils.log import ClientExtInterceptor  # type: ignore
 
@@ -113,7 +113,7 @@ class MarketDataClient:
         *,
         session_id: str,
         strategy_id: int = 0,
-        account_id: int = 0,
+        portfolio_id: int = 0,
         stream_id: int,
         ttl_seconds: int,
     ) -> bool:
@@ -125,7 +125,7 @@ class MarketDataClient:
             req = marketdata_service_pb2.CreateOrRenewMarketDataLeaseRequest(
                 session_id=session_id,
                 strategy_id=int(strategy_id),
-                account_id=int(account_id),
+                portfolio_id=int(portfolio_id),
                 stream_id=int(stream_id),
                 ttl_seconds=int(ttl_seconds),
             )

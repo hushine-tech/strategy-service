@@ -8,6 +8,7 @@ shutdown, status patches, and heartbeat continue while user code is paused.
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import json
 import queue
@@ -25,6 +26,9 @@ from strategy_service.debug_workspace import prepare_debug_workspace
 from strategy_service.runtime_channel import RuntimeChannelClient
 
 _DATASET_END = object()
+DEFAULT_LIVE_MARKET_DATA_MAX_LAG_SECONDS = 30.0
+DEFAULT_LIVE_MARKET_DATA_DROP_FAIL_THRESHOLD = 3
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,7 +47,7 @@ class RuntimeBusyError(RuntimeError):
 class DebugDataset:
     dataset_id: str
     user_id: int
-    account_id: int
+    portfolio_id: int
     runtime_id: str
     market: str
     symbol: str
@@ -52,6 +56,20 @@ class DebugDataset:
     end_time_ms: int
     loaded_at_ms: int
     klines: list[Any]
+
+
+@dataclass(frozen=True)
+class RuntimeSessionEvent:
+    kind: str
+    payload: Any
+    stream_key: str = ""
+
+
+@dataclass(frozen=True)
+class TimedMarketDataItem:
+    payload: Any
+    stream_key: str
+    enqueued_at: float
 
 
 class RuntimeWorkerProcess:
@@ -119,13 +137,29 @@ class RuntimeAgent:
         worker: RuntimeWorkerProcess | None = None,
         *,
         runtime_id: str = "",
+        live_queue_maxsize: int = 2048,
+        dataset_queue_maxsize: int = 2048,
+        order_queue_maxsize: int = 0,
+        live_market_data_max_lag_seconds: float = DEFAULT_LIVE_MARKET_DATA_MAX_LAG_SECONDS,
+        live_market_data_drop_fail_threshold: int = DEFAULT_LIVE_MARKET_DATA_DROP_FAIL_THRESHOLD,
+        now_fn: Callable[[], float] | None = None,
     ) -> None:
         self._channel = channel
         self._worker = worker
         self._runtime_id = runtime_id
+        self._live_queue_maxsize = _coerce_queue_maxsize(live_queue_maxsize)
+        self._dataset_queue_maxsize = _coerce_queue_maxsize(dataset_queue_maxsize)
+        self._order_queue_maxsize = _coerce_queue_maxsize(order_queue_maxsize, allow_unbounded=True)
+        self._live_market_data_max_lag_seconds = max(0.0, float(live_market_data_max_lag_seconds))
+        self._live_market_data_drop_fail_threshold = max(1, int(live_market_data_drop_fail_threshold))
+        self._now = now_fn or time.time
         self._data_cache: dict[tuple[str, str, int], bytes] = {}
         self._live_queues: dict[str, queue.Queue[Any]] = {}
+        self._order_update_queues: dict[str, queue.Queue[Any]] = {}
+        self._session_event_queues: dict[str, queue.Queue[object]] = {}
         self._dataset_queues: dict[str, queue.Queue[Any]] = {}
+        self._live_drop_events: dict[tuple[str, str], int] = {}
+        self._failed_sessions: set[str] = set()
         self._debug_dataset: DebugDataset | None = None
         self._debug_lock = threading.Lock()
         self._debug_replay_running = False
@@ -228,20 +262,66 @@ class RuntimeAgent:
         if frame.frame_type == cp_pb2.FRAME_TYPE_DATASET_CHUNK and frame.HasField("dataset_chunk"):
             chunk = frame.dataset_chunk
             self._data_cache[(chunk.session_id, chunk.dataset_id, int(chunk.sequence))] = bytes(chunk.payload)
-            q = self._dataset_queues.setdefault(chunk.session_id, queue.Queue())
+            q = self._dataset_queues.setdefault(
+                chunk.session_id,
+                queue.Queue(maxsize=self._dataset_queue_maxsize),
+            )
+            had_backlog = q.qsize() > 0
             for kline in _decode_dataset_chunk_payload(chunk.payload):
-                q.put(kline)
+                self._put_data_nowait(
+                    q,
+                    kline,
+                    session_id=chunk.session_id,
+                    stream_key=chunk.dataset_id,
+                    kind="dataset",
+                    report_slow_consumer=had_backlog,
+                )
             if chunk.end:
-                q.put(_DATASET_END)
+                self._put_data_nowait(
+                    q,
+                    _DATASET_END,
+                    session_id=chunk.session_id,
+                    stream_key=chunk.dataset_id,
+                    kind="dataset",
+                    report_slow_consumer=had_backlog,
+                )
             return
         if frame.frame_type == cp_pb2.FRAME_TYPE_LIVE_KLINE_BATCH and frame.HasField("live_kline_batch"):
             batch = frame.live_kline_batch
             self._data_cache[
                 (batch.session_id, batch.stream_key, int(batch.sequence))
             ] = frame.SerializeToString()
-            q = self._live_queues.setdefault(batch.session_id, queue.Queue())
+            q = self._live_queues.setdefault(
+                batch.session_id,
+                queue.Queue(maxsize=0),
+            )
             for kline in _decode_live_kline_batch(batch):
-                q.put(kline)
+                q.put_nowait(TimedMarketDataItem(
+                    payload=kline,
+                    stream_key=str(batch.stream_key or ""),
+                    enqueued_at=self._now(),
+                ))
+                self._wake_session_event_loop(batch.session_id)
+            return
+        if frame.frame_type == cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH and frame.HasField("order_update_batch"):
+            batch = frame.order_update_batch
+            stream_key = str(batch.stream_key or "order_lifecycle")
+            self._data_cache[
+                (batch.session_id, stream_key, int(batch.sequence))
+            ] = frame.SerializeToString()
+            q = self._order_update_queues.setdefault(
+                batch.session_id,
+                queue.Queue(maxsize=0),
+            )
+            for event in _decode_order_update_batch(batch):
+                session_event = RuntimeSessionEvent(
+                    kind="order_update",
+                    payload=event,
+                    stream_key=stream_key,
+                )
+                q.put_nowait(session_event)
+                self._wake_session_event_loop(batch.session_id)
+            return
 
     def cached_data(self, session_id: str, stream_key: str, sequence: int) -> bytes | None:
         return self._data_cache.get((session_id, stream_key, int(sequence)))
@@ -265,13 +345,16 @@ class RuntimeAgent:
             )
             for stream in required_streams
         }
-        q = self._live_queues.setdefault(session_id, queue.Queue())
-        while not stop_event.is_set():
+        q = self._live_queues.setdefault(session_id, queue.Queue(maxsize=0))
+        while not stop_event.is_set() and session_id not in self._failed_sessions:
             try:
-                kline = q.get(timeout=max(0.01, float(idle_timeout_seconds)))
+                item = q.get(timeout=max(0.01, float(idle_timeout_seconds)))
             except queue.Empty:
                 if stop_when_idle:
                     return
+                continue
+            kline = self._fresh_live_payload(session_id, item)
+            if kline is None:
                 continue
             if kline is _DATASET_END:
                 return
@@ -284,6 +367,100 @@ class RuntimeAgent:
             ) not in allowed:
                 continue
             yield kline
+
+    def iter_order_updates(
+        self,
+        *,
+        session_id: str,
+        stop_event: Any,
+        idle_timeout_seconds: float = 1.0,
+        stop_when_idle: bool = False,
+    ):
+        q = self._order_update_queues.setdefault(
+            session_id,
+            queue.Queue(maxsize=0),
+        )
+        while not stop_event.is_set() and session_id not in self._failed_sessions:
+            try:
+                item = q.get(timeout=max(0.01, float(idle_timeout_seconds)))
+            except queue.Empty:
+                if stop_when_idle:
+                    return
+                continue
+            yield _session_event_payload(item)
+
+    def iter_session_events(
+        self,
+        *,
+        session_id: str,
+        required_streams: list[Any],
+        stop_event: Any,
+        idle_timeout_seconds: float = 1.0,
+        stop_when_idle: bool = False,
+    ):
+        allowed = {
+            runtime_stream_key(
+                getattr(stream, "exchange", "binance"),
+                getattr(stream, "market", ""),
+                getattr(stream, "kind", "kline"),
+                getattr(stream, "symbol", ""),
+                getattr(stream, "interval", ""),
+            )
+            for stream in required_streams
+        }
+        live_q = self._live_queues.setdefault(session_id, queue.Queue(maxsize=0))
+        order_q = self._order_update_queues.setdefault(
+            session_id,
+            queue.Queue(maxsize=0),
+        )
+        wake_q = self._session_event_queue(session_id)
+        pending_kline: Any | None = None
+        while not stop_event.is_set() and session_id not in self._failed_sessions:
+            try:
+                order_update = _as_session_event(order_q.get_nowait(), default_kind="order_update")
+            except queue.Empty:
+                order_update = None
+            if order_update is not None:
+                yield order_update
+                continue
+
+            if pending_kline is None:
+                try:
+                    pending_kline = live_q.get_nowait()
+                except queue.Empty:
+                    pending_kline = None
+
+            if pending_kline is None:
+                try:
+                    wake_q.get(timeout=max(0.01, float(idle_timeout_seconds)))
+                except queue.Empty:
+                    if stop_when_idle:
+                        return
+                continue
+
+            try:
+                order_update = _as_session_event(order_q.get_nowait(), default_kind="order_update")
+            except queue.Empty:
+                order_update = None
+            if order_update is not None:
+                yield order_update
+                continue
+
+            kline = pending_kline
+            pending_kline = None
+            kline = self._fresh_live_payload(session_id, kline)
+            if kline is None:
+                continue
+            stream_key = runtime_stream_key(
+                "binance",
+                getattr(kline, "market", ""),
+                "kline",
+                getattr(kline, "symbol", ""),
+                getattr(kline, "interval", ""),
+            )
+            if allowed and stream_key not in allowed:
+                continue
+            yield RuntimeSessionEvent(kind="kline", payload=kline, stream_key=stream_key)
 
     def iter_dataset_klines(
         self,
@@ -304,7 +481,7 @@ class RuntimeAgent:
             )
             for stream in required_streams
         }
-        q = self._dataset_queues.setdefault(session_id, queue.Queue())
+        q = self._dataset_queues.setdefault(session_id, queue.Queue(maxsize=self._dataset_queue_maxsize))
         while not stop_event.is_set():
             try:
                 kline = q.get(timeout=max(0.01, float(idle_timeout_seconds)))
@@ -323,6 +500,164 @@ class RuntimeAgent:
             ) not in allowed:
                 continue
             yield kline
+
+    def _put_data_nowait(
+        self,
+        q: queue.Queue[Any],
+        item: Any,
+        *,
+        session_id: str,
+        stream_key: str,
+        kind: str,
+        report_slow_consumer: bool = True,
+    ) -> None:
+        depth_before = q.qsize()
+        try:
+            q.put_nowait(item)
+            if report_slow_consumer and depth_before > 0:
+                self._report_data_backpressure(
+                    session_id=session_id,
+                    stream_key=stream_key,
+                    reason=(
+                        f"slow_consumer: kind={kind} "
+                        f"queue_depth={q.qsize()} dropped=0"
+                    ),
+                )
+            return
+        except queue.Full:
+            pass
+        dropped = 0
+        try:
+            _ = q.get_nowait()
+            dropped = 1
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(item)
+        except queue.Full:
+            pass
+        self._report_data_backpressure(
+            session_id=session_id,
+            stream_key=stream_key,
+            reason=(
+                f"data_dropped: kind={kind} "
+                f"queue_depth={q.qsize()} dropped={dropped}"
+            ),
+        )
+
+    def _report_data_backpressure(
+        self,
+        *,
+        session_id: str,
+        stream_key: str,
+        reason: str,
+    ) -> None:
+        try:
+            self._channel.send_data_backpressure(
+                session_id=session_id,
+                stream_key=stream_key,
+                reason=reason,
+                resume_after_unix_ms=int((time.time() + 1.0) * 1000),
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("failed to report RuntimeChannel data backpressure", exc_info=True)
+
+    def _fresh_live_payload(self, session_id: str, item: Any) -> Any | None:
+        if not isinstance(item, TimedMarketDataItem):
+            return item
+        lag = max(0.0, self._now() - float(item.enqueued_at))
+        if lag <= self._live_market_data_max_lag_seconds:
+            return item.payload
+        self._record_live_market_data_drop(
+            session_id=session_id,
+            stream_key=item.stream_key,
+            lag_seconds=lag,
+        )
+        return None
+
+    def _record_live_market_data_drop(
+        self,
+        *,
+        session_id: str,
+        stream_key: str,
+        lag_seconds: float,
+    ) -> None:
+        drop_key = (session_id, stream_key)
+        count = int(self._live_drop_events.get(drop_key, 0)) + 1
+        self._live_drop_events[drop_key] = count
+        self._report_data_backpressure(
+            session_id=session_id,
+            stream_key=stream_key,
+            reason=(
+                "market_data_dropped: kind=live_kline "
+                f"lag_seconds={lag_seconds:.3f} "
+                f"drop_events={count} "
+                f"threshold={self._live_market_data_drop_fail_threshold}"
+            ),
+        )
+        if count >= self._live_market_data_drop_fail_threshold:
+            self._mark_session_failed_for_market_data_drop(session_id, stream_key, count)
+
+    def _mark_session_failed_for_market_data_drop(self, session_id: str, stream_key: str, drop_events: int) -> None:
+        if session_id in self._failed_sessions:
+            return
+        self._failed_sessions.add(session_id)
+        reason = (
+            "market_data_dropped_threshold_exceeded:"
+            f"stream_key={stream_key}:"
+            f"drop_events={drop_events}:"
+            f"threshold={self._live_market_data_drop_fail_threshold}"
+        )
+        try:
+            self._channel.send_status_patch(
+                runtime_id=self._runtime_id,
+                session_id=session_id,
+                status="failed",
+                reason=reason,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("failed to report RuntimeChannel session failure", exc_info=True)
+
+    def _wake_session_event_loop(self, session_id: str) -> None:
+        q = self._session_event_queue(session_id)
+        try:
+            q.put_nowait(object())
+            return
+        except queue.Full:
+            pass
+        try:
+            _ = q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(object())
+        except queue.Full:
+            pass
+
+    def _session_event_queue(self, session_id: str) -> queue.Queue[object]:
+        return self._session_event_queues.setdefault(
+            session_id,
+            queue.Queue(maxsize=max(1, self._live_queue_maxsize, self._order_queue_maxsize)),
+        )
+
+
+def _coerce_queue_maxsize(value: int, *, allow_unbounded: bool = False) -> int:
+    size = int(value)
+    if allow_unbounded and size <= 0:
+        return 0
+    return max(1, size)
+
+
+def _as_session_event(item: Any, *, default_kind: str) -> RuntimeSessionEvent:
+    if isinstance(item, RuntimeSessionEvent):
+        return item
+    return RuntimeSessionEvent(kind=default_kind, payload=item)
+
+
+def _session_event_payload(item: Any) -> Any:
+    if isinstance(item, RuntimeSessionEvent):
+        return item.payload
+    return item
 
 
 def runtime_stream_key(exchange: str, market: str, kind: str, symbol: str, interval: str) -> str:
@@ -364,6 +699,19 @@ def _decode_live_kline_batch(batch: cp_pb2.RuntimeLiveKlineBatch) -> list[Any]:
     return out
 
 
+def _decode_order_update_batch(batch: cp_pb2.RuntimeOrderUpdateBatch) -> list[Any]:
+    from strategy_service.gen import order_service_pb2
+    from strategy_service.order_client import OrderClient
+
+    out = []
+    for packed in batch.events:
+        item = order_service_pb2.OrderLifecycleEventEntry()
+        if not packed.Unpack(item):
+            continue
+        out.append(OrderClient.order_update_event_from_proto(item))
+    return out
+
+
 def _decode_dataset_chunk_payload(payload: bytes) -> list[Any]:
     try:
         raw = json.loads(bytes(payload).decode("utf-8"))
@@ -399,7 +747,7 @@ def _debug_dataset_from_payload(payload: bytes) -> DebugDataset:
     return DebugDataset(
         dataset_id=dataset_id,
         user_id=int(raw.get("user_id") or 0),
-        account_id=int(raw.get("account_id") or 0),
+        portfolio_id=int(raw.get("portfolio_id") or 0),
         runtime_id=str(raw.get("runtime_id") or "").strip(),
         market=str(raw.get("market") or "").strip().lower(),
         symbol=str(raw.get("symbol") or "").strip().upper(),

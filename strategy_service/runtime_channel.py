@@ -70,6 +70,8 @@ def canonical_hello_payload(hello: cp_pb2.RuntimeHello) -> bytes:
         "resource_profile": str(hello.resource_profile or ""),
         "runtime_id": str(hello.runtime_id or ""),
         "name": str(hello.name or ""),
+        "source": str(hello.source or ""),
+        "user_id": int(hello.user_id),
         "version": str(hello.version or ""),
     }
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -152,8 +154,10 @@ def _runtime_credential_from_raw(raw: object, source: str) -> RuntimeCredential:
 
 @dataclass(frozen=True)
 class RuntimeHelloArgs:
-    key_id: str
-    private_key_pem: str
+    key_id: str = ""
+    private_key_pem: str = ""
+    source: str = ""
+    user_id: int = 0
     runtime_id: str = ""
     name: str = ""
     endpoint_host: str = ""
@@ -170,6 +174,8 @@ def build_signed_hello(args: RuntimeHelloArgs, *, now_ms: int | None = None) -> 
     key = load_ed25519_private_key(args.private_key_pem)
     hello = cp_pb2.RuntimeHello(
         key_id=args.key_id,
+        source=(args.source or "").strip(),
+        user_id=int(args.user_id or 0),
         runtime_id=args.runtime_id,
         name=(args.name or "").strip(),
         endpoint_host=args.endpoint_host,
@@ -186,6 +192,30 @@ def build_signed_hello(args: RuntimeHelloArgs, *, now_ms: int | None = None) -> 
     return hello
 
 
+def build_bare_hello(args: RuntimeHelloArgs, *, now_ms: int | None = None) -> cp_pb2.RuntimeHello:
+    if str(args.source or "").strip().lower() != "bare":
+        raise ValueError("bare RuntimeChannel hello requires source=bare")
+    user_id = int(args.user_id or 0)
+    if user_id <= 0:
+        raise ValueError("bare RuntimeChannel hello requires user_id")
+    runtime_id = str(args.runtime_id or "").strip()
+    if not runtime_id:
+        raise ValueError("bare RuntimeChannel hello requires runtime_id")
+    return cp_pb2.RuntimeHello(
+        source="bare",
+        user_id=user_id,
+        runtime_id=runtime_id,
+        name=(args.name or "").strip(),
+        endpoint_host="",
+        grpc_port=0,
+        debug_port=0,
+        capabilities=list(_normalize_capabilities(args.capabilities)),
+        resource_profile=args.resource_profile or "small",
+        version=args.version or "0.1.0",
+        issued_at_unix_ms=int(now_ms if now_ms is not None else time.time() * 1000),
+    )
+
+
 def build_signed_hello_from_credential(
     credential: RuntimeCredential,
     args: RuntimeHelloArgs,
@@ -195,6 +225,8 @@ def build_signed_hello_from_credential(
     hello_args = RuntimeHelloArgs(
         key_id=credential.key_id,
         private_key_pem=credential.private_key_pem,
+        source=args.source,
+        user_id=args.user_id,
         runtime_id=args.runtime_id,
         name=args.name,
         endpoint_host=args.endpoint_host,
@@ -239,7 +271,7 @@ class RuntimeChannelClient:
     def __init__(
         self,
         address: str,
-        credential: RuntimeCredential,
+        credential: RuntimeCredential | None,
         hello_args: RuntimeHelloArgs,
         *,
         heartbeat_seconds: int = DEFAULT_HEARTBEAT_SECONDS,
@@ -422,6 +454,28 @@ class RuntimeChannelClient:
             ),
         ))
 
+    def send_data_backpressure(
+        self,
+        *,
+        session_id: str,
+        stream_key: str,
+        reason: str,
+        resume_after_unix_ms: int = 0,
+    ) -> None:
+        with self._outbound_lock:
+            outbound = self._outbound
+        if outbound is None:
+            raise RuntimeError("runtime channel is not connected")
+        outbound.put(cp_pb2.RuntimeFrame(
+            frame_type=cp_pb2.FRAME_TYPE_DATA_BACKPRESSURE,
+            data_backpressure=cp_pb2.RuntimeDataBackpressure(
+                session_id=session_id,
+                stream_key=stream_key,
+                resume_after_unix_ms=int(resume_after_unix_ms),
+                reason=reason,
+            ),
+        ))
+
     def _fail_pending(self, reason: str) -> None:
         with self._pending_lock:
             pending = list(self._pending.items())
@@ -541,6 +595,7 @@ class RuntimeChannelClient:
         if frame.frame_type in (
             cp_pb2.FRAME_TYPE_DATASET_CHUNK,
             cp_pb2.FRAME_TYPE_LIVE_KLINE_BATCH,
+            cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH,
         ):
             self._handle_data_frame(frame, outbound)
             return
@@ -581,6 +636,8 @@ class RuntimeChannelClient:
         resume = self._build_resume_frame_if_valid()
         if resume is not None:
             return resume
+        if self._credential is None or str(self._hello_args.source or "").strip().lower() == "bare":
+            return hello_frame(build_bare_hello(self._hello_args))
         return hello_frame(build_signed_hello_from_credential(self._credential, self._hello_args))
 
     def _build_resume_frame_if_valid(self) -> cp_pb2.RuntimeFrame | None:
@@ -695,6 +752,13 @@ class RuntimeChannelClient:
                 frame.live_kline_batch.session_id,
                 frame.live_kline_batch.stream_key,
                 frame.live_kline_batch.sequence,
+            ))
+            return
+        if frame.frame_type == cp_pb2.FRAME_TYPE_ORDER_UPDATE_BATCH and frame.HasField("order_update_batch"):
+            outbound.put(_data_ack_frame(
+                frame.order_update_batch.session_id,
+                frame.order_update_batch.stream_key or "order_lifecycle",
+                frame.order_update_batch.sequence,
             ))
 
 

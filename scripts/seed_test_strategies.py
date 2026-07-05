@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed 3 test strategies into the ``account`` database for TESTUSDT testing.
+"""Seed 3 test strategies into the ``portfolio`` database for TESTUSDT testing.
 
 覆盖:
   - ``testusdt-spot-roundtrip`` v1.0.0     —— spot BUY/SELL 环路
@@ -22,7 +22,7 @@
 环境变量(均有默认值):
     PGHOST        默认 192.168.88.10
     PGPORT        默认 5432
-    PGDATABASE    默认 account
+    PGDATABASE    默认 portfolio
     PGUSER        默认 postgres
     PGPASSWORD    默认 postgres
     SEED_USERNAME 默认 test-user           (仅在该 user 不存在时创建)
@@ -34,7 +34,7 @@
     - 可反复执行不产生副作用
 
 本脚本**只创建策略模板**,不创建账号、不挂载/激活策略。挂载请走
-``POST /api/accounts/{id}/strategies`` 或 ``MountStrategy``/``ActivateStrategy``
+``POST /api/portfolios/{id}/strategies`` 或 ``MountStrategy``/``ActivateStrategy``
 gRPC。
 """
 
@@ -50,7 +50,7 @@ import psycopg2
 
 HOST = os.environ.get("PGHOST", "192.168.88.10")
 PORT = int(os.environ.get("PGPORT", "5432"))
-DB = os.environ.get("PGDATABASE", "account")
+DB = os.environ.get("PGDATABASE", "portfolio")
 USER = os.environ.get("PGUSER", "postgres")
 PASSWORD = os.environ.get("PGPASSWORD", "postgres")
 
@@ -265,9 +265,9 @@ def main() -> None:
         conn.close()
 
     print()
-    print("Done. 挂载 + 激活示例(替换 ACCOUNT_ID / STRATEGY_ID):")
-    print("  POST /api/accounts/ACCOUNT_ID/strategies         {strategy_id: STRATEGY_ID}")
-    print("  POST /api/accounts/ACCOUNT_ID/strategies/active  {strategy_id: STRATEGY_ID}")
+    print("Done. 挂载 + 激活示例(替换 PORTFOLIO_ID / STRATEGY_ID):")
+    print("  POST /api/portfolios/PORTFOLIO_ID/strategies         {strategy_id: STRATEGY_ID}")
+    print("  POST /api/portfolios/PORTFOLIO_ID/strategies/active  {strategy_id: STRATEGY_ID}")
     print()
     print("记住:")
     print("  - spot 策略需要账号有 spot.assets['TESTUSDT'] 槽位 + 足够 spot.free USDT")

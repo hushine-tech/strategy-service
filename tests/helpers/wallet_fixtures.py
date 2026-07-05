@@ -1,8 +1,8 @@
 """Shared wallet fixtures for strategy-service tests.
 
 After Phase C2b legacy cleanup, all test code constructs wallets through the
-same path production code uses: a proto ``AccountWalletState`` →
-``proto_to_account_spec`` → ``build_wallet_from_account`` →
+same path production code uses: a proto ``PortfolioWalletState`` →
+``proto_to_portfolio_spec`` → ``build_wallet_from_portfolio`` →
 ``BinanceWalletRuntime``. This module exposes two convenience constructors:
 
 - ``make_backtest_wallet(...)``  environment=0 — routes through ``("local", "backtest")``
@@ -17,14 +17,14 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from strategy_service.gen import account_service_pb2
+from strategy_service.gen import portfolio_service_pb2
 from strategy_service.wallet import BinanceWalletRuntime
-from strategy_service.wallet_adapter import proto_to_account_spec
-from strategy_service.wallet_factory import build_wallet_from_account
+from strategy_service.wallet_adapter import proto_to_portfolio_spec
+from strategy_service.wallet_factory import build_wallet_from_portfolio
 
 
 def _apply_futures_position(
-    futures_proto: account_service_pb2.FuturesWallet,
+    futures_proto: portfolio_service_pb2.FuturesWallet,
     *,
     symbol: str,
     position_qty: float = 0.0,
@@ -39,18 +39,18 @@ def _apply_futures_position(
     isolated_wallet: float = 0.0,
     break_even_price: float = 0.0,
     fee_rate: float = 0.0,
-    account_margin_mode: str = "cross",
+    portfolio_margin_mode: str = "cross",
 ) -> None:
     """Append one position entry to a FuturesWallet proto.
 
-    ``margin_mode`` defaults to the account-level ``account_margin_mode`` when
+    ``margin_mode`` defaults to the portfolio-level ``portfolio_margin_mode`` when
     the caller doesn't specify it; the canonical contract (strict ingress)
     requires every position to carry a non-empty ``margin_mode``.
 
     ``initial_balance`` is the per-position seed used by the isolated-margin
     bootstrap formula (see ``wallet_factory._bootstrap_futures_equity``).
     """
-    effective_margin_mode = (margin_mode or account_margin_mode).strip().lower()
+    effective_margin_mode = (margin_mode or portfolio_margin_mode).strip().lower()
     p = futures_proto.positions.add()
     p.symbol = symbol
     p.position_side = position_side
@@ -80,7 +80,7 @@ def _apply_futures_position(
 
 
 def _apply_spot_asset(
-    spot_proto: account_service_pb2.SpotWallet,
+    spot_proto: portfolio_service_pb2.SpotWallet,
     *,
     symbol: str,
     qty: float = 0.0,
@@ -116,9 +116,9 @@ def _build_wallet_proto(
     spot_assets: Iterable[dict[str, Any]] | None,
     spot_free: float,
     spot_locked: float,
-) -> account_service_pb2.AccountWalletState:
+) -> portfolio_service_pb2.PortfolioWalletState:
     available = wallet_balance if available_balance is None else available_balance
-    futures = account_service_pb2.FuturesWallet(
+    futures = portfolio_service_pb2.FuturesWallet(
         margin_mode=margin_mode,
         position_mode=position_mode,
         initial_balance=initial_balance,
@@ -132,16 +132,16 @@ def _build_wallet_proto(
         unrealized_pnl=0.0,
     )
     for pos in futures_positions or []:
-        # Forward the account-level margin_mode so positions that don't
-        # specify one adopt the account default (strict canonical contract
+        # Forward the portfolio-level margin_mode so positions that don't
+        # specify one adopt the portfolio default (strict canonical contract
         # requires FuturesPosition.margin_mode to be non-empty).
-        _apply_futures_position(futures, account_margin_mode=margin_mode, **pos)
+        _apply_futures_position(futures, portfolio_margin_mode=margin_mode, **pos)
 
-    spot = account_service_pb2.SpotWallet(free=spot_free, locked=spot_locked)
+    spot = portfolio_service_pb2.SpotWallet(free=spot_free, locked=spot_locked)
     for asset in spot_assets or []:
         _apply_spot_asset(spot, **asset)
 
-    return account_service_pb2.AccountWalletState(
+    return portfolio_service_pb2.PortfolioWalletState(
         environment=environment,
         total_value=wallet_balance,
         spot_estimated_value=0.0,
@@ -167,7 +167,7 @@ def make_backtest_wallet(
 ) -> BinanceWalletRuntime:
     """Build a environment=0 backtest wallet runtime via the canonical path.
 
-    Defaults produce a $10k cross-margin one-way account with no open
+    Defaults produce a $10k cross-margin one-way portfolio with no open
     positions and no spot assets — the simplest viable starting state. All
     kwargs accept straightforward overrides.
 
@@ -194,7 +194,7 @@ def make_backtest_wallet(
         spot_free=spot_free,
         spot_locked=spot_locked,
     )
-    return build_wallet_from_account(proto_to_account_spec(wallet_proto))
+    return build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
 
 
 def make_demo_wallet(
@@ -231,7 +231,7 @@ def make_demo_wallet(
         spot_free=spot_free,
         spot_locked=spot_locked,
     )
-    return build_wallet_from_account(proto_to_account_spec(wallet_proto))
+    return build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
 
 
 make_testnet_wallet = make_demo_wallet

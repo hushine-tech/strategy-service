@@ -22,8 +22,8 @@ from strategy_service.runtime_agent import DebugDataset, RuntimeBusyError
 from strategy_service.runtime_profile import RUNTIME_VERSION
 from strategy_service.service import StrategyEngine
 from strategy_service.types import Exchange, Market
-from strategy_service.wallet_adapter import proto_to_account_spec
-from strategy_service.wallet_factory import build_wallet_from_account
+from strategy_service.wallet_adapter import proto_to_portfolio_spec
+from strategy_service.wallet_factory import build_wallet_from_portfolio
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ class DebugReplayRunner:
         bars_processed = 0
         status = "failed"
         error = ""
-        account_client = self._platform_proxy.account_client()
+        portfolio_client = self._platform_proxy.portfolio_client()
         try:
             start_resp = self._start_platform_debug_replay(dataset, request)
             session_id = start_resp.session_id
@@ -111,32 +111,32 @@ class DebugReplayRunner:
                         f"runtime={dataset.dataset_id} platform={start_resp.dataset.dataset_id}"
                     )
 
-            snapshot = account_client.get_portfolio_snapshot(
-                dataset.account_id,
+            snapshot = portfolio_client.get_portfolio_snapshot(
+                dataset.portfolio_id,
                 dataset.user_id,
             )
             if snapshot is None or getattr(snapshot, "wallet", None) is None:
-                raise RuntimeError(f"account {dataset.account_id} not found or core-service unreachable")
+                raise RuntimeError(f"portfolio {dataset.portfolio_id} not found or core-service unreachable")
             info = snapshot.wallet
             if int(getattr(info, "environment", 0) or 0) != 0:
-                raise RuntimeError("debug replay only supports backtest accounts")
-            wallet = build_wallet_from_account(proto_to_account_spec(info))
+                raise RuntimeError("debug replay only supports backtest portfolios")
+            wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(info))
             debug_market = _phase3_market(dataset.market)
             portfolio_wallet = PortfolioWalletRuntime(
-                dataset.account_id,
+                dataset.portfolio_id,
                 {(Exchange.BINANCE, debug_market)},
                 {(Exchange.BINANCE, debug_market, 1001): wallet},
             )
 
             strategy_code = self._read_strategy_code(dataset)
             self._save_debug_session(
-                account_client=account_client,
+                portfolio_client=portfolio_client,
                 dataset=dataset,
                 session_id=session_id,
                 session_name=session_name,
             )
-            account_client.update_portfolio_snapshot(
-                account_id=dataset.account_id,
+            portfolio_client.update_portfolio_snapshot(
+                portfolio_id=dataset.portfolio_id,
                 user_id=dataset.user_id,
                 snapshot_reason=SNAPSHOT_REASON_STRATEGY_START,
                 strategy_id=0,
@@ -151,7 +151,7 @@ class DebugReplayRunner:
                 strategy_path=self._strategy_path(),
                 wallet=portfolio_wallet,
                 order_client=order_client,
-                account_id=dataset.account_id,
+                portfolio_id=dataset.portfolio_id,
                 strategy_id=0,
                 session_id=session_id,
                 strategy_code=strategy_code,
@@ -159,8 +159,8 @@ class DebugReplayRunner:
             )
 
             def _on_order_sync() -> None:
-                account_client.update_portfolio_snapshot(
-                    account_id=dataset.account_id,
+                portfolio_client.update_portfolio_snapshot(
+                    portfolio_id=dataset.portfolio_id,
                     user_id=dataset.user_id,
                     snapshot_reason=SNAPSHOT_REASON_ORDER_FILL,
                     strategy_id=0,
@@ -173,7 +173,7 @@ class DebugReplayRunner:
                 engine.running_strategy(_adapt_kline(kline, _phase3_market(getattr(kline, "market", None))))
                 bars_processed += 1
                 if bars_processed % self._progress_every_bars == 0:
-                    account_client.update_session(
+                    portfolio_client.update_session(
                         session_id=session_id,
                         status="running",
                         bars_processed=bars_processed,
@@ -194,14 +194,14 @@ class DebugReplayRunner:
         finally:
             if session_id:
                 try:
-                    account_client.update_portfolio_snapshot(
-                        account_id=dataset.account_id,
+                    portfolio_client.update_portfolio_snapshot(
+                        portfolio_id=dataset.portfolio_id,
                         user_id=dataset.user_id,
                         snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
                         strategy_id=0,
                         session_id=session_id,
                     )
-                    account_client.update_session(
+                    portfolio_client.update_session(
                         session_id=session_id,
                         status=status,
                         bars_processed=bars_processed,
@@ -221,8 +221,8 @@ class DebugReplayRunner:
             raise RuntimeError("active debug dataset has no klines")
         if int(dataset.user_id or 0) <= 0:
             raise RuntimeError("active debug dataset is missing user_id")
-        if int(dataset.account_id or 0) <= 0:
-            raise RuntimeError("active debug dataset is missing account_id")
+        if int(dataset.portfolio_id or 0) <= 0:
+            raise RuntimeError("active debug dataset is missing portfolio_id")
         if not str(dataset.runtime_id or "").strip():
             raise RuntimeError("active debug dataset is missing runtime_id")
         return dataset
@@ -247,14 +247,14 @@ class DebugReplayRunner:
     def _save_debug_session(
         self,
         *,
-        account_client: Any,
+        portfolio_client: Any,
         dataset: DebugDataset,
         session_id: str,
         session_name: str,
     ) -> None:
-        account_client.require_save_session(
+        portfolio_client.require_save_session(
             session_id=session_id,
-            account_id=dataset.account_id,
+            portfolio_id=dataset.portfolio_id,
             strategy_id=0,
             environment=0,
             interval=dataset.interval,

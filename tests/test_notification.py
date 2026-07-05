@@ -40,7 +40,7 @@ def test_self_notify_injected_into_user_strategy() -> None:
     strategy = BaseStrategy(
         "ignored",
         _portfolio_wallet(),
-        account_id=7,
+        portfolio_id=7,
         strategy_id=9,
         session_id="sess-1",
         notifier=StrategyNotifier(client),
@@ -72,7 +72,7 @@ class MyStrategy:
     assert client.calls[0]["severity"] == "warn"
     assert client.calls[0]["message"] == "threshold reached"
     assert client.calls[0]["title"] == "Risk"
-    assert client.calls[0]["account_id"] == 7
+    assert client.calls[0]["portfolio_id"] == 7
     assert client.calls[0]["strategy_id"] == 9
     assert client.calls[0]["session_id"] == "sess-1"
 
@@ -81,7 +81,7 @@ def test_self_notify_swallow_transport_error_and_returns_false() -> None:
     client = _NotificationClient(fail=True)
     notifier = StrategyNotifier(client)
 
-    assert notifier.info("hello", account_id=1, strategy_id=2, session_id="sess") is False
+    assert notifier.info("hello", portfolio_id=1, strategy_id=2, session_id="sess") is False
 
 
 def test_noop_notification_client_returns_false() -> None:
@@ -107,7 +107,7 @@ def test_hosted_notification_client_calls_control_panel_publish_runtime_notifica
     )
 
     assert client.publish(
-        account_id=7,
+        portfolio_id=7,
         strategy_id=9,
         session_id="sess-1",
         severity="error",
@@ -118,7 +118,7 @@ def test_hosted_notification_client_calls_control_panel_publish_runtime_notifica
     assert timeout == 1.5
     assert req.user_id == 42
     assert req.runtime_id == "rt-1"
-    assert req.account_id == 7
+    assert req.portfolio_id == 7
     assert req.strategy_id == 9
     assert req.session_id == "sess-1"
     assert req.category == "custom"
@@ -145,7 +145,7 @@ def test_proxy_notification_client_uses_runtime_channel_method() -> None:
     client = ProxyNotificationClient(proxy)
 
     assert client.publish(
-        account_id=7,
+        portfolio_id=7,
         strategy_id=9,
         session_id="sess-1",
         severity="info",
@@ -159,6 +159,6 @@ def test_proxy_notification_client_uses_runtime_channel_method() -> None:
     assert request["category"] == "custom"
     assert request["severity"] == "info"
     assert request["message"] == "hello"
-    assert request["account_id"] == 7
+    assert request["portfolio_id"] == 7
     assert request["strategy_id"] == 9
     assert request["session_id"] == "sess-1"

@@ -116,11 +116,11 @@ class OrderClient:
 
     def place_order(
         self,
-        account_id: int,
+        portfolio_id: int,
         decision: OrderDecision,
         mark_price: float,
         *,
-        account_symbol: str | None = None,
+        portfolio_symbol: str | None = None,
         strategy_id: int = 0,
         market: str | None = None,
         session_id: str = "",
@@ -128,7 +128,7 @@ class OrderClient:
         market_time: object | None = None,
     ) -> ExecutionFeedback:
         """Place an order via order.v1."""
-        symbol = account_symbol or decision.symbol
+        symbol = portfolio_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
         effective_market = str(getattr(decision, "market", None) or "").strip()
         exchange_code = self._exchange_code(getattr(decision, "exchange", None))
@@ -148,7 +148,7 @@ class OrderClient:
             from strategy_service.gen import order_service_pb2
 
             kwargs: dict = dict(
-                account_id=int(account_id),
+                portfolio_id=int(portfolio_id),
                 symbol=symbol,
                 side=decision.side,
                 qty=float(decision.qty),
@@ -182,9 +182,9 @@ class OrderClient:
             resp = self._stub.PlaceOrder(req)
             return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
         except Exception as exc:
-            logger.warning("OrderClient.place_order failed for %d/%s", account_id, decision.symbol, exc_info=True)
+            logger.warning("OrderClient.place_order failed for %d/%s", portfolio_id, decision.symbol, exc_info=True)
             return self._resolve_unknown_attempt(
-                account_id=account_id,
+                portfolio_id=portfolio_id,
                 intent_id=intent,
                 error_message=str(exc),
                 decision=decision,
@@ -258,7 +258,8 @@ class OrderClient:
     @classmethod
     def order_response_from_update(cls, event: OrderUpdateEvent) -> OrderResponse | None:
         """Convert a fill lifecycle event into the wallet-facing order delta."""
-        if str(event.event_type or "").strip().lower() != "fill" or event.fill is None:
+        event_type = str(event.event_type or "").strip().lower()
+        if event_type not in {"fill", "liquidation"} or event.fill is None:
             return None
         if event.fill.fee_missing:
             return None
@@ -295,6 +296,10 @@ class OrderClient:
         )
 
     @staticmethod
+    def order_update_event_from_proto(item) -> OrderUpdateEvent:
+        return OrderClient._order_update_event_from_proto(item)
+
+    @staticmethod
     def _order_update_event_from_proto(item) -> OrderUpdateEvent:
         fill = None
         if item.HasField("fill_delta"):
@@ -312,7 +317,7 @@ class OrderClient:
         return OrderUpdateEvent(
             event_id=int(item.event_id),
             session_id=str(item.session_id or ""),
-            account_id=int(item.account_id),
+            portfolio_id=int(item.portfolio_id),
             venue_id=int(item.venue_id),
             exchange=EXCHANGE_NAMES.get(int(item.exchange), f"exchange:{int(item.exchange)}"),
             market=MARKET_NAMES.get(int(item.market), f"market:{int(item.market)}"),
@@ -337,7 +342,7 @@ class OrderClient:
     def _resolve_unknown_attempt(
         self,
         *,
-        account_id: int,
+        portfolio_id: int,
         intent_id: str,
         error_message: str,
         decision: OrderDecision,
@@ -357,7 +362,7 @@ class OrderClient:
             from strategy_service.gen import order_service_pb2
 
             resp = self._stub.ResolveOrderAttempt(order_service_pb2.ResolveOrderAttemptRequest(
-                account_id=int(account_id),
+                portfolio_id=int(portfolio_id),
                 intent_id=intent_id,
             ))
             feedback = self._feedback_from_response(resp, decision=decision, market=market, symbol=symbol)
@@ -365,7 +370,7 @@ class OrderClient:
                 feedback.error_message = error_message
             return feedback
         except Exception:
-            logger.warning("OrderClient.resolve_unknown_attempt failed for %d/%s", account_id, symbol, exc_info=True)
+            logger.warning("OrderClient.resolve_unknown_attempt failed for %d/%s", portfolio_id, symbol, exc_info=True)
             return ExecutionFeedback(
                 intent_id=intent_id,
                 attempt_status="UNKNOWN",

@@ -13,7 +13,7 @@ VenueWalletKey = tuple[str, str, int]
 
 @dataclass
 class PortfolioWalletRuntime:
-    account_id: int
+    portfolio_id: int
     allowed_routes: set[RouteKey]
     wallets: dict[VenueWalletKey, Any] = field(default_factory=dict)
 
