@@ -30,6 +30,7 @@ required_literals=(
   'CONFIG_PATH="./config.local.yaml"'
   'CONFIG_PATH="./config.yaml"'
   'config file not found: ${CONFIG_PATH}'
+  'LOG_TRACING_ENDPOINT="http://${PLATFORM_HOST}:4318"'
   'cd "${STRATEGY_DIR}"'
   'hushine_runtime_cli start'
   '--user-id "${USER_ID}"'

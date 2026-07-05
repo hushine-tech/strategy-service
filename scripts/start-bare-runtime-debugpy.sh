@@ -124,6 +124,9 @@ export RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE="${RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE:
 export RUNTIME_CHANNEL_TLS_SERVER_NAME="${RUNTIME_CHANNEL_TLS_SERVER_NAME:-runtime-channel.local}"
 export RUNTIME_BARE_BOOTSTRAP_DIR="${BOOTSTRAP_DIR}"
 export PYTHONPATH="${PYTHONPATH:-.:./strategy-library}"
+if [[ -z "${LOG_TRACING_ENDPOINT:-}" && "${PLATFORM_HOST}" != "127.0.0.1" && "${PLATFORM_HOST}" != "localhost" ]]; then
+  export LOG_TRACING_ENDPOINT="http://${PLATFORM_HOST}:4318"
+fi
 if [[ -n "${NO_PROXY:-}" ]]; then
   export NO_PROXY="${NO_PROXY},${PLATFORM_HOST}"
 else
@@ -142,6 +145,7 @@ echo "core-service: ${CORE_SERVICE_ADDR}"
 echo "control-panel: ${CONTROL_PANEL_ADDR}"
 echo "runtime-channel: ${RUNTIME_CHANNEL_ADDR}"
 echo "config: ${CONFIG_PATH}"
+echo "tracing endpoint: ${LOG_TRACING_ENDPOINT:-config default}"
 if [[ "${#wait_args[@]}" -gt 0 ]]; then
   echo "Waiting for VS Code attach before registering runtime."
 fi
