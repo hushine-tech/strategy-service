@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 hushine-runtime = "hushine_runtime_cli:main"
 hushine-debug = "hushine_runtime_cli:debug_main"
+hushine-session-worker = "strategy_service.session_worker_entry:main"
 
 [project.optional-dependencies]
 dev = [
