@@ -7,8 +7,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="${SCRIPT_DIR}/strategy_service/gen"
 GO_OUT_DIR="${SCRIPT_DIR}/gen/strategyv1"
+RUNTIME_WORKER_GO_OUT_DIR="${SCRIPT_DIR}/gen/runtimeworkerv1"
 
-mkdir -p "$OUT_DIR" "$GO_OUT_DIR"
+mkdir -p "$OUT_DIR" "$GO_OUT_DIR" "$RUNTIME_WORKER_GO_OUT_DIR"
 
 # --- core-service proto (Python stubs only) ---
 ACCT_PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"
@@ -76,6 +77,22 @@ PATH="$HOME/go/bin:$PATH" protoc \
   --go-grpc_out="$GO_OUT_DIR" --go-grpc_opt=paths=source_relative \
   "$STRAT_PROTO_SRC/strategy_service.proto"
 
+# --- runtime worker local IPC proto (Python + Go stubs) ---
+/opt/anaconda3/bin/python3 -m grpc_tools.protoc \
+  -I "$STRAT_PROTO_SRC" \
+  --python_out="$OUT_DIR" \
+  --grpc_python_out="$OUT_DIR" \
+  "$STRAT_PROTO_SRC/runtime_worker.proto"
+
+sed -i '' 's/^import runtime_worker_pb2/from . import runtime_worker_pb2/' "$OUT_DIR/runtime_worker_pb2_grpc.py"
+
+PATH="$HOME/go/bin:$PATH" protoc \
+  -I "$STRAT_PROTO_SRC" \
+  --go_out="$RUNTIME_WORKER_GO_OUT_DIR" --go_opt=paths=source_relative \
+  --go-grpc_out="$RUNTIME_WORKER_GO_OUT_DIR" --go-grpc_opt=paths=source_relative \
+  "$STRAT_PROTO_SRC/runtime_worker.proto"
+
 echo "Generated stubs:"
 echo "  Python → $OUT_DIR"
 echo "  Go     → $GO_OUT_DIR"
+echo "  Worker → $RUNTIME_WORKER_GO_OUT_DIR"

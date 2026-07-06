@@ -1,0 +1,167 @@
+syntax = "proto3";
+
+package runtime.worker.v1;
+
+option go_package = "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1;runtimeworkerv1";
+
+import "google/protobuf/any.proto";
+
+service RuntimeWorkerAgent {
+  rpc Connect(stream WorkerFrame) returns (stream AgentFrame);
+}
+
+message WorkerFrame {
+  string frame_id = 1;
+  oneof payload {
+    WorkerHello hello = 10;
+    WorkerHeartbeat heartbeat = 11;
+    SessionProgress progress = 12;
+    PlatformCall platform_call = 13;
+    PlatformCallResult platform_call_result = 14;
+    IndicatorFrame indicator_frame = 15;
+    NotificationEvent notification = 16;
+    WalletSnapshot wallet_snapshot = 17;
+    FinalStatus final_status = 18;
+    WorkerError worker_error = 19;
+    LogEvent log_event = 20;
+  }
+}
+
+message AgentFrame {
+  string frame_id = 1;
+  string reply_to = 2;
+  oneof payload {
+    StartSession start_session = 10;
+    MarketDataBatch market_data_batch = 11;
+    OrderUpdateBatch order_update_batch = 12;
+    StopSession stop_session = 13;
+    ShutdownWorker shutdown_worker = 14;
+    PlatformCall platform_call = 15;
+    PlatformCallResult platform_call_result = 16;
+    AgentError error = 17;
+  }
+}
+
+message WorkerHello {
+  string session_id = 1;
+  string token = 2;
+  string worker_version = 3;
+  int64 pid = 4;
+}
+
+message WorkerHeartbeat {
+  string session_id = 1;
+  string current_status = 2;
+  int64 bars_processed = 3;
+  int64 last_market_time_ms = 4;
+}
+
+message StartSession {
+  string session_id = 1;
+  int64 user_id = 2;
+  string runtime_id = 3;
+  google.protobuf.Any run_strategy_request = 4;
+  google.protobuf.Any session_bootstrap = 5;
+}
+
+message MarketDataBatch {
+  string session_id = 1;
+  string stream_key = 2;
+  int64 sequence = 3;
+  repeated google.protobuf.Any klines = 4;
+}
+
+message OrderUpdateBatch {
+  string session_id = 1;
+  string stream_key = 2;
+  int64 sequence = 3;
+  repeated google.protobuf.Any events = 4;
+}
+
+message StopSession {
+  string session_id = 1;
+  string action = 2;
+  string reason = 3;
+}
+
+message ShutdownWorker {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message SessionProgress {
+  string session_id = 1;
+  string status = 2;
+  int64 bars_processed = 3;
+  string error = 4;
+  int64 last_market_time_ms = 5;
+}
+
+message PlatformCall {
+  string call_id = 1;
+  string method = 2;
+  google.protobuf.Any request = 3;
+  int64 timeout_ms = 4;
+}
+
+message PlatformCallResult {
+  string call_id = 1;
+  bool ok = 2;
+  google.protobuf.Any response = 3;
+  string error = 4;
+}
+
+message IndicatorValue {
+  string indicator_key = 1;
+  double value = 2;
+  bool has_value = 3;
+  string marker_json = 4;
+}
+
+message IndicatorFrame {
+  string session_id = 1;
+  string stream_key = 2;
+  int64 market_time_ms = 3;
+  int64 interval_ms = 4;
+  repeated IndicatorValue values = 5;
+}
+
+message NotificationEvent {
+  string session_id = 1;
+  string severity = 2;
+  string title = 3;
+  string message = 4;
+  string dedupe_key = 5;
+}
+
+message WalletSnapshot {
+  string session_id = 1;
+  string snapshot_reason = 2;
+  google.protobuf.Any wallet = 3;
+}
+
+message FinalStatus {
+  string session_id = 1;
+  string status = 2;
+  int64 bars_processed = 3;
+  string error = 4;
+}
+
+message WorkerError {
+  string session_id = 1;
+  string error_type = 2;
+  string message = 3;
+  string stack = 4;
+}
+
+message LogEvent {
+  string session_id = 1;
+  string level = 2;
+  string message = 3;
+  map<string, string> fields = 4;
+}
+
+message AgentError {
+  string code = 1;
+  string message = 2;
+}
