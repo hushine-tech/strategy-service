@@ -33,12 +33,10 @@ const (
 	PortfolioService_ReleaseVenue_FullMethodName                    = "/portfolio.v1.PortfolioService/ReleaseVenue"
 	PortfolioService_ArchiveVenue_FullMethodName                    = "/portfolio.v1.PortfolioService/ArchiveVenue"
 	PortfolioService_PreflightStrategySession_FullMethodName        = "/portfolio.v1.PortfolioService/PreflightStrategySession"
-	PortfolioService_GetVenueRouteMeta_FullMethodName               = "/portfolio.v1.PortfolioService/GetVenueRouteMeta"
 	PortfolioService_GetPortfolioSnapshot_FullMethodName            = "/portfolio.v1.PortfolioService/GetPortfolioSnapshot"
 	PortfolioService_UpdatePortfolioSnapshot_FullMethodName         = "/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot"
 	PortfolioService_UpdatePortfolioWalletState_FullMethodName      = "/portfolio.v1.PortfolioService/UpdatePortfolioWalletState"
 	PortfolioService_ListSymbols_FullMethodName                     = "/portfolio.v1.PortfolioService/ListSymbols"
-	PortfolioService_GetPortfolioMeta_FullMethodName                = "/portfolio.v1.PortfolioService/GetPortfolioMeta"
 	PortfolioService_CreateStrategy_FullMethodName                  = "/portfolio.v1.PortfolioService/CreateStrategy"
 	PortfolioService_ListStrategies_FullMethodName                  = "/portfolio.v1.PortfolioService/ListStrategies"
 	PortfolioService_GetStrategy_FullMethodName                     = "/portfolio.v1.PortfolioService/GetStrategy"
@@ -97,7 +95,6 @@ type PortfolioServiceClient interface {
 	ReleaseVenue(ctx context.Context, in *ReleaseVenueRequest, opts ...grpc.CallOption) (*ReleaseVenueResponse, error)
 	ArchiveVenue(ctx context.Context, in *ArchiveVenueRequest, opts ...grpc.CallOption) (*ArchiveVenueResponse, error)
 	PreflightStrategySession(ctx context.Context, in *PreflightStrategySessionRequest, opts ...grpc.CallOption) (*PreflightStrategySessionResponse, error)
-	GetVenueRouteMeta(ctx context.Context, in *GetVenueRouteMetaRequest, opts ...grpc.CallOption) (*GetVenueRouteMetaResponse, error)
 	// Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
 	// through the exchange capability registry and returns portfolio-level summary
 	// plus per-venue balances/positions.
@@ -111,9 +108,6 @@ type PortfolioServiceClient interface {
 	UpdatePortfolioWalletState(ctx context.Context, in *UpdatePortfolioWalletStateRequest, opts ...grpc.CallOption) (*UpdatePortfolioWalletStateResponse, error)
 	// Cached tradable symbols for portal pickers (Binance public exchangeInfo). market: "spot" | "usdm_futures".
 	ListSymbols(ctx context.Context, in *ListSymbolsRequest, opts ...grpc.CallOption) (*ListSymbolsResponse, error)
-	// Internal RPC: returns full portfolio config including API credentials.
-	// Intended for the internal order module only; NOT exposed to BFFs/portals.
-	GetPortfolioMeta(ctx context.Context, in *GetPortfolioMetaRequest, opts ...grpc.CallOption) (*GetPortfolioMetaResponse, error)
 	// 创建策略（immutable，创建后不可修改）
 	CreateStrategy(ctx context.Context, in *CreateStrategyRequest, opts ...grpc.CallOption) (*CreateStrategyResponse, error)
 	// 列出所有策略（可选按名称过滤）
@@ -321,16 +315,6 @@ func (c *portfolioServiceClient) PreflightStrategySession(ctx context.Context, i
 	return out, nil
 }
 
-func (c *portfolioServiceClient) GetVenueRouteMeta(ctx context.Context, in *GetVenueRouteMetaRequest, opts ...grpc.CallOption) (*GetVenueRouteMetaResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetVenueRouteMetaResponse)
-	err := c.cc.Invoke(ctx, PortfolioService_GetVenueRouteMeta_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *portfolioServiceClient) GetPortfolioSnapshot(ctx context.Context, in *GetPortfolioSnapshotRequest, opts ...grpc.CallOption) (*GetPortfolioSnapshotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPortfolioSnapshotResponse)
@@ -365,16 +349,6 @@ func (c *portfolioServiceClient) ListSymbols(ctx context.Context, in *ListSymbol
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListSymbolsResponse)
 	err := c.cc.Invoke(ctx, PortfolioService_ListSymbols_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *portfolioServiceClient) GetPortfolioMeta(ctx context.Context, in *GetPortfolioMetaRequest, opts ...grpc.CallOption) (*GetPortfolioMetaResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetPortfolioMetaResponse)
-	err := c.cc.Invoke(ctx, PortfolioService_GetPortfolioMeta_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -689,7 +663,6 @@ type PortfolioServiceServer interface {
 	ReleaseVenue(context.Context, *ReleaseVenueRequest) (*ReleaseVenueResponse, error)
 	ArchiveVenue(context.Context, *ArchiveVenueRequest) (*ArchiveVenueResponse, error)
 	PreflightStrategySession(context.Context, *PreflightStrategySessionRequest) (*PreflightStrategySessionResponse, error)
-	GetVenueRouteMeta(context.Context, *GetVenueRouteMetaRequest) (*GetVenueRouteMetaResponse, error)
 	// Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
 	// through the exchange capability registry and returns portfolio-level summary
 	// plus per-venue balances/positions.
@@ -703,9 +676,6 @@ type PortfolioServiceServer interface {
 	UpdatePortfolioWalletState(context.Context, *UpdatePortfolioWalletStateRequest) (*UpdatePortfolioWalletStateResponse, error)
 	// Cached tradable symbols for portal pickers (Binance public exchangeInfo). market: "spot" | "usdm_futures".
 	ListSymbols(context.Context, *ListSymbolsRequest) (*ListSymbolsResponse, error)
-	// Internal RPC: returns full portfolio config including API credentials.
-	// Intended for the internal order module only; NOT exposed to BFFs/portals.
-	GetPortfolioMeta(context.Context, *GetPortfolioMetaRequest) (*GetPortfolioMetaResponse, error)
 	// 创建策略（immutable，创建后不可修改）
 	CreateStrategy(context.Context, *CreateStrategyRequest) (*CreateStrategyResponse, error)
 	// 列出所有策略（可选按名称过滤）
@@ -815,9 +785,6 @@ func (UnimplementedPortfolioServiceServer) ArchiveVenue(context.Context, *Archiv
 func (UnimplementedPortfolioServiceServer) PreflightStrategySession(context.Context, *PreflightStrategySessionRequest) (*PreflightStrategySessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PreflightStrategySession not implemented")
 }
-func (UnimplementedPortfolioServiceServer) GetVenueRouteMeta(context.Context, *GetVenueRouteMetaRequest) (*GetVenueRouteMetaResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetVenueRouteMeta not implemented")
-}
 func (UnimplementedPortfolioServiceServer) GetPortfolioSnapshot(context.Context, *GetPortfolioSnapshotRequest) (*GetPortfolioSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPortfolioSnapshot not implemented")
 }
@@ -829,9 +796,6 @@ func (UnimplementedPortfolioServiceServer) UpdatePortfolioWalletState(context.Co
 }
 func (UnimplementedPortfolioServiceServer) ListSymbols(context.Context, *ListSymbolsRequest) (*ListSymbolsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSymbols not implemented")
-}
-func (UnimplementedPortfolioServiceServer) GetPortfolioMeta(context.Context, *GetPortfolioMetaRequest) (*GetPortfolioMetaResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetPortfolioMeta not implemented")
 }
 func (UnimplementedPortfolioServiceServer) CreateStrategy(context.Context, *CreateStrategyRequest) (*CreateStrategyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateStrategy not implemented")
@@ -1190,24 +1154,6 @@ func _PortfolioService_PreflightStrategySession_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PortfolioService_GetVenueRouteMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetVenueRouteMetaRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PortfolioServiceServer).GetVenueRouteMeta(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PortfolioService_GetVenueRouteMeta_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PortfolioServiceServer).GetVenueRouteMeta(ctx, req.(*GetVenueRouteMetaRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _PortfolioService_GetPortfolioSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetPortfolioSnapshotRequest)
 	if err := dec(in); err != nil {
@@ -1276,24 +1222,6 @@ func _PortfolioService_ListSymbols_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PortfolioServiceServer).ListSymbols(ctx, req.(*ListSymbolsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PortfolioService_GetPortfolioMeta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetPortfolioMetaRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PortfolioServiceServer).GetPortfolioMeta(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PortfolioService_GetPortfolioMeta_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PortfolioServiceServer).GetPortfolioMeta(ctx, req.(*GetPortfolioMetaRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1866,10 +1794,6 @@ var PortfolioService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PortfolioService_PreflightStrategySession_Handler,
 		},
 		{
-			MethodName: "GetVenueRouteMeta",
-			Handler:    _PortfolioService_GetVenueRouteMeta_Handler,
-		},
-		{
 			MethodName: "GetPortfolioSnapshot",
 			Handler:    _PortfolioService_GetPortfolioSnapshot_Handler,
 		},
@@ -1884,10 +1808,6 @@ var PortfolioService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSymbols",
 			Handler:    _PortfolioService_ListSymbols_Handler,
-		},
-		{
-			MethodName: "GetPortfolioMeta",
-			Handler:    _PortfolioService_GetPortfolioMeta_Handler,
 		},
 		{
 			MethodName: "CreateStrategy",

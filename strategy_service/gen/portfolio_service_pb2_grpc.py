@@ -105,11 +105,6 @@ class PortfolioServiceStub(object):
                 request_serializer=portfolio__service__pb2.PreflightStrategySessionRequest.SerializeToString,
                 response_deserializer=portfolio__service__pb2.PreflightStrategySessionResponse.FromString,
                 _registered_method=True)
-        self.GetVenueRouteMeta = channel.unary_unary(
-                '/portfolio.v1.PortfolioService/GetVenueRouteMeta',
-                request_serializer=portfolio__service__pb2.GetVenueRouteMetaRequest.SerializeToString,
-                response_deserializer=portfolio__service__pb2.GetVenueRouteMetaResponse.FromString,
-                _registered_method=True)
         self.GetPortfolioSnapshot = channel.unary_unary(
                 '/portfolio.v1.PortfolioService/GetPortfolioSnapshot',
                 request_serializer=portfolio__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
@@ -129,11 +124,6 @@ class PortfolioServiceStub(object):
                 '/portfolio.v1.PortfolioService/ListSymbols',
                 request_serializer=portfolio__service__pb2.ListSymbolsRequest.SerializeToString,
                 response_deserializer=portfolio__service__pb2.ListSymbolsResponse.FromString,
-                _registered_method=True)
-        self.GetPortfolioMeta = channel.unary_unary(
-                '/portfolio.v1.PortfolioService/GetPortfolioMeta',
-                request_serializer=portfolio__service__pb2.GetPortfolioMetaRequest.SerializeToString,
-                response_deserializer=portfolio__service__pb2.GetPortfolioMetaResponse.FromString,
                 _registered_method=True)
         self.CreateStrategy = channel.unary_unary(
                 '/portfolio.v1.PortfolioService/CreateStrategy',
@@ -373,12 +363,6 @@ class PortfolioServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetVenueRouteMeta(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def GetPortfolioSnapshot(self, request, context):
         """Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
         through the exchange capability registry and returns portfolio-level summary
@@ -407,14 +391,6 @@ class PortfolioServiceServicer(object):
 
     def ListSymbols(self, request, context):
         """Cached tradable symbols for portal pickers (Binance public exchangeInfo). market: "spot" | "usdm_futures".
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetPortfolioMeta(self, request, context):
-        """Internal RPC: returns full portfolio config including API credentials.
-        Intended for the internal order module only; NOT exposed to BFFs/portals.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -698,11 +674,6 @@ def add_PortfolioServiceServicer_to_server(servicer, server):
                     request_deserializer=portfolio__service__pb2.PreflightStrategySessionRequest.FromString,
                     response_serializer=portfolio__service__pb2.PreflightStrategySessionResponse.SerializeToString,
             ),
-            'GetVenueRouteMeta': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetVenueRouteMeta,
-                    request_deserializer=portfolio__service__pb2.GetVenueRouteMetaRequest.FromString,
-                    response_serializer=portfolio__service__pb2.GetVenueRouteMetaResponse.SerializeToString,
-            ),
             'GetPortfolioSnapshot': grpc.unary_unary_rpc_method_handler(
                     servicer.GetPortfolioSnapshot,
                     request_deserializer=portfolio__service__pb2.GetPortfolioSnapshotRequest.FromString,
@@ -722,11 +693,6 @@ def add_PortfolioServiceServicer_to_server(servicer, server):
                     servicer.ListSymbols,
                     request_deserializer=portfolio__service__pb2.ListSymbolsRequest.FromString,
                     response_serializer=portfolio__service__pb2.ListSymbolsResponse.SerializeToString,
-            ),
-            'GetPortfolioMeta': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetPortfolioMeta,
-                    request_deserializer=portfolio__service__pb2.GetPortfolioMetaRequest.FromString,
-                    response_serializer=portfolio__service__pb2.GetPortfolioMetaResponse.SerializeToString,
             ),
             'CreateStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateStrategy,
@@ -1259,33 +1225,6 @@ class PortfolioService(object):
             _registered_method=True)
 
     @staticmethod
-    def GetVenueRouteMeta(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/portfolio.v1.PortfolioService/GetVenueRouteMeta',
-            portfolio__service__pb2.GetVenueRouteMetaRequest.SerializeToString,
-            portfolio__service__pb2.GetVenueRouteMetaResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
     def GetPortfolioSnapshot(request,
             target,
             options=(),
@@ -1383,33 +1322,6 @@ class PortfolioService(object):
             '/portfolio.v1.PortfolioService/ListSymbols',
             portfolio__service__pb2.ListSymbolsRequest.SerializeToString,
             portfolio__service__pb2.ListSymbolsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetPortfolioMeta(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/portfolio.v1.PortfolioService/GetPortfolioMeta',
-            portfolio__service__pb2.GetPortfolioMetaRequest.SerializeToString,
-            portfolio__service__pb2.GetPortfolioMetaResponse.FromString,
             options,
             channel_credentials,
             insecure,
