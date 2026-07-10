@@ -245,13 +245,6 @@ class SessionManager:
             if s is not None:
                 s.thread = thread
 
-    def list_active_live_sessions(self) -> list[tuple[str, SessionState]]:
-        with self._lock:
-            return [
-                (session_id, state)
-                for session_id, state in self._sessions.items()
-                if state.environment == 1 and state.status == "running"
-            ]
 
     def mark_terminal(self, session_id: str) -> None:
         """Mark a session for eventual cleanup."""

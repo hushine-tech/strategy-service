@@ -25,13 +25,6 @@ service StrategyService {
   // StopStrategy stops a running strategy session.
   rpc StopStrategy(StopStrategyRequest) returns (StopStrategyResponse);
 
-  // GetLiveConsumptionDiagnostics returns active demo session bindings and
-  // anomaly counters for operator diagnostics.
-  rpc GetLiveConsumptionDiagnostics(GetLiveConsumptionDiagnosticsRequest) returns (GetLiveConsumptionDiagnosticsResponse);
-
-  // ValidateStrategyCode statically checks saved strategy source against the
-  // current runtime profile without importing or executing user code.
-  rpc ValidateStrategyCode(ValidateStrategyCodeRequest) returns (ValidateStrategyCodeResponse);
 }
 
 message RunStrategyRequest {
@@ -86,28 +79,6 @@ message StopStrategyRequest {
 
 message StopStrategyResponse {
   bool stopped = 1;
-}
-
-message ValidateStrategyCodeRequest {
-  string code = 1;
-  string runtime_version = 2;
-  string runtime_profile = 3;
-  int64 user_id = 100;
-}
-
-message StrategyValidationIssue {
-  string code = 1;
-  string message = 2;
-  string module = 3;
-  int32 line = 4;
-}
-
-message ValidateStrategyCodeResponse {
-  bool ok = 1;
-  repeated StrategyValidationIssue issues = 2;
-  string runtime_version = 3;
-  string runtime_profile = 4;
-  repeated string allowed_third_party_modules = 5;
 }
 
 // ── PreviewRunStrategy ────────────────────────────────────────────────────
@@ -184,8 +155,6 @@ message RiskControls {
   string leverage_source = 4; // request_default / platform_default
 }
 
-message GetLiveConsumptionDiagnosticsRequest {}
-
 message StrategyOrderTargetBinding {
   string exchange = 1;
   string market = 2;
@@ -204,25 +173,4 @@ message LiveStreamBinding {
   string kind = 4;
   string symbol = 5;
   string interval = 6;
-}
-
-message LiveSessionDiagnostic {
-  string session_id = 1;
-  int64 user_id = 2;
-  int64 portfolio_id = 3;
-  int64 strategy_id = 4;
-  int32 portfolio_environment = 5;
-  string status = 6;
-  int32 bars_processed = 7;
-  string error = 8;
-  string consumer_group = 9;
-  repeated LiveStreamBinding streams = 10;
-  int32 unroutable_events = 11;
-  int64 last_unroutable_at_ms = 12;
-  string last_unroutable_reason = 13;
-  int64 last_lease_heartbeat_at_ms = 14;
-}
-
-message GetLiveConsumptionDiagnosticsResponse {
-  repeated LiveSessionDiagnostic sessions = 1;
 }

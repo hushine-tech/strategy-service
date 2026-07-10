@@ -465,218 +465,6 @@ func (x *StopStrategyResponse) GetStopped() bool {
 	return false
 }
 
-type ValidateStrategyCodeRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Code           string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
-	RuntimeVersion string                 `protobuf:"bytes,2,opt,name=runtime_version,json=runtimeVersion,proto3" json:"runtime_version,omitempty"`
-	RuntimeProfile string                 `protobuf:"bytes,3,opt,name=runtime_profile,json=runtimeProfile,proto3" json:"runtime_profile,omitempty"`
-	UserId         int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *ValidateStrategyCodeRequest) Reset() {
-	*x = ValidateStrategyCodeRequest{}
-	mi := &file_strategy_service_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ValidateStrategyCodeRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ValidateStrategyCodeRequest) ProtoMessage() {}
-
-func (x *ValidateStrategyCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ValidateStrategyCodeRequest.ProtoReflect.Descriptor instead.
-func (*ValidateStrategyCodeRequest) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *ValidateStrategyCodeRequest) GetCode() string {
-	if x != nil {
-		return x.Code
-	}
-	return ""
-}
-
-func (x *ValidateStrategyCodeRequest) GetRuntimeVersion() string {
-	if x != nil {
-		return x.RuntimeVersion
-	}
-	return ""
-}
-
-func (x *ValidateStrategyCodeRequest) GetRuntimeProfile() string {
-	if x != nil {
-		return x.RuntimeProfile
-	}
-	return ""
-}
-
-func (x *ValidateStrategyCodeRequest) GetUserId() int64 {
-	if x != nil {
-		return x.UserId
-	}
-	return 0
-}
-
-type StrategyValidationIssue struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	Module        string                 `protobuf:"bytes,3,opt,name=module,proto3" json:"module,omitempty"`
-	Line          int32                  `protobuf:"varint,4,opt,name=line,proto3" json:"line,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StrategyValidationIssue) Reset() {
-	*x = StrategyValidationIssue{}
-	mi := &file_strategy_service_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StrategyValidationIssue) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StrategyValidationIssue) ProtoMessage() {}
-
-func (x *StrategyValidationIssue) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StrategyValidationIssue.ProtoReflect.Descriptor instead.
-func (*StrategyValidationIssue) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *StrategyValidationIssue) GetCode() string {
-	if x != nil {
-		return x.Code
-	}
-	return ""
-}
-
-func (x *StrategyValidationIssue) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
-
-func (x *StrategyValidationIssue) GetModule() string {
-	if x != nil {
-		return x.Module
-	}
-	return ""
-}
-
-func (x *StrategyValidationIssue) GetLine() int32 {
-	if x != nil {
-		return x.Line
-	}
-	return 0
-}
-
-type ValidateStrategyCodeResponse struct {
-	state                    protoimpl.MessageState     `protogen:"open.v1"`
-	Ok                       bool                       `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	Issues                   []*StrategyValidationIssue `protobuf:"bytes,2,rep,name=issues,proto3" json:"issues,omitempty"`
-	RuntimeVersion           string                     `protobuf:"bytes,3,opt,name=runtime_version,json=runtimeVersion,proto3" json:"runtime_version,omitempty"`
-	RuntimeProfile           string                     `protobuf:"bytes,4,opt,name=runtime_profile,json=runtimeProfile,proto3" json:"runtime_profile,omitempty"`
-	AllowedThirdPartyModules []string                   `protobuf:"bytes,5,rep,name=allowed_third_party_modules,json=allowedThirdPartyModules,proto3" json:"allowed_third_party_modules,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
-}
-
-func (x *ValidateStrategyCodeResponse) Reset() {
-	*x = ValidateStrategyCodeResponse{}
-	mi := &file_strategy_service_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ValidateStrategyCodeResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ValidateStrategyCodeResponse) ProtoMessage() {}
-
-func (x *ValidateStrategyCodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ValidateStrategyCodeResponse.ProtoReflect.Descriptor instead.
-func (*ValidateStrategyCodeResponse) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *ValidateStrategyCodeResponse) GetOk() bool {
-	if x != nil {
-		return x.Ok
-	}
-	return false
-}
-
-func (x *ValidateStrategyCodeResponse) GetIssues() []*StrategyValidationIssue {
-	if x != nil {
-		return x.Issues
-	}
-	return nil
-}
-
-func (x *ValidateStrategyCodeResponse) GetRuntimeVersion() string {
-	if x != nil {
-		return x.RuntimeVersion
-	}
-	return ""
-}
-
-func (x *ValidateStrategyCodeResponse) GetRuntimeProfile() string {
-	if x != nil {
-		return x.RuntimeProfile
-	}
-	return ""
-}
-
-func (x *ValidateStrategyCodeResponse) GetAllowedThirdPartyModules() []string {
-	if x != nil {
-		return x.AllowedThirdPartyModules
-	}
-	return nil
-}
-
 type PreviewRunStrategyRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	PortfolioId  int64                  `protobuf:"varint,1,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
@@ -697,7 +485,7 @@ type PreviewRunStrategyRequest struct {
 
 func (x *PreviewRunStrategyRequest) Reset() {
 	*x = PreviewRunStrategyRequest{}
-	mi := &file_strategy_service_proto_msgTypes[9]
+	mi := &file_strategy_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -709,7 +497,7 @@ func (x *PreviewRunStrategyRequest) String() string {
 func (*PreviewRunStrategyRequest) ProtoMessage() {}
 
 func (x *PreviewRunStrategyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[9]
+	mi := &file_strategy_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -722,7 +510,7 @@ func (x *PreviewRunStrategyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreviewRunStrategyRequest.ProtoReflect.Descriptor instead.
 func (*PreviewRunStrategyRequest) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{9}
+	return file_strategy_service_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PreviewRunStrategyRequest) GetPortfolioId() int64 {
@@ -792,7 +580,7 @@ type PreflightInputKey struct {
 
 func (x *PreflightInputKey) Reset() {
 	*x = PreflightInputKey{}
-	mi := &file_strategy_service_proto_msgTypes[10]
+	mi := &file_strategy_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -804,7 +592,7 @@ func (x *PreflightInputKey) String() string {
 func (*PreflightInputKey) ProtoMessage() {}
 
 func (x *PreflightInputKey) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[10]
+	mi := &file_strategy_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -817,7 +605,7 @@ func (x *PreflightInputKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreflightInputKey.ProtoReflect.Descriptor instead.
 func (*PreflightInputKey) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{10}
+	return file_strategy_service_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PreflightInputKey) GetMarket() string {
@@ -862,7 +650,7 @@ type PreflightFailureProto struct {
 
 func (x *PreflightFailureProto) Reset() {
 	*x = PreflightFailureProto{}
-	mi := &file_strategy_service_proto_msgTypes[11]
+	mi := &file_strategy_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -874,7 +662,7 @@ func (x *PreflightFailureProto) String() string {
 func (*PreflightFailureProto) ProtoMessage() {}
 
 func (x *PreflightFailureProto) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[11]
+	mi := &file_strategy_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -887,7 +675,7 @@ func (x *PreflightFailureProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreflightFailureProto.ProtoReflect.Descriptor instead.
 func (*PreflightFailureProto) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{11}
+	return file_strategy_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PreflightFailureProto) GetKind() string {
@@ -940,7 +728,7 @@ type PreviewRunStrategyResponse struct {
 
 func (x *PreviewRunStrategyResponse) Reset() {
 	*x = PreviewRunStrategyResponse{}
-	mi := &file_strategy_service_proto_msgTypes[12]
+	mi := &file_strategy_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -952,7 +740,7 @@ func (x *PreviewRunStrategyResponse) String() string {
 func (*PreviewRunStrategyResponse) ProtoMessage() {}
 
 func (x *PreviewRunStrategyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[12]
+	mi := &file_strategy_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -965,7 +753,7 @@ func (x *PreviewRunStrategyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreviewRunStrategyResponse.ProtoReflect.Descriptor instead.
 func (*PreviewRunStrategyResponse) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{12}
+	return file_strategy_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PreviewRunStrategyResponse) GetProfile() string {
@@ -1043,7 +831,7 @@ type RiskControls struct {
 
 func (x *RiskControls) Reset() {
 	*x = RiskControls{}
-	mi := &file_strategy_service_proto_msgTypes[13]
+	mi := &file_strategy_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1055,7 +843,7 @@ func (x *RiskControls) String() string {
 func (*RiskControls) ProtoMessage() {}
 
 func (x *RiskControls) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[13]
+	mi := &file_strategy_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1068,7 +856,7 @@ func (x *RiskControls) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RiskControls.ProtoReflect.Descriptor instead.
 func (*RiskControls) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{13}
+	return file_strategy_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RiskControls) GetMaxLossClosePct() float64 {
@@ -1099,42 +887,6 @@ func (x *RiskControls) GetLeverageSource() string {
 	return ""
 }
 
-type GetLiveConsumptionDiagnosticsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetLiveConsumptionDiagnosticsRequest) Reset() {
-	*x = GetLiveConsumptionDiagnosticsRequest{}
-	mi := &file_strategy_service_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetLiveConsumptionDiagnosticsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetLiveConsumptionDiagnosticsRequest) ProtoMessage() {}
-
-func (x *GetLiveConsumptionDiagnosticsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetLiveConsumptionDiagnosticsRequest.ProtoReflect.Descriptor instead.
-func (*GetLiveConsumptionDiagnosticsRequest) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{14}
-}
-
 type StrategyOrderTargetBinding struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Exchange      string                 `protobuf:"bytes,1,opt,name=exchange,proto3" json:"exchange,omitempty"`
@@ -1146,7 +898,7 @@ type StrategyOrderTargetBinding struct {
 
 func (x *StrategyOrderTargetBinding) Reset() {
 	*x = StrategyOrderTargetBinding{}
-	mi := &file_strategy_service_proto_msgTypes[15]
+	mi := &file_strategy_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1158,7 +910,7 @@ func (x *StrategyOrderTargetBinding) String() string {
 func (*StrategyOrderTargetBinding) ProtoMessage() {}
 
 func (x *StrategyOrderTargetBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[15]
+	mi := &file_strategy_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1171,7 +923,7 @@ func (x *StrategyOrderTargetBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StrategyOrderTargetBinding.ProtoReflect.Descriptor instead.
 func (*StrategyOrderTargetBinding) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{15}
+	return file_strategy_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StrategyOrderTargetBinding) GetExchange() string {
@@ -1205,7 +957,7 @@ type StrategyRouteBinding struct {
 
 func (x *StrategyRouteBinding) Reset() {
 	*x = StrategyRouteBinding{}
-	mi := &file_strategy_service_proto_msgTypes[16]
+	mi := &file_strategy_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1217,7 +969,7 @@ func (x *StrategyRouteBinding) String() string {
 func (*StrategyRouteBinding) ProtoMessage() {}
 
 func (x *StrategyRouteBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[16]
+	mi := &file_strategy_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1230,7 +982,7 @@ func (x *StrategyRouteBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StrategyRouteBinding.ProtoReflect.Descriptor instead.
 func (*StrategyRouteBinding) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{16}
+	return file_strategy_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StrategyRouteBinding) GetExchange() string {
@@ -1261,7 +1013,7 @@ type LiveStreamBinding struct {
 
 func (x *LiveStreamBinding) Reset() {
 	*x = LiveStreamBinding{}
-	mi := &file_strategy_service_proto_msgTypes[17]
+	mi := &file_strategy_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1273,7 +1025,7 @@ func (x *LiveStreamBinding) String() string {
 func (*LiveStreamBinding) ProtoMessage() {}
 
 func (x *LiveStreamBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[17]
+	mi := &file_strategy_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1286,7 +1038,7 @@ func (x *LiveStreamBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LiveStreamBinding.ProtoReflect.Descriptor instead.
 func (*LiveStreamBinding) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{17}
+	return file_strategy_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *LiveStreamBinding) GetStreamId() int64 {
@@ -1331,198 +1083,6 @@ func (x *LiveStreamBinding) GetInterval() string {
 	return ""
 }
 
-type LiveSessionDiagnostic struct {
-	state                  protoimpl.MessageState `protogen:"open.v1"`
-	SessionId              string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	UserId                 int64                  `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	PortfolioId            int64                  `protobuf:"varint,3,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
-	StrategyId             int64                  `protobuf:"varint,4,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
-	PortfolioEnvironment   int32                  `protobuf:"varint,5,opt,name=portfolio_environment,json=portfolioEnvironment,proto3" json:"portfolio_environment,omitempty"`
-	Status                 string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
-	BarsProcessed          int32                  `protobuf:"varint,7,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
-	Error                  string                 `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
-	ConsumerGroup          string                 `protobuf:"bytes,9,opt,name=consumer_group,json=consumerGroup,proto3" json:"consumer_group,omitempty"`
-	Streams                []*LiveStreamBinding   `protobuf:"bytes,10,rep,name=streams,proto3" json:"streams,omitempty"`
-	UnroutableEvents       int32                  `protobuf:"varint,11,opt,name=unroutable_events,json=unroutableEvents,proto3" json:"unroutable_events,omitempty"`
-	LastUnroutableAtMs     int64                  `protobuf:"varint,12,opt,name=last_unroutable_at_ms,json=lastUnroutableAtMs,proto3" json:"last_unroutable_at_ms,omitempty"`
-	LastUnroutableReason   string                 `protobuf:"bytes,13,opt,name=last_unroutable_reason,json=lastUnroutableReason,proto3" json:"last_unroutable_reason,omitempty"`
-	LastLeaseHeartbeatAtMs int64                  `protobuf:"varint,14,opt,name=last_lease_heartbeat_at_ms,json=lastLeaseHeartbeatAtMs,proto3" json:"last_lease_heartbeat_at_ms,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
-}
-
-func (x *LiveSessionDiagnostic) Reset() {
-	*x = LiveSessionDiagnostic{}
-	mi := &file_strategy_service_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LiveSessionDiagnostic) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LiveSessionDiagnostic) ProtoMessage() {}
-
-func (x *LiveSessionDiagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LiveSessionDiagnostic.ProtoReflect.Descriptor instead.
-func (*LiveSessionDiagnostic) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *LiveSessionDiagnostic) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *LiveSessionDiagnostic) GetUserId() int64 {
-	if x != nil {
-		return x.UserId
-	}
-	return 0
-}
-
-func (x *LiveSessionDiagnostic) GetPortfolioId() int64 {
-	if x != nil {
-		return x.PortfolioId
-	}
-	return 0
-}
-
-func (x *LiveSessionDiagnostic) GetStrategyId() int64 {
-	if x != nil {
-		return x.StrategyId
-	}
-	return 0
-}
-
-func (x *LiveSessionDiagnostic) GetPortfolioEnvironment() int32 {
-	if x != nil {
-		return x.PortfolioEnvironment
-	}
-	return 0
-}
-
-func (x *LiveSessionDiagnostic) GetStatus() string {
-	if x != nil {
-		return x.Status
-	}
-	return ""
-}
-
-func (x *LiveSessionDiagnostic) GetBarsProcessed() int32 {
-	if x != nil {
-		return x.BarsProcessed
-	}
-	return 0
-}
-
-func (x *LiveSessionDiagnostic) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-func (x *LiveSessionDiagnostic) GetConsumerGroup() string {
-	if x != nil {
-		return x.ConsumerGroup
-	}
-	return ""
-}
-
-func (x *LiveSessionDiagnostic) GetStreams() []*LiveStreamBinding {
-	if x != nil {
-		return x.Streams
-	}
-	return nil
-}
-
-func (x *LiveSessionDiagnostic) GetUnroutableEvents() int32 {
-	if x != nil {
-		return x.UnroutableEvents
-	}
-	return 0
-}
-
-func (x *LiveSessionDiagnostic) GetLastUnroutableAtMs() int64 {
-	if x != nil {
-		return x.LastUnroutableAtMs
-	}
-	return 0
-}
-
-func (x *LiveSessionDiagnostic) GetLastUnroutableReason() string {
-	if x != nil {
-		return x.LastUnroutableReason
-	}
-	return ""
-}
-
-func (x *LiveSessionDiagnostic) GetLastLeaseHeartbeatAtMs() int64 {
-	if x != nil {
-		return x.LastLeaseHeartbeatAtMs
-	}
-	return 0
-}
-
-type GetLiveConsumptionDiagnosticsResponse struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	Sessions      []*LiveSessionDiagnostic `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetLiveConsumptionDiagnosticsResponse) Reset() {
-	*x = GetLiveConsumptionDiagnosticsResponse{}
-	mi := &file_strategy_service_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetLiveConsumptionDiagnosticsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetLiveConsumptionDiagnosticsResponse) ProtoMessage() {}
-
-func (x *GetLiveConsumptionDiagnosticsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_strategy_service_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetLiveConsumptionDiagnosticsResponse.ProtoReflect.Descriptor instead.
-func (*GetLiveConsumptionDiagnosticsResponse) Descriptor() ([]byte, []int) {
-	return file_strategy_service_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *GetLiveConsumptionDiagnosticsResponse) GetSessions() []*LiveSessionDiagnostic {
-	if x != nil {
-		return x.Sessions
-	}
-	return nil
-}
-
 var File_strategy_service_proto protoreflect.FileDescriptor
 
 const file_strategy_service_proto_rawDesc = "" +
@@ -1561,23 +1121,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\n" +
 	"runtime_id\x18e \x01(\tR\truntimeId\"0\n" +
 	"\x14StopStrategyResponse\x12\x18\n" +
-	"\astopped\x18\x01 \x01(\bR\astopped\"\x9c\x01\n" +
-	"\x1bValidateStrategyCodeRequest\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\tR\x04code\x12'\n" +
-	"\x0fruntime_version\x18\x02 \x01(\tR\x0eruntimeVersion\x12'\n" +
-	"\x0fruntime_profile\x18\x03 \x01(\tR\x0eruntimeProfile\x12\x17\n" +
-	"\auser_id\x18d \x01(\x03R\x06userId\"s\n" +
-	"\x17StrategyValidationIssue\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\x12\x16\n" +
-	"\x06module\x18\x03 \x01(\tR\x06module\x12\x12\n" +
-	"\x04line\x18\x04 \x01(\x05R\x04line\"\xfd\x01\n" +
-	"\x1cValidateStrategyCodeResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\x12<\n" +
-	"\x06issues\x18\x02 \x03(\v2$.strategy.v1.StrategyValidationIssueR\x06issues\x12'\n" +
-	"\x0fruntime_version\x18\x03 \x01(\tR\x0eruntimeVersion\x12'\n" +
-	"\x0fruntime_profile\x18\x04 \x01(\tR\x0eruntimeProfile\x12=\n" +
-	"\x1ballowed_third_party_modules\x18\x05 \x03(\tR\x18allowedThirdPartyModules\"\xa8\x02\n" +
+	"\astopped\x18\x01 \x01(\bR\astopped\"\xa8\x02\n" +
 	"\x19PreviewRunStrategyRequest\x12!\n" +
 	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12#\n" +
 	"\rstrategy_path\x18\x02 \x01(\tR\fstrategyPath\x12\"\n" +
@@ -1610,8 +1154,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x12max_loss_close_pct\x18\x01 \x01(\x01R\x0fmaxLossClosePct\x121\n" +
 	"\x15max_loss_close_source\x18\x02 \x01(\tR\x12maxLossCloseSource\x12\x1a\n" +
 	"\bleverage\x18\x03 \x01(\x01R\bleverage\x12'\n" +
-	"\x0fleverage_source\x18\x04 \x01(\tR\x0eleverageSource\"&\n" +
-	"$GetLiveConsumptionDiagnosticsRequest\"h\n" +
+	"\x0fleverage_source\x18\x04 \x01(\tR\x0eleverageSource\"h\n" +
 	"\x1aStrategyOrderTargetBinding\x12\x1a\n" +
 	"\bexchange\x18\x01 \x01(\tR\bexchange\x12\x16\n" +
 	"\x06market\x18\x02 \x01(\tR\x06market\x12\x16\n" +
@@ -1625,41 +1168,19 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06market\x18\x03 \x01(\tR\x06market\x12\x12\n" +
 	"\x04kind\x18\x04 \x01(\tR\x04kind\x12\x16\n" +
 	"\x06symbol\x18\x05 \x01(\tR\x06symbol\x12\x1a\n" +
-	"\binterval\x18\x06 \x01(\tR\binterval\"\xd0\x04\n" +
-	"\x15LiveSessionDiagnostic\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12!\n" +
-	"\fportfolio_id\x18\x03 \x01(\x03R\vportfolioId\x12\x1f\n" +
-	"\vstrategy_id\x18\x04 \x01(\x03R\n" +
-	"strategyId\x123\n" +
-	"\x15portfolio_environment\x18\x05 \x01(\x05R\x14portfolioEnvironment\x12\x16\n" +
-	"\x06status\x18\x06 \x01(\tR\x06status\x12%\n" +
-	"\x0ebars_processed\x18\a \x01(\x05R\rbarsProcessed\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05error\x12%\n" +
-	"\x0econsumer_group\x18\t \x01(\tR\rconsumerGroup\x128\n" +
-	"\astreams\x18\n" +
-	" \x03(\v2\x1e.strategy.v1.LiveStreamBindingR\astreams\x12+\n" +
-	"\x11unroutable_events\x18\v \x01(\x05R\x10unroutableEvents\x121\n" +
-	"\x15last_unroutable_at_ms\x18\f \x01(\x03R\x12lastUnroutableAtMs\x124\n" +
-	"\x16last_unroutable_reason\x18\r \x01(\tR\x14lastUnroutableReason\x12:\n" +
-	"\x1alast_lease_heartbeat_at_ms\x18\x0e \x01(\x03R\x16lastLeaseHeartbeatAtMs\"g\n" +
-	"%GetLiveConsumptionDiagnosticsResponse\x12>\n" +
-	"\bsessions\x18\x01 \x03(\v2\".strategy.v1.LiveSessionDiagnosticR\bsessions*\x9e\x01\n" +
+	"\binterval\x18\x06 \x01(\tR\binterval*\x9e\x01\n" +
 	"\n" +
 	"StopAction\x12\x1b\n" +
 	"\x17STOP_ACTION_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12STOP_ACTION_CANCEL\x10\x01\x12\x19\n" +
 	"\x15STOP_ACTION_STOP_ONLY\x10\x02\x12(\n" +
 	"$STOP_ACTION_STOP_AND_CLOSE_POSITIONS\x10\x03\x12\x16\n" +
-	"\x12STOP_ACTION_FINISH\x10\x042\xf9\x04\n" +
+	"\x12STOP_ACTION_FINISH\x10\x042\x83\x03\n" +
 	"\x0fStrategyService\x12P\n" +
 	"\vRunStrategy\x12\x1f.strategy.v1.RunStrategyRequest\x1a .strategy.v1.RunStrategyResponse\x12e\n" +
 	"\x12PreviewRunStrategy\x12&.strategy.v1.PreviewRunStrategyRequest\x1a'.strategy.v1.PreviewRunStrategyResponse\x12b\n" +
 	"\x11GetStrategyStatus\x12%.strategy.v1.GetStrategyStatusRequest\x1a&.strategy.v1.GetStrategyStatusResponse\x12S\n" +
-	"\fStopStrategy\x12 .strategy.v1.StopStrategyRequest\x1a!.strategy.v1.StopStrategyResponse\x12\x86\x01\n" +
-	"\x1dGetLiveConsumptionDiagnostics\x121.strategy.v1.GetLiveConsumptionDiagnosticsRequest\x1a2.strategy.v1.GetLiveConsumptionDiagnosticsResponse\x12k\n" +
-	"\x14ValidateStrategyCode\x12(.strategy.v1.ValidateStrategyCodeRequest\x1a).strategy.v1.ValidateStrategyCodeResponseBDZBgithub.com/hushine-tech/strategy-service/gen/strategyv1;strategyv1b\x06proto3"
+	"\fStopStrategy\x12 .strategy.v1.StopStrategyRequest\x1a!.strategy.v1.StopStrategyResponseBDZBgithub.com/hushine-tech/strategy-service/gen/strategyv1;strategyv1b\x06proto3"
 
 var (
 	file_strategy_service_proto_rawDescOnce sync.Once
@@ -1674,59 +1195,46 @@ func file_strategy_service_proto_rawDescGZIP() []byte {
 }
 
 var file_strategy_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_strategy_service_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_strategy_service_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_strategy_service_proto_goTypes = []any{
-	(StopAction)(0),                               // 0: strategy.v1.StopAction
-	(*RunStrategyRequest)(nil),                    // 1: strategy.v1.RunStrategyRequest
-	(*RunStrategyResponse)(nil),                   // 2: strategy.v1.RunStrategyResponse
-	(*GetStrategyStatusRequest)(nil),              // 3: strategy.v1.GetStrategyStatusRequest
-	(*GetStrategyStatusResponse)(nil),             // 4: strategy.v1.GetStrategyStatusResponse
-	(*StopStrategyRequest)(nil),                   // 5: strategy.v1.StopStrategyRequest
-	(*StopStrategyResponse)(nil),                  // 6: strategy.v1.StopStrategyResponse
-	(*ValidateStrategyCodeRequest)(nil),           // 7: strategy.v1.ValidateStrategyCodeRequest
-	(*StrategyValidationIssue)(nil),               // 8: strategy.v1.StrategyValidationIssue
-	(*ValidateStrategyCodeResponse)(nil),          // 9: strategy.v1.ValidateStrategyCodeResponse
-	(*PreviewRunStrategyRequest)(nil),             // 10: strategy.v1.PreviewRunStrategyRequest
-	(*PreflightInputKey)(nil),                     // 11: strategy.v1.PreflightInputKey
-	(*PreflightFailureProto)(nil),                 // 12: strategy.v1.PreflightFailureProto
-	(*PreviewRunStrategyResponse)(nil),            // 13: strategy.v1.PreviewRunStrategyResponse
-	(*RiskControls)(nil),                          // 14: strategy.v1.RiskControls
-	(*GetLiveConsumptionDiagnosticsRequest)(nil),  // 15: strategy.v1.GetLiveConsumptionDiagnosticsRequest
-	(*StrategyOrderTargetBinding)(nil),            // 16: strategy.v1.StrategyOrderTargetBinding
-	(*StrategyRouteBinding)(nil),                  // 17: strategy.v1.StrategyRouteBinding
-	(*LiveStreamBinding)(nil),                     // 18: strategy.v1.LiveStreamBinding
-	(*LiveSessionDiagnostic)(nil),                 // 19: strategy.v1.LiveSessionDiagnostic
-	(*GetLiveConsumptionDiagnosticsResponse)(nil), // 20: strategy.v1.GetLiveConsumptionDiagnosticsResponse
+	(StopAction)(0),                    // 0: strategy.v1.StopAction
+	(*RunStrategyRequest)(nil),         // 1: strategy.v1.RunStrategyRequest
+	(*RunStrategyResponse)(nil),        // 2: strategy.v1.RunStrategyResponse
+	(*GetStrategyStatusRequest)(nil),   // 3: strategy.v1.GetStrategyStatusRequest
+	(*GetStrategyStatusResponse)(nil),  // 4: strategy.v1.GetStrategyStatusResponse
+	(*StopStrategyRequest)(nil),        // 5: strategy.v1.StopStrategyRequest
+	(*StopStrategyResponse)(nil),       // 6: strategy.v1.StopStrategyResponse
+	(*PreviewRunStrategyRequest)(nil),  // 7: strategy.v1.PreviewRunStrategyRequest
+	(*PreflightInputKey)(nil),          // 8: strategy.v1.PreflightInputKey
+	(*PreflightFailureProto)(nil),      // 9: strategy.v1.PreflightFailureProto
+	(*PreviewRunStrategyResponse)(nil), // 10: strategy.v1.PreviewRunStrategyResponse
+	(*RiskControls)(nil),               // 11: strategy.v1.RiskControls
+	(*StrategyOrderTargetBinding)(nil), // 12: strategy.v1.StrategyOrderTargetBinding
+	(*StrategyRouteBinding)(nil),       // 13: strategy.v1.StrategyRouteBinding
+	(*LiveStreamBinding)(nil),          // 14: strategy.v1.LiveStreamBinding
 }
 var file_strategy_service_proto_depIdxs = []int32{
 	0,  // 0: strategy.v1.StopStrategyRequest.stop_action:type_name -> strategy.v1.StopAction
-	8,  // 1: strategy.v1.ValidateStrategyCodeResponse.issues:type_name -> strategy.v1.StrategyValidationIssue
-	11, // 2: strategy.v1.PreflightFailureProto.input_key:type_name -> strategy.v1.PreflightInputKey
-	12, // 3: strategy.v1.PreviewRunStrategyResponse.failures:type_name -> strategy.v1.PreflightFailureProto
-	18, // 4: strategy.v1.PreviewRunStrategyResponse.required_streams:type_name -> strategy.v1.LiveStreamBinding
-	18, // 5: strategy.v1.PreviewRunStrategyResponse.declared_inputs:type_name -> strategy.v1.LiveStreamBinding
-	16, // 6: strategy.v1.PreviewRunStrategyResponse.declared_order_targets:type_name -> strategy.v1.StrategyOrderTargetBinding
-	17, // 7: strategy.v1.PreviewRunStrategyResponse.required_routes:type_name -> strategy.v1.StrategyRouteBinding
-	14, // 8: strategy.v1.PreviewRunStrategyResponse.risk_controls:type_name -> strategy.v1.RiskControls
-	18, // 9: strategy.v1.LiveSessionDiagnostic.streams:type_name -> strategy.v1.LiveStreamBinding
-	19, // 10: strategy.v1.GetLiveConsumptionDiagnosticsResponse.sessions:type_name -> strategy.v1.LiveSessionDiagnostic
-	1,  // 11: strategy.v1.StrategyService.RunStrategy:input_type -> strategy.v1.RunStrategyRequest
-	10, // 12: strategy.v1.StrategyService.PreviewRunStrategy:input_type -> strategy.v1.PreviewRunStrategyRequest
-	3,  // 13: strategy.v1.StrategyService.GetStrategyStatus:input_type -> strategy.v1.GetStrategyStatusRequest
-	5,  // 14: strategy.v1.StrategyService.StopStrategy:input_type -> strategy.v1.StopStrategyRequest
-	15, // 15: strategy.v1.StrategyService.GetLiveConsumptionDiagnostics:input_type -> strategy.v1.GetLiveConsumptionDiagnosticsRequest
-	7,  // 16: strategy.v1.StrategyService.ValidateStrategyCode:input_type -> strategy.v1.ValidateStrategyCodeRequest
-	2,  // 17: strategy.v1.StrategyService.RunStrategy:output_type -> strategy.v1.RunStrategyResponse
-	13, // 18: strategy.v1.StrategyService.PreviewRunStrategy:output_type -> strategy.v1.PreviewRunStrategyResponse
-	4,  // 19: strategy.v1.StrategyService.GetStrategyStatus:output_type -> strategy.v1.GetStrategyStatusResponse
-	6,  // 20: strategy.v1.StrategyService.StopStrategy:output_type -> strategy.v1.StopStrategyResponse
-	20, // 21: strategy.v1.StrategyService.GetLiveConsumptionDiagnostics:output_type -> strategy.v1.GetLiveConsumptionDiagnosticsResponse
-	9,  // 22: strategy.v1.StrategyService.ValidateStrategyCode:output_type -> strategy.v1.ValidateStrategyCodeResponse
-	17, // [17:23] is the sub-list for method output_type
-	11, // [11:17] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	8,  // 1: strategy.v1.PreflightFailureProto.input_key:type_name -> strategy.v1.PreflightInputKey
+	9,  // 2: strategy.v1.PreviewRunStrategyResponse.failures:type_name -> strategy.v1.PreflightFailureProto
+	14, // 3: strategy.v1.PreviewRunStrategyResponse.required_streams:type_name -> strategy.v1.LiveStreamBinding
+	14, // 4: strategy.v1.PreviewRunStrategyResponse.declared_inputs:type_name -> strategy.v1.LiveStreamBinding
+	12, // 5: strategy.v1.PreviewRunStrategyResponse.declared_order_targets:type_name -> strategy.v1.StrategyOrderTargetBinding
+	13, // 6: strategy.v1.PreviewRunStrategyResponse.required_routes:type_name -> strategy.v1.StrategyRouteBinding
+	11, // 7: strategy.v1.PreviewRunStrategyResponse.risk_controls:type_name -> strategy.v1.RiskControls
+	1,  // 8: strategy.v1.StrategyService.RunStrategy:input_type -> strategy.v1.RunStrategyRequest
+	7,  // 9: strategy.v1.StrategyService.PreviewRunStrategy:input_type -> strategy.v1.PreviewRunStrategyRequest
+	3,  // 10: strategy.v1.StrategyService.GetStrategyStatus:input_type -> strategy.v1.GetStrategyStatusRequest
+	5,  // 11: strategy.v1.StrategyService.StopStrategy:input_type -> strategy.v1.StopStrategyRequest
+	2,  // 12: strategy.v1.StrategyService.RunStrategy:output_type -> strategy.v1.RunStrategyResponse
+	10, // 13: strategy.v1.StrategyService.PreviewRunStrategy:output_type -> strategy.v1.PreviewRunStrategyResponse
+	4,  // 14: strategy.v1.StrategyService.GetStrategyStatus:output_type -> strategy.v1.GetStrategyStatusResponse
+	6,  // 15: strategy.v1.StrategyService.StopStrategy:output_type -> strategy.v1.StopStrategyResponse
+	12, // [12:16] is the sub-list for method output_type
+	8,  // [8:12] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_strategy_service_proto_init() }
@@ -1740,7 +1248,7 @@ func file_strategy_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_strategy_service_proto_rawDesc), len(file_strategy_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

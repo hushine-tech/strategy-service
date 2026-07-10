@@ -54,16 +54,6 @@ class StrategyServiceStub(object):
                 request_serializer=strategy__service__pb2.StopStrategyRequest.SerializeToString,
                 response_deserializer=strategy__service__pb2.StopStrategyResponse.FromString,
                 _registered_method=True)
-        self.GetLiveConsumptionDiagnostics = channel.unary_unary(
-                '/strategy.v1.StrategyService/GetLiveConsumptionDiagnostics',
-                request_serializer=strategy__service__pb2.GetLiveConsumptionDiagnosticsRequest.SerializeToString,
-                response_deserializer=strategy__service__pb2.GetLiveConsumptionDiagnosticsResponse.FromString,
-                _registered_method=True)
-        self.ValidateStrategyCode = channel.unary_unary(
-                '/strategy.v1.StrategyService/ValidateStrategyCode',
-                request_serializer=strategy__service__pb2.ValidateStrategyCodeRequest.SerializeToString,
-                response_deserializer=strategy__service__pb2.ValidateStrategyCodeResponse.FromString,
-                _registered_method=True)
 
 
 class StrategyServiceServicer(object):
@@ -106,22 +96,6 @@ class StrategyServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetLiveConsumptionDiagnostics(self, request, context):
-        """GetLiveConsumptionDiagnostics returns active demo session bindings and
-        anomaly counters for operator diagnostics.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ValidateStrategyCode(self, request, context):
-        """ValidateStrategyCode statically checks saved strategy source against the
-        current runtime profile without importing or executing user code.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
 
 def add_StrategyServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -144,16 +118,6 @@ def add_StrategyServiceServicer_to_server(servicer, server):
                     servicer.StopStrategy,
                     request_deserializer=strategy__service__pb2.StopStrategyRequest.FromString,
                     response_serializer=strategy__service__pb2.StopStrategyResponse.SerializeToString,
-            ),
-            'GetLiveConsumptionDiagnostics': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetLiveConsumptionDiagnostics,
-                    request_deserializer=strategy__service__pb2.GetLiveConsumptionDiagnosticsRequest.FromString,
-                    response_serializer=strategy__service__pb2.GetLiveConsumptionDiagnosticsResponse.SerializeToString,
-            ),
-            'ValidateStrategyCode': grpc.unary_unary_rpc_method_handler(
-                    servicer.ValidateStrategyCode,
-                    request_deserializer=strategy__service__pb2.ValidateStrategyCodeRequest.FromString,
-                    response_serializer=strategy__service__pb2.ValidateStrategyCodeResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -264,60 +228,6 @@ class StrategyService(object):
             '/strategy.v1.StrategyService/StopStrategy',
             strategy__service__pb2.StopStrategyRequest.SerializeToString,
             strategy__service__pb2.StopStrategyResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetLiveConsumptionDiagnostics(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/strategy.v1.StrategyService/GetLiveConsumptionDiagnostics',
-            strategy__service__pb2.GetLiveConsumptionDiagnosticsRequest.SerializeToString,
-            strategy__service__pb2.GetLiveConsumptionDiagnosticsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ValidateStrategyCode(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/strategy.v1.StrategyService/ValidateStrategyCode',
-            strategy__service__pb2.ValidateStrategyCodeRequest.SerializeToString,
-            strategy__service__pb2.ValidateStrategyCodeResponse.FromString,
             options,
             channel_credentials,
             insecure,

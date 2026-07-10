@@ -19,12 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StrategyService_RunStrategy_FullMethodName                   = "/strategy.v1.StrategyService/RunStrategy"
-	StrategyService_PreviewRunStrategy_FullMethodName            = "/strategy.v1.StrategyService/PreviewRunStrategy"
-	StrategyService_GetStrategyStatus_FullMethodName             = "/strategy.v1.StrategyService/GetStrategyStatus"
-	StrategyService_StopStrategy_FullMethodName                  = "/strategy.v1.StrategyService/StopStrategy"
-	StrategyService_GetLiveConsumptionDiagnostics_FullMethodName = "/strategy.v1.StrategyService/GetLiveConsumptionDiagnostics"
-	StrategyService_ValidateStrategyCode_FullMethodName          = "/strategy.v1.StrategyService/ValidateStrategyCode"
+	StrategyService_RunStrategy_FullMethodName        = "/strategy.v1.StrategyService/RunStrategy"
+	StrategyService_PreviewRunStrategy_FullMethodName = "/strategy.v1.StrategyService/PreviewRunStrategy"
+	StrategyService_GetStrategyStatus_FullMethodName  = "/strategy.v1.StrategyService/GetStrategyStatus"
+	StrategyService_StopStrategy_FullMethodName       = "/strategy.v1.StrategyService/StopStrategy"
 )
 
 // StrategyServiceClient is the client API for StrategyService service.
@@ -49,12 +47,6 @@ type StrategyServiceClient interface {
 	GetStrategyStatus(ctx context.Context, in *GetStrategyStatusRequest, opts ...grpc.CallOption) (*GetStrategyStatusResponse, error)
 	// StopStrategy stops a running strategy session.
 	StopStrategy(ctx context.Context, in *StopStrategyRequest, opts ...grpc.CallOption) (*StopStrategyResponse, error)
-	// GetLiveConsumptionDiagnostics returns active demo session bindings and
-	// anomaly counters for operator diagnostics.
-	GetLiveConsumptionDiagnostics(ctx context.Context, in *GetLiveConsumptionDiagnosticsRequest, opts ...grpc.CallOption) (*GetLiveConsumptionDiagnosticsResponse, error)
-	// ValidateStrategyCode statically checks saved strategy source against the
-	// current runtime profile without importing or executing user code.
-	ValidateStrategyCode(ctx context.Context, in *ValidateStrategyCodeRequest, opts ...grpc.CallOption) (*ValidateStrategyCodeResponse, error)
 }
 
 type strategyServiceClient struct {
@@ -105,26 +97,6 @@ func (c *strategyServiceClient) StopStrategy(ctx context.Context, in *StopStrate
 	return out, nil
 }
 
-func (c *strategyServiceClient) GetLiveConsumptionDiagnostics(ctx context.Context, in *GetLiveConsumptionDiagnosticsRequest, opts ...grpc.CallOption) (*GetLiveConsumptionDiagnosticsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetLiveConsumptionDiagnosticsResponse)
-	err := c.cc.Invoke(ctx, StrategyService_GetLiveConsumptionDiagnostics_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *strategyServiceClient) ValidateStrategyCode(ctx context.Context, in *ValidateStrategyCodeRequest, opts ...grpc.CallOption) (*ValidateStrategyCodeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ValidateStrategyCodeResponse)
-	err := c.cc.Invoke(ctx, StrategyService_ValidateStrategyCode_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // StrategyServiceServer is the server API for StrategyService service.
 // All implementations must embed UnimplementedStrategyServiceServer
 // for forward compatibility.
@@ -147,12 +119,6 @@ type StrategyServiceServer interface {
 	GetStrategyStatus(context.Context, *GetStrategyStatusRequest) (*GetStrategyStatusResponse, error)
 	// StopStrategy stops a running strategy session.
 	StopStrategy(context.Context, *StopStrategyRequest) (*StopStrategyResponse, error)
-	// GetLiveConsumptionDiagnostics returns active demo session bindings and
-	// anomaly counters for operator diagnostics.
-	GetLiveConsumptionDiagnostics(context.Context, *GetLiveConsumptionDiagnosticsRequest) (*GetLiveConsumptionDiagnosticsResponse, error)
-	// ValidateStrategyCode statically checks saved strategy source against the
-	// current runtime profile without importing or executing user code.
-	ValidateStrategyCode(context.Context, *ValidateStrategyCodeRequest) (*ValidateStrategyCodeResponse, error)
 	mustEmbedUnimplementedStrategyServiceServer()
 }
 
@@ -174,12 +140,6 @@ func (UnimplementedStrategyServiceServer) GetStrategyStatus(context.Context, *Ge
 }
 func (UnimplementedStrategyServiceServer) StopStrategy(context.Context, *StopStrategyRequest) (*StopStrategyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopStrategy not implemented")
-}
-func (UnimplementedStrategyServiceServer) GetLiveConsumptionDiagnostics(context.Context, *GetLiveConsumptionDiagnosticsRequest) (*GetLiveConsumptionDiagnosticsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetLiveConsumptionDiagnostics not implemented")
-}
-func (UnimplementedStrategyServiceServer) ValidateStrategyCode(context.Context, *ValidateStrategyCodeRequest) (*ValidateStrategyCodeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ValidateStrategyCode not implemented")
 }
 func (UnimplementedStrategyServiceServer) mustEmbedUnimplementedStrategyServiceServer() {}
 func (UnimplementedStrategyServiceServer) testEmbeddedByValue()                         {}
@@ -274,42 +234,6 @@ func _StrategyService_StopStrategy_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _StrategyService_GetLiveConsumptionDiagnostics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetLiveConsumptionDiagnosticsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StrategyServiceServer).GetLiveConsumptionDiagnostics(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StrategyService_GetLiveConsumptionDiagnostics_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StrategyServiceServer).GetLiveConsumptionDiagnostics(ctx, req.(*GetLiveConsumptionDiagnosticsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StrategyService_ValidateStrategyCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ValidateStrategyCodeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StrategyServiceServer).ValidateStrategyCode(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StrategyService_ValidateStrategyCode_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StrategyServiceServer).ValidateStrategyCode(ctx, req.(*ValidateStrategyCodeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // StrategyService_ServiceDesc is the grpc.ServiceDesc for StrategyService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -332,14 +256,6 @@ var StrategyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopStrategy",
 			Handler:    _StrategyService_StopStrategy_Handler,
-		},
-		{
-			MethodName: "GetLiveConsumptionDiagnostics",
-			Handler:    _StrategyService_GetLiveConsumptionDiagnostics_Handler,
-		},
-		{
-			MethodName: "ValidateStrategyCode",
-			Handler:    _StrategyService_ValidateStrategyCode_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

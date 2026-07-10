@@ -3136,39 +3136,6 @@ def test_restore_running_sessions_fails_visible_when_list_fails(monkeypatch):
         )
 
 
-def test_get_live_consumption_diagnostics_reports_active_mode2_sessions():
-    servicer = StrategyServiceServicer("", "", {}, "127.0.0.1:9092")
-    session_id, state = servicer._sessions.create(environment=1, user_id=17)
-    state.bars_processed = 12
-    state.configure_live_runtime(
-        portfolio_id=303,
-        strategy_id=404,
-        required_streams=[
-            StreamBinding(21, "binance", "futures", "kline", "BTCUSDT", "1m")
-        ],
-        consumer_group="strategy-session-404-session-live",
-    )
-    state.note_lease_heartbeat(now_ms=1_700_000_000_000)
-    state.record_unroutable("unroutable live kline: BTCUSDT futures 1m", now_ms=1_700_000_000_100)
-    servicer._sessions.create(environment=0, user_id=18)
-
-    resp = servicer.GetLiveConsumptionDiagnostics(pb2.GetLiveConsumptionDiagnosticsRequest(), _FakeContext())
-
-    assert len(resp.sessions) == 1
-    session = resp.sessions[0]
-    assert session.session_id == session_id
-    assert session.user_id == 17
-    assert session.portfolio_id == 303
-    assert session.strategy_id == 404
-    assert session.consumer_group == "strategy-session-404-session-live"
-    assert session.unroutable_events == 1
-    assert session.last_unroutable_reason == "unroutable live kline: BTCUSDT futures 1m"
-    assert session.last_lease_heartbeat_at_ms == 1_700_000_000_000
-    assert [(stream.stream_id, stream.symbol, stream.market) for stream in session.streams] == [
-        (21, "BTCUSDT", "futures")
-    ]
-
-
 def test_live_stream_preflight_requires_running_live_and_fresh_streams():
     """Module-level preflight: per-declared-input lookup, running + fresh ⇒ ok."""
     from strategy_service.inputs import StrategyInput

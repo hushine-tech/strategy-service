@@ -2383,34 +2383,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         return False, "stop_and_close_failed:spot_open_orders_remaining"
         return True, ""
 
-    # ── ValidateStrategyCode ─────────────────────────────────────────────────
-
-    def ValidateStrategyCode(self, request, context):
-        user_id = int(getattr(request, "user_id", 0) or 0)
-        if user_id <= 0:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("user_id is required")
-            return pb2.ValidateStrategyCodeResponse(ok=False)
-        if not self._enforce_user_binding(user_id, context):
-            return pb2.ValidateStrategyCodeResponse(ok=False)
-
-        result = validate_strategy_code(request.code or "")
-        return pb2.ValidateStrategyCodeResponse(
-            ok=result.ok,
-            issues=[
-                pb2.StrategyValidationIssue(
-                    code=issue.code,
-                    message=issue.message,
-                    module=issue.module,
-                    line=issue.line,
-                )
-                for issue in result.issues
-            ],
-            runtime_version=result.runtime_version,
-            runtime_profile=result.runtime_profile,
-            allowed_third_party_modules=result.allowed_third_party_modules,
-        )
-
     # ── PreviewRunStrategy ───────────────────────────────────────────────────
     #
     # Same code path as RunStrategy up through preflight, but no session
@@ -2676,37 +2648,3 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             required_routes,
             effective_risk,
         )
-
-    def GetLiveConsumptionDiagnostics(self, request, context):
-        del request, context
-        sessions: list[pb2.LiveSessionDiagnostic] = []
-        for session_id, state in self._sessions.list_active_live_sessions():
-            sessions.append(
-                pb2.LiveSessionDiagnostic(
-                    session_id=session_id,
-                    user_id=state.user_id,
-                    portfolio_id=state.portfolio_id,
-                    strategy_id=state.strategy_id,
-                    portfolio_environment=state.environment,
-                    status=state.status,
-                    bars_processed=state.bars_processed,
-                    error=state.error,
-                    consumer_group=state.live_consumer_group,
-                    streams=[
-                        pb2.LiveStreamBinding(
-                            stream_id=binding.stream_id,
-                            exchange=binding.exchange,
-                            market=binding.market,
-                            kind=binding.kind,
-                            symbol=binding.symbol,
-                            interval=binding.interval,
-                        )
-                        for binding in state.required_streams
-                    ],
-                    unroutable_events=state.unroutable_events,
-                    last_unroutable_at_ms=state.last_unroutable_at_ms,
-                    last_unroutable_reason=state.last_unroutable_reason,
-                    last_lease_heartbeat_at_ms=state.lease_heartbeat_at_ms,
-                )
-            )
-        return pb2.GetLiveConsumptionDiagnosticsResponse(sessions=sessions)
