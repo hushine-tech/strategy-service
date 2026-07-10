@@ -3,6 +3,7 @@ package runtimeagent
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -348,6 +349,54 @@ func TestIndicatorSyncManagerFinalizes2049As1024Plus1024PlusOne(t *testing.T) {
 	for index, want := range []int32{1024, 1024, 1} {
 		if chunks[index].GetChunkIndex() != int32(index) || chunks[index].GetCount() != want || !chunks[index].GetFinalized() {
 			t.Fatalf("chunk %d = %+v, want finalized count %d", index, chunks[index], want)
+		}
+	}
+}
+
+func TestIndicatorSyncManagerKeepsMultipleSymbolsAndIntervalsIndependent(t *testing.T) {
+	platform := &indicatorSyncPlatform{}
+	manager := newIndicatorSyncManager(platform, 1024)
+	streams := []struct {
+		key   string
+		count int64
+	}{
+		{key: "binance:perpetual_futures:BTCUSDT:1m", count: 1025},
+		{key: "binance:perpetual_futures:BTCUSDT:5m", count: 1023},
+		{key: "binance:perpetual_futures:ETHUSDT:1m", count: 1024},
+	}
+	for _, stream := range streams {
+		for marketTime := int64(1); marketTime <= stream.count; marketTime++ {
+			frame := indicatorSyncFrame("sess-1", marketTime)
+			frame.StreamKey = stream.key
+			if err := manager.ReceiveFrame(frame); err != nil {
+				t.Fatalf("ReceiveFrame %s/%d: %v", stream.key, marketTime, err)
+			}
+		}
+	}
+	if err := manager.FinalizeSession(context.Background(), "sess-1"); err != nil {
+		t.Fatalf("FinalizeSession: %v", err)
+	}
+	requests, _ := platform.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("platform calls = %d, want 1", len(requests))
+	}
+	if len(requests[0].GetDefinitions()) != 3 {
+		t.Fatalf("definitions = %+v, want one per stream", requests[0].GetDefinitions())
+	}
+	got := map[string][]int32{}
+	for _, chunk := range requests[0].GetChunks() {
+		if !chunk.GetFinalized() {
+			t.Fatalf("chunk remained open: %+v", chunk)
+		}
+		got[chunk.GetStreamKey()] = append(got[chunk.GetStreamKey()], chunk.GetCount())
+	}
+	for streamKey, want := range map[string][]int32{
+		"binance:perpetual_futures:BTCUSDT:1m": {1024, 1},
+		"binance:perpetual_futures:BTCUSDT:5m": {1023},
+		"binance:perpetual_futures:ETHUSDT:1m": {1024},
+	} {
+		if !reflect.DeepEqual(got[streamKey], want) {
+			t.Fatalf("stream %s counts = %v, want %v", streamKey, got[streamKey], want)
 		}
 	}
 }

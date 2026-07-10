@@ -155,6 +155,7 @@ def _build_servicer(
         restore_running_sessions=False,
         platform_proxy=platform_proxy,
         notification_client=platform_proxy.notification_client(),
+        agent_managed_final_status=True,
     )
     data_source = WorkerAgentDataSource(client)
     servicer.set_runtime_data_source(data_source)

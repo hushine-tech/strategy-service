@@ -462,6 +462,25 @@ func TestAgentFinalStatusPreservesFailedStatus(t *testing.T) {
 	}
 }
 
+func TestAgentFinalStatusRejectsNonTerminalStatus(t *testing.T) {
+	invoker := &agentFinalPlatform{}
+	agent := NewAgent(AgentConfig{RuntimeID: "rt-1", PlatformInvoker: invoker})
+	var ack *rwv1.AgentFrame
+	err := agent.HandleWorkerFrame(context.Background(), "sess-1", &rwv1.WorkerFrame{
+		FrameId: "final-1",
+		Payload: &rwv1.WorkerFrame_FinalStatus{FinalStatus: &rwv1.FinalStatus{
+			SessionId: "sess-1", Status: "running", BarsProcessed: 17,
+		}},
+	}, func(frame *rwv1.AgentFrame) error { ack = frame; return nil })
+	if err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("HandleWorkerFrame error = %v, want terminal-status rejection", err)
+	}
+	methods, _ := invoker.snapshot()
+	if len(methods) != 0 || ack != nil {
+		t.Fatalf("methods/ack = %v/%+v, want no side effects", methods, ack)
+	}
+}
+
 func TestAgentCleanupForgetsOnlyRequestedIndicatorSession(t *testing.T) {
 	agent := NewAgent(AgentConfig{})
 	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {

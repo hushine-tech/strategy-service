@@ -608,6 +608,11 @@ func (a *Agent) handleWorkerFinalStatus(
 	if statusValue == "completed" {
 		statusValue = "finished"
 	}
+	switch statusValue {
+	case "finished", "failed", "stopped", "stop_failed", "recoverable":
+	default:
+		return fmt.Errorf("final status must be terminal, got %q", status.GetStatus())
+	}
 	flushCtx := ctx
 	var cancel context.CancelFunc
 	if a.cfg.IndicatorFinalizeTimeout > 0 {
@@ -626,9 +631,6 @@ func (a *Agent) handleWorkerFinalStatus(
 				Code: "INDICATOR_FINALIZATION_FAILED", Message: message,
 			}},
 		})
-	}
-	if statusValue == "" {
-		return fmt.Errorf("final status value is required")
 	}
 	if err := a.updateSession(ctx, sessionID, statusValue, status.GetBarsProcessed(), status.GetError()); err != nil {
 		return err

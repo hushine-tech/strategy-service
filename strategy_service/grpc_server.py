@@ -79,6 +79,7 @@ DEFAULT_FRESHNESS_GRACE_SECONDS = 30
 DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
 DEFAULT_SESSION_LEVERAGE = 1.0
+TERMINAL_SESSION_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
 
 
 def _strategy_validation_error(code: str | None) -> str:
@@ -548,6 +549,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         restore_running_sessions: bool = True,
         platform_proxy: Any | None = None,
         notification_client: Any | None = None,
+        agent_managed_final_status: bool = False,
     ) -> None:
         self._portfolio_addr = portfolio_service_addr
         self._market_data_addr = market_data_control_panel_addr
@@ -568,6 +570,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._platform_access_mode = PLATFORM_ACCESS_PROXY_ONLY
         self._platform_proxy = platform_proxy
         self._notification_client = notification_client
+        self._agent_managed_final_status = bool(agent_managed_final_status)
         self._runtime_data_source = None
         self._indicator_frame_sink: Callable[..., None] | None = None
         self._preflight_enabled = bool(self._market_data_policy.get("preflight_enabled", True))
@@ -1392,22 +1395,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                             state.error = "; ".join(finalization_errors)
                         elif not state.error:
                             state.error = "; ".join(finalization_errors)
-                if not acct_client.update_session(
-                    session_id=session_id,
-                    status=state.status,
-                    bars_processed=state.bars_processed,
-                    error=state.error,
-                    runtime_id=state.runtime_id,
-                ):
-                    logger.warning("session %s: failed to persist final session status", session_id)
-                    _safe_send_session_status_patch(
-                        self._platform_proxy,
-                        session_id=session_id,
-                        status=state.status,
-                        bars_processed=state.bars_processed,
-                        error=state.error,
-                        runtime_id=state.runtime_id,
-                    )
+                self._persist_session_status(session_id, state, fallback_patch=True)
                 self._sessions.mark_terminal(session_id)
             except Exception:
                 logger.warning("session %s: failed to finalize", session_id, exc_info=True)
@@ -1925,7 +1913,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 "platform live delivery is not configured; "
                 "FetchKlines fallback is disabled for demo/live execution"
             )
-        acct_client = self._portfolio_client()
         canonical_by_stream = {
             _stream_key(stream.market, stream.symbol, stream.interval): (
                 stream.canonical_market or stream.market
@@ -1966,20 +1953,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     self._record_unroutable_live_kline(session_id, state, kline)
                 with state._lock:
                     state.bars_processed += 1
-                    bars_processed = state.bars_processed
-                    status = state.status
-                    error = state.error
-                    runtime_id = state.runtime_id
                 try:
-                    ok = acct_client.update_session(
-                        session_id=session_id,
-                        status=status,
-                        bars_processed=bars_processed,
-                        error=error,
-                        runtime_id=runtime_id,
-                    )
-                    if not ok:
-                        logger.warning("session %s: failed to update live progress", session_id)
+                    self._persist_session_status(session_id, state)
                 except Exception:  # noqa: BLE001
                     logger.warning("session %s: failed to update live progress", session_id, exc_info=True)
         finally:
@@ -2173,16 +2148,35 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._halt_session_runtime(state, finalize=True)
         return pb2.StopStrategyResponse(stopped=True)
 
-    def _persist_session_status(self, session_id: str, state: SessionState) -> None:
+    def _persist_session_status(
+        self,
+        session_id: str,
+        state: SessionState,
+        *,
+        fallback_patch: bool = False,
+    ) -> bool:
+        if self._agent_managed_final_status and state.status in TERMINAL_SESSION_STATUSES:
+            return True
         acct_client = self._portfolio_client()
-        if not acct_client.update_session(
+        ok = acct_client.update_session(
             session_id=session_id,
             status=state.status,
             bars_processed=state.bars_processed,
             error=state.error,
             runtime_id=state.runtime_id,
-        ):
+        )
+        if not ok:
             logger.warning("session %s: failed to persist status=%s", session_id, state.status)
+            if fallback_patch:
+                _safe_send_session_status_patch(
+                    self._platform_proxy,
+                    session_id=session_id,
+                    status=state.status,
+                    bars_processed=state.bars_processed,
+                    error=state.error,
+                    runtime_id=state.runtime_id,
+                )
+        return bool(ok)
 
     @staticmethod
     def _halt_session_runtime(state: SessionState, *, finalize: bool) -> None:
