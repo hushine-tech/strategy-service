@@ -1218,7 +1218,7 @@ def test_run_live_initializes_runtime_channel_delivery(monkeypatch):
 
     monkeypatch.setitem(
         sys.modules,
-        "strategy_service.data_loop",
+        "strategy_service.marketdata_adapter",
         types.SimpleNamespace(
             _adapt_kline=lambda kline, market=None: SimpleNamespace(
                 symbol=kline.symbol,

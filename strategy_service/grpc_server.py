@@ -1794,7 +1794,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             state.transition("failed", error="start_time_ms and end_time_ms are required for backtest portfolios")
             return
 
-        from strategy_service.data_loop import _adapt_kline
+        from strategy_service.marketdata_adapter import _adapt_kline
 
         required_streams = [
             StreamBinding(
@@ -1871,7 +1871,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         engine: StrategyEngine,
     ) -> None:
         import threading as _threading
-        from strategy_service.data_loop import _adapt_kline
+        from strategy_service.marketdata_adapter import _adapt_kline
 
         if state.environment == 1 and self._lease_management_enabled:
             if not self._renew_stream_leases_once(session_id, state):
