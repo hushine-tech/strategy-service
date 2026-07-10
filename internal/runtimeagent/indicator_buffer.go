@@ -24,13 +24,36 @@ type IndicatorChunk struct {
 	Finalized   bool
 }
 
+type IndicatorPointDisposition int
+
+const (
+	IndicatorPointAccepted IndicatorPointDisposition = iota
+	IndicatorPointDuplicate
+	IndicatorPointOutOfOrder
+)
+
+type IndicatorAddResult struct {
+	Disposition IndicatorPointDisposition
+	Sealed      bool
+}
+
+type IndicatorFlushSnapshot struct {
+	Finals         []IndicatorChunk
+	Open           IndicatorChunk
+	OpenGeneration uint64
+}
+
 type IndicatorBuffer struct {
-	mu        sync.Mutex
-	limit     int
-	kind      string
-	active    IndicatorChunk
-	activeRaw []string
-	pending   map[int]IndicatorChunk
+	mu               sync.Mutex
+	limit            int
+	kind             string
+	active           IndicatorChunk
+	activeRaw        []string
+	pending          map[int]IndicatorChunk
+	dirty            bool
+	generation       uint64
+	lastMarketTimeMS int64
+	hasMarketTime    bool
 }
 
 func NewIndicatorBuffer(limit int) *IndicatorBuffer {
@@ -52,9 +75,22 @@ func NewIndicatorBufferForType(limit int, kind string) *IndicatorBuffer {
 	}
 }
 
-func (b *IndicatorBuffer) AddPoint(point IndicatorPoint) bool {
+func (b *IndicatorBuffer) AddPoint(point IndicatorPoint) IndicatorAddResult {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	if b.hasMarketTime {
+		if point.MarketTimeMS == b.lastMarketTimeMS {
+			return IndicatorAddResult{Disposition: IndicatorPointDuplicate}
+		}
+		if point.MarketTimeMS < b.lastMarketTimeMS {
+			return IndicatorAddResult{Disposition: IndicatorPointOutOfOrder}
+		}
+	}
+	b.lastMarketTimeMS = point.MarketTimeMS
+	b.hasMarketTime = true
+	b.generation++
+	b.dirty = true
 
 	if b.active.Count == 0 {
 		b.active.StartTimeMS = point.MarketTimeMS
@@ -71,21 +107,75 @@ func (b *IndicatorBuffer) AddPoint(point IndicatorPoint) bool {
 	}
 
 	if b.active.Count < b.limit {
-		return false
+		return IndicatorAddResult{Disposition: IndicatorPointAccepted}
 	}
 
-	sealed := b.active
-	sealed.Finalized = true
-	b.pending[sealed.ChunkIndex] = sealed
-	b.active = IndicatorChunk{ChunkIndex: sealed.ChunkIndex + 1}
-	b.activeRaw = nil
+	b.sealOpenLocked()
+	return IndicatorAddResult{Disposition: IndicatorPointAccepted, Sealed: true}
+}
+
+func (b *IndicatorBuffer) SnapshotDirtyForFlush() IndicatorFlushSnapshot {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	snapshot := IndicatorFlushSnapshot{
+		Finals:         b.pendingChunksLocked(),
+		OpenGeneration: b.generation,
+	}
+	if b.dirty && b.active.Count > 0 {
+		snapshot.Open = b.active
+		snapshot.Open.Finalized = false
+	}
+	return snapshot
+}
+
+func (b *IndicatorBuffer) SealOpen() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.active.Count == 0 {
+		return false
+	}
+	b.generation++
+	b.sealOpenLocked()
 	return true
 }
 
+func (b *IndicatorBuffer) MarkFlushAcked(snapshot IndicatorFlushSnapshot) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, chunk := range snapshot.Finals {
+		delete(b.pending, chunk.ChunkIndex)
+	}
+	if snapshot.Open.Count > 0 &&
+		snapshot.OpenGeneration == b.generation &&
+		snapshot.Open.ChunkIndex == b.active.ChunkIndex {
+		b.dirty = false
+	}
+}
+
+// SnapshotForFlush is kept until all callers move to dirty snapshots.
 func (b *IndicatorBuffer) SnapshotForFlush() ([]IndicatorChunk, IndicatorChunk) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	open := b.active
+	open.Finalized = false
+	return b.pendingChunksLocked(), open
+}
+
+// MarkFinalizedAcked is kept until all callers move to exact snapshot ACKs.
+func (b *IndicatorBuffer) MarkFinalizedAcked(indexes []int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, index := range indexes {
+		delete(b.pending, index)
+	}
+}
+
+func (b *IndicatorBuffer) pendingChunksLocked() []IndicatorChunk {
 	indexes := make([]int, 0, len(b.pending))
 	for index := range b.pending {
 		indexes = append(indexes, index)
@@ -95,18 +185,16 @@ func (b *IndicatorBuffer) SnapshotForFlush() ([]IndicatorChunk, IndicatorChunk) 
 	for _, index := range indexes {
 		finals = append(finals, b.pending[index])
 	}
-	open := b.active
-	open.Finalized = false
-	return finals, open
+	return finals
 }
 
-func (b *IndicatorBuffer) MarkFinalizedAcked(indexes []int) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	for _, index := range indexes {
-		delete(b.pending, index)
-	}
+func (b *IndicatorBuffer) sealOpenLocked() {
+	sealed := b.active
+	sealed.Finalized = true
+	b.pending[sealed.ChunkIndex] = sealed
+	b.active = IndicatorChunk{ChunkIndex: sealed.ChunkIndex + 1}
+	b.activeRaw = nil
+	b.dirty = false
 }
 
 func normalizeJSONValue(value string) string {
