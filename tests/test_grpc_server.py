@@ -1386,7 +1386,8 @@ def test_run_strategy_rejects_strategy_missing_inputs_declaration(monkeypatch):
     # No session created, no save_session call, RPC returns FAILED_PRECONDITION.
     assert resp.session_id == ""
     assert context.code == grpc.StatusCode.FAILED_PRECONDITION
-    assert "input declaration invalid" in context.details
+    assert context.details.startswith("strategy code validation failed: ")
+    assert '"code":"missing_inputs"' in context.details
     assert calls["save_session"] == 0
     assert servicer._sessions._sessions == {}
 
@@ -4709,4 +4710,35 @@ def test_preview_run_strategy_rejects_invalid_declaration(monkeypatch):
 
     assert resp.profile == ""
     assert context.code == grpc.StatusCode.FAILED_PRECONDITION
-    assert "input declaration invalid" in context.details
+    assert context.details.startswith("strategy code validation failed: ")
+    assert '"code":"missing_inputs"' in context.details
+
+
+@pytest.mark.parametrize("method_name", ["RunStrategy", "PreviewRunStrategy"])
+def test_run_and_preview_reject_saved_code_with_same_validation_error(monkeypatch, method_name):
+    strategy_code = (
+        "import talib\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, _ = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=strategy_code,
+    )
+    request = SimpleNamespace(
+        portfolio_id=303,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    getattr(servicer, method_name)(request, context)
+
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details == grpc_server._strategy_validation_error(strategy_code)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import threading
@@ -78,6 +79,29 @@ DEFAULT_FRESHNESS_GRACE_SECONDS = 30
 DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
 DEFAULT_SESSION_LEVERAGE = 1.0
+
+
+def _strategy_validation_error(code: str | None) -> str:
+    """Return stable validation details for saved strategy source code."""
+    if code is None:
+        return ""
+    result = validate_strategy_code(code)
+    if result.ok:
+        return ""
+    issues = [
+        {
+            "code": issue.code,
+            "message": issue.message,
+            "module": issue.module,
+            "line": issue.line,
+        }
+        for issue in result.issues
+    ]
+    return "strategy code validation failed: " + json.dumps(
+        issues,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 RESTORE_RUNNING_SESSIONS_RETRIES = 5
 RESTORE_RUNNING_SESSIONS_RETRY_SECONDS = 1.0
 PLATFORM_ACCESS_PROXY_ONLY = "proxy_only"
@@ -954,6 +978,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         except DebugStrategySourceError as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"failed to materialize bare debug strategy source: {e}")
+            return pb2.RunStrategyResponse()
+
+        validation_error = _strategy_validation_error(strategy_code)
+        if validation_error:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(validation_error)
             return pb2.RunStrategyResponse()
 
         # Resolve the strategy's declared input universe. Per pre_C3
@@ -2546,6 +2576,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         except DebugStrategySourceError as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"failed to materialize bare debug strategy source: {e}")
+            return pb2.PreviewRunStrategyResponse()
+
+        validation_error = _strategy_validation_error(strategy_code)
+        if validation_error:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(validation_error)
             return pb2.PreviewRunStrategyResponse()
 
         try:
