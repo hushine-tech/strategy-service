@@ -3,6 +3,8 @@ package runtimeagent
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -317,7 +319,7 @@ func TestAgentRuntimeDataReturnsDeliveryError(t *testing.T) {
 	}
 }
 
-func TestAgentIndicatorFrameUpsertsOpenChunkThroughPlatform(t *testing.T) {
+func TestAgentIndicatorFrameBuffersWithoutImmediatePlatformWrite(t *testing.T) {
 	invoker := &fakePlatformInvoker{}
 	agent := NewAgent(AgentConfig{
 		PlatformInvoker: invoker,
@@ -348,6 +350,12 @@ func TestAgentIndicatorFrameUpsertsOpenChunkThroughPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleWorkerFrame indicator: %v", err)
 	}
+	if invoker.method != "" {
+		t.Fatalf("platform method = %q before flush, want empty", invoker.method)
+	}
+	if err := agent.indicatorSync.FlushSession(context.Background(), "sess-1", false); err != nil {
+		t.Fatalf("FlushSession: %v", err)
+	}
 
 	if invoker.method != "portfolio.SaveStrategyIndicators" {
 		t.Fatalf("platform method = %q", invoker.method)
@@ -371,6 +379,103 @@ func TestAgentIndicatorFrameUpsertsOpenChunkThroughPlatform(t *testing.T) {
 	}
 	if chunk.GetValuesJson() != `{"values":[100.5],"times":null}` {
 		t.Fatalf("values_json = %q", chunk.GetValuesJson())
+	}
+}
+
+func TestAgentFinalStatusFlushesThenPersistsFinishedThenAcknowledges(t *testing.T) {
+	invoker := &agentFinalPlatform{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", PlatformInvoker: invoker,
+		IndicatorFinalizeTimeout: time.Second, IndicatorRetryInitial: time.Millisecond,
+	})
+	bufferAgentIndicator(t, agent, "sess-1")
+	var ack *rwv1.AgentFrame
+	err := agent.HandleWorkerFrame(context.Background(), "sess-1", &rwv1.WorkerFrame{
+		FrameId: "final-1",
+		Payload: &rwv1.WorkerFrame_FinalStatus{FinalStatus: &rwv1.FinalStatus{
+			SessionId: "sess-1", Status: "finished", BarsProcessed: 1440,
+		}},
+	}, func(frame *rwv1.AgentFrame) error { ack = frame; return nil })
+	if err != nil {
+		t.Fatalf("HandleWorkerFrame final: %v", err)
+	}
+	methods, updates := invoker.snapshot()
+	if len(methods) != 2 || methods[0] != "portfolio.SaveStrategyIndicators" || methods[1] != "portfolio.UpdateSession" {
+		t.Fatalf("platform methods = %v", methods)
+	}
+	if len(updates) != 1 || updates[0].GetStatus() != "finished" || updates[0].GetBarsProcessed() != 1440 {
+		t.Fatalf("updates = %+v", updates)
+	}
+	if ack == nil || ack.GetReplyTo() != "final-1" || ack.GetPayload() != nil {
+		t.Fatalf("ack = %+v, want payloadless reply_to final-1", ack)
+	}
+}
+
+func TestAgentFinalStatusFlushFailurePersistsRecoverableAndReturnsErrorAck(t *testing.T) {
+	invoker := &agentFinalPlatform{saveErr: errors.New("database unavailable")}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", PlatformInvoker: invoker,
+		IndicatorFinalizeTimeout: 10 * time.Millisecond,
+		IndicatorRetryInitial:    time.Millisecond, IndicatorRetryMax: 2 * time.Millisecond,
+	})
+	bufferAgentIndicator(t, agent, "sess-1")
+	var ack *rwv1.AgentFrame
+	err := agent.HandleWorkerFrame(context.Background(), "sess-1", &rwv1.WorkerFrame{
+		FrameId: "final-1",
+		Payload: &rwv1.WorkerFrame_FinalStatus{FinalStatus: &rwv1.FinalStatus{
+			SessionId: "sess-1", Status: "finished", BarsProcessed: 1440,
+		}},
+	}, func(frame *rwv1.AgentFrame) error { ack = frame; return nil })
+	if err != nil {
+		t.Fatalf("HandleWorkerFrame final: %v", err)
+	}
+	_, updates := invoker.snapshot()
+	if len(updates) != 1 || updates[0].GetStatus() != "recoverable" ||
+		!strings.HasPrefix(updates[0].GetError(), "indicator finalization failed:") {
+		t.Fatalf("updates = %+v", updates)
+	}
+	if ack == nil || ack.GetReplyTo() != "final-1" || ack.GetError().GetCode() != "INDICATOR_FINALIZATION_FAILED" {
+		t.Fatalf("ack = %+v", ack)
+	}
+}
+
+func TestAgentFinalStatusPreservesFailedStatus(t *testing.T) {
+	invoker := &agentFinalPlatform{}
+	agent := NewAgent(AgentConfig{RuntimeID: "rt-1", PlatformInvoker: invoker})
+	bufferAgentIndicator(t, agent, "sess-1")
+	var ack *rwv1.AgentFrame
+	err := agent.HandleWorkerFrame(context.Background(), "sess-1", &rwv1.WorkerFrame{
+		FrameId: "final-1",
+		Payload: &rwv1.WorkerFrame_FinalStatus{FinalStatus: &rwv1.FinalStatus{
+			SessionId: "sess-1", Status: "failed", BarsProcessed: 17, Error: "strategy error",
+		}},
+	}, func(frame *rwv1.AgentFrame) error { ack = frame; return nil })
+	if err != nil {
+		t.Fatalf("HandleWorkerFrame final: %v", err)
+	}
+	_, updates := invoker.snapshot()
+	if len(updates) != 1 || updates[0].GetStatus() != "failed" || updates[0].GetError() != "strategy error" {
+		t.Fatalf("updates = %+v", updates)
+	}
+	if ack == nil || ack.GetReplyTo() != "final-1" || ack.GetPayload() != nil {
+		t.Fatalf("ack = %+v", ack)
+	}
+}
+
+func TestAgentCleanupForgetsOnlyRequestedIndicatorSession(t *testing.T) {
+	agent := NewAgent(AgentConfig{})
+	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
+		t.Fatalf("ReceiveFrame old: %v", err)
+	}
+	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-new")); err != nil {
+		t.Fatalf("ReceiveFrame new: %v", err)
+	}
+	agent.cleanupSessionState("sess-old", "test cleanup")
+	if agent.indicatorSync.lookupSession("sess-old") != nil {
+		t.Fatal("old session indicator state was not cleared")
+	}
+	if agent.indicatorSync.lookupSession("sess-new") == nil {
+		t.Fatal("new session indicator state was cleared")
 	}
 }
 
@@ -418,7 +523,9 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 		StartTimeout:    time.Second,
 		RequestTimeout:  time.Second,
 	})
-	agent.indicatorBuffers[indicatorStateKey("sess-old", "futures:ZECUSDT:1m", "bb_mid")] = NewIndicatorBufferForType(1024, "line")
+	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
+		t.Fatalf("ReceiveFrame old indicators: %v", err)
+	}
 	agent.ready["sess-old"] = make(chan struct{}, 1)
 	starter.onStart = func(pendingSessionID string) {
 		go func() {
@@ -448,7 +555,7 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 	if updateReq.GetError() == "" {
 		t.Fatalf("update session error should explain local bare restart")
 	}
-	if _, ok := agent.indicatorBuffers[indicatorStateKey("sess-old", "futures:ZECUSDT:1m", "bb_mid")]; ok {
+	if agent.indicatorSync.lookupSession("sess-old") != nil {
 		t.Fatalf("old session indicator buffer was not cleared")
 	}
 	if _, ok := agent.ready["sess-old"]; ok {
@@ -639,6 +746,66 @@ func (s *fakeWorkerStarter) StartSessionWorker(ctx context.Context, sessionID st
 		s.onStart(sessionID)
 	}
 	return &ManagedWorker{SessionID: sessionID}, nil
+}
+
+type agentFinalPlatform struct {
+	mu      sync.Mutex
+	methods []string
+	updates []*portfoliov1.UpdateSessionRequest
+	saveErr error
+}
+
+func (p *agentFinalPlatform) InvokePlatformAny(_ context.Context, method string, request *anypb.Any, _ time.Duration) (*anypb.Any, error) {
+	p.mu.Lock()
+	p.methods = append(p.methods, method)
+	p.mu.Unlock()
+	switch method {
+	case "portfolio.SaveStrategyIndicators":
+		if p.saveErr != nil {
+			return nil, p.saveErr
+		}
+		return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{DefinitionsSaved: 1, ChunksSaved: 1})
+	case "portfolio.UpdateSession":
+		update := &portfoliov1.UpdateSessionRequest{}
+		if err := request.UnmarshalTo(update); err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		p.updates = append(p.updates, update)
+		p.mu.Unlock()
+		return anypb.New(&portfoliov1.UpdateSessionResponse{})
+	default:
+		return nil, errors.New("unexpected method: " + method)
+	}
+}
+
+func (p *agentFinalPlatform) snapshot() ([]string, []*portfoliov1.UpdateSessionRequest) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	methods := append([]string(nil), p.methods...)
+	updates := append([]*portfoliov1.UpdateSessionRequest(nil), p.updates...)
+	return methods, updates
+}
+
+func bufferAgentIndicator(t *testing.T, agent *Agent, sessionID string) {
+	t.Helper()
+	err := agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+		Payload: &rwv1.WorkerFrame_IndicatorFrame{IndicatorFrame: agentIndicatorFrame(sessionID)},
+	}, nil)
+	if err != nil {
+		t.Fatalf("buffer indicator: %v", err)
+	}
+}
+
+func agentIndicatorFrame(sessionID string) *rwv1.IndicatorFrame {
+	return &rwv1.IndicatorFrame{
+		SessionId: sessionID, UserId: 6, StrategyId: 12,
+		StreamKey: "futures:ZECUSDT:1m", MarketTimeMs: 123000, IntervalMs: 60000,
+		Definitions: []*rwv1.IndicatorDefinition{{
+			IndicatorKey: "bb_mid", Name: "BB Mid", Type: "line", Pane: "price",
+		}},
+		Values: []*rwv1.IndicatorValue{{IndicatorKey: "bb_mid", Value: 100.5, HasValue: true}},
+	}
 }
 
 type fakePlatformInvoker struct {

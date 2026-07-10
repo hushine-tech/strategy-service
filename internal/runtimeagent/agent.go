@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,17 +37,21 @@ type WorkerSessionBinder interface {
 }
 
 type AgentConfig struct {
-	RuntimeID       string
-	RuntimeSource   string
-	RuntimeName     string
-	UserID          int64
-	WorkerStarter   WorkerStarter
-	WorkerStopper   WorkerStopper
-	PlatformInvoker PlatformInvoker
-	WorkerSender    WorkerSender
-	StartTimeout    time.Duration
-	RequestTimeout  time.Duration
-	IndicatorLimit  int
+	RuntimeID                string
+	RuntimeSource            string
+	RuntimeName              string
+	UserID                   int64
+	WorkerStarter            WorkerStarter
+	WorkerStopper            WorkerStopper
+	PlatformInvoker          PlatformInvoker
+	WorkerSender             WorkerSender
+	StartTimeout             time.Duration
+	RequestTimeout           time.Duration
+	IndicatorLimit           int
+	IndicatorFlushInterval   time.Duration
+	IndicatorFinalizeTimeout time.Duration
+	IndicatorRetryInitial    time.Duration
+	IndicatorRetryMax        time.Duration
 }
 
 type Agent struct {
@@ -60,8 +63,7 @@ type Agent struct {
 	workerCallReply   map[string]chan *rwv1.PlatformCallResult
 	workerCallSession map[string]string
 	runRequests       map[string]*anypb.Any
-	indicatorBuffers  map[string]*IndicatorBuffer
-	indicatorTypes    map[string]string
+	indicatorSync     *IndicatorSyncManager
 }
 
 type pendingSessionStart struct {
@@ -77,16 +79,28 @@ func NewAgent(cfg AgentConfig) *Agent {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
-	return &Agent{
+	agent := &Agent{
 		cfg:               cfg,
 		pending:           map[string]*pendingSessionStart{},
 		ready:             map[string]chan struct{}{},
 		workerCallReply:   map[string]chan *rwv1.PlatformCallResult{},
 		workerCallSession: map[string]string{},
 		runRequests:       map[string]*anypb.Any{},
-		indicatorBuffers:  map[string]*IndicatorBuffer{},
-		indicatorTypes:    map[string]string{},
 	}
+	agent.indicatorSync = NewIndicatorSyncManager(IndicatorSyncConfig{
+		PlatformInvoker: cfg.PlatformInvoker,
+		IndicatorLimit:  cfg.IndicatorLimit,
+		FlushInterval:   cfg.IndicatorFlushInterval,
+		RequestTimeout:  cfg.RequestTimeout,
+		FinalizeTimeout: cfg.IndicatorFinalizeTimeout,
+		RetryInitial:    cfg.IndicatorRetryInitial,
+		RetryMax:        cfg.IndicatorRetryMax,
+	})
+	return agent
+}
+
+func (a *Agent) RunSyncLoop(ctx context.Context) {
+	a.indicatorSync.Run(ctx)
 }
 
 type RestartSessionOptions struct {
@@ -349,17 +363,6 @@ func (a *Agent) cleanupSessionState(sessionID string, reason string) {
 	delete(a.pending, sessionID)
 	delete(a.ready, sessionID)
 	delete(a.runRequests, sessionID)
-	prefix := sessionID + "\x00"
-	for key := range a.indicatorBuffers {
-		if strings.HasPrefix(key, prefix) {
-			delete(a.indicatorBuffers, key)
-		}
-	}
-	for key := range a.indicatorTypes {
-		if strings.HasPrefix(key, prefix) {
-			delete(a.indicatorTypes, key)
-		}
-	}
 	for callID, callSessionID := range a.workerCallSession {
 		if callSessionID != sessionID {
 			continue
@@ -371,6 +374,7 @@ func (a *Agent) cleanupSessionState(sessionID string, reason string) {
 		delete(a.workerCallSession, callID)
 	}
 	a.mu.Unlock()
+	a.indicatorSync.ForgetSession(context.Background(), sessionID)
 	if strings.TrimSpace(reason) == "" {
 		reason = "session worker was restarted"
 	}
@@ -439,7 +443,6 @@ func (a *Agent) HandleWorkerFrame(
 	frame *rwv1.WorkerFrame,
 	send func(*rwv1.AgentFrame) error,
 ) error {
-	_ = ctx
 	if frame == nil {
 		return nil
 	}
@@ -525,7 +528,9 @@ func (a *Agent) HandleWorkerFrame(
 			}
 		}
 	case *rwv1.WorkerFrame_IndicatorFrame:
-		return a.handleWorkerIndicatorFrame(ctx, frame.GetIndicatorFrame())
+		return a.indicatorSync.ReceiveFrame(frame.GetIndicatorFrame())
+	case *rwv1.WorkerFrame_FinalStatus:
+		return a.handleWorkerFinalStatus(ctx, frame.GetFrameId(), frame.GetFinalStatus(), send)
 	}
 	return nil
 }
@@ -575,74 +580,80 @@ func (a *Agent) invokeWorkerPlatformCall(ctx context.Context, call *rwv1.Platfor
 	}
 }
 
-func (a *Agent) handleWorkerIndicatorFrame(ctx context.Context, frame *rwv1.IndicatorFrame) error {
-	if frame == nil || strings.TrimSpace(frame.GetSessionId()) == "" || strings.TrimSpace(frame.GetStreamKey()) == "" {
-		return nil
+func (a *Agent) handleWorkerFinalStatus(
+	ctx context.Context,
+	frameID string,
+	status *rwv1.FinalStatus,
+	send func(*rwv1.AgentFrame) error,
+) error {
+	if status == nil {
+		return fmt.Errorf("final status is empty")
+	}
+	sessionID := strings.TrimSpace(status.GetSessionId())
+	if sessionID == "" {
+		return fmt.Errorf("final status session_id is required")
+	}
+	frameID = strings.TrimSpace(frameID)
+	if frameID == "" {
+		return fmt.Errorf("final status frame_id is required")
+	}
+	if send == nil {
+		return fmt.Errorf("final status sender is not configured")
 	}
 	if a.cfg.PlatformInvoker == nil {
 		return fmt.Errorf("platform invoker is not configured")
 	}
-	req := &portfoliov1.SaveStrategyIndicatorsRequest{
-		SessionId: frame.GetSessionId(),
-		UserId:    frame.GetUserId(),
+
+	statusValue := strings.TrimSpace(strings.ToLower(status.GetStatus()))
+	if statusValue == "completed" {
+		statusValue = "finished"
 	}
-	for _, definition := range frame.GetDefinitions() {
-		key := strings.TrimSpace(definition.GetIndicatorKey())
-		if key == "" {
-			continue
+	flushCtx := ctx
+	var cancel context.CancelFunc
+	if a.cfg.IndicatorFinalizeTimeout > 0 {
+		flushCtx, cancel = context.WithTimeout(ctx, a.cfg.IndicatorFinalizeTimeout)
+		defer cancel()
+	}
+	flushErr := a.indicatorSync.FinalizeSession(flushCtx, sessionID)
+	if statusValue == "finished" && flushErr != nil {
+		message := "indicator finalization failed: " + flushErr.Error()
+		if err := a.updateSession(ctx, sessionID, "recoverable", status.GetBarsProcessed(), message); err != nil {
+			return err
 		}
-		req.Definitions = append(req.Definitions, &portfoliov1.StrategyIndicatorDefinition{
-			SessionId:    frame.GetSessionId(),
-			StrategyId:   frame.GetStrategyId(),
-			StreamKey:    frame.GetStreamKey(),
-			IndicatorKey: key,
-			Name:         definition.GetName(),
-			Type:         definition.GetType(),
-			Pane:         definition.GetPane(),
-			Color:        definition.GetColor(),
-			Unit:         definition.GetUnit(),
-			Description:  definition.GetDescription(),
-			ConfigJson:   definition.GetConfigJson(),
+		return send(&rwv1.AgentFrame{
+			ReplyTo: frameID,
+			Payload: &rwv1.AgentFrame_Error{Error: &rwv1.AgentError{
+				Code: "INDICATOR_FINALIZATION_FAILED", Message: message,
+			}},
 		})
-		a.setIndicatorType(frame.GetSessionId(), frame.GetStreamKey(), key, definition.GetType())
 	}
-	for _, value := range frame.GetValues() {
-		key := strings.TrimSpace(value.GetIndicatorKey())
-		if key == "" {
-			continue
-		}
-		buffer := a.indicatorBuffer(frame.GetSessionId(), frame.GetStreamKey(), key)
-		pointValue := "null"
-		if marker := strings.TrimSpace(value.GetMarkerJson()); marker != "" {
-			pointValue = marker
-		} else if value.GetHasValue() {
-			pointValue = strconv.FormatFloat(value.GetValue(), 'f', -1, 64)
-		}
-		buffer.AddPoint(IndicatorPoint{
-			MarketTimeMS: frame.GetMarketTimeMs(),
-			IntervalMS:   frame.GetIntervalMs(),
-			ValueJSON:    pointValue,
-		})
-		finals, open := buffer.SnapshotForFlush()
-		for _, chunk := range finals {
-			req.Chunks = append(req.Chunks, portfolioIndicatorChunk(frame, key, chunk))
-		}
-		if open.Count > 0 {
-			req.Chunks = append(req.Chunks, portfolioIndicatorChunk(frame, key, open))
-		}
+	if statusValue == "" {
+		return fmt.Errorf("final status value is required")
 	}
-	if len(req.GetDefinitions()) == 0 && len(req.GetChunks()) == 0 {
-		return nil
-	}
-	packed, err := anypb.New(req)
-	if err != nil {
+	if err := a.updateSession(ctx, sessionID, statusValue, status.GetBarsProcessed(), status.GetError()); err != nil {
 		return err
 	}
-	if _, err := a.cfg.PlatformInvoker.InvokePlatformAny(ctx, "portfolio.SaveStrategyIndicators", packed, a.cfg.RequestTimeout); err != nil {
+	if err := send(&rwv1.AgentFrame{ReplyTo: frameID}); err != nil {
 		return err
 	}
-	a.markIndicatorFinalsAcked(frame)
+	a.indicatorSync.ForgetSession(ctx, sessionID)
 	return nil
+}
+
+func (a *Agent) updateSession(ctx context.Context, sessionID, status string, barsProcessed int64, message string) error {
+	if barsProcessed < 0 {
+		barsProcessed = 0
+	}
+	const maxInt32 = int64(1<<31 - 1)
+	if barsProcessed > maxInt32 {
+		barsProcessed = maxInt32
+	}
+	req := &portfoliov1.UpdateSessionRequest{
+		SessionId: sessionID, Status: status, BarsProcessed: int32(barsProcessed),
+		Error: message, RuntimeId: strings.TrimSpace(a.cfg.RuntimeID),
+	}
+	var response portfoliov1.UpdateSessionResponse
+	return a.invokePlatformProto(ctx, "portfolio.UpdateSession", req, &response)
 }
 
 func (a *Agent) rememberRunRequest(sessionID string, request *anypb.Any) {
@@ -736,62 +747,6 @@ func (a *Agent) cachedRunRequest(sessionID string) *strategyv1.RunStrategyReques
 		return nil
 	}
 	return &runReq
-}
-
-func (a *Agent) setIndicatorType(sessionID, streamKey, indicatorKey, typ string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.indicatorTypes[indicatorStateKey(sessionID, streamKey, indicatorKey)] = strings.TrimSpace(strings.ToLower(typ))
-}
-
-func (a *Agent) indicatorBuffer(sessionID, streamKey, indicatorKey string) *IndicatorBuffer {
-	stateKey := indicatorStateKey(sessionID, streamKey, indicatorKey)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if buffer := a.indicatorBuffers[stateKey]; buffer != nil {
-		return buffer
-	}
-	buffer := NewIndicatorBufferForType(a.cfg.IndicatorLimit, a.indicatorTypes[stateKey])
-	a.indicatorBuffers[stateKey] = buffer
-	return buffer
-}
-
-func (a *Agent) markIndicatorFinalsAcked(frame *rwv1.IndicatorFrame) {
-	if frame == nil {
-		return
-	}
-	for _, value := range frame.GetValues() {
-		key := strings.TrimSpace(value.GetIndicatorKey())
-		if key == "" {
-			continue
-		}
-		buffer := a.indicatorBuffer(frame.GetSessionId(), frame.GetStreamKey(), key)
-		finals, _ := buffer.SnapshotForFlush()
-		indexes := make([]int, 0, len(finals))
-		for _, chunk := range finals {
-			indexes = append(indexes, chunk.ChunkIndex)
-		}
-		buffer.MarkFinalizedAcked(indexes)
-	}
-}
-
-func portfolioIndicatorChunk(frame *rwv1.IndicatorFrame, indicatorKey string, chunk IndicatorChunk) *portfoliov1.StrategyIndicatorChunk {
-	return &portfoliov1.StrategyIndicatorChunk{
-		SessionId:    frame.GetSessionId(),
-		StreamKey:    frame.GetStreamKey(),
-		IndicatorKey: indicatorKey,
-		ChunkIndex:   int32(chunk.ChunkIndex),
-		StartTimeMs:  chunk.StartTimeMS,
-		EndTimeMs:    chunk.EndTimeMS,
-		IntervalMs:   chunk.IntervalMS,
-		Count:        int32(chunk.Count),
-		ValuesJson:   chunk.ValuesJSON,
-		Finalized:    chunk.Finalized,
-	}
-}
-
-func indicatorStateKey(sessionID, streamKey, indicatorKey string) string {
-	return strings.TrimSpace(sessionID) + "\x00" + strings.TrimSpace(streamKey) + "\x00" + strings.TrimSpace(indicatorKey)
 }
 
 func responseFrame(correlationID string, message proto.Message) *cpv1.RuntimeFrame {

@@ -155,26 +155,6 @@ func (b *IndicatorBuffer) MarkFlushAcked(snapshot IndicatorFlushSnapshot) {
 	}
 }
 
-// SnapshotForFlush is kept until all callers move to dirty snapshots.
-func (b *IndicatorBuffer) SnapshotForFlush() ([]IndicatorChunk, IndicatorChunk) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	open := b.active
-	open.Finalized = false
-	return b.pendingChunksLocked(), open
-}
-
-// MarkFinalizedAcked is kept until all callers move to exact snapshot ACKs.
-func (b *IndicatorBuffer) MarkFinalizedAcked(indexes []int) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	for _, index := range indexes {
-		delete(b.pending, index)
-	}
-}
-
 func (b *IndicatorBuffer) pendingChunksLocked() []IndicatorChunk {
 	indexes := make([]int, 0, len(b.pending))
 	for index := range b.pending {
