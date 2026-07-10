@@ -11,6 +11,7 @@ from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 from strategy_service.grpc_server import PLATFORM_ACCESS_PROXY_ONLY, StrategyServiceServicer
 from strategy_service.platform_proxy import RuntimeChannelPlatformProxy
 from strategy_service.worker_agent_client import (
+    FinalStatusRejected,
     WorkerAgentClient,
     WorkerAgentDataSource,
     WorkerRuntimeChannelAdapter,
@@ -100,14 +101,25 @@ def _poll_until_terminal(
             detail = context.details or context.code.name
             client.send_progress(session_id=session_id, status="failed", error=detail)
             return 1
+        if status.status in _TERMINAL_STATUSES:
+            try:
+                client.send_final_status(
+                    session_id=session_id,
+                    status=status.status,
+                    bars_processed=status.bars_processed,
+                    error=status.error,
+                    timeout_seconds=35.0,
+                )
+            except (FinalStatusRejected, TimeoutError) as exc:
+                logger.error("final session status was not acknowledged: %s", exc)
+                return 1
+            return 0 if status.status in {"finished", "completed", "stopped"} else 1
         client.send_progress(
             session_id=session_id,
             status=status.status,
             bars_processed=status.bars_processed,
             error=status.error,
         )
-        if status.status in _TERMINAL_STATUSES:
-            return 0 if status.status in {"finished", "completed", "stopped"} else 1
         time.sleep(1.0)
 
 

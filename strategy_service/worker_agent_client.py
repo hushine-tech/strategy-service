@@ -19,6 +19,10 @@ from strategy_service.gen import runtime_worker_pb2_grpc as worker_grpc
 WORKER_VERSION = "0.1.0"
 
 
+class FinalStatusRejected(RuntimeError):
+    pass
+
+
 def _platform_timeout_seconds(timeout_seconds: float | None) -> float:
     return max(0.1, float(timeout_seconds or 30.0))
 
@@ -84,6 +88,8 @@ class WorkerAgentClient:
         self._incoming: queue.Queue[worker_pb2.AgentFrame] = queue.Queue()
         self._pending: dict[str, queue.Queue[worker_pb2.PlatformCallResult]] = {}
         self._pending_lock = threading.Lock()
+        self._pending_replies: dict[str, queue.Queue[worker_pb2.AgentFrame]] = {}
+        self._pending_reply_lock = threading.Lock()
         self._agent_platform_call_handler: Callable[[worker_pb2.PlatformCall], Any] | None = None
         self._agent_platform_call_lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -98,10 +104,10 @@ class WorkerAgentClient:
         self._thread.start()
 
     def close(self) -> None:
-        self._closed.set()
         self._outbound.put(None)
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+        self._closed.set()
 
     def wait_for_start_session(self, *, timeout_seconds: float = 30.0) -> worker_pb2.StartSession:
         deadline = max(0.1, float(timeout_seconds or 30.0))
@@ -175,6 +181,41 @@ class WorkerAgentClient:
                 )
             )
         )
+
+    def send_final_status(
+        self,
+        *,
+        session_id: str,
+        status: str,
+        bars_processed: int = 0,
+        error: str = "",
+        timeout_seconds: float = 35.0,
+    ) -> None:
+        frame_id = self._call_id_factory()
+        reply: queue.Queue[worker_pb2.AgentFrame] = queue.Queue(maxsize=1)
+        with self._pending_reply_lock:
+            self._pending_replies[frame_id] = reply
+        try:
+            self._outbound.put(
+                worker_pb2.WorkerFrame(
+                    frame_id=frame_id,
+                    final_status=worker_pb2.FinalStatus(
+                        session_id=session_id,
+                        status=status,
+                        bars_processed=int(bars_processed),
+                        error=error,
+                    ),
+                )
+            )
+            try:
+                ack = reply.get(timeout=max(0.01, float(timeout_seconds)))
+            except queue.Empty as exc:
+                raise TimeoutError(f"timed out waiting for final status ack: {session_id}") from exc
+            if ack.WhichOneof("payload") == "error":
+                raise FinalStatusRejected(ack.error.message or ack.error.code)
+        finally:
+            with self._pending_reply_lock:
+                self._pending_replies.pop(frame_id, None)
 
     def send_platform_call_result(
         self,
@@ -270,8 +311,6 @@ class WorkerAgentClient:
                 channel = self._channel_factory(self.env.agent_addr)
                 stub = worker_grpc.RuntimeWorkerAgentStub(channel)
             for frame in stub.Connect(self._outbound_frames()):
-                if self._closed.is_set():
-                    break
                 self._handle_agent_frame(frame)
         except BaseException as exc:  # noqa: BLE001
             self._error = exc
@@ -288,6 +327,12 @@ class WorkerAgentClient:
             yield frame
 
     def _handle_agent_frame(self, frame: worker_pb2.AgentFrame) -> None:
+        if frame.reply_to:
+            with self._pending_reply_lock:
+                reply = self._pending_replies.get(frame.reply_to)
+            if reply is not None:
+                reply.put(frame)
+                return
         if frame.WhichOneof("payload") == "platform_call_result":
             call_id = frame.platform_call_result.call_id
             with self._pending_lock:

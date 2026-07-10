@@ -1,15 +1,115 @@
-import pytest
+import threading
 import time
+
+import pytest
 from google.protobuf.any_pb2 import Any
 
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 from strategy_service.gen import runtime_worker_pb2 as worker_pb2
 from strategy_service.worker_agent_client import (
+    FinalStatusRejected,
     WorkerAgentClient,
     WorkerEnv,
     build_worker_hello_frame,
     load_worker_env,
 )
+
+
+class _FinalAckStub:
+    def __init__(self, *, error: str = ""):
+        self.sent = []
+        self.final_seen = threading.Event()
+        self.allow_ack = threading.Event()
+        self.error = error
+
+    def Connect(self, frames):
+        for frame in frames:
+            self.sent.append(frame)
+            if frame.WhichOneof("payload") != "final_status":
+                continue
+            self.final_seen.set()
+            assert self.allow_ack.wait(timeout=1.0)
+            if self.error:
+                yield worker_pb2.AgentFrame(
+                    reply_to=frame.frame_id,
+                    error=worker_pb2.AgentError(
+                        code="INDICATOR_FINALIZATION_FAILED",
+                        message=self.error,
+                    ),
+                )
+            else:
+                yield worker_pb2.AgentFrame(reply_to=frame.frame_id)
+            return
+
+
+def test_send_final_status_waits_until_matching_reply_to():
+    stub = _FinalAckStub()
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=stub,
+        call_id_factory=lambda: "final-1",
+    )
+    client.start()
+    for index in range(1440):
+        client._outbound.put(worker_pb2.WorkerFrame(
+            indicator_frame=worker_pb2.IndicatorFrame(
+                session_id="sess-1",
+                stream_key="binance:perpetual_futures:TESTUSDT:1m",
+                market_time_ms=index * 60_000,
+            ),
+        ))
+    done = threading.Event()
+    failure = []
+
+    def send():
+        try:
+            client.send_final_status(
+                session_id="sess-1",
+                status="finished",
+                bars_processed=1440,
+                timeout_seconds=1.0,
+            )
+        except BaseException as exc:  # noqa: BLE001
+            failure.append(exc)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=send)
+    thread.start()
+    assert stub.final_seen.wait(timeout=1.0)
+    assert not done.is_set()
+    assert sum(frame.WhichOneof("payload") == "indicator_frame" for frame in stub.sent) == 1440
+    stub.allow_ack.set()
+    assert done.wait(timeout=1.0)
+    thread.join(timeout=1.0)
+    client.close()
+    assert failure == []
+
+
+def test_send_final_status_raises_when_agent_returns_error():
+    stub = _FinalAckStub(error="indicator finalization failed: database unavailable")
+    stub.allow_ack.set()
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=stub,
+        call_id_factory=lambda: "final-1",
+    )
+    client.start()
+    with pytest.raises(FinalStatusRejected, match="database unavailable"):
+        client.send_final_status(session_id="sess-1", status="finished", timeout_seconds=1.0)
+    client.close()
+
+
+def test_send_final_status_times_out_without_ack():
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=_FakeWorkerStub([]),
+        call_id_factory=lambda: "final-1",
+    )
+    client.start()
+    with pytest.raises(TimeoutError, match="final status ack"):
+        client.send_final_status(session_id="sess-1", status="finished", timeout_seconds=0.01)
+    client.close()
 
 
 def test_load_worker_env_requires_agent_addr(monkeypatch):
