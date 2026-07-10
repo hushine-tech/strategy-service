@@ -28,7 +28,7 @@ type User struct {
 	Username  string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// plan_code maps to control-panel-service's runtime_plans config tier.
-	// Added with migration 0011_add_user_plan_code.sql (Phase D1).
+	// Subscription plan used by runtime and notification policy resolution.
 	PlanCode      string `protobuf:"bytes,4,opt,name=plan_code,json=planCode,proto3" json:"plan_code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
