@@ -26,12 +26,12 @@ echo "=== smoke 1: Python package imports ==="
 docker run --rm --entrypoint python "${IMAGE}" -c "
 import sys
 print('python:', sys.version.split()[0])
-from strategy_service.config import Config
-cfg = Config.load('config.yaml')
-cfg.apply_env_overrides()
-print('runtime channel:', cfg.dependencies.runtime_channel_grpc)
 from strategy_service.gen import control_panel_service_pb2 as cp
-print('proto:', cp.RuntimeHello.DESCRIPTOR.full_name)
+from strategy_service.gen import runtime_worker_pb2 as worker
+from strategy_service.session_worker_entry import main as worker_main
+print('runtime proto:', cp.RuntimeHello.DESCRIPTOR.full_name)
+print('worker proto:', worker.WorkerFrame.DESCRIPTOR.full_name)
+print('worker entry:', worker_main.__name__)
 print('OK')
 "
 
