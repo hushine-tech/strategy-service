@@ -479,6 +479,73 @@ func TestAgentCleanupForgetsOnlyRequestedIndicatorSession(t *testing.T) {
 	}
 }
 
+func TestAgentRestartWaitsForFlushThenForgetsOldSession(t *testing.T) {
+	invoker := &blockingRestartPlatform{
+		saveStarted: make(chan struct{}, 1),
+		releaseSave: make(chan struct{}),
+	}
+	starter := &fakeWorkerStarter{}
+	stopper := &signalingWorkerStopper{stopped: make(chan struct{}, 1)}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, PlatformInvoker: invoker,
+		WorkerStarter: starter, WorkerStopper: stopper, StartTimeout: time.Second,
+	})
+	for _, sessionID := range []string{"sess-old", "sess-new"} {
+		if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame(sessionID)); err != nil {
+			t.Fatalf("ReceiveFrame %s: %v", sessionID, err)
+		}
+	}
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- agent.indicatorSync.FlushSession(context.Background(), "sess-old", false)
+	}()
+	select {
+	case <-invoker.saveStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for old-session flush")
+	}
+	starter.onStart = func(pendingSessionID string) {
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+					SessionId: "sess-restarted", Status: "running",
+				}},
+			}, nil)
+		}()
+	}
+	restartDone := make(chan error, 1)
+	go func() {
+		_, err := agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "sess-old"})
+		restartDone <- err
+	}()
+	select {
+	case <-stopper.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for worker stop")
+	}
+	select {
+	case err := <-restartDone:
+		t.Fatalf("restart finished before flush release: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if agent.indicatorSync.lookupSession("sess-old") == nil {
+		t.Fatal("old session was forgotten while its flush was active")
+	}
+	close(invoker.releaseSave)
+	if err := <-flushDone; err != nil {
+		t.Fatalf("FlushSession: %v", err)
+	}
+	if err := <-restartDone; err != nil {
+		t.Fatalf("RestartSession: %v", err)
+	}
+	if agent.indicatorSync.lookupSession("sess-old") != nil {
+		t.Fatal("old session indicator state was not forgotten")
+	}
+	if agent.indicatorSync.lookupSession("sess-new") == nil {
+		t.Fatal("unrelated new session indicator state was forgotten")
+	}
+}
+
 func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStartsNewWorker(t *testing.T) {
 	starter := &fakeWorkerStarter{}
 	stopper := &fakeWorkerStopper{}
@@ -753,6 +820,43 @@ type agentFinalPlatform struct {
 	methods []string
 	updates []*portfoliov1.UpdateSessionRequest
 	saveErr error
+}
+
+type blockingRestartPlatform struct {
+	saveStarted chan struct{}
+	releaseSave chan struct{}
+}
+
+func (p *blockingRestartPlatform) InvokePlatformAny(_ context.Context, method string, _ *anypb.Any, _ time.Duration) (*anypb.Any, error) {
+	switch method {
+	case "portfolio.SaveStrategyIndicators":
+		select {
+		case p.saveStarted <- struct{}{}:
+		default:
+		}
+		<-p.releaseSave
+		return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{DefinitionsSaved: 1, ChunksSaved: 1})
+	case "portfolio.GetSession":
+		return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
+			SessionId: "sess-old", UserId: 6, RuntimeId: "rt-1", Status: "running",
+		}})
+	case "portfolio.UpdateSession":
+		return anypb.New(&portfoliov1.UpdateSessionResponse{})
+	default:
+		return nil, errors.New("unexpected method: " + method)
+	}
+}
+
+type signalingWorkerStopper struct {
+	stopped chan struct{}
+}
+
+func (s *signalingWorkerStopper) StopSessionWorker(_ context.Context, _ string, _ time.Duration) error {
+	select {
+	case s.stopped <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 func (p *agentFinalPlatform) InvokePlatformAny(_ context.Context, method string, request *anypb.Any, _ time.Duration) (*anypb.Any, error) {

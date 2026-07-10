@@ -164,11 +164,16 @@ func runAgent(
 		cfg.RuntimeChannelAddr,
 		workerListener.Addr().String(),
 	)
+	startAgentBackgroundLoops(ctx, agent)
 	if err := runtimeClient.Run(ctx); err != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "runtime channel stopped: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+func startAgentBackgroundLoops(ctx context.Context, agent *runtimeagent.Agent) {
+	go agent.RunSyncLoop(ctx)
 }
 
 func runtimeIdentityFromConfig(cfg runtimeagent.Config, userID int64) runtimeagent.RuntimeIdentity {

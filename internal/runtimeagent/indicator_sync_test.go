@@ -235,3 +235,119 @@ func TestIndicatorSyncManagerRetriesFinalFlushWithinDeadline(t *testing.T) {
 		t.Fatalf("platform calls = %d, want 3", len(requests))
 	}
 }
+
+func TestIndicatorSyncManagerSplits1023PlusTwoIntoFinal1024AndOpenOne(t *testing.T) {
+	platform := &indicatorSyncPlatform{}
+	manager := newIndicatorSyncManager(platform, 1024)
+	for marketTime := int64(1); marketTime <= 1023; marketTime++ {
+		if err := manager.ReceiveFrame(indicatorSyncFrame("sess-1", marketTime)); err != nil {
+			t.Fatalf("ReceiveFrame %d: %v", marketTime, err)
+		}
+	}
+	if err := manager.FlushSession(context.Background(), "sess-1", false); err != nil {
+		t.Fatalf("flush 1023: %v", err)
+	}
+	for _, marketTime := range []int64{1024, 1025} {
+		if err := manager.ReceiveFrame(indicatorSyncFrame("sess-1", marketTime)); err != nil {
+			t.Fatalf("ReceiveFrame %d: %v", marketTime, err)
+		}
+	}
+	if err := manager.FlushSession(context.Background(), "sess-1", false); err != nil {
+		t.Fatalf("flush 1025: %v", err)
+	}
+	requests, _ := platform.snapshot()
+	if len(requests) != 2 {
+		t.Fatalf("platform calls = %d, want 2", len(requests))
+	}
+	chunks := requests[1].GetChunks()
+	if len(chunks) != 2 || chunks[0].GetChunkIndex() != 0 || chunks[0].GetCount() != 1024 || !chunks[0].GetFinalized() ||
+		chunks[1].GetChunkIndex() != 1 || chunks[1].GetCount() != 1 || chunks[1].GetFinalized() {
+		t.Fatalf("1023+2 chunks = %+v", chunks)
+	}
+}
+
+func TestIndicatorSyncManagerHandlesFlushBetween1024And1025(t *testing.T) {
+	platform := &indicatorSyncPlatform{}
+	manager := newIndicatorSyncManager(platform, 1024)
+	for marketTime := int64(1); marketTime <= 1023; marketTime++ {
+		if err := manager.ReceiveFrame(indicatorSyncFrame("sess-1", marketTime)); err != nil {
+			t.Fatalf("ReceiveFrame %d: %v", marketTime, err)
+		}
+	}
+	if err := manager.FlushSession(context.Background(), "sess-1", false); err != nil {
+		t.Fatalf("flush 1023: %v", err)
+	}
+	if err := manager.ReceiveFrame(indicatorSyncFrame("sess-1", 1024)); err != nil {
+		t.Fatalf("ReceiveFrame 1024: %v", err)
+	}
+	if err := manager.FlushSession(context.Background(), "sess-1", false); err != nil {
+		t.Fatalf("flush 1024: %v", err)
+	}
+	if err := manager.ReceiveFrame(indicatorSyncFrame("sess-1", 1025)); err != nil {
+		t.Fatalf("ReceiveFrame 1025: %v", err)
+	}
+	if err := manager.FlushSession(context.Background(), "sess-1", false); err != nil {
+		t.Fatalf("flush 1025: %v", err)
+	}
+	requests, _ := platform.snapshot()
+	if len(requests) != 3 {
+		t.Fatalf("platform calls = %d, want 3", len(requests))
+	}
+	finalChunk := requests[1].GetChunks()
+	openChunk := requests[2].GetChunks()
+	if len(finalChunk) != 1 || finalChunk[0].GetCount() != 1024 || !finalChunk[0].GetFinalized() {
+		t.Fatalf("1024 flush chunks = %+v", finalChunk)
+	}
+	if len(openChunk) != 1 || openChunk[0].GetChunkIndex() != 1 || openChunk[0].GetCount() != 1 || openChunk[0].GetFinalized() {
+		t.Fatalf("1025 flush chunks = %+v", openChunk)
+	}
+}
+
+func TestIndicatorSyncManagerDuplicate1023FrameDoesNotWriteAgain(t *testing.T) {
+	platform := &indicatorSyncPlatform{}
+	manager := newIndicatorSyncManager(platform, 1024)
+	for marketTime := int64(1); marketTime <= 1023; marketTime++ {
+		if err := manager.ReceiveFrame(indicatorSyncFrame("sess-1", marketTime)); err != nil {
+			t.Fatalf("ReceiveFrame %d: %v", marketTime, err)
+		}
+	}
+	if err := manager.FlushSession(context.Background(), "sess-1", false); err != nil {
+		t.Fatalf("first flush: %v", err)
+	}
+	if err := manager.ReceiveFrame(indicatorSyncFrame("sess-1", 1023)); err != nil {
+		t.Fatalf("duplicate ReceiveFrame: %v", err)
+	}
+	if err := manager.FlushSession(context.Background(), "sess-1", false); err != nil {
+		t.Fatalf("duplicate flush: %v", err)
+	}
+	requests, _ := platform.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("platform calls after duplicate = %d, want 1", len(requests))
+	}
+}
+
+func TestIndicatorSyncManagerFinalizes2049As1024Plus1024PlusOne(t *testing.T) {
+	platform := &indicatorSyncPlatform{}
+	manager := newIndicatorSyncManager(platform, 1024)
+	for marketTime := int64(1); marketTime <= 2049; marketTime++ {
+		if err := manager.ReceiveFrame(indicatorSyncFrame("sess-1", marketTime)); err != nil {
+			t.Fatalf("ReceiveFrame %d: %v", marketTime, err)
+		}
+	}
+	if err := manager.FinalizeSession(context.Background(), "sess-1"); err != nil {
+		t.Fatalf("FinalizeSession: %v", err)
+	}
+	requests, _ := platform.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("platform calls = %d, want 1", len(requests))
+	}
+	chunks := requests[0].GetChunks()
+	if len(chunks) != 3 {
+		t.Fatalf("chunks = %+v, want 3", chunks)
+	}
+	for index, want := range []int32{1024, 1024, 1} {
+		if chunks[index].GetChunkIndex() != int32(index) || chunks[index].GetCount() != want || !chunks[index].GetFinalized() {
+			t.Fatalf("chunk %d = %+v, want finalized count %d", index, chunks[index], want)
+		}
+	}
+}
