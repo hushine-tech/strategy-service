@@ -38,8 +38,11 @@ USER = os.environ.get("TIMESCALE_USER", "postgres")
 PASSWORD = os.environ.get("TIMESCALE_PASSWORD", "postgres")
 
 FUTURES_TABLE = "futures_klines_testusdt_1m"
+FUTURES_5M_TABLE = "futures_klines_testusdt_5m"
+ALT_FUTURES_TABLE = "futures_klines_altusdt_1m"
 SPOT_TABLE = "spot_klines_testusdt_1m"
 SYMBOL = "TESTUSDT"
+ALT_SYMBOL = "ALTUSDT"
 NUM_BARS = 200
 BASE_TIME = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -101,7 +104,14 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
-def _seed_table(cur, table_name: str, market: str) -> None:
+def _seed_table(
+    cur,
+    table_name: str,
+    market: str,
+    *,
+    symbol: str = SYMBOL,
+    interval_minutes: int = 1,
+) -> None:
     """为指定表写入测试数据。"""
     create_sql = CREATE_TABLE_SQL.replace("{TABLE}", table_name)
     hyper_sql = HYPERTABLE_SQL.replace("{TABLE}", table_name)
@@ -113,22 +123,24 @@ def _seed_table(cur, table_name: str, market: str) -> None:
     except Exception:
         pass
 
-    cur.execute(f"DELETE FROM {table_name} WHERE symbol = %s", (SYMBOL,))
+    cur.execute(f"DELETE FROM {table_name} WHERE symbol = %s", (symbol,))
 
     prices = generate_prices()
+    if interval_minutes > 1:
+        prices = prices[::interval_minutes]
     rows = []
     for i, price in enumerate(prices):
-        open_time = BASE_TIME + timedelta(minutes=i)
-        close_time = open_time + timedelta(minutes=1) - timedelta(milliseconds=1)
+        open_time = BASE_TIME + timedelta(minutes=i * interval_minutes)
+        close_time = open_time + timedelta(minutes=interval_minutes) - timedelta(milliseconds=1)
         rows.append((
-            open_time, SYMBOL, market, "binance",
+            open_time, symbol, market, "binance",
             open_time, close_time,
             price, price, price, price,
             1000.0, price * 1000.0, 100,
         ))
 
     cur.executemany(insert_sql, rows)
-    cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE symbol = %s", (SYMBOL,))
+    cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE symbol = %s", (symbol,))
     count = cur.fetchone()[0]
     print(f"  {table_name}: {count} rows ({market})")
 
@@ -144,6 +156,8 @@ def main() -> None:
     print(f"  Time range: {BASE_TIME.isoformat()} → {(BASE_TIME + timedelta(minutes=NUM_BARS-1)).isoformat()}")
 
     _seed_table(cur, FUTURES_TABLE, "futures")
+    _seed_table(cur, FUTURES_5M_TABLE, "futures", interval_minutes=5)
+    _seed_table(cur, ALT_FUTURES_TABLE, "futures", symbol=ALT_SYMBOL)
     _seed_table(cur, SPOT_TABLE, "spot")
 
     cur.close()
