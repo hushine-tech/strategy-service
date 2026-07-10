@@ -545,6 +545,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._platform_proxy = platform_proxy
         self._notification_client = notification_client
         self._runtime_data_source = None
+        self._indicator_frame_sink: Callable[..., None] | None = None
         self._preflight_enabled = bool(self._market_data_policy.get("preflight_enabled", True))
         self._lease_management_enabled = bool(self._market_data_policy.get("lease_management_enabled", True))
         self._lease_heartbeat_seconds = int(
@@ -571,6 +572,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
     def set_runtime_data_source(self, runtime_data_source: Any) -> None:
         self._runtime_data_source = runtime_data_source
+
+    def set_indicator_frame_sink(self, sink: Callable[..., None] | None) -> None:
+        self._indicator_frame_sink = sink
 
     def _portfolio_client(self):
         if self._platform_proxy is None:
@@ -1653,6 +1657,48 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return lambda: None
 
         user_id = int(getattr(request, "user_id", 0) or getattr(state, "user_id", 0) or 0)
+        sink = self._indicator_frame_sink
+        if callable(sink):
+            flushers: list[Callable[[], None]] = []
+            for strategy in strategies:
+                definitions = list(getattr(strategy, "indicator_definitions", []) or [])
+                definition_streams_sent: set[str] = set()
+
+                def on_frame(
+                    stream_key: str,
+                    market_time_ms: int,
+                    interval_ms: int,
+                    frame,
+                    *,
+                    definitions=definitions,
+                    definition_streams_sent=definition_streams_sent,
+                ) -> None:
+                    definition_payload = []
+                    if stream_key not in definition_streams_sent:
+                        definition_payload = [replace(definition, stream_key=stream_key) for definition in definitions]
+                        definition_streams_sent.add(stream_key)
+                    try:
+                        sink(
+                            session_id=session_id,
+                            user_id=user_id,
+                            strategy_id=int(getattr(state, "strategy_id", 0) or 0),
+                            stream_key=stream_key,
+                            market_time_ms=market_time_ms,
+                            interval_ms=interval_ms,
+                            definitions=definition_payload,
+                            frame=frame,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "strategy indicator sink failed: session=%s stream_key=%s",
+                            session_id,
+                            stream_key,
+                            exc_info=True,
+                        )
+
+                strategy.on_indicator_frame = on_frame
+            return lambda: None
+
         flushers: list[Callable[[], None]] = []
 
         def save_payload(*, definitions: list[Any] | None = None, chunks: list[Any] | None = None) -> None:

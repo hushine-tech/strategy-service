@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 from strategy_service.config import Config
 
 
@@ -22,7 +24,12 @@ def test_default_config_file_is_runtime_only():
     config_path = Path(__file__).resolve().parents[1] / "config.yaml"
 
     cfg = Config.load(str(config_path))
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
 
+    assert "database" not in raw
+    assert "kafka" not in raw
+    assert "market_data" not in raw
+    assert "notification" not in raw
     assert cfg.dependencies.runtime_channel_grpc == "127.0.0.1:50055"
     assert cfg.database.host == ""
     assert cfg.database.database == ""

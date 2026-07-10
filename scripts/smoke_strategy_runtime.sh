@@ -3,10 +3,9 @@
 #
 # This is the *container-only* smoke that does not require external services.
 # It verifies:
-#   1. The image imports the uv console scripts and config loader.
+#   1. The image imports the Python config loader.
 #   2. RuntimeChannel proto stubs are importable.
-#   3. The new `hushine-runtime start` command exposes help without loading
-#      deleted standalone gRPC entrypoints.
+#   3. The Go runtime-agent entrypoint exposes help.
 
 set -euo pipefail
 
@@ -33,16 +32,12 @@ cfg.apply_env_overrides()
 print('runtime channel:', cfg.dependencies.runtime_channel_grpc)
 from strategy_service.gen import control_panel_service_pb2 as cp
 print('proto:', cp.RuntimeHello.DESCRIPTOR.full_name)
-import hushine_runtime_cli
-print('console wrapper:', hushine_runtime_cli.main.__name__)
-from strategy_service.cli.hushine_runtime import main
-print('entrypoint:', main.__name__)
 print('OK')
 "
 
 echo
-echo "=== smoke 2: hushine-runtime help ==="
-docker run --rm --entrypoint uv "${IMAGE}" run --no-sync python -m hushine_runtime_cli start --help
+echo "=== smoke 2: runtime-agent help ==="
+docker run --rm --entrypoint ./bin/runtime-agent "${IMAGE}" --help
 
 echo
 echo "All container smoke checks passed for ${IMAGE}."

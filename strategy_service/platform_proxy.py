@@ -959,7 +959,7 @@ class RuntimeChannelLogHandler(logging.Handler):
     """
 
     _skip_prefixes = (
-        "strategy_service.runtime_channel",
+        "strategy_service.worker_agent_client",
         "strategy_service.platform_proxy",
         "grpc",
     )

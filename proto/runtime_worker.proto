@@ -118,12 +118,26 @@ message IndicatorValue {
   string marker_json = 4;
 }
 
+message IndicatorDefinition {
+  string indicator_key = 1;
+  string name = 2;
+  string type = 3;
+  string pane = 4;
+  string color = 5;
+  string unit = 6;
+  string description = 7;
+  string config_json = 8;
+}
+
 message IndicatorFrame {
   string session_id = 1;
   string stream_key = 2;
   int64 market_time_ms = 3;
   int64 interval_ms = 4;
   repeated IndicatorValue values = 5;
+  int64 user_id = 6;
+  int64 strategy_id = 7;
+  repeated IndicatorDefinition definitions = 8;
 }
 
 message NotificationEvent {

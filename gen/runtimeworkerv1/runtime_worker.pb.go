@@ -1190,6 +1190,106 @@ func (x *IndicatorValue) GetMarkerJson() string {
 	return ""
 }
 
+type IndicatorDefinition struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	IndicatorKey  string                 `protobuf:"bytes,1,opt,name=indicator_key,json=indicatorKey,proto3" json:"indicator_key,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
+	Pane          string                 `protobuf:"bytes,4,opt,name=pane,proto3" json:"pane,omitempty"`
+	Color         string                 `protobuf:"bytes,5,opt,name=color,proto3" json:"color,omitempty"`
+	Unit          string                 `protobuf:"bytes,6,opt,name=unit,proto3" json:"unit,omitempty"`
+	Description   string                 `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`
+	ConfigJson    string                 `protobuf:"bytes,8,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IndicatorDefinition) Reset() {
+	*x = IndicatorDefinition{}
+	mi := &file_runtime_worker_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IndicatorDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IndicatorDefinition) ProtoMessage() {}
+
+func (x *IndicatorDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_runtime_worker_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IndicatorDefinition.ProtoReflect.Descriptor instead.
+func (*IndicatorDefinition) Descriptor() ([]byte, []int) {
+	return file_runtime_worker_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *IndicatorDefinition) GetIndicatorKey() string {
+	if x != nil {
+		return x.IndicatorKey
+	}
+	return ""
+}
+
+func (x *IndicatorDefinition) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *IndicatorDefinition) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *IndicatorDefinition) GetPane() string {
+	if x != nil {
+		return x.Pane
+	}
+	return ""
+}
+
+func (x *IndicatorDefinition) GetColor() string {
+	if x != nil {
+		return x.Color
+	}
+	return ""
+}
+
+func (x *IndicatorDefinition) GetUnit() string {
+	if x != nil {
+		return x.Unit
+	}
+	return ""
+}
+
+func (x *IndicatorDefinition) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *IndicatorDefinition) GetConfigJson() string {
+	if x != nil {
+		return x.ConfigJson
+	}
+	return ""
+}
+
 type IndicatorFrame struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -1197,13 +1297,16 @@ type IndicatorFrame struct {
 	MarketTimeMs  int64                  `protobuf:"varint,3,opt,name=market_time_ms,json=marketTimeMs,proto3" json:"market_time_ms,omitempty"`
 	IntervalMs    int64                  `protobuf:"varint,4,opt,name=interval_ms,json=intervalMs,proto3" json:"interval_ms,omitempty"`
 	Values        []*IndicatorValue      `protobuf:"bytes,5,rep,name=values,proto3" json:"values,omitempty"`
+	UserId        int64                  `protobuf:"varint,6,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	StrategyId    int64                  `protobuf:"varint,7,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
+	Definitions   []*IndicatorDefinition `protobuf:"bytes,8,rep,name=definitions,proto3" json:"definitions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *IndicatorFrame) Reset() {
 	*x = IndicatorFrame{}
-	mi := &file_runtime_worker_proto_msgTypes[13]
+	mi := &file_runtime_worker_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1215,7 +1318,7 @@ func (x *IndicatorFrame) String() string {
 func (*IndicatorFrame) ProtoMessage() {}
 
 func (x *IndicatorFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[13]
+	mi := &file_runtime_worker_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1228,7 +1331,7 @@ func (x *IndicatorFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndicatorFrame.ProtoReflect.Descriptor instead.
 func (*IndicatorFrame) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{13}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *IndicatorFrame) GetSessionId() string {
@@ -1266,6 +1369,27 @@ func (x *IndicatorFrame) GetValues() []*IndicatorValue {
 	return nil
 }
 
+func (x *IndicatorFrame) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *IndicatorFrame) GetStrategyId() int64 {
+	if x != nil {
+		return x.StrategyId
+	}
+	return 0
+}
+
+func (x *IndicatorFrame) GetDefinitions() []*IndicatorDefinition {
+	if x != nil {
+		return x.Definitions
+	}
+	return nil
+}
+
 type NotificationEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -1279,7 +1403,7 @@ type NotificationEvent struct {
 
 func (x *NotificationEvent) Reset() {
 	*x = NotificationEvent{}
-	mi := &file_runtime_worker_proto_msgTypes[14]
+	mi := &file_runtime_worker_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1291,7 +1415,7 @@ func (x *NotificationEvent) String() string {
 func (*NotificationEvent) ProtoMessage() {}
 
 func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[14]
+	mi := &file_runtime_worker_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1304,7 +1428,7 @@ func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationEvent.ProtoReflect.Descriptor instead.
 func (*NotificationEvent) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{14}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *NotificationEvent) GetSessionId() string {
@@ -1353,7 +1477,7 @@ type WalletSnapshot struct {
 
 func (x *WalletSnapshot) Reset() {
 	*x = WalletSnapshot{}
-	mi := &file_runtime_worker_proto_msgTypes[15]
+	mi := &file_runtime_worker_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1365,7 +1489,7 @@ func (x *WalletSnapshot) String() string {
 func (*WalletSnapshot) ProtoMessage() {}
 
 func (x *WalletSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[15]
+	mi := &file_runtime_worker_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1378,7 +1502,7 @@ func (x *WalletSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WalletSnapshot.ProtoReflect.Descriptor instead.
 func (*WalletSnapshot) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{15}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *WalletSnapshot) GetSessionId() string {
@@ -1414,7 +1538,7 @@ type FinalStatus struct {
 
 func (x *FinalStatus) Reset() {
 	*x = FinalStatus{}
-	mi := &file_runtime_worker_proto_msgTypes[16]
+	mi := &file_runtime_worker_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1426,7 +1550,7 @@ func (x *FinalStatus) String() string {
 func (*FinalStatus) ProtoMessage() {}
 
 func (x *FinalStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[16]
+	mi := &file_runtime_worker_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1439,7 +1563,7 @@ func (x *FinalStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalStatus.ProtoReflect.Descriptor instead.
 func (*FinalStatus) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{16}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *FinalStatus) GetSessionId() string {
@@ -1482,7 +1606,7 @@ type WorkerError struct {
 
 func (x *WorkerError) Reset() {
 	*x = WorkerError{}
-	mi := &file_runtime_worker_proto_msgTypes[17]
+	mi := &file_runtime_worker_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1494,7 +1618,7 @@ func (x *WorkerError) String() string {
 func (*WorkerError) ProtoMessage() {}
 
 func (x *WorkerError) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[17]
+	mi := &file_runtime_worker_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1507,7 +1631,7 @@ func (x *WorkerError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerError.ProtoReflect.Descriptor instead.
 func (*WorkerError) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{17}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *WorkerError) GetSessionId() string {
@@ -1550,7 +1674,7 @@ type LogEvent struct {
 
 func (x *LogEvent) Reset() {
 	*x = LogEvent{}
-	mi := &file_runtime_worker_proto_msgTypes[18]
+	mi := &file_runtime_worker_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1562,7 +1686,7 @@ func (x *LogEvent) String() string {
 func (*LogEvent) ProtoMessage() {}
 
 func (x *LogEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[18]
+	mi := &file_runtime_worker_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1575,7 +1699,7 @@ func (x *LogEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEvent.ProtoReflect.Descriptor instead.
 func (*LogEvent) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{18}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *LogEvent) GetSessionId() string {
@@ -1616,7 +1740,7 @@ type AgentError struct {
 
 func (x *AgentError) Reset() {
 	*x = AgentError{}
-	mi := &file_runtime_worker_proto_msgTypes[19]
+	mi := &file_runtime_worker_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1628,7 +1752,7 @@ func (x *AgentError) String() string {
 func (*AgentError) ProtoMessage() {}
 
 func (x *AgentError) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[19]
+	mi := &file_runtime_worker_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1641,7 +1765,7 @@ func (x *AgentError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentError.ProtoReflect.Descriptor instead.
 func (*AgentError) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{19}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AgentError) GetCode() string {
@@ -1758,7 +1882,17 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\x01R\x05value\x12\x1b\n" +
 	"\thas_value\x18\x03 \x01(\bR\bhasValue\x12\x1f\n" +
 	"\vmarker_json\x18\x04 \x01(\tR\n" +
-	"markerJson\"\xd0\x01\n" +
+	"markerJson\"\xe3\x01\n" +
+	"\x13IndicatorDefinition\x12#\n" +
+	"\rindicator_key\x18\x01 \x01(\tR\findicatorKey\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x03 \x01(\tR\x04type\x12\x12\n" +
+	"\x04pane\x18\x04 \x01(\tR\x04pane\x12\x14\n" +
+	"\x05color\x18\x05 \x01(\tR\x05color\x12\x12\n" +
+	"\x04unit\x18\x06 \x01(\tR\x04unit\x12 \n" +
+	"\vdescription\x18\a \x01(\tR\vdescription\x12\x1f\n" +
+	"\vconfig_json\x18\b \x01(\tR\n" +
+	"configJson\"\xd4\x02\n" +
 	"\x0eIndicatorFrame\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
@@ -1767,7 +1901,11 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\x0emarket_time_ms\x18\x03 \x01(\x03R\fmarketTimeMs\x12\x1f\n" +
 	"\vinterval_ms\x18\x04 \x01(\x03R\n" +
 	"intervalMs\x129\n" +
-	"\x06values\x18\x05 \x03(\v2!.runtime.worker.v1.IndicatorValueR\x06values\"\x9d\x01\n" +
+	"\x06values\x18\x05 \x03(\v2!.runtime.worker.v1.IndicatorValueR\x06values\x12\x17\n" +
+	"\auser_id\x18\x06 \x01(\x03R\x06userId\x12\x1f\n" +
+	"\vstrategy_id\x18\a \x01(\x03R\n" +
+	"strategyId\x12H\n" +
+	"\vdefinitions\x18\b \x03(\v2&.runtime.worker.v1.IndicatorDefinitionR\vdefinitions\"\x9d\x01\n" +
 	"\x11NotificationEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1a\n" +
@@ -1822,30 +1960,31 @@ func file_runtime_worker_proto_rawDescGZIP() []byte {
 	return file_runtime_worker_proto_rawDescData
 }
 
-var file_runtime_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_runtime_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_runtime_worker_proto_goTypes = []any{
-	(*WorkerFrame)(nil),        // 0: runtime.worker.v1.WorkerFrame
-	(*AgentFrame)(nil),         // 1: runtime.worker.v1.AgentFrame
-	(*WorkerHello)(nil),        // 2: runtime.worker.v1.WorkerHello
-	(*WorkerHeartbeat)(nil),    // 3: runtime.worker.v1.WorkerHeartbeat
-	(*StartSession)(nil),       // 4: runtime.worker.v1.StartSession
-	(*MarketDataBatch)(nil),    // 5: runtime.worker.v1.MarketDataBatch
-	(*OrderUpdateBatch)(nil),   // 6: runtime.worker.v1.OrderUpdateBatch
-	(*StopSession)(nil),        // 7: runtime.worker.v1.StopSession
-	(*ShutdownWorker)(nil),     // 8: runtime.worker.v1.ShutdownWorker
-	(*SessionProgress)(nil),    // 9: runtime.worker.v1.SessionProgress
-	(*PlatformCall)(nil),       // 10: runtime.worker.v1.PlatformCall
-	(*PlatformCallResult)(nil), // 11: runtime.worker.v1.PlatformCallResult
-	(*IndicatorValue)(nil),     // 12: runtime.worker.v1.IndicatorValue
-	(*IndicatorFrame)(nil),     // 13: runtime.worker.v1.IndicatorFrame
-	(*NotificationEvent)(nil),  // 14: runtime.worker.v1.NotificationEvent
-	(*WalletSnapshot)(nil),     // 15: runtime.worker.v1.WalletSnapshot
-	(*FinalStatus)(nil),        // 16: runtime.worker.v1.FinalStatus
-	(*WorkerError)(nil),        // 17: runtime.worker.v1.WorkerError
-	(*LogEvent)(nil),           // 18: runtime.worker.v1.LogEvent
-	(*AgentError)(nil),         // 19: runtime.worker.v1.AgentError
-	nil,                        // 20: runtime.worker.v1.LogEvent.FieldsEntry
-	(*anypb.Any)(nil),          // 21: google.protobuf.Any
+	(*WorkerFrame)(nil),         // 0: runtime.worker.v1.WorkerFrame
+	(*AgentFrame)(nil),          // 1: runtime.worker.v1.AgentFrame
+	(*WorkerHello)(nil),         // 2: runtime.worker.v1.WorkerHello
+	(*WorkerHeartbeat)(nil),     // 3: runtime.worker.v1.WorkerHeartbeat
+	(*StartSession)(nil),        // 4: runtime.worker.v1.StartSession
+	(*MarketDataBatch)(nil),     // 5: runtime.worker.v1.MarketDataBatch
+	(*OrderUpdateBatch)(nil),    // 6: runtime.worker.v1.OrderUpdateBatch
+	(*StopSession)(nil),         // 7: runtime.worker.v1.StopSession
+	(*ShutdownWorker)(nil),      // 8: runtime.worker.v1.ShutdownWorker
+	(*SessionProgress)(nil),     // 9: runtime.worker.v1.SessionProgress
+	(*PlatformCall)(nil),        // 10: runtime.worker.v1.PlatformCall
+	(*PlatformCallResult)(nil),  // 11: runtime.worker.v1.PlatformCallResult
+	(*IndicatorValue)(nil),      // 12: runtime.worker.v1.IndicatorValue
+	(*IndicatorDefinition)(nil), // 13: runtime.worker.v1.IndicatorDefinition
+	(*IndicatorFrame)(nil),      // 14: runtime.worker.v1.IndicatorFrame
+	(*NotificationEvent)(nil),   // 15: runtime.worker.v1.NotificationEvent
+	(*WalletSnapshot)(nil),      // 16: runtime.worker.v1.WalletSnapshot
+	(*FinalStatus)(nil),         // 17: runtime.worker.v1.FinalStatus
+	(*WorkerError)(nil),         // 18: runtime.worker.v1.WorkerError
+	(*LogEvent)(nil),            // 19: runtime.worker.v1.LogEvent
+	(*AgentError)(nil),          // 20: runtime.worker.v1.AgentError
+	nil,                         // 21: runtime.worker.v1.LogEvent.FieldsEntry
+	(*anypb.Any)(nil),           // 22: google.protobuf.Any
 }
 var file_runtime_worker_proto_depIdxs = []int32{
 	2,  // 0: runtime.worker.v1.WorkerFrame.hello:type_name -> runtime.worker.v1.WorkerHello
@@ -1853,12 +1992,12 @@ var file_runtime_worker_proto_depIdxs = []int32{
 	9,  // 2: runtime.worker.v1.WorkerFrame.progress:type_name -> runtime.worker.v1.SessionProgress
 	10, // 3: runtime.worker.v1.WorkerFrame.platform_call:type_name -> runtime.worker.v1.PlatformCall
 	11, // 4: runtime.worker.v1.WorkerFrame.platform_call_result:type_name -> runtime.worker.v1.PlatformCallResult
-	13, // 5: runtime.worker.v1.WorkerFrame.indicator_frame:type_name -> runtime.worker.v1.IndicatorFrame
-	14, // 6: runtime.worker.v1.WorkerFrame.notification:type_name -> runtime.worker.v1.NotificationEvent
-	15, // 7: runtime.worker.v1.WorkerFrame.wallet_snapshot:type_name -> runtime.worker.v1.WalletSnapshot
-	16, // 8: runtime.worker.v1.WorkerFrame.final_status:type_name -> runtime.worker.v1.FinalStatus
-	17, // 9: runtime.worker.v1.WorkerFrame.worker_error:type_name -> runtime.worker.v1.WorkerError
-	18, // 10: runtime.worker.v1.WorkerFrame.log_event:type_name -> runtime.worker.v1.LogEvent
+	14, // 5: runtime.worker.v1.WorkerFrame.indicator_frame:type_name -> runtime.worker.v1.IndicatorFrame
+	15, // 6: runtime.worker.v1.WorkerFrame.notification:type_name -> runtime.worker.v1.NotificationEvent
+	16, // 7: runtime.worker.v1.WorkerFrame.wallet_snapshot:type_name -> runtime.worker.v1.WalletSnapshot
+	17, // 8: runtime.worker.v1.WorkerFrame.final_status:type_name -> runtime.worker.v1.FinalStatus
+	18, // 9: runtime.worker.v1.WorkerFrame.worker_error:type_name -> runtime.worker.v1.WorkerError
+	19, // 10: runtime.worker.v1.WorkerFrame.log_event:type_name -> runtime.worker.v1.LogEvent
 	4,  // 11: runtime.worker.v1.AgentFrame.start_session:type_name -> runtime.worker.v1.StartSession
 	5,  // 12: runtime.worker.v1.AgentFrame.market_data_batch:type_name -> runtime.worker.v1.MarketDataBatch
 	6,  // 13: runtime.worker.v1.AgentFrame.order_update_batch:type_name -> runtime.worker.v1.OrderUpdateBatch
@@ -1866,23 +2005,24 @@ var file_runtime_worker_proto_depIdxs = []int32{
 	8,  // 15: runtime.worker.v1.AgentFrame.shutdown_worker:type_name -> runtime.worker.v1.ShutdownWorker
 	10, // 16: runtime.worker.v1.AgentFrame.platform_call:type_name -> runtime.worker.v1.PlatformCall
 	11, // 17: runtime.worker.v1.AgentFrame.platform_call_result:type_name -> runtime.worker.v1.PlatformCallResult
-	19, // 18: runtime.worker.v1.AgentFrame.error:type_name -> runtime.worker.v1.AgentError
-	21, // 19: runtime.worker.v1.StartSession.run_strategy_request:type_name -> google.protobuf.Any
-	21, // 20: runtime.worker.v1.StartSession.session_bootstrap:type_name -> google.protobuf.Any
-	21, // 21: runtime.worker.v1.MarketDataBatch.klines:type_name -> google.protobuf.Any
-	21, // 22: runtime.worker.v1.OrderUpdateBatch.events:type_name -> google.protobuf.Any
-	21, // 23: runtime.worker.v1.PlatformCall.request:type_name -> google.protobuf.Any
-	21, // 24: runtime.worker.v1.PlatformCallResult.response:type_name -> google.protobuf.Any
+	20, // 18: runtime.worker.v1.AgentFrame.error:type_name -> runtime.worker.v1.AgentError
+	22, // 19: runtime.worker.v1.StartSession.run_strategy_request:type_name -> google.protobuf.Any
+	22, // 20: runtime.worker.v1.StartSession.session_bootstrap:type_name -> google.protobuf.Any
+	22, // 21: runtime.worker.v1.MarketDataBatch.klines:type_name -> google.protobuf.Any
+	22, // 22: runtime.worker.v1.OrderUpdateBatch.events:type_name -> google.protobuf.Any
+	22, // 23: runtime.worker.v1.PlatformCall.request:type_name -> google.protobuf.Any
+	22, // 24: runtime.worker.v1.PlatformCallResult.response:type_name -> google.protobuf.Any
 	12, // 25: runtime.worker.v1.IndicatorFrame.values:type_name -> runtime.worker.v1.IndicatorValue
-	21, // 26: runtime.worker.v1.WalletSnapshot.wallet:type_name -> google.protobuf.Any
-	20, // 27: runtime.worker.v1.LogEvent.fields:type_name -> runtime.worker.v1.LogEvent.FieldsEntry
-	0,  // 28: runtime.worker.v1.RuntimeWorkerAgent.Connect:input_type -> runtime.worker.v1.WorkerFrame
-	1,  // 29: runtime.worker.v1.RuntimeWorkerAgent.Connect:output_type -> runtime.worker.v1.AgentFrame
-	29, // [29:30] is the sub-list for method output_type
-	28, // [28:29] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	13, // 26: runtime.worker.v1.IndicatorFrame.definitions:type_name -> runtime.worker.v1.IndicatorDefinition
+	22, // 27: runtime.worker.v1.WalletSnapshot.wallet:type_name -> google.protobuf.Any
+	21, // 28: runtime.worker.v1.LogEvent.fields:type_name -> runtime.worker.v1.LogEvent.FieldsEntry
+	0,  // 29: runtime.worker.v1.RuntimeWorkerAgent.Connect:input_type -> runtime.worker.v1.WorkerFrame
+	1,  // 30: runtime.worker.v1.RuntimeWorkerAgent.Connect:output_type -> runtime.worker.v1.AgentFrame
+	30, // [30:31] is the sub-list for method output_type
+	29, // [29:30] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_runtime_worker_proto_init() }
@@ -1919,7 +2059,7 @@ func file_runtime_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runtime_worker_proto_rawDesc), len(file_runtime_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

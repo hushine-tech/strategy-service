@@ -12,8 +12,20 @@
 #
 # Hosted and self-hosted runtimes share the same RuntimeChannel entrypoint.
 # Hosted containers receive an internal credential from control-panel; local
-# debug can use `hushine-runtime start --user-id ...` only when the
-# control-panel debug gate is enabled.
+# bare runtimes connect with the Go runtime-agent after control-panel bootstrap.
+
+FROM golang:1.26-bookworm AS go-builder
+
+WORKDIR /src
+
+COPY golang-lib/ /src/golang-lib/
+COPY strategy-service/go.mod strategy-service/go.sum /src/strategy-service/
+COPY strategy-service/cmd/ /src/strategy-service/cmd/
+COPY strategy-service/gen/ /src/strategy-service/gen/
+COPY strategy-service/internal/ /src/strategy-service/internal/
+
+RUN cd /src/strategy-service \
+    && go build -o /out/runtime-agent ./cmd/runtime-agent
 
 FROM python:3.13-slim AS runtime-base
 
@@ -37,18 +49,19 @@ RUN pip install --no-cache-dir uv
 COPY strategy-library/ /app/strategy-library/
 
 # strategy-service code (everything except the dangling symlink).
-COPY strategy-service/hushine_runtime_cli.py /app/strategy-service/hushine_runtime_cli.py
 COPY strategy-service/strategy_service/ /app/strategy-service/strategy_service/
 COPY strategy-service/strategy_templates/ /app/strategy-service/strategy_templates/
 COPY strategy-service/proto/ /app/strategy-service/proto/
 COPY strategy-service/config.yaml /app/strategy-service/config.yaml
+RUN mkdir -p /app/strategy-service/bin
+COPY --from=go-builder /out/runtime-agent /app/strategy-service/bin/runtime-agent
 
 # In the image we recreate the symlink layout the source tree uses so
 # imports like `from utils.log import ...` resolve via PYTHONPATH the
 # same way local dev does.
 RUN ln -s /app/strategy-library /app/strategy-service/strategy-library \
     && cd /app/strategy-service \
-    && uv sync --frozen --no-dev
+    && uv sync --frozen --no-dev --no-install-package hushine-strategy-library
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -62,6 +75,6 @@ FROM runtime-base AS executor
 
 ENV HUSHINE_RUNTIME_ROLE=executor
 
-CMD ["uv", "run", "--no-sync", "python", "-m", "hushine_runtime_cli", "start", "--config", "config.yaml"]
+CMD ["./bin/runtime-agent", "--config", "config.yaml"]
 
 FROM executor AS default

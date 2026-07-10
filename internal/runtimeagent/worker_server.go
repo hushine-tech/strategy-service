@@ -77,6 +77,41 @@ func (r *SessionRegistry) AdmitWorker(sessionID string, token string, pid int64)
 	return nil
 }
 
+func (r *SessionRegistry) AliasWorkerSession(existingSessionID string, sessionID string) error {
+	existingSessionID = strings.TrimSpace(existingSessionID)
+	sessionID = strings.TrimSpace(sessionID)
+	if existingSessionID == "" || sessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	worker, ok := r.active[existingSessionID]
+	if !ok {
+		return ErrWorkerNotExpected
+	}
+	if existingSessionID == sessionID {
+		return nil
+	}
+	if _, ok := r.expected[sessionID]; ok {
+		return ErrWorkerAlreadyExists
+	}
+	if existing, ok := r.active[sessionID]; ok {
+		if existing.PID == worker.PID && existing.SessionID == worker.SessionID {
+			return nil
+		}
+		return ErrWorkerAlreadyExists
+	}
+	worker.SessionID = sessionID
+	for key, active := range r.active {
+		if active.PID == worker.PID && (active.SessionID == existingSessionID || key == existingSessionID) {
+			r.active[key] = worker
+		}
+	}
+	r.active[sessionID] = worker
+	return nil
+}
+
 func (r *SessionRegistry) ForgetWorker(sessionID string) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -86,5 +121,26 @@ func (r *SessionRegistry) ForgetWorker(sessionID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.expected, sessionID)
-	delete(r.active, sessionID)
+	worker, ok := r.active[sessionID]
+	if !ok {
+		delete(r.active, sessionID)
+		return
+	}
+	for key, active := range r.active {
+		if active.PID == worker.PID && active.SessionID == worker.SessionID {
+			delete(r.active, key)
+		}
+	}
+}
+
+func (r *SessionRegistry) ActiveWorker(sessionID string) (WorkerIdentity, bool) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return WorkerIdentity{}, false
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	worker, ok := r.active[sessionID]
+	return worker, ok
 }

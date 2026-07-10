@@ -1,17 +1,25 @@
 package runtimeagent
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 type WorkerManagerConfig struct {
 	PythonExecutable string
+	PythonArgsPrefix []string
 	WorkerModule     string
 	AgentAddr        string
 	DebugpyBasePort  int
+	WorkDir          string
 }
 
 type WorkerStartSpec struct {
@@ -25,6 +33,18 @@ type WorkerStartSpec struct {
 type WorkerManager struct {
 	cfg      WorkerManagerConfig
 	registry *SessionRegistry
+	mu       sync.Mutex
+	active   map[string]*ManagedWorker
+}
+
+type ManagedWorker struct {
+	SessionID string
+	Spec      WorkerStartSpec
+	Cmd       *exec.Cmd
+
+	done     <-chan error
+	waitOnce sync.Once
+	waitErr  error
 }
 
 func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
@@ -40,6 +60,7 @@ func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
 	return &WorkerManager{
 		cfg:      cfg,
 		registry: NewSessionRegistry(),
+		active:   map[string]*ManagedWorker{},
 	}
 }
 
@@ -74,8 +95,179 @@ func (m *WorkerManager) PrepareSessionWorker(sessionID string) (WorkerStartSpec,
 	return spec, nil
 }
 
+func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string, extraEnv []string) (*ManagedWorker, error) {
+	spec, err := m.PrepareSessionWorker(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		m.registry.ForgetWorker(sessionID)
+		return nil, ctx.Err()
+	default:
+	}
+	args := append([]string{}, m.cfg.PythonArgsPrefix...)
+	args = append(args, "-m", m.cfg.WorkerModule)
+	cmd := exec.Command(m.cfg.PythonExecutable, args...)
+	if strings.TrimSpace(m.cfg.WorkDir) != "" {
+		cmd.Dir = m.cfg.WorkDir
+	}
+	cmd.Env = append(os.Environ(), spec.Env...)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		m.registry.ForgetWorker(sessionID)
+		return nil, fmt.Errorf("start session worker: %w", err)
+	}
+	done := make(chan error, 1)
+	worker := &ManagedWorker{SessionID: spec.SessionID, Spec: spec, Cmd: cmd, done: done}
+	m.mu.Lock()
+	m.active[spec.SessionID] = worker
+	m.mu.Unlock()
+	go func() {
+		err := cmd.Wait()
+		m.registry.ForgetWorker(spec.SessionID)
+		m.forgetWorker(worker)
+		done <- err
+		close(done)
+	}()
+	return worker, nil
+}
+
+func (m *WorkerManager) StopSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	worker := m.findWorker(sessionID)
+	if worker == nil || worker.Cmd == nil || worker.Cmd.Process == nil {
+		m.registry.ForgetWorker(sessionID)
+		return nil
+	}
+	if err := worker.Cmd.Process.Kill(); err != nil {
+		if errors.Is(err, os.ErrProcessDone) {
+			m.registry.ForgetWorker(sessionID)
+			m.forgetWorker(worker)
+			return nil
+		}
+		m.registry.ForgetWorker(sessionID)
+		return fmt.Errorf("kill session worker %s: %w", sessionID, err)
+	}
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- worker.Wait()
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return fmt.Errorf("session worker did not exit after kill: %s", sessionID)
+	case <-waitDone:
+		m.registry.ForgetWorker(sessionID)
+		m.forgetWorker(worker)
+		return nil
+	}
+}
+
+func (m *WorkerManager) AliasWorkerSession(existingSessionID string, sessionID string) error {
+	existingSessionID = strings.TrimSpace(existingSessionID)
+	sessionID = strings.TrimSpace(sessionID)
+	if existingSessionID == "" || sessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	if err := m.registry.AliasWorkerSession(existingSessionID, sessionID); err != nil {
+		return err
+	}
+	if existingSessionID == sessionID {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if worker := m.active[existingSessionID]; worker != nil {
+		m.active[sessionID] = worker
+		return nil
+	}
+	identity, ok := m.registry.ActiveWorker(sessionID)
+	if !ok || identity.PID <= 0 {
+		return nil
+	}
+	for _, worker := range m.active {
+		if worker != nil && worker.Cmd != nil && worker.Cmd.Process != nil && int64(worker.Cmd.Process.Pid) == identity.PID {
+			m.active[sessionID] = worker
+			return nil
+		}
+	}
+	return nil
+}
+
+func (w *ManagedWorker) Wait() error {
+	if w == nil || w.Cmd == nil {
+		return nil
+	}
+	w.waitOnce.Do(func() {
+		if w.done != nil {
+			w.waitErr = <-w.done
+			return
+		}
+		w.waitErr = w.Cmd.Wait()
+	})
+	return w.waitErr
+}
+
 func (m *WorkerManager) Registry() *SessionRegistry {
 	return m.registry
+}
+
+func (m *WorkerManager) findWorker(sessionID string) *ManagedWorker {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	m.mu.Lock()
+	if worker := m.active[sessionID]; worker != nil {
+		m.mu.Unlock()
+		return worker
+	}
+	m.mu.Unlock()
+	identity, ok := m.registry.ActiveWorker(sessionID)
+	if !ok || identity.PID <= 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, worker := range m.active {
+		if worker != nil && worker.Cmd != nil && worker.Cmd.Process != nil && int64(worker.Cmd.Process.Pid) == identity.PID {
+			return worker
+		}
+	}
+	return nil
+}
+
+func (m *WorkerManager) forgetWorker(worker *ManagedWorker) {
+	if worker == nil {
+		return
+	}
+	pid := int64(0)
+	if worker.Cmd != nil && worker.Cmd.Process != nil {
+		pid = int64(worker.Cmd.Process.Pid)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, active := range m.active {
+		if active == worker {
+			delete(m.active, key)
+			continue
+		}
+		if pid > 0 && active != nil && active.Cmd != nil && active.Cmd.Process != nil && int64(active.Cmd.Process.Pid) == pid {
+			delete(m.active, key)
+		}
+	}
 }
 
 func randomToken() (string, error) {

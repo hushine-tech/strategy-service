@@ -5,21 +5,32 @@ CONFIG?=./config.yaml
 PID_FILE=.run.pid
 DEV_NO_PROXY_HOSTS ?= 127.0.0.1,localhost,::1,192.168.88.10
 DEV_NO_PROXY := env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY NO_PROXY=$(DEV_NO_PROXY_HOSTS),$${NO_PROXY} no_proxy=$(DEV_NO_PROXY_HOSTS),$${no_proxy}
+VERSION?=dev
 
-.PHONY: build dev start stop clean test
+.PHONY: build build-release dev start stop clean test test-scripts
 
 test:
 	PYTHONPATH=$(PYTHONPATH_VAL) $(UV) run --extra dev pytest tests/ -q
+	go test ./...
+	$(MAKE) test-scripts
+
+test-scripts:
+	bash scripts/start-bare-runtime-debugpy.test.sh
+	bash scripts/runtime-agent-platform.test.sh
 
 build:
-	@echo "Python: no build step (use 'make dev' or 'make start')"
+	go build -o bin/runtime-agent ./cmd/runtime-agent
+
+build-release:
+	scripts/build-runtime-agent-release.sh --version $(VERSION)
 
 dev:
-	$(DEV_NO_PROXY) PYTHONPATH=$(PYTHONPATH_VAL) $(UV) run hushine-runtime start --config $(CONFIG)
+	$(DEV_NO_PROXY) PYTHONPATH=$(PYTHONPATH_VAL) go run ./cmd/runtime-agent --config $(CONFIG)
 
 start:
 	mkdir -p logs
-	python3 -c 'import os, subprocess; env=os.environ.copy(); [env.pop(k, None) for k in ("http_proxy","https_proxy","HTTP_PROXY","HTTPS_PROXY","all_proxy","ALL_PROXY")]; env["NO_PROXY"]="$(DEV_NO_PROXY_HOSTS),"+env.get("NO_PROXY",""); env["no_proxy"]="$(DEV_NO_PROXY_HOSTS),"+env.get("no_proxy",""); env["PYTHONPATH"]="$(PYTHONPATH_VAL)"; out=open("logs/strategy-service.out","ab",buffering=0); p=subprocess.Popen(["$(UV)","run","hushine-runtime","start","--config","$(CONFIG)"], stdout=out, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True, env=env); open("$(PID_FILE)","w").write(str(p.pid)+"\n")'
+	$(MAKE) build
+	python3 -c 'import os, subprocess; env=os.environ.copy(); [env.pop(k, None) for k in ("http_proxy","https_proxy","HTTP_PROXY","HTTPS_PROXY","all_proxy","ALL_PROXY")]; env["NO_PROXY"]="$(DEV_NO_PROXY_HOSTS),"+env.get("NO_PROXY",""); env["no_proxy"]="$(DEV_NO_PROXY_HOSTS),"+env.get("no_proxy",""); env["PYTHONPATH"]="$(PYTHONPATH_VAL)"; out=open("logs/strategy-service.out","ab",buffering=0); p=subprocess.Popen(["./bin/runtime-agent","--config","$(CONFIG)"], stdout=out, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True, env=env); open("$(PID_FILE)","w").write(str(p.pid)+"\n")'
 	@echo "✓ strategy-service started (pid=$$(cat $(PID_FILE))), logs at strategy-service/logs/strategy-service.out"
 
 stop:

@@ -11,7 +11,8 @@ runtime mode has been removed.
 ```bash
 uv sync
 ./generate_proto.sh
-uv run hushine-runtime start --config config.yaml
+make build
+scripts/start-runtime-agent.sh -- --config config.yaml
 ```
 
 Run tests:
@@ -46,8 +47,48 @@ docker run --rm \
 ```
 
 `config.yaml` is intentionally runtime-only. Do not put portfolio/order,
-Kafka, or database endpoints in this repository's default config; executor
-runtimes talk to the platform through RuntimeChannel proxy calls.
+Kafka, database, market-data policy, or notification endpoints in this
+repository's default config; executor runtimes talk to the platform through
+RuntimeChannel proxy calls.
+
+## Runtime Agent Binaries
+
+Daily development builds only the current platform binary:
+
+```bash
+make build
+```
+
+Release packaging is the only flow that cross-compiles all supported platforms:
+
+```bash
+scripts/build-runtime-agent-release.sh --version v0.1.0
+```
+
+That writes:
+
+- `dist/runtime-agent/darwin-amd64/runtime-agent`
+- `dist/runtime-agent/darwin-arm64/runtime-agent`
+- `dist/runtime-agent/linux-amd64/runtime-agent`
+- `dist/runtime-agent/linux-arm64/runtime-agent`
+- `dist/runtime-agent/windows-amd64/runtime-agent.exe`
+- `dist/runtime-agent/windows-arm64/runtime-agent.exe`
+
+The launchers auto-detect the current platform and start an existing binary;
+they do not build:
+
+```bash
+scripts/start-runtime-agent.sh -- --config config.yaml
+```
+
+Windows:
+
+```powershell
+.\scripts\start-runtime-agent.ps1 -- --config config.yaml
+```
+
+For a source checkout with no release binary, run `make build` once. To
+explicitly allow source-mode fallback, set `RUNTIME_AGENT_ALLOW_GO_RUN=1`.
 
 ## RuntimeChannel Data Path
 
@@ -71,6 +112,7 @@ For the current bare-runtime debugpy path, start from the `strategy-service`
 directory:
 
 ```bash
+make build
 DEBUG_WAIT=0 scripts/start-bare-runtime-debugpy.sh 6 192.168.88.6
 ```
 
@@ -81,9 +123,26 @@ the target platform host. With the command above, the script derives:
 - control-panel: `192.168.88.6:50054`
 - RuntimeChannel: `192.168.88.6:50055`
 
-`DEBUG_WAIT=0` starts the runtime immediately without waiting for a VS Code
-debugger attach. Omit it, or set `DEBUG_WAIT=1`, when you want the process to
-pause before runtime registration.
+`DEBUG_WAIT=0` starts the runtime immediately. Omit it, or set `DEBUG_WAIT=1`,
+when you want the Python session worker to pause for VS Code before executing a
+session.
+
+When the local strategy code has changed and the currently selected bare
+session should be restarted, keep the runtime-agent running and execute:
+
+```bash
+scripts/restart-bare-worker-session.sh
+```
+
+The command reads the state file written by
+`scripts/start-bare-runtime-debugpy.sh`, stops the old local Python worker,
+marks the old session recoverable through RuntimeChannel, clears local worker
+buffers, and starts a fresh worker against the same runtime. To target a known
+session explicitly:
+
+```bash
+scripts/restart-bare-worker-session.sh <session_id>
+```
 
 Equivalent explicit form:
 
@@ -115,14 +174,14 @@ The default attach endpoint is `127.0.0.1:5678`, matching the script output:
 `VS Code attach: 127.0.0.1:5678`. If you start the runtime with
 `DEBUG_PORT=5679`, update the launch configuration port to `5679` as well.
 
-The raw `hushine-runtime start` form is still available for non-debugpy
-diagnostics:
+The raw Go agent form is available for non-debugpy diagnostics after a bare
+runtime certificate has already been bootstrapped:
 
 ```bash
 RUNTIME_CHANNEL_TLS_ENABLED=true \
 RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE=../hushine-deploy/certs/runtime-channel-server.pem \
 RUNTIME_CHANNEL_TLS_SERVER_NAME=runtime-channel.local \
-uv run hushine-runtime start --config config.local.yaml \
+scripts/start-runtime-agent.sh -- --config config.local.yaml \
   --control-panel-addr 127.0.0.1:50054 \
   --runtime-channel-addr 127.0.0.1:50055 \
   --user-id 123
@@ -134,12 +193,6 @@ through RuntimeChannel; direct core-service calls are ignored after startup.
 Optional environment overrides include `DEBUG_HOST`, `DEBUG_PORT`,
 `DEBUG_WAIT`, `PLATFORM_HOST`, `CORE_SERVICE_ADDR`, `CONTROL_PANEL_ADDR`,
 `RUNTIME_CHANNEL_ADDR`, and `CONFIG_PATH`.
-
-The existing debug replay helper remains available through uv:
-
-```bash
-uv run hushine-debug replay --debugpy --wait
-```
 
 When a bare debug run materializes strategy code locally, edits live under
 `.hushine-runtime/strategies`. Upload them back to the remote portfolio database

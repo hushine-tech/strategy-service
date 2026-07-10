@@ -1,7 +1,9 @@
 package runtimeagent
 
 import (
+	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -25,17 +27,27 @@ type IndicatorChunk struct {
 type IndicatorBuffer struct {
 	mu        sync.Mutex
 	limit     int
+	kind      string
 	active    IndicatorChunk
 	activeRaw []string
 	pending   map[int]IndicatorChunk
 }
 
 func NewIndicatorBuffer(limit int) *IndicatorBuffer {
+	return NewIndicatorBufferForType(limit, "line")
+}
+
+func NewIndicatorBufferForType(limit int, kind string) *IndicatorBuffer {
 	if limit <= 0 {
 		limit = 1024
 	}
+	kind = strings.TrimSpace(strings.ToLower(kind))
+	if kind == "" {
+		kind = "line"
+	}
 	return &IndicatorBuffer{
 		limit:   limit,
+		kind:    kind,
 		pending: map[int]IndicatorChunk{},
 	}
 }
@@ -50,8 +62,13 @@ func (b *IndicatorBuffer) AddPoint(point IndicatorPoint) bool {
 	}
 	b.active.EndTimeMS = point.MarketTimeMS
 	b.active.Count++
-	b.activeRaw = append(b.activeRaw, normalizeJSONValue(point.ValueJSON))
-	b.active.ValuesJSON = "[" + strings.Join(b.activeRaw, ",") + "]"
+	if b.kind == "marker" {
+		b.activeRaw = append(b.activeRaw, markersWithOffset(point.ValueJSON, b.active.Count-1)...)
+		b.active.ValuesJSON = `{"markers":[` + strings.Join(b.activeRaw, ",") + `]}`
+	} else {
+		b.activeRaw = append(b.activeRaw, normalizeJSONValue(point.ValueJSON))
+		b.active.ValuesJSON = `{"values":[` + strings.Join(b.activeRaw, ",") + `],"times":null}`
+	}
 
 	if b.active.Count < b.limit {
 		return false
@@ -97,5 +114,43 @@ func normalizeJSONValue(value string) string {
 	if value == "" {
 		return "null"
 	}
-	return value
+	if _, err := strconv.ParseFloat(value, 64); err == nil {
+		return value
+	}
+	if value == "null" {
+		return value
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "null"
+	}
+	return string(raw)
+}
+
+func markersWithOffset(value string, offset int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	var markers []map[string]any
+	if err := json.Unmarshal([]byte(value), &markers); err != nil {
+		var marker map[string]any
+		if err := json.Unmarshal([]byte(value), &marker); err != nil {
+			return nil
+		}
+		markers = []map[string]any{marker}
+	}
+	out := make([]string, 0, len(markers))
+	for _, marker := range markers {
+		if marker == nil {
+			continue
+		}
+		marker["offset"] = offset
+		raw, err := json.Marshal(marker)
+		if err != nil {
+			continue
+		}
+		out = append(out, string(raw))
+	}
+	return out
 }

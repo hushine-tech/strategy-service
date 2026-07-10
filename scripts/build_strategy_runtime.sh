@@ -51,4 +51,5 @@ echo "  RuntimeChannel startup ignores portfolio/order/Kafka/database"
 echo "  config and uses only RuntimeChannel platform proxy calls."
 echo
 echo "  # 3. Local bare debug on a machine with uv installed:"
-echo "  uv run hushine-runtime start --config config.yaml --runtime-channel-addr 127.0.0.1:50055 --user-id 123"
+echo "  make build"
+echo "  DEBUG_WAIT=0 scripts/start-bare-runtime-debugpy.sh 123 127.0.0.1"

@@ -11,7 +11,7 @@ dependencies:
 
 runtime:
   # Empty uses /etc/hushine/runtime.cred for self-hosted runtimes.
-  # Bare debug uses `hushine-runtime start --user-id ...` instead.
+  # Bare debug uses scripts/start-bare-runtime-debugpy.sh.
   credential_path: ""
   source: ""
   runtime_id: ""
@@ -25,17 +25,6 @@ runtime_channel_tls:
   enabled: false
   root_cert_file: ""
   server_name: ""
-
-market_data:
-  preflight_enabled: true
-  lease_management_enabled: true
-  lease_heartbeat_seconds: 30
-  lease_ttl_seconds: 90
-  freshness_grace_seconds: 30
-
-notification:
-  enabled: true
-  timeout_seconds: 2
 
 log:
   tracing:

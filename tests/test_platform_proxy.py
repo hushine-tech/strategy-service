@@ -454,7 +454,7 @@ def test_runtime_channel_log_handler_skips_proxy_internals():
     import logging
 
     record = logging.LogRecord(
-        name="strategy_service.runtime_channel",
+        name="strategy_service.worker_agent_client",
         level=logging.WARNING,
         pathname=__file__,
         lineno=123,

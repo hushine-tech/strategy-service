@@ -1,5 +1,7 @@
 # back-test is the legacy implementation, managed separately
 back-test/
+bin/
+dist/
 __pycache__/
 .venv/
 .uv-bootstrap/
