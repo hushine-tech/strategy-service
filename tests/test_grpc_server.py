@@ -109,6 +109,12 @@ def _install_marketdata_client(monkeypatch, fake_cls) -> None:
     )
 
 
+def test_session_state_has_no_legacy_live_loop_hook():
+    state = SessionState(environment=1, user_id=17, portfolio_id=404)
+
+    assert not hasattr(state, "live_loop")
+
+
 def _wallet_with_futures_slot():
     """Build a environment=1 testnet wallet with one isolated BTCUSDT position slot.
 
@@ -2353,13 +2359,6 @@ def test_stop_strategy_stop_only_persists_state_and_halts_runtime():
             updates.append((session_id, status, bars_processed, error))
             return True
 
-    class FakeLiveLoop:
-        def __init__(self) -> None:
-            self.stopped = False
-
-        def stop(self) -> None:
-            self.stopped = True
-
     class FakePlatformProxy:
         def portfolio_client(self):
             return FakePortfolioClient("acct:1")
@@ -2367,8 +2366,6 @@ def test_stop_strategy_stop_only_persists_state_and_halts_runtime():
     servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092")
     servicer.set_platform_proxy(FakePlatformProxy())
     session_id, state = servicer._sessions.create(environment=1, user_id=17, portfolio_id=404)
-    live_loop = FakeLiveLoop()
-    state.live_loop = live_loop
     stop_event = threading.Event()
     state._stop_event = stop_event  # type: ignore[attr-defined]
     state.lease_stop_event = threading.Event()
@@ -2386,7 +2383,6 @@ def test_stop_strategy_stop_only_persists_state_and_halts_runtime():
     assert resp.stopped is True
     assert context.code is None
     assert state.status == "stopped"
-    assert live_loop.stopped is True
     assert stop_event.is_set() is True
     assert state.lease_stop_event is not None and state.lease_stop_event.is_set() is True
     assert updates[-1] == (session_id, "stopped", 0, "")
@@ -2523,13 +2519,6 @@ def test_stop_strategy_finish_persists_finished_and_halts_runtime():
             updates.append((session_id, status, bars_processed, error))
             return True
 
-    class FakeLiveLoop:
-        def __init__(self) -> None:
-            self.stopped = False
-
-        def stop(self) -> None:
-            self.stopped = True
-
     class FakePlatformProxy:
         def portfolio_client(self):
             return FakePortfolioClient("acct:1")
@@ -2537,8 +2526,6 @@ def test_stop_strategy_finish_persists_finished_and_halts_runtime():
     servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092")
     servicer.set_platform_proxy(FakePlatformProxy())
     session_id, state = servicer._sessions.create(environment=1, user_id=17, portfolio_id=404)
-    live_loop = FakeLiveLoop()
-    state.live_loop = live_loop
     stop_event = threading.Event()
     state._stop_event = stop_event  # type: ignore[attr-defined]
     state.lease_stop_event = threading.Event()
@@ -2556,7 +2543,6 @@ def test_stop_strategy_finish_persists_finished_and_halts_runtime():
     assert resp.stopped is True
     assert context.code is None
     assert state.status == "finished"
-    assert live_loop.stopped is True
     assert stop_event.is_set() is True
     assert state.lease_stop_event is not None and state.lease_stop_event.is_set() is True
     assert updates[0][1] == "stopping"

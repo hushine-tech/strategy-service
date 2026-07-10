@@ -6,10 +6,6 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from strategy_service.data_loop import LiveDataLoop
 
 _TERMINAL_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
 _ACTIVE_STATUSES = frozenset({"running", "stopping"})
@@ -39,7 +35,6 @@ class SessionState:
     runtime_source: str = ""
     runtime_name: str = ""
     thread: threading.Thread | None = None
-    live_loop: "LiveDataLoop | None" = None  # demo/live session stop hook
     required_streams: list[StreamBinding] = field(default_factory=list)
     live_consumer_group: str = ""
     lease_thread: threading.Thread | None = None
@@ -249,12 +244,6 @@ class SessionManager:
             s = self._sessions.get(session_id)
             if s is not None:
                 s.thread = thread
-
-    def set_live_loop(self, session_id: str, loop: "LiveDataLoop") -> None:
-        with self._lock:
-            s = self._sessions.get(session_id)
-            if s is not None:
-                s.live_loop = loop
 
     def list_active_live_sessions(self) -> list[tuple[str, SessionState]]:
         with self._lock:

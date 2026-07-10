@@ -1052,8 +1052,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         # backtest / live runtime now — the (symbol, market) flattening was
         # removed after multi-interval support landed, because collapsing to
         # 2-tuples silently dropped declared intervals on the replay/subscribe
-        # paths (see ``data_loop.BacktestDataLoop.run_declared`` +
-        # ``LiveKlineSubscription.from_declared_inputs``).
+        # paths. Declared (exchange, market, symbol, interval) inputs remain
+        # distinct and are never flattened to a single interval per symbol.
 
         # Preflight is split into two concerns:
         #
@@ -2156,8 +2156,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
     @staticmethod
     def _halt_session_runtime(state: SessionState, *, finalize: bool) -> None:
-        if state.live_loop is not None:
-            state.live_loop.stop()
         if state.lease_stop_event is not None:
             state.lease_stop_event.set()
         if finalize:
