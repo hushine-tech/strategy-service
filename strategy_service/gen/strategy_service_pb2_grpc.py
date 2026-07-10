@@ -70,11 +70,11 @@ class StrategyServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def RunStrategy(self, request, context):
-        """RunStrategy starts strategy execution. Returns immediately with a session_id.
-        Data source is determined by portfolio environment (fetched from core-service):
-        environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
-        environment=1 (demo)     → LiveDataLoop (Kafka)
-        environment=2 (live)     → LiveDataLoop (Kafka; currently fail-closed)
+        """RunStrategy starts strategy execution and returns immediately with a session_id.
+        Data delivery is selected from the Portfolio environment:
+        environment=0 (backtest) -> paged historical reads through the platform proxy
+        environment=1 (demo)     -> RuntimeChannel live K-line and order-update frames
+        environment=2 (live)     -> RuntimeChannel, rollout-guarded and fail-closed
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

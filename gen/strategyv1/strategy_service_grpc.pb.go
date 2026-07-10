@@ -31,12 +31,12 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StrategyServiceClient interface {
-	// RunStrategy starts strategy execution. Returns immediately with a session_id.
-	// Data source is determined by portfolio environment (fetched from core-service):
+	// RunStrategy starts strategy execution and returns immediately with a session_id.
+	// Data delivery is selected from the Portfolio environment:
 	//
-	//	environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
-	//	environment=1 (demo)     → LiveDataLoop (Kafka)
-	//	environment=2 (live)     → LiveDataLoop (Kafka; currently fail-closed)
+	//	environment=0 (backtest) -> paged historical reads through the platform proxy
+	//	environment=1 (demo)     -> RuntimeChannel live K-line and order-update frames
+	//	environment=2 (live)     -> RuntimeChannel, rollout-guarded and fail-closed
 	RunStrategy(ctx context.Context, in *RunStrategyRequest, opts ...grpc.CallOption) (*RunStrategyResponse, error)
 	// PreviewRunStrategy runs the same profile-specific preflight as RunStrategy
 	// but does NOT create a session, persist state, or start a background worker.
@@ -129,12 +129,12 @@ func (c *strategyServiceClient) ValidateStrategyCode(ctx context.Context, in *Va
 // All implementations must embed UnimplementedStrategyServiceServer
 // for forward compatibility.
 type StrategyServiceServer interface {
-	// RunStrategy starts strategy execution. Returns immediately with a session_id.
-	// Data source is determined by portfolio environment (fetched from core-service):
+	// RunStrategy starts strategy execution and returns immediately with a session_id.
+	// Data delivery is selected from the Portfolio environment:
 	//
-	//	environment=0 (backtest) → BacktestDataLoop (TimescaleDB)
-	//	environment=1 (demo)     → LiveDataLoop (Kafka)
-	//	environment=2 (live)     → LiveDataLoop (Kafka; currently fail-closed)
+	//	environment=0 (backtest) -> paged historical reads through the platform proxy
+	//	environment=1 (demo)     -> RuntimeChannel live K-line and order-update frames
+	//	environment=2 (live)     -> RuntimeChannel, rollout-guarded and fail-closed
 	RunStrategy(context.Context, *RunStrategyRequest) (*RunStrategyResponse, error)
 	// PreviewRunStrategy runs the same profile-specific preflight as RunStrategy
 	// but does NOT create a session, persist state, or start a background worker.
