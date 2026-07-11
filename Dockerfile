@@ -14,7 +14,7 @@
 # Hosted containers receive an internal credential from control-panel; local
 # bare runtimes connect with the Go runtime-agent after control-panel bootstrap.
 
-FROM golang:1.26-bookworm AS go-builder
+FROM golang:1.26-bookworm AS go-builder-base
 
 WORKDIR /src
 
@@ -24,8 +24,16 @@ COPY strategy-service/cmd/ /src/strategy-service/cmd/
 COPY strategy-service/gen/ /src/strategy-service/gen/
 COPY strategy-service/internal/ /src/strategy-service/internal/
 
+FROM go-builder-base AS go-builder
+
 RUN cd /src/strategy-service \
     && go build -o /out/runtime-agent ./cmd/runtime-agent
+
+FROM go-builder-base AS go-coverage-builder
+
+RUN cd /src/strategy-service \
+    && go build -cover -covermode=atomic -coverpkg=./... \
+        -o /out/runtime-agent ./cmd/runtime-agent
 
 FROM python:3.13-slim AS runtime-base
 
@@ -72,6 +80,17 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app/strategy-service
 
 FROM runtime-base AS executor
+
+ENV HUSHINE_RUNTIME_ROLE=executor
+
+CMD ["./bin/runtime-agent", "--config", "config.yaml"]
+
+FROM runtime-base AS executor-coverage
+
+COPY --from=go-coverage-builder /out/runtime-agent /app/strategy-service/bin/runtime-agent
+COPY strategy-service/.coveragerc /app/strategy-service/.coveragerc
+RUN uv sync --frozen --no-dev --extra coverage \
+    --no-install-package hushine-strategy-library
 
 ENV HUSHINE_RUNTIME_ROLE=executor
 

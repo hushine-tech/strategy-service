@@ -7,6 +7,7 @@
 # Usage:
 #   ./scripts/build_strategy_runtime.sh           # tag dev
 #   ./scripts/build_strategy_runtime.sh v0.1.0    # tag custom
+#   ./scripts/build_strategy_runtime.sh --coverage # coverage target/tag only
 
 set -euo pipefail
 
@@ -14,9 +15,25 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVICE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${SERVICE_DIR}/.." && pwd)"
 
-VERSION="${1:-dev}"
 IMAGE_PREFIX="${IMAGE_PREFIX:-hushine/strategy-runtime}"
 
+if [[ "${1:-}" == "--coverage" ]]; then
+    COVERAGE_IMAGE="${IMAGE_PREFIX}:executor-coverage"
+
+    echo "Building ${COVERAGE_IMAGE} from ${REPO_ROOT}"
+    docker build \
+        --target executor-coverage \
+        -f "${SERVICE_DIR}/Dockerfile" \
+        -t "${COVERAGE_IMAGE}" \
+        "${REPO_ROOT}"
+
+    echo
+    echo "Built:"
+    echo "  ${COVERAGE_IMAGE}"
+    exit 0
+fi
+
+VERSION="${1:-dev}"
 EXECUTOR_IMAGE="${IMAGE_PREFIX}:executor-${VERSION}"
 DEFAULT_IMAGE="${IMAGE_PREFIX}:${VERSION}"
 

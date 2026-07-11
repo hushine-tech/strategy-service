@@ -21,6 +21,9 @@ dependencies = [
 hushine-session-worker = "strategy_service.session_worker_entry:main"
 
 [project.optional-dependencies]
+coverage = [
+    "coverage>=7.0.0,<8.0.0",
+]
 dev = [
     "pytest>=8.0.0",
 ]

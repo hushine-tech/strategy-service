@@ -1,0 +1,4 @@
+[run]
+source = strategy_service
+parallel = true
+sigterm = true
