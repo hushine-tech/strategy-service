@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 .uv-bootstrap/
 .hushine-runtime/
+.hushine-worker-state/
 *.egg-info/
 .deps/
 /logs

@@ -83,6 +83,11 @@ func run(args []string) int {
 		AgentAddr:        workerListener.Addr().String(),
 		DebugpyBasePort:  debugPort,
 		WorkDir:          ".",
+		StateRoot:        cfg.WorkerStateRoot,
+		PythonPath: []string{
+			".",
+			"../strategy-library",
+		},
 	})
 
 	identity := runtimeIdentityFromConfig(cfg, *userID)

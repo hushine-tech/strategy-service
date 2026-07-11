@@ -2,6 +2,8 @@ package runtimeagent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,33 +47,34 @@ func TestWorkerManagerStartsPythonWorkerWithAgentEnv(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "env.txt")
 	module := filepath.Join(dir, "worker_stub.py")
-	if err := os.WriteFile(module, []byte(`
+	source := fmt.Sprintf(`
 import os
 from pathlib import Path
-Path(os.environ["HUSHINE_TEST_WORKER_ENV_FILE"]).write_text(
-    "\n".join([
-        os.environ.get("HUSHINE_AGENT_ADDR", ""),
-        os.environ.get("HUSHINE_SESSION_ID", ""),
-        os.environ.get("HUSHINE_WORKER_TOKEN", ""),
-    ]),
-    encoding="utf-8",
-)
-`), 0o600); err != nil {
+Path(%q).write_text("\n".join([
+    os.environ.get("HUSHINE_AGENT_ADDR", ""),
+    os.environ.get("HUSHINE_SESSION_ID", ""),
+    os.environ.get("HUSHINE_WORKER_TOKEN", ""),
+    os.environ.get("HUSHINE_RUNTIME_ID", ""),
+    "DATABASE_PASSWORD=" + os.environ.get("DATABASE_PASSWORD", ""),
+]), encoding="utf-8")
+`, out)
+	if err := os.WriteFile(module, []byte(source), 0o600); err != nil {
 		t.Fatalf("write worker module: %v", err)
 	}
+	t.Setenv("DATABASE_PASSWORD", "parent-canary-secret")
 
 	m := NewWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_stub",
 		AgentAddr:        "127.0.0.1:59000",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	worker, err := m.StartSessionWorker(ctx, "sess-worker", []string{
-		"PYTHONPATH=" + dir,
-		"HUSHINE_TEST_WORKER_ENV_FILE=" + out,
-	})
+	worker, err := m.StartSessionWorker(ctx, "sess-worker", []string{"HUSHINE_RUNTIME_ID=rt-test"})
 	if err != nil {
 		t.Fatalf("StartSessionWorker: %v", err)
 	}
@@ -82,12 +85,15 @@ Path(os.environ["HUSHINE_TEST_WORKER_ENV_FILE"]).write_text(
 	if err != nil {
 		t.Fatalf("read worker env output: %v", err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
-	if len(lines) != 3 {
+	lines := strings.Split(string(body), "\n")
+	if len(lines) != 5 {
 		t.Fatalf("worker env lines = %q", string(body))
 	}
-	if lines[0] != "127.0.0.1:59000" || lines[1] != "sess-worker" || lines[2] == "" {
+	if lines[0] != "127.0.0.1:59000" || lines[1] != "sess-worker" || lines[2] == "" || lines[3] != "rt-test" {
 		t.Fatalf("worker env = %q", string(body))
+	}
+	if lines[4] != "DATABASE_PASSWORD=" {
+		t.Fatalf("parent secret leaked to worker: %q", lines[4])
 	}
 	if err := worker.Wait(); err != nil {
 		t.Fatalf("second worker wait should reuse reaped result: %v", err)
@@ -111,9 +117,12 @@ time.sleep(10)
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_sleep",
 		AgentAddr:        "127.0.0.1:59000",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	worker, err := m.StartSessionWorker(ctx, "sess-survive", []string{"PYTHONPATH=" + dir})
+	worker, err := m.StartSessionWorker(ctx, "sess-survive", nil)
 	if err != nil {
 		t.Fatalf("StartSessionWorker: %v", err)
 	}
@@ -151,6 +160,81 @@ func TestWorkerManagerStopSessionWorkerTreatsAlreadyExitedProcessAsStopped(t *te
 	}
 	if worker := m.findWorker("sess-exited"); worker != nil {
 		t.Fatalf("exited worker was not forgotten")
+	}
+}
+
+func TestWorkerManagerStopWaitsForManagedCleanupBeforeReleasingSession(t *testing.T) {
+	cmd := exec.Command("python3", "-c", "pass")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start short process: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait short process: %v", err)
+	}
+
+	m := NewWorkerManager(WorkerManagerConfig{})
+	if err := m.registry.ExpectWorker("sess-cleanup", "token"); err != nil {
+		t.Fatalf("ExpectWorker: %v", err)
+	}
+	managedDone := make(chan error)
+	m.active["sess-cleanup"] = &ManagedWorker{
+		SessionID: "sess-cleanup",
+		Cmd:       cmd,
+		done:      managedDone,
+	}
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- m.StopSessionWorker(context.Background(), "sess-cleanup", time.Second)
+	}()
+
+	select {
+	case err := <-stopDone:
+		t.Fatalf("StopSessionWorker returned before managed cleanup completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := m.registry.ExpectWorker("sess-cleanup", "other-token"); !errors.Is(err, ErrWorkerAlreadyExists) {
+		t.Fatalf("registry released session before managed cleanup: %v", err)
+	}
+
+	managedDone <- nil
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("StopSessionWorker: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("StopSessionWorker did not return after managed cleanup")
+	}
+	if err := m.registry.ExpectWorker("sess-cleanup", "replacement-token"); err != nil {
+		t.Fatalf("registry retained session after managed cleanup: %v", err)
+	}
+}
+
+func TestWorkerManagerStopRetainsSessionWhenKillFails(t *testing.T) {
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("FindProcess: %v", err)
+	}
+	if err := process.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	m := NewWorkerManager(WorkerManagerConfig{})
+	if err := m.registry.ExpectWorker("sess-kill-error", "token"); err != nil {
+		t.Fatalf("ExpectWorker: %v", err)
+	}
+	m.active["sess-kill-error"] = &ManagedWorker{
+		SessionID: "sess-kill-error",
+		Cmd:       &exec.Cmd{Process: process},
+	}
+
+	err = m.StopSessionWorker(context.Background(), "sess-kill-error", time.Second)
+	if err == nil {
+		t.Fatal("StopSessionWorker accepted a failed kill")
+	}
+	if err := m.registry.ExpectWorker("sess-kill-error", "other-token"); !errors.Is(err, ErrWorkerAlreadyExists) {
+		t.Fatalf("registry released session after failed kill: %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,8 @@ type WorkerManagerConfig struct {
 	AgentAddr        string
 	DebugpyBasePort  int
 	WorkDir          string
+	StateRoot        string
+	PythonPath       []string
 }
 
 type WorkerStartSpec struct {
@@ -27,7 +30,6 @@ type WorkerStartSpec struct {
 	Token       string
 	AgentAddr   string
 	DebugpyPort int
-	Env         []string
 }
 
 type WorkerManager struct {
@@ -56,6 +58,12 @@ func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
 	}
 	if strings.TrimSpace(cfg.AgentAddr) == "" {
 		cfg.AgentAddr = "127.0.0.1:0"
+	}
+	if workDir, err := absoluteWorkerWorkDir(cfg.WorkDir); err == nil {
+		cfg.WorkDir = workDir
+	}
+	if strings.TrimSpace(cfg.StateRoot) == "" {
+		cfg.StateRoot = filepath.Join(cfg.WorkDir, ".hushine-worker-state")
 	}
 	return &WorkerManager{
 		cfg:      cfg,
@@ -86,12 +94,6 @@ func (m *WorkerManager) PrepareSessionWorker(sessionID string) (WorkerStartSpec,
 		AgentAddr:   m.cfg.AgentAddr,
 		DebugpyPort: debugpyPort,
 	}
-	spec.Env = []string{
-		"HUSHINE_AGENT_ADDR=" + spec.AgentAddr,
-		"HUSHINE_WORKER_TOKEN=" + spec.Token,
-		"HUSHINE_SESSION_ID=" + spec.SessionID,
-		fmt.Sprintf("HUSHINE_DEBUGPY_PORT=%d", spec.DebugpyPort),
-	}
 	return spec, nil
 }
 
@@ -108,17 +110,25 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 	}
 	args := append([]string{}, m.cfg.PythonArgsPrefix...)
 	args = append(args, "-m", m.cfg.WorkerModule)
-	cmd := exec.Command(m.cfg.PythonExecutable, args...)
+	env, sessionRoot, resolvedExecutable, err := buildWorkerEnvironment(m.cfg, spec, extraEnv)
+	if err != nil {
+		m.registry.ForgetWorker(sessionID)
+		return nil, err
+	}
+	cmd := exec.Command(resolvedExecutable, args...)
 	if strings.TrimSpace(m.cfg.WorkDir) != "" {
 		cmd.Dir = m.cfg.WorkDir
 	}
-	cmd.Env = append(os.Environ(), spec.Env...)
-	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		cleanupErr := os.RemoveAll(sessionRoot)
 		m.registry.ForgetWorker(sessionID)
-		return nil, fmt.Errorf("start session worker: %w", err)
+		return nil, errors.Join(
+			fmt.Errorf("start session worker: %w", err),
+			cleanupWorkerSessionError(sessionRoot, cleanupErr),
+		)
 	}
 	done := make(chan error, 1)
 	worker := &ManagedWorker{SessionID: spec.SessionID, Spec: spec, Cmd: cmd, done: done}
@@ -127,12 +137,20 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 	m.mu.Unlock()
 	go func() {
 		err := cmd.Wait()
+		err = errors.Join(err, cleanupWorkerSessionError(sessionRoot, os.RemoveAll(sessionRoot)))
 		m.registry.ForgetWorker(spec.SessionID)
 		m.forgetWorker(worker)
 		done <- err
 		close(done)
 	}()
 	return worker, nil
+}
+
+func cleanupWorkerSessionError(sessionRoot string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("remove worker session root %s: %w", sessionRoot, err)
 }
 
 func (m *WorkerManager) StopSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error {
@@ -149,13 +167,14 @@ func (m *WorkerManager) StopSessionWorker(ctx context.Context, sessionID string,
 		return nil
 	}
 	if err := worker.Cmd.Process.Kill(); err != nil {
-		if errors.Is(err, os.ErrProcessDone) {
+		if errors.Is(err, os.ErrProcessDone) && worker.done == nil {
 			m.registry.ForgetWorker(sessionID)
 			m.forgetWorker(worker)
 			return nil
 		}
-		m.registry.ForgetWorker(sessionID)
-		return fmt.Errorf("kill session worker %s: %w", sessionID, err)
+		if !errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("kill session worker %s: %w", sessionID, err)
+		}
 	}
 	waitDone := make(chan error, 1)
 	go func() {
