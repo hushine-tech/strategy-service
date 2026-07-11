@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hushine-tech/strategy-service/gen/controlpanelv1"
 	"github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
@@ -51,6 +52,11 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "runtime-channel address is required")
 		return 1
 	}
+	coverageRoot, err := prepareRuntimeCoverageRoot(os.Getenv("HUSHINE_RUNTIME_COVERAGE_DIR"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "runtime coverage: %v\n", err)
+		return 1
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -74,9 +80,14 @@ func run(args []string) int {
 		_, _ = fmt.Sscanf(raw, "%d", &debugPort)
 	}
 	debugpyWait := parseDebugpyWait(os.Getenv("DEBUG_WAIT"))
+	pythonArgsPrefix := append([]string{}, workerPythonArgsPrefix(debugPort)...)
+	pythonArgsPrefix = append(
+		pythonArgsPrefix,
+		(runtimeagent.CoverageConfig{RootDir: coverageRoot}).PythonArgsPrefix()...,
+	)
 	workerManager := runtimeagent.NewWorkerManager(runtimeagent.WorkerManagerConfig{
 		PythonExecutable: workerPythonExecutable(debugPort),
-		PythonArgsPrefix: workerPythonArgsPrefix(debugPort),
+		PythonArgsPrefix: pythonArgsPrefix,
 		WorkerModule:     "strategy_service.session_worker_entry",
 		AgentAddr:        workerListener.Addr().String(),
 		DebugpyBasePort:  debugPort,
@@ -105,7 +116,7 @@ func run(args []string) int {
 		return 1
 	}
 
-	return runAgent(ctx, cfg, identity, credential, workerManager, workerListener, dialOptions)
+	return runAgent(ctx, cfg, identity, credential, workerManager, workerListener, dialOptions, coverageRoot)
 }
 
 func runAgent(
@@ -116,7 +127,11 @@ func runAgent(
 	workerManager *runtimeagent.WorkerManager,
 	workerListener net.Listener,
 	dialOptions []grpc.DialOption,
+	coverageRoot string,
 ) int {
+	agentCtx, cancelAgent := context.WithCancel(ctx)
+	defer cancelAgent()
+
 	var agent *runtimeagent.Agent
 	runtimeClient := runtimeagent.NewRuntimeChannelClient(runtimeagent.RuntimeChannelClientConfig{
 		Address:          cfg.RuntimeChannelAddr,
@@ -144,7 +159,7 @@ func runAgent(
 	agent.SetWorkerSender(workerServer)
 
 	if controlAddr := strings.TrimSpace(os.Getenv("RUNTIME_AGENT_CONTROL_ADDR")); controlAddr != "" && !strings.EqualFold(controlAddr, "off") && controlAddr != "0" {
-		addr, shutdown, err := runtimeagent.StartLocalControlServer(ctx, controlAddr, agent)
+		addr, shutdown, err := runtimeagent.StartLocalControlServer(agentCtx, controlAddr, agent)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "start local control: %v\n", err)
 			return 1
@@ -158,7 +173,18 @@ func runAgent(
 	go func() {
 		_ = grpcServer.Serve(workerListener)
 	}()
-	defer grpcServer.GracefulStop()
+	shutdownDone := make(chan struct{})
+	go func() {
+		shutdownAgentOnContext(
+			agentCtx,
+			coverageRoot,
+			workerManager,
+			grpcServer,
+			10*time.Second,
+			5*time.Second,
+		)
+		close(shutdownDone)
+	}()
 
 	fmt.Printf(
 		"runtime-agent started: runtime_id=%s name=%s source=%s runtime-channel=%s worker-ipc=%s\n",
@@ -168,12 +194,68 @@ func runAgent(
 		cfg.RuntimeChannelAddr,
 		workerListener.Addr().String(),
 	)
-	startAgentBackgroundLoops(ctx, agent)
-	if err := runtimeClient.Run(ctx); err != nil && ctx.Err() == nil {
-		fmt.Fprintf(os.Stderr, "runtime channel stopped: %v\n", err)
+	startAgentBackgroundLoops(agentCtx, agent)
+	runErr := runtimeClient.Run(agentCtx)
+	cancelAgent()
+	<-shutdownDone
+	if runErr != nil && ctx.Err() == nil {
+		fmt.Fprintf(os.Stderr, "runtime channel stopped: %v\n", runErr)
 		return 1
 	}
 	return 0
+}
+
+type agentWorkerStopper interface {
+	StopAll(context.Context, time.Duration) error
+}
+
+type agentGRPCStopper interface {
+	GracefulStop()
+	Stop()
+}
+
+func shutdownAgentOnContext(
+	ctx context.Context,
+	coverageRoot string,
+	workerManager agentWorkerStopper,
+	grpcServer agentGRPCStopper,
+	shutdownTimeout time.Duration,
+	workerTimeout time.Duration,
+) {
+	<-ctx.Done()
+	if coverageRoot != "" {
+		_ = runtimeagent.WriteGoCoverageSnapshot(filepath.Join(coverageRoot, "go"))
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	_ = workerManager.StopAll(shutdownCtx, workerTimeout)
+
+	gracefulDone := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(gracefulDone)
+	}()
+	select {
+	case <-gracefulDone:
+	case <-shutdownCtx.Done():
+		grpcServer.Stop()
+	}
+}
+
+func prepareRuntimeCoverageRoot(root string) (string, error) {
+	if root == "" {
+		return "", nil
+	}
+	if strings.TrimSpace(root) != root || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return "", fmt.Errorf("HUSHINE_RUNTIME_COVERAGE_DIR must be an absolute cleaned path")
+	}
+	for _, child := range []string{"go", "python"} {
+		path := filepath.Join(root, child)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return "", fmt.Errorf("create %s coverage directory: %w", child, err)
+		}
+	}
+	return root, nil
 }
 
 func startAgentBackgroundLoops(ctx context.Context, agent *runtimeagent.Agent) {
