@@ -211,6 +211,52 @@ func TestWorkerManagerStopSessionWorkerTreatsAlreadyExitedProcessAsStopped(t *te
 	}
 }
 
+func TestStopSessionWorkerRequestsGracefulStopBeforeKill(t *testing.T) {
+	manager, worker, marker := startSignalAwareWorker(t)
+
+	err := manager.StopSessionWorker(context.Background(), worker.SessionID, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("SIGTERM marker: %v", err)
+	}
+}
+
+func TestStopSessionWorkerForceKillsWorkerAfterTimeout(t *testing.T) {
+	manager, worker := startSignalIgnoringWorker(t)
+	timeout := 100 * time.Millisecond
+	started := time.Now()
+
+	err := manager.StopSessionWorker(context.Background(), worker.SessionID, timeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < timeout {
+		t.Fatalf("worker stopped after %v, want force kill after at least %v", elapsed, timeout)
+	}
+	if worker.Cmd.ProcessState == nil {
+		t.Fatal("worker process was not reaped after force kill")
+	}
+}
+
+func TestStopAllDeduplicatesAliasedWorkers(t *testing.T) {
+	manager, worker, counter := startCountingWorker(t)
+	if err := manager.Registry().AdmitWorker(worker.SessionID, worker.Spec.Token, int64(worker.Cmd.Process.Pid)); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AliasWorkerSession(worker.SessionID, "replacement-session"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.StopAll(context.Background(), 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := readStopCount(t, counter); got != 1 {
+		t.Fatalf("stop count=%d want 1", got)
+	}
+}
+
 func TestWorkerManagerStopWaitsForManagedCleanupBeforeReleasingSession(t *testing.T) {
 	cmd := exec.Command("python3", "-c", "pass")
 	if err := cmd.Start(); err != nil {
@@ -398,6 +444,132 @@ func writePythonWorkerModule(t *testing.T, dir string, name string, source strin
 	if err := os.WriteFile(filepath.Join(dir, name+".py"), []byte(source), 0o600); err != nil {
 		t.Fatalf("write worker module: %v", err)
 	}
+}
+
+func startSignalAwareWorker(t *testing.T) (*WorkerManager, *ManagedWorker, string) {
+	t.Helper()
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "sigterm-marker")
+	ready := filepath.Join(dir, "ready")
+	writePythonWorkerModule(t, dir, "worker_signal_aware", fmt.Sprintf(`
+import signal
+import sys
+import time
+from pathlib import Path
+
+marker = Path(%q)
+ready = Path(%q)
+
+def stop(_signum, _frame):
+    marker.write_text("SIGTERM", encoding="utf-8")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, stop)
+ready.write_text("ready", encoding="utf-8")
+while True:
+    time.sleep(0.05)
+`, marker, ready))
+	manager, worker := startWorkerModule(t, dir, "worker_signal_aware", "signal-aware")
+	waitForWorkerFile(t, ready)
+	return manager, worker, marker
+}
+
+func startSignalIgnoringWorker(t *testing.T) (*WorkerManager, *ManagedWorker) {
+	t.Helper()
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	writePythonWorkerModule(t, dir, "worker_signal_ignoring", fmt.Sprintf(`
+import signal
+import time
+from pathlib import Path
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path(%q).write_text("ready", encoding="utf-8")
+while True:
+    time.sleep(0.05)
+`, ready))
+	manager, worker := startWorkerModule(t, dir, "worker_signal_ignoring", "signal-ignoring")
+	waitForWorkerFile(t, ready)
+	return manager, worker
+}
+
+func startCountingWorker(t *testing.T) (*WorkerManager, *ManagedWorker, string) {
+	t.Helper()
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "stop-count")
+	ready := filepath.Join(dir, "ready")
+	writePythonWorkerModule(t, dir, "worker_signal_counting", fmt.Sprintf(`
+import signal
+import sys
+import time
+from pathlib import Path
+
+counter = Path(%q)
+ready = Path(%q)
+
+def stop(_signum, _frame):
+    count = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+    counter.write_text(str(count + 1), encoding="utf-8")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, stop)
+ready.write_text("ready", encoding="utf-8")
+while True:
+    time.sleep(0.05)
+`, counter, ready))
+	manager, worker := startWorkerModule(t, dir, "worker_signal_counting", "signal-counting")
+	waitForWorkerFile(t, ready)
+	return manager, worker, counter
+}
+
+func startWorkerModule(t *testing.T, dir string, module string, sessionID string) (*WorkerManager, *ManagedWorker) {
+	t.Helper()
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     module,
+		AgentAddr:        "127.0.0.1:59000",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+	worker, err := manager.StartSessionWorker(context.Background(), sessionID, nil)
+	if err != nil {
+		t.Fatalf("StartSessionWorker: %v", err)
+	}
+	t.Cleanup(func() {
+		if worker.Cmd != nil && worker.Cmd.Process != nil {
+			_ = worker.Cmd.Process.Kill()
+		}
+		_ = worker.Wait()
+	})
+	return manager, worker
+}
+
+func waitForWorkerFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat worker readiness file: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("worker did not create readiness file %q", path)
+}
+
+func readStopCount(t *testing.T, path string) int {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stop count: %v", err)
+	}
+	var count int
+	if _, err := fmt.Sscanf(string(body), "%d", &count); err != nil {
+		t.Fatalf("parse stop count %q: %v", string(body), err)
+	}
+	return count
 }
 
 func TestWorkerManagerAliasWorkerSessionMakesRealSessionStoppable(t *testing.T) {

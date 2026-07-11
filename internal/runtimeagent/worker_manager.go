@@ -188,14 +188,14 @@ func (m *WorkerManager) StopSessionWorker(ctx context.Context, sessionID string,
 		m.registry.ForgetWorker(sessionID)
 		return nil
 	}
-	if err := worker.Cmd.Process.Kill(); err != nil {
+	if err := requestWorkerStop(worker.Cmd.Process); err != nil {
 		if errors.Is(err, os.ErrProcessDone) && worker.done == nil {
 			m.registry.ForgetWorker(sessionID)
 			m.forgetWorker(worker)
 			return nil
 		}
 		if !errors.Is(err, os.ErrProcessDone) {
-			return fmt.Errorf("kill session worker %s: %w", sessionID, err)
+			return fmt.Errorf("request stop for session worker %s: %w", sessionID, err)
 		}
 	}
 	waitDone := make(chan error, 1)
@@ -208,16 +208,57 @@ func (m *WorkerManager) StopSessionWorker(ctx context.Context, sessionID string,
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
-		return fmt.Errorf("session worker did not exit after kill: %s", sessionID)
-	case waitErr := <-waitDone:
-		if hasWorkerSessionCleanupError(waitErr) {
-			return waitErr
+		if err := worker.Cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("kill session worker %s: %w", sessionID, err)
 		}
-		m.clearCleanupFailure(sessionID)
-		m.registry.ForgetWorker(sessionID)
-		m.forgetWorker(worker)
-		return nil
+		waitErr := <-waitDone
+		return m.finishWorkerStop(sessionID, worker, waitErr)
+	case waitErr := <-waitDone:
+		return m.finishWorkerStop(sessionID, worker, waitErr)
 	}
+}
+
+func (m *WorkerManager) StopAll(ctx context.Context, timeout time.Duration) error {
+	type workerSnapshot struct {
+		sessionID string
+		pid       int
+	}
+
+	m.mu.Lock()
+	workers := make([]workerSnapshot, 0, len(m.active))
+	for sessionID, worker := range m.active {
+		pid := 0
+		if worker != nil && worker.Cmd != nil && worker.Cmd.Process != nil {
+			pid = worker.Cmd.Process.Pid
+		}
+		workers = append(workers, workerSnapshot{sessionID: sessionID, pid: pid})
+	}
+	m.mu.Unlock()
+
+	seenPIDs := make(map[int]struct{}, len(workers))
+	var stopErrors []error
+	for _, worker := range workers {
+		if worker.pid > 0 {
+			if _, ok := seenPIDs[worker.pid]; ok {
+				continue
+			}
+			seenPIDs[worker.pid] = struct{}{}
+		}
+		if err := m.StopSessionWorker(ctx, worker.sessionID, timeout); err != nil {
+			stopErrors = append(stopErrors, err)
+		}
+	}
+	return errors.Join(stopErrors...)
+}
+
+func (m *WorkerManager) finishWorkerStop(sessionID string, worker *ManagedWorker, waitErr error) error {
+	if hasWorkerSessionCleanupError(waitErr) {
+		return waitErr
+	}
+	m.clearCleanupFailure(sessionID)
+	m.registry.ForgetWorker(sessionID)
+	m.forgetWorker(worker)
+	return nil
 }
 
 func (m *WorkerManager) retainCleanupFailure(sessionID string, err error) {
