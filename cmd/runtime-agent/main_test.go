@@ -94,3 +94,29 @@ func TestWorkerPythonExecutablePrefersProjectVenv(t *testing.T) {
 		t.Fatalf("worker python executable = %q, want %q", got, pythonPath)
 	}
 }
+
+func TestParseDebugpyWait(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "unset", value: "", want: false},
+		{name: "zero", value: "0", want: false},
+		{name: "false", value: " false ", want: false},
+		{name: "no", value: "NO", want: false},
+		{name: "off", value: "off", want: false},
+		{name: "one", value: "1", want: true},
+		{name: "true", value: "true", want: true},
+		{name: "yes", value: "YES", want: true},
+		{name: "on", value: "on", want: true},
+		{name: "other-non-empty", value: "wait", want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseDebugpyWait(tc.value); got != tc.want {
+				t.Fatalf("parseDebugpyWait(%q) = %t, want %t", tc.value, got, tc.want)
+			}
+		})
+	}
+}

@@ -73,12 +73,14 @@ func run(args []string) int {
 	if raw := strings.TrimSpace(os.Getenv("DEBUG_PORT")); raw != "" {
 		_, _ = fmt.Sscanf(raw, "%d", &debugPort)
 	}
+	debugpyWait := parseDebugpyWait(os.Getenv("DEBUG_WAIT"))
 	workerManager := runtimeagent.NewWorkerManager(runtimeagent.WorkerManagerConfig{
 		PythonExecutable: workerPythonExecutable(debugPort),
 		PythonArgsPrefix: workerPythonArgsPrefix(debugPort),
 		WorkerModule:     "strategy_service.session_worker_entry",
 		AgentAddr:        workerListener.Addr().String(),
 		DebugpyBasePort:  debugPort,
+		DebugpyWait:      debugpyWait,
 		WorkDir:          ".",
 		StateRoot:        cfg.WorkerStateRoot,
 		PythonPath: []string{
@@ -309,6 +311,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func parseDebugpyWait(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off":
+		return false
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return true
+	}
 }
 
 func workerPythonExecutable(debugPort int) string {

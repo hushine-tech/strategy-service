@@ -98,6 +98,7 @@ func buildWorkerEnvironmentWithCleanup(
 		"HUSHINE_WORKER_TOKEN":    spec.Token,
 		"HUSHINE_SESSION_ID":      strings.TrimSpace(spec.SessionID),
 		"HUSHINE_DEBUGPY_PORT":    strconv.Itoa(spec.DebugpyPort),
+		"DEBUG_WAIT":              strconv.FormatBool(spec.DebugpyWait),
 	}
 
 	platformValues, err := trustedWorkerPlatformEnvironment(resolvedExecutable)

@@ -57,12 +57,42 @@ func TestBuildWorkerEnvironmentDoesNotInheritParentSecrets(t *testing.T) {
 	}
 }
 
+func TestBuildWorkerEnvironmentGeneratesTypedDebugpyWait(t *testing.T) {
+	cases := []struct {
+		name string
+		wait bool
+		want string
+	}{
+		{name: "disabled", wait: false, want: "false"},
+		{name: "enabled", wait: true, want: "true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			env, _, _, err := buildWorkerEnvironment(WorkerManagerConfig{
+				PythonExecutable: mustCurrentExecutable(t),
+				WorkDir:          root,
+				StateRoot:        filepath.Join(root, "state"),
+			}, WorkerStartSpec{
+				SessionID: "sess", Token: "token", AgentAddr: "127.0.0.1:1", DebugpyWait: tc.wait,
+			}, nil)
+			if err != nil {
+				t.Fatalf("buildWorkerEnvironment: %v", err)
+			}
+			if got := envMap(env)["DEBUG_WAIT"]; got != tc.want {
+				t.Fatalf("DEBUG_WAIT = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildWorkerEnvironmentRejectsUnmodeledExtraEnv(t *testing.T) {
 	cases := []string{
 		"KAFKA_BROKERS=evil:9092",
 		"DATABASE_PASSWORD=secret",
 		"PYTHONPATH=/tmp/evil",
 		"HUSHINE_WORKER_TOKEN=override",
+		"DEBUG_WAIT=true",
 		"MY_CUSTOM_VAR=value",
 	}
 	for _, item := range cases {

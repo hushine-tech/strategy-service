@@ -103,6 +103,54 @@ Path(%q).write_text("\n".join([
 	}
 }
 
+func TestWorkerManagerStartsPythonWorkerWithTypedDebugpyWait(t *testing.T) {
+	cases := []struct {
+		name string
+		wait bool
+		want string
+	}{
+		{name: "disabled", wait: false, want: "false"},
+		{name: "enabled", wait: true, want: "true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			out := filepath.Join(dir, "debug-wait.txt")
+			writePythonWorkerModule(t, dir, "worker_debug_wait", fmt.Sprintf(`
+import os
+from pathlib import Path
+Path(%q).write_text(os.environ.get("DEBUG_WAIT", ""), encoding="utf-8")
+`, out))
+			m := NewWorkerManager(WorkerManagerConfig{
+				PythonExecutable: "python3",
+				WorkerModule:     "worker_debug_wait",
+				AgentAddr:        "127.0.0.1:59000",
+				DebugpyWait:      tc.wait,
+				WorkDir:          dir,
+				StateRoot:        filepath.Join(dir, "state"),
+				PythonPath:       []string{dir},
+			})
+			worker, err := m.StartSessionWorker(context.Background(), "sess-debug-wait", nil)
+			if err != nil {
+				t.Fatalf("StartSessionWorker: %v", err)
+			}
+			if err := worker.Wait(); err != nil {
+				t.Fatalf("worker wait: %v", err)
+			}
+			if worker.Spec.DebugpyWait != tc.wait {
+				t.Fatalf("worker spec DebugpyWait = %t, want %t", worker.Spec.DebugpyWait, tc.wait)
+			}
+			body, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatalf("read DEBUG_WAIT output: %v", err)
+			}
+			if got := string(body); got != tc.want {
+				t.Fatalf("worker DEBUG_WAIT = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWorkerManagerStartedWorkerSurvivesCanceledRequestContext(t *testing.T) {
 	dir := t.TempDir()
 	module := filepath.Join(dir, "worker_sleep.py")

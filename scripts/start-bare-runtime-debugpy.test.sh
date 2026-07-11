@@ -116,52 +116,72 @@ env_out="${tmp_dir}/agent.env"
 } > "${fake_start}"
 chmod +x "${fake_start}"
 
-env -i \
-  PATH="${PATH}" \
-  HOME="${HOME}" \
-  USER="${USER:-hushine-test}" \
-  TMPDIR="${TMPDIR:-/tmp}" \
-  DATABASE_PASSWORD=parent-db-secret \
-  KAFKA_BROKERS=parent-kafka-secret \
-  CORE_SERVICE_GRPC_ADDR=parent-core-secret \
-  ORDER_SERVICE_GRPC_ADDR=parent-order-secret \
-  CONTROL_PANEL_SERVICE_GRPC_ADDR=parent-control-secret \
-  MARKET_DATA_CONTROL_PANEL_GRPC_ADDR=parent-market-secret \
-  QUANT_HANDLER_JWT_SECRET=parent-jwt-secret \
-  LOG_TRACING_ENDPOINT=http://parent-tracing:4318 \
-  http_proxy=http://parent-proxy \
-  no_proxy=parent.internal \
-  RUNTIME_CHANNEL_TLS_ENABLED=false \
-  DEBUG_WAIT=0 \
-  RUNTIME_BARE_BOOTSTRAP_DIR="${tmp_dir}/bootstrap" \
-  RUNTIME_BARE_STATE_FILE="${tmp_dir}/runtime.env" \
-  RUNTIME_AGENT_START_SCRIPT="${fake_start}" \
-  CONFIG_PATH="${REPO_ROOT}/strategy-service/config.yaml" \
-  bash "${RUNTIME_SCRIPT}" --user-id 6 --platform-host 127.0.0.1
+for debug_wait in 0 1 off; do
+  launcher_out="${tmp_dir}/launcher-${debug_wait}.out"
+  env -i \
+    PATH="${PATH}" \
+    HOME="${HOME}" \
+    USER="${USER:-hushine-test}" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    DATABASE_PASSWORD=parent-db-secret \
+    KAFKA_BROKERS=parent-kafka-secret \
+    CORE_SERVICE_GRPC_ADDR=parent-core-secret \
+    ORDER_SERVICE_GRPC_ADDR=parent-order-secret \
+    CONTROL_PANEL_SERVICE_GRPC_ADDR=parent-control-secret \
+    MARKET_DATA_CONTROL_PANEL_GRPC_ADDR=parent-market-secret \
+    QUANT_HANDLER_JWT_SECRET=parent-jwt-secret \
+    LOG_TRACING_ENDPOINT=http://parent-tracing:4318 \
+    http_proxy=http://parent-proxy \
+    no_proxy=parent.internal \
+    RUNTIME_CHANNEL_TLS_ENABLED=false \
+    DEBUG_WAIT="${debug_wait}" \
+    RUNTIME_BARE_BOOTSTRAP_DIR="${tmp_dir}/bootstrap" \
+    RUNTIME_BARE_STATE_FILE="${tmp_dir}/runtime.env" \
+    RUNTIME_AGENT_START_SCRIPT="${fake_start}" \
+    CONFIG_PATH="${REPO_ROOT}/strategy-service/config.yaml" \
+    bash "${RUNTIME_SCRIPT}" --user-id 6 --platform-host 127.0.0.1 > "${launcher_out}"
 
-while IFS='=' read -r key _; do
-  case "${key}" in
-    DEBUG_PORT|HOME|OLDPWD|PATH|PWD|PYTHONPATH|RUNTIME_AGENT_CONTROL_ADDR|RUNTIME_CHANNEL_GRPC_ADDR|RUNTIME_CHANNEL_TLS_ENABLED|RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE|RUNTIME_CHANNEL_TLS_SERVER_NAME|RUNTIME_NAME|RUNTIME_RUNTIME_ID|SHLVL|TMPDIR|USER|_) ;;
-    *)
-      echo "unexpected key reached runtime-agent: ${key}" >&2
+  if [[ "${debug_wait}" == "1" ]]; then
+    if ! grep -Fq 'Worker will wait for VS Code attach before executing a session.' "${launcher_out}"; then
+      echo "missing debugger wait message for DEBUG_WAIT=${debug_wait}" >&2
       exit 1
-      ;;
-  esac
-done < "${env_out}"
-
-for required in \
-  'RUNTIME_CHANNEL_GRPC_ADDR=127.0.0.1:50055' \
-  'RUNTIME_CHANNEL_TLS_ENABLED=false' \
-  'RUNTIME_NAME=' \
-  'RUNTIME_RUNTIME_ID=' \
-  'RUNTIME_AGENT_CONTROL_ADDR=' \
-  'DEBUG_PORT=5678'
-do
-  if [[ "${required}" == *= ]]; then
-    grep -q "^${required}" "${env_out}"
-  else
-    grep -Fxq "${required}" "${env_out}"
+    fi
+  elif grep -Fq 'Worker will wait for VS Code attach before executing a session.' "${launcher_out}"; then
+    echo "unexpected debugger wait message for DEBUG_WAIT=${debug_wait}" >&2
+    exit 1
   fi
+
+  while IFS='=' read -r key _; do
+    case "${key}" in
+      DEBUG_PORT|DEBUG_WAIT|HOME|OLDPWD|PATH|PWD|PYTHONPATH|RUNTIME_AGENT_CONTROL_ADDR|RUNTIME_CHANNEL_GRPC_ADDR|RUNTIME_CHANNEL_TLS_ENABLED|RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE|RUNTIME_CHANNEL_TLS_SERVER_NAME|RUNTIME_NAME|RUNTIME_RUNTIME_ID|SHLVL|TMPDIR|USER|_) ;;
+      *)
+        echo "unexpected key reached runtime-agent: ${key}" >&2
+        exit 1
+        ;;
+    esac
+  done < "${env_out}"
+
+  for required in \
+    'RUNTIME_CHANNEL_GRPC_ADDR=127.0.0.1:50055' \
+    'RUNTIME_CHANNEL_TLS_ENABLED=false' \
+    'RUNTIME_NAME=' \
+    'RUNTIME_RUNTIME_ID=' \
+    'RUNTIME_AGENT_CONTROL_ADDR=' \
+    'DEBUG_PORT=5678' \
+    "DEBUG_WAIT=${debug_wait}"
+  do
+    if [[ "${required}" == *= ]]; then
+      if ! grep -q "^${required}" "${env_out}"; then
+        echo "missing required runtime-agent env prefix: ${required}" >&2
+        exit 1
+      fi
+    else
+      if ! grep -Fxq "${required}" "${env_out}"; then
+        echo "missing required runtime-agent env: ${required}" >&2
+        exit 1
+      fi
+    fi
+  done
 done
 
 state_keys="$(sed -n 's/^export \([^=]*\)=.*/\1/p' "${tmp_dir}/runtime.env" | LC_ALL=C sort)"

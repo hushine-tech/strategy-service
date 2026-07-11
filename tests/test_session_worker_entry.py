@@ -1,7 +1,13 @@
+import sys
+
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 from strategy_service.grpc_server import StrategyServiceServicer
 from strategy_service.session import SessionState
-from strategy_service.session_worker_entry import _build_servicer, _poll_until_terminal
+from strategy_service.session_worker_entry import (
+    _build_servicer,
+    _poll_until_terminal,
+    _start_debugpy_if_requested,
+)
 from strategy_service.worker_agent_client import FinalStatusRejected
 
 
@@ -36,6 +42,40 @@ class _FinalClient:
 
     def send_indicator_frame(self, **kwargs):
         del kwargs
+
+
+class _FakeDebugpy:
+    def __init__(self):
+        self.listened = []
+        self.wait_calls = 0
+
+    def listen(self, address):
+        self.listened.append(address)
+
+    def wait_for_client(self):
+        self.wait_calls += 1
+
+
+def test_start_debugpy_does_not_wait_when_debug_wait_is_false(monkeypatch):
+    fake_debugpy = _FakeDebugpy()
+    monkeypatch.setitem(sys.modules, "debugpy", fake_debugpy)
+    monkeypatch.setenv("DEBUG_WAIT", "false")
+
+    _start_debugpy_if_requested(5678)
+
+    assert fake_debugpy.listened == [("127.0.0.1", 5678)]
+    assert fake_debugpy.wait_calls == 0
+
+
+def test_start_debugpy_waits_when_debug_wait_is_true(monkeypatch):
+    fake_debugpy = _FakeDebugpy()
+    monkeypatch.setitem(sys.modules, "debugpy", fake_debugpy)
+    monkeypatch.setenv("DEBUG_WAIT", "true")
+
+    _start_debugpy_if_requested(5678)
+
+    assert fake_debugpy.listened == [("127.0.0.1", 5678)]
+    assert fake_debugpy.wait_calls == 1
 
 
 def test_poll_until_terminal_sends_final_status_and_waits_for_ack():

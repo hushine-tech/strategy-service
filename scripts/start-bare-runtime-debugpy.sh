@@ -131,9 +131,13 @@ export RUNTIME_BARE_BOOTSTRAP_DIR="${BOOTSTRAP_DIR}"
 export RUNTIME_BARE_STATE_FILE="${RUNTIME_BARE_STATE_FILE}"
 
 wait_args=()
-if [[ "${DEBUG_WAIT}" != "0" && "${DEBUG_WAIT}" != "false" ]]; then
-  wait_args=(--wait-for-client)
-fi
+debug_wait_normalized="$(printf '%s' "${DEBUG_WAIT}" | tr '[:upper:]' '[:lower:]')"
+debug_wait_normalized="${debug_wait_normalized#"${debug_wait_normalized%%[![:space:]]*}"}"
+debug_wait_normalized="${debug_wait_normalized%"${debug_wait_normalized##*[![:space:]]}"}"
+case "${debug_wait_normalized}" in
+  ""|0|false|no|off) ;;
+  *) wait_args=(--wait-for-client) ;;
+esac
 
 echo "Starting bare runtime for user_id=${USER_ID} under debugpy."
 echo "VS Code attach: ${DEBUG_HOST}:${DEBUG_PORT}"
@@ -216,6 +220,7 @@ agent_env=(
   "RUNTIME_NAME=${RUNTIME_NAME}"
   "RUNTIME_AGENT_CONTROL_ADDR=${RUNTIME_AGENT_CONTROL_ADDR}"
   "DEBUG_PORT=${DEBUG_PORT}"
+  "DEBUG_WAIT=${DEBUG_WAIT}"
 )
 if [[ -n "${RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE:-}" ]]; then
   agent_env+=("RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE=${RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE}")

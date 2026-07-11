@@ -20,6 +20,7 @@ type WorkerManagerConfig struct {
 	WorkerModule     string
 	AgentAddr        string
 	DebugpyBasePort  int
+	DebugpyWait      bool
 	WorkDir          string
 	StateRoot        string
 	PythonPath       []string
@@ -30,6 +31,7 @@ type WorkerStartSpec struct {
 	Token       string
 	AgentAddr   string
 	DebugpyPort int
+	DebugpyWait bool
 }
 
 type WorkerManager struct {
@@ -101,6 +103,7 @@ func (m *WorkerManager) PrepareSessionWorker(sessionID string) (WorkerStartSpec,
 		Token:       token,
 		AgentAddr:   m.cfg.AgentAddr,
 		DebugpyPort: debugpyPort,
+		DebugpyWait: m.cfg.DebugpyWait,
 	}
 	return spec, nil
 }
