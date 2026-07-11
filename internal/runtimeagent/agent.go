@@ -180,7 +180,7 @@ func (a *Agent) handleRunStrategy(
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", err.Error())
 	}
 
-	workerExited := waitManagedWorker(worker)
+	workerExited := worker.processExitedSignal()
 	timer := time.NewTimer(a.cfg.StartTimeout)
 	defer timer.Stop()
 	select {
@@ -188,8 +188,21 @@ func (a *Agent) handleRunStrategy(
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Cancelled", ctx.Err().Error())
 	case <-timer.C:
 		return runtimeErrorFrame(frame.GetCorrelationId(), "DeadlineExceeded", "session worker did not report started")
-	case waitErr := <-workerExited:
-		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", managedWorkerExitError("reporting started", waitErr).Error())
+	case <-workerExited:
+		select {
+		case sessionID := <-pending.started:
+			return responseFrame(frame.GetCorrelationId(), &strategyv1.RunStrategyResponse{SessionId: sessionID})
+		default:
+		}
+		select {
+		case message := <-pending.failed:
+			if strings.TrimSpace(message) == "" {
+				message = "session worker failed before start"
+			}
+			return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", message)
+		default:
+		}
+		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", managedWorkerExitError("reporting started", worker.processError()).Error())
 	case message := <-pending.failed:
 		if strings.TrimSpace(message) == "" {
 			message = "session worker failed before start"
@@ -855,7 +868,7 @@ func (a *Agent) waitWorkerReady(ctx context.Context, ready <-chan struct{}, work
 	if timeout <= 0 {
 		timeout = a.cfg.RequestTimeout
 	}
-	workerExited := waitManagedWorker(worker)
+	workerExited := worker.processExitedSignal()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
@@ -863,22 +876,16 @@ func (a *Agent) waitWorkerReady(ctx context.Context, ready <-chan struct{}, work
 		return ctx.Err()
 	case <-timer.C:
 		return fmt.Errorf("session worker did not connect")
-	case waitErr := <-workerExited:
-		return managedWorkerExitError("connecting", waitErr)
+	case <-workerExited:
+		select {
+		case <-ready:
+			return nil
+		default:
+		}
+		return managedWorkerExitError("connecting", worker.processError())
 	case <-ready:
 		return nil
 	}
-}
-
-func waitManagedWorker(worker *ManagedWorker) <-chan error {
-	if worker == nil || worker.Cmd == nil {
-		return nil
-	}
-	exited := make(chan error, 1)
-	go func() {
-		exited <- worker.Wait()
-	}()
-	return exited
 }
 
 func managedWorkerExitError(stage string, waitErr error) error {

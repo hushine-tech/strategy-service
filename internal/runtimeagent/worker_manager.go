@@ -52,9 +52,11 @@ type ManagedWorker struct {
 	Spec      WorkerStartSpec
 	Cmd       *exec.Cmd
 
-	done     <-chan error
-	waitOnce sync.Once
-	waitErr  error
+	processExited  <-chan struct{}
+	processExitErr error
+	done           <-chan error
+	waitOnce       sync.Once
+	waitErr        error
 }
 
 func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
@@ -155,13 +157,22 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 		}
 		return nil, startErr
 	}
+	processExited := make(chan struct{})
 	done := make(chan error, 1)
-	worker := &ManagedWorker{SessionID: spec.SessionID, Spec: spec, Cmd: cmd, done: done}
+	worker := &ManagedWorker{
+		SessionID:     spec.SessionID,
+		Spec:          spec,
+		Cmd:           cmd,
+		processExited: processExited,
+		done:          done,
+	}
 	m.mu.Lock()
 	m.active[spec.SessionID] = worker
 	m.mu.Unlock()
 	go func() {
 		waitErr := cmd.Wait()
+		worker.processExitErr = waitErr
+		close(processExited)
 		cleanupErr := runWorkerSessionCleanup(m.cleanupSessionRoot, sessionRoot)
 		waitErr = errors.Join(waitErr, cleanupWorkerSessionError(sessionRoot, cleanupErr))
 		if cleanupErr == nil {
@@ -387,6 +398,21 @@ func (w *ManagedWorker) Wait() error {
 		w.waitErr = w.Cmd.Wait()
 	})
 	return w.waitErr
+}
+
+func (w *ManagedWorker) processExitedSignal() <-chan struct{} {
+	if w == nil {
+		return nil
+	}
+	return w.processExited
+}
+
+func (w *ManagedWorker) processError() error {
+	if w == nil || w.processExited == nil {
+		return nil
+	}
+	<-w.processExited
+	return w.processExitErr
 }
 
 func (m *WorkerManager) Registry() *SessionRegistry {

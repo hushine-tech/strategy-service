@@ -160,8 +160,57 @@ raise RuntimeError("worker bootstrap failed")
 	if respFrame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
 		t.Fatalf("response frame type = %v", respFrame.GetFrameType())
 	}
+	if got := respFrame.GetError().GetCode(); got != "Internal" {
+		t.Fatalf("error code = %q, want Internal", got)
+	}
 	if got := respFrame.GetError().GetMessage(); !strings.Contains(got, "session worker exited before reporting started") {
 		t.Fatalf("error message = %q, want worker exit before reporting started", got)
+	}
+}
+
+func TestAgentRunStrategyPrefersStartedWhenWorkerAlsoExited(t *testing.T) {
+	request, err := anypb.New(&strategyv1.RunStrategyRequest{
+		PortfolioId: 1,
+		UserId:      6,
+		RuntimeId:   "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		processExited := make(chan struct{})
+		close(processExited)
+		starter := &fakeWorkerStarter{worker: &ManagedWorker{
+			processExited:  processExited,
+			processExitErr: errors.New("worker exited"),
+		}}
+		agent := NewAgent(AgentConfig{
+			RuntimeID:      "rt-1",
+			WorkerStarter:  starter,
+			StartTimeout:   time.Second,
+			RequestTimeout: time.Second,
+		})
+		starter.onStart = func(pendingSessionID string) {
+			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+					SessionId: "sess-real",
+					Status:    "running",
+				}},
+			}, nil)
+		}
+
+		respFrame := agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+			CorrelationId: "corr-run-started-and-exited",
+			FrameType:     cpv1.FrameType_FRAME_TYPE_REQUEST,
+			Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+				Method:  "RunStrategy",
+				Request: request,
+			}},
+		})
+		if respFrame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
+			t.Fatalf("iteration %d response frame type = %v error=%v", i, respFrame.GetFrameType(), respFrame.GetError())
+		}
 	}
 }
 
@@ -322,8 +371,93 @@ raise RuntimeError("worker bootstrap failed")
 	if respFrame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
 		t.Fatalf("response frame type = %v", respFrame.GetFrameType())
 	}
+	if got := respFrame.GetError().GetCode(); got != "Internal" {
+		t.Fatalf("error code = %q, want Internal", got)
+	}
 	if got := respFrame.GetError().GetMessage(); !strings.Contains(got, "session worker exited before connecting") {
 		t.Fatalf("error message = %q, want worker exit before connecting", got)
+	}
+}
+
+func TestAgentPreviewRunStrategyReportsProcessExitBeforeCleanupCompletes(t *testing.T) {
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_exit_before_cleanup", `
+raise RuntimeError("worker bootstrap failed")
+`)
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_exit_before_cleanup",
+		AgentAddr:        "127.0.0.1:59000",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	defer close(releaseCleanup)
+	manager.cleanupSessionRoot = func(string) error {
+		close(cleanupStarted)
+		<-releaseCleanup
+		return nil
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStarter:  manager,
+		RequestTimeout: 2 * time.Second,
+	})
+	request, err := anypb.New(&strategyv1.PreviewRunStrategyRequest{
+		PortfolioId: 1,
+		UserId:      6,
+		RuntimeId:   "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	response := make(chan *cpv1.RuntimeFrame, 1)
+	go func() {
+		response <- agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+			CorrelationId: "corr-preview-cleanup-blocked",
+			FrameType:     cpv1.FrameType_FRAME_TYPE_REQUEST,
+			Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+				Method:  "PreviewRunStrategy",
+				Request: request,
+			}},
+		})
+	}()
+
+	select {
+	case <-cleanupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("worker cleanup did not start")
+	}
+	select {
+	case respFrame := <-response:
+		if respFrame.GetError().GetCode() != "Internal" {
+			t.Fatalf("error code = %q, want Internal", respFrame.GetError().GetCode())
+		}
+		if got := respFrame.GetError().GetMessage(); !strings.Contains(got, "session worker exited before connecting") {
+			t.Fatalf("error message = %q, want worker exit before connecting", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("worker exit was hidden behind blocked cleanup")
+	}
+}
+
+func TestWaitWorkerReadyPrefersReadyWhenProcessAlsoExited(t *testing.T) {
+	agent := NewAgent(AgentConfig{RequestTimeout: time.Second})
+	for i := 0; i < 100; i++ {
+		ready := make(chan struct{}, 1)
+		ready <- struct{}{}
+		processExited := make(chan struct{})
+		close(processExited)
+		worker := &ManagedWorker{
+			processExited:  processExited,
+			processExitErr: errors.New("worker exited"),
+		}
+		if err := agent.waitWorkerReady(context.Background(), ready, worker, time.Second); err != nil {
+			t.Fatalf("iteration %d waitWorkerReady: %v", i, err)
+		}
 	}
 }
 
@@ -913,6 +1047,7 @@ type fakeWorkerStarter struct {
 	startedSessionID string
 	onStart          func(string)
 	extraEnv         map[string]string
+	worker           *ManagedWorker
 }
 
 func (s *fakeWorkerStarter) StartSessionWorker(ctx context.Context, sessionID string, extraEnv []string) (*ManagedWorker, error) {
@@ -928,6 +1063,10 @@ func (s *fakeWorkerStarter) StartSessionWorker(ctx context.Context, sessionID st
 	}
 	if s.onStart != nil {
 		s.onStart(sessionID)
+	}
+	if s.worker != nil {
+		s.worker.SessionID = sessionID
+		return s.worker, nil
 	}
 	return &ManagedWorker{SessionID: sessionID}, nil
 }
