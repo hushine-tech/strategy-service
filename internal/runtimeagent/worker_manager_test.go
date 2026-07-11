@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -212,6 +213,7 @@ func TestWorkerManagerStopSessionWorkerTreatsAlreadyExitedProcessAsStopped(t *te
 }
 
 func TestStopSessionWorkerRequestsGracefulStopBeforeKill(t *testing.T) {
+	requirePOSIXSignals(t)
 	manager, worker, marker := startSignalAwareWorker(t)
 
 	err := manager.StopSessionWorker(context.Background(), worker.SessionID, 2*time.Second)
@@ -224,8 +226,10 @@ func TestStopSessionWorkerRequestsGracefulStopBeforeKill(t *testing.T) {
 }
 
 func TestStopSessionWorkerForceKillsWorkerAfterTimeout(t *testing.T) {
+	requirePOSIXSignals(t)
 	manager, worker := startSignalIgnoringWorker(t)
 	timeout := 100 * time.Millisecond
+	maxElapsed := timeout + 5*time.Second
 	started := time.Now()
 
 	err := manager.StopSessionWorker(context.Background(), worker.SessionID, timeout)
@@ -234,13 +238,38 @@ func TestStopSessionWorkerForceKillsWorkerAfterTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed < timeout {
 		t.Fatalf("worker stopped after %v, want force kill after at least %v", elapsed, timeout)
+	} else if elapsed > maxElapsed {
+		t.Fatalf("worker stopped after %v, want no more than %v", elapsed, maxElapsed)
 	}
 	if worker.Cmd.ProcessState == nil {
 		t.Fatal("worker process was not reaped after force kill")
 	}
 }
 
+func TestStopSessionWorkerCancellationForceKillsAndReapsWorker(t *testing.T) {
+	requirePOSIXSignals(t)
+	manager, worker := startSignalIgnoringWorker(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+
+	err := manager.StopSessionWorker(ctx, worker.SessionID, 10*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("StopSessionWorker error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("canceled stop returned after %v, want no more than 5s", elapsed)
+	}
+	if worker.Cmd.ProcessState == nil {
+		t.Fatal("worker process was not reaped after canceled stop")
+	}
+	if got := manager.findWorker(worker.SessionID); got != nil {
+		t.Fatalf("worker remained active after canceled stop: %+v", got)
+	}
+}
+
 func TestStopAllDeduplicatesAliasedWorkers(t *testing.T) {
+	requirePOSIXSignals(t)
 	manager, worker, counter := startCountingWorker(t)
 	if err := manager.Registry().AdmitWorker(worker.SessionID, worker.Spec.Token, int64(worker.Cmd.Process.Pid)); err != nil {
 		t.Fatal(err)
@@ -248,12 +277,49 @@ func TestStopAllDeduplicatesAliasedWorkers(t *testing.T) {
 	if err := manager.AliasWorkerSession(worker.SessionID, "replacement-session"); err != nil {
 		t.Fatal(err)
 	}
+	stopWorker := manager.stopWorker
+	stopAttempts := 0
+	manager.stopWorker = func(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
+		stopAttempts++
+		return stopWorker(ctx, worker, timeout)
+	}
 
 	if err := manager.StopAll(context.Background(), 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
+	if stopAttempts != 1 {
+		t.Fatalf("stop attempts=%d want 1", stopAttempts)
+	}
 	if got := readStopCount(t, counter); got != 1 {
 		t.Fatalf("stop count=%d want 1", got)
+	}
+}
+
+func TestStopAllStopsSnapshottedWorkerAfterSessionReplacement(t *testing.T) {
+	manager := NewWorkerManager(WorkerManagerConfig{})
+	original := startUnmanagedWorker(t, "replacement-race")
+	replacement := startUnmanagedWorker(t, "replacement-race")
+	manager.active[original.SessionID] = original
+
+	stopWorker := manager.stopWorker
+	manager.stopWorker = func(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
+		manager.mu.Lock()
+		manager.active[original.SessionID] = replacement
+		manager.mu.Unlock()
+		return stopWorker(ctx, worker, timeout)
+	}
+
+	if err := manager.StopAll(context.Background(), 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if original.Cmd.ProcessState == nil {
+		t.Fatal("snapshotted worker was not reaped")
+	}
+	if replacement.Cmd.ProcessState != nil {
+		t.Fatal("replacement worker was stopped")
+	}
+	if got := manager.findWorker(original.SessionID); got != replacement {
+		t.Fatalf("active worker = %+v, want replacement", got)
 	}
 }
 
@@ -446,6 +512,13 @@ func writePythonWorkerModule(t *testing.T, dir string, name string, source strin
 	}
 }
 
+func requirePOSIXSignals(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX signal semantics")
+	}
+}
+
 func startSignalAwareWorker(t *testing.T) (*WorkerManager, *ManagedWorker, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -543,6 +616,21 @@ func startWorkerModule(t *testing.T, dir string, module string, sessionID string
 		_ = worker.Wait()
 	})
 	return manager, worker
+}
+
+func startUnmanagedWorker(t *testing.T, sessionID string) *ManagedWorker {
+	t.Helper()
+	cmd := exec.Command("python3", "-c", "import time; time.sleep(60)")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start unmanaged worker: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	})
+	return &ManagedWorker{SessionID: sessionID, Cmd: cmd}
 }
 
 func waitForWorkerFile(t *testing.T, path string) {
