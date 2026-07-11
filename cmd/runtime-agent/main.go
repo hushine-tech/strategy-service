@@ -32,7 +32,6 @@ func run(args []string) int {
 	fs := flag.NewFlagSet("runtime-agent", flag.ContinueOnError)
 	configPath := fs.String("config", "config.yaml", "path to config.yaml")
 	runtimeChannelAddr := fs.String("runtime-channel-addr", "", "control-panel RuntimeChannel gRPC address")
-	controlPanelAddr := fs.String("control-panel-addr", "", "control-panel gRPC address used by bare bootstrap scripts")
 	userID := fs.Int64("user-id", 0, "debug bare runtime user id")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -40,8 +39,6 @@ func run(args []string) int {
 		}
 		return 2
 	}
-	_ = controlPanelAddr
-
 	cfg, err := runtimeagent.LoadConfig(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)

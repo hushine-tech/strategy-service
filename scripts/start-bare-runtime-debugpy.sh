@@ -10,15 +10,13 @@ Usage:
   scripts/start-bare-runtime-debugpy.sh [USER_ID] [PLATFORM_HOST]
   scripts/start-bare-runtime-debugpy.sh --user-id 6 --platform-host 192.168.88.6
   scripts/start-bare-runtime-debugpy.sh --user-id 6 \
-    --core-service-addr 192.168.88.6:50051 \
     --control-panel-addr 192.168.88.6:50054 \
     --runtime-channel-addr 192.168.88.6:50055
 
 Defaults:
   USER_ID=6
   PLATFORM_HOST=127.0.0.1
-  core-service      PLATFORM_HOST:50051
-  control-panel     PLATFORM_HOST:50054
+  control-panel     PLATFORM_HOST:50054 (certificate bootstrap only)
   runtime-channel   PLATFORM_HOST:50055
 
 Useful debug env:
@@ -41,14 +39,6 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --platform-host|--host)
       PLATFORM_HOST="${2:?missing value for $1}"
-      shift 2
-      ;;
-    --core-service-addr|--core-addr)
-      CORE_SERVICE_ADDR="${2:?missing value for $1}"
-      shift 2
-      ;;
-    --order-service-addr|--order-addr)
-      ORDER_SERVICE_ADDR="${2:?missing value for $1}"
       shift 2
       ;;
     --control-panel-addr|--control-addr)
@@ -96,10 +86,7 @@ DEBUG_HOST="${DEBUG_HOST:-127.0.0.1}"
 DEBUG_PORT="${DEBUG_PORT:-5678}"
 DEBUG_WAIT="${DEBUG_WAIT:-1}"
 
-CORE_SERVICE_ADDR="${CORE_SERVICE_ADDR:-${CORE_SERVICE_GRPC_ADDR:-${PLATFORM_HOST}:50051}}"
-ORDER_SERVICE_ADDR="${ORDER_SERVICE_ADDR:-${ORDER_SERVICE_GRPC_ADDR:-${CORE_SERVICE_ADDR}}}"
-CONTROL_PANEL_ADDR="${CONTROL_PANEL_ADDR:-${CONTROL_PANEL_SERVICE_GRPC_ADDR:-${PLATFORM_HOST}:50054}}"
-MARKET_DATA_CONTROL_PANEL_ADDR="${MARKET_DATA_CONTROL_PANEL_ADDR:-${MARKET_DATA_CONTROL_PANEL_GRPC_ADDR:-${CONTROL_PANEL_ADDR}}}"
+CONTROL_PANEL_ADDR="${CONTROL_PANEL_ADDR:-${PLATFORM_HOST}:50054}"
 RUNTIME_CHANNEL_ADDR="${RUNTIME_CHANNEL_ADDR:-${RUNTIME_CHANNEL_GRPC_ADDR:-${PLATFORM_HOST}:50055}}"
 
 if [[ -z "${CONFIG_PATH:-}" ]]; then
@@ -136,32 +123,12 @@ if [[ -z "${RUNTIME_AGENT_CONTROL_ADDR:-}" ]]; then
 fi
 RUNTIME_AGENT_CONTROL_URL="http://${RUNTIME_AGENT_CONTROL_ADDR}"
 
-export CORE_SERVICE_GRPC_ADDR="${CORE_SERVICE_ADDR}"
-export ORDER_SERVICE_GRPC_ADDR="${ORDER_SERVICE_ADDR}"
-export CONTROL_PANEL_SERVICE_GRPC_ADDR="${CONTROL_PANEL_ADDR}"
-export MARKET_DATA_CONTROL_PANEL_GRPC_ADDR="${MARKET_DATA_CONTROL_PANEL_ADDR}"
-export RUNTIME_CHANNEL_GRPC_ADDR="${RUNTIME_CHANNEL_ADDR}"
-export RUNTIME_CHANNEL_TLS_ENABLED="${RUNTIME_CHANNEL_TLS_ENABLED:-true}"
-export RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE="${RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE:-${REPO_ROOT}/hushine-deploy/certs/runtime-channel-server.pem}"
-export RUNTIME_CHANNEL_TLS_SERVER_NAME="${RUNTIME_CHANNEL_TLS_SERVER_NAME:-runtime-channel.local}"
+RUNTIME_CHANNEL_TLS_ENABLED="${RUNTIME_CHANNEL_TLS_ENABLED:-true}"
+RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE="${RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE:-${REPO_ROOT}/hushine-deploy/certs/runtime-channel-server.pem}"
+RUNTIME_CHANNEL_TLS_SERVER_NAME="${RUNTIME_CHANNEL_TLS_SERVER_NAME:-runtime-channel.local}"
 BOOTSTRAP_ROOT_CERT_FILE="${RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE}"
 export RUNTIME_BARE_BOOTSTRAP_DIR="${BOOTSTRAP_DIR}"
 export RUNTIME_BARE_STATE_FILE="${RUNTIME_BARE_STATE_FILE}"
-export RUNTIME_RUNTIME_ID="${RUNTIME_ID}"
-export RUNTIME_NAME="${RUNTIME_NAME}"
-export RUNTIME_AGENT_CONTROL_ADDR="${RUNTIME_AGENT_CONTROL_ADDR}"
-export HUSHINE_RUNTIME_SOURCE="bare"
-export HUSHINE_RUNTIME_NAME="${RUNTIME_NAME}"
-export PYTHONPATH="${PYTHONPATH:-.:./strategy-library}"
-if [[ -z "${LOG_TRACING_ENDPOINT:-}" && "${PLATFORM_HOST}" != "127.0.0.1" && "${PLATFORM_HOST}" != "localhost" ]]; then
-  export LOG_TRACING_ENDPOINT="http://${PLATFORM_HOST}:4318"
-fi
-if [[ -n "${NO_PROXY:-}" ]]; then
-  export NO_PROXY="${NO_PROXY},${PLATFORM_HOST}"
-else
-  export NO_PROXY="127.0.0.1,localhost,::1,192.168.88.10,${PLATFORM_HOST}"
-fi
-export no_proxy="${no_proxy:-${NO_PROXY}}"
 
 wait_args=()
 if [[ "${DEBUG_WAIT}" != "0" && "${DEBUG_WAIT}" != "false" ]]; then
@@ -170,14 +137,12 @@ fi
 
 echo "Starting bare runtime for user_id=${USER_ID} under debugpy."
 echo "VS Code attach: ${DEBUG_HOST}:${DEBUG_PORT}"
-echo "core-service: ${CORE_SERVICE_ADDR}"
-echo "control-panel: ${CONTROL_PANEL_ADDR}"
+echo "control-panel certificate bootstrap: ${CONTROL_PANEL_ADDR}"
 echo "runtime-channel: ${RUNTIME_CHANNEL_ADDR}"
 echo "runtime-id: ${RUNTIME_ID}"
 echo "local-control: ${RUNTIME_AGENT_CONTROL_URL}"
 echo "state-file: ${RUNTIME_BARE_STATE_FILE}"
 echo "config: ${CONFIG_PATH}"
-echo "tracing endpoint: ${LOG_TRACING_ENDPOINT:-config default}"
 if [[ "${#wait_args[@]}" -gt 0 ]]; then
   echo "Worker will wait for VS Code attach before executing a session."
 fi
@@ -185,8 +150,8 @@ fi
 cd "${STRATEGY_DIR}"
 
 if [[ "${RUNTIME_CHANNEL_TLS_ENABLED}" == "1" || "${RUNTIME_CHANNEL_TLS_ENABLED}" == "true" ]]; then
-  export RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE="${RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE:-${BOOTSTRAP_DIR}/runtime-client.pem}"
-  export RUNTIME_CHANNEL_TLS_CLIENT_KEY_FILE="${RUNTIME_CHANNEL_TLS_CLIENT_KEY_FILE:-${BOOTSTRAP_DIR}/runtime-client.key}"
+  RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE="${RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE:-${BOOTSTRAP_DIR}/runtime-client.pem}"
+  RUNTIME_CHANNEL_TLS_CLIENT_KEY_FILE="${RUNTIME_CHANNEL_TLS_CLIENT_KEY_FILE:-${BOOTSTRAP_DIR}/runtime-client.key}"
   BUNDLE_ROOT_CERT_FILE="${BOOTSTRAP_DIR}/control-panel-ca.pem"
   bootstrap_python=()
   if [[ -x "${STRATEGY_DIR}/.venv/bin/python" ]]; then
@@ -220,16 +185,12 @@ if paths is None:
     action = "bootstrapped"
 print(f"{action} bare runtime mTLS: {paths.client_cert_file}")
 PY
-  export RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE="${BUNDLE_ROOT_CERT_FILE}"
+  RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE="${BUNDLE_ROOT_CERT_FILE}"
 fi
 
 mkdir -p "$(dirname "${RUNTIME_BARE_STATE_FILE}")"
 cat > "${RUNTIME_BARE_STATE_FILE}" <<EOF
 export USER_ID="${USER_ID}"
-export PLATFORM_HOST="${PLATFORM_HOST}"
-export CORE_SERVICE_GRPC_ADDR="${CORE_SERVICE_ADDR}"
-export CONTROL_PANEL_SERVICE_GRPC_ADDR="${CONTROL_PANEL_ADDR}"
-export RUNTIME_CHANNEL_GRPC_ADDR="${RUNTIME_CHANNEL_ADDR}"
 export RUNTIME_RUNTIME_ID="${RUNTIME_ID}"
 export RUNTIME_NAME="${RUNTIME_NAME}"
 export RUNTIME_AGENT_CONTROL_ADDR="${RUNTIME_AGENT_CONTROL_ADDR}"
@@ -241,8 +202,34 @@ chmod 600 "${RUNTIME_BARE_STATE_FILE}"
 
 RUNTIME_AGENT_START_SCRIPT="${RUNTIME_AGENT_START_SCRIPT:-${STRATEGY_DIR}/scripts/start-runtime-agent.sh}"
 
-exec "${RUNTIME_AGENT_START_SCRIPT}" -- \
+agent_env=(
+  "PATH=${PATH}"
+  "HOME=${HOME}"
+  "USER=${USER:-}"
+  "TMPDIR=${TMPDIR:-/tmp}"
+  "PYTHONPATH=${STRATEGY_DIR}:${REPO_ROOT}/strategy-library"
+  "RUNTIME_CHANNEL_GRPC_ADDR=${RUNTIME_CHANNEL_ADDR}"
+  "RUNTIME_CHANNEL_TLS_ENABLED=${RUNTIME_CHANNEL_TLS_ENABLED}"
+  "RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE=${RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE}"
+  "RUNTIME_CHANNEL_TLS_SERVER_NAME=${RUNTIME_CHANNEL_TLS_SERVER_NAME}"
+  "RUNTIME_RUNTIME_ID=${RUNTIME_ID}"
+  "RUNTIME_NAME=${RUNTIME_NAME}"
+  "RUNTIME_AGENT_CONTROL_ADDR=${RUNTIME_AGENT_CONTROL_ADDR}"
+  "DEBUG_PORT=${DEBUG_PORT}"
+)
+if [[ -n "${RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE:-}" ]]; then
+  agent_env+=("RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE=${RUNTIME_CHANNEL_TLS_CLIENT_CERT_FILE}")
+fi
+if [[ -n "${RUNTIME_CHANNEL_TLS_CLIENT_KEY_FILE:-}" ]]; then
+  agent_env+=("RUNTIME_CHANNEL_TLS_CLIENT_KEY_FILE=${RUNTIME_CHANNEL_TLS_CLIENT_KEY_FILE}")
+fi
+for key in RUNTIME_AGENT_BIN RUNTIME_AGENT_BIN_DIR RUNTIME_AGENT_DIST_DIR RUNTIME_AGENT_ALLOW_GO_RUN HUSHINE_WORKER_PYTHON HUSHINE_WORKER_PYTHON_ARGS; do
+  if [[ -n "${!key:-}" ]]; then
+    agent_env+=("${key}=${!key}")
+  fi
+done
+
+exec env -i "${agent_env[@]}" "${RUNTIME_AGENT_START_SCRIPT}" -- \
   --config "${CONFIG_PATH}" \
   --runtime-channel-addr "${RUNTIME_CHANNEL_ADDR}" \
-  --control-panel-addr "${CONTROL_PANEL_ADDR}" \
   --user-id "${USER_ID}"

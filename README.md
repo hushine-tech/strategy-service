@@ -119,8 +119,7 @@ DEBUG_WAIT=0 scripts/start-bare-runtime-debugpy.sh 6 192.168.88.6
 The first positional argument is `user_id`; the second positional argument is
 the target platform host. With the command above, the script derives:
 
-- core-service: `192.168.88.6:50051`
-- control-panel: `192.168.88.6:50054`
+- control-panel certificate bootstrap: `192.168.88.6:50054`
 - RuntimeChannel: `192.168.88.6:50055`
 
 `DEBUG_WAIT=0` starts the runtime immediately. Omit it, or set `DEBUG_WAIT=1`,
@@ -157,10 +156,13 @@ When ports are non-standard, pass full addresses:
 ```bash
 scripts/start-bare-runtime-debugpy.sh \
   --user-id 6 \
-  --core-service-addr 192.168.88.6:50051 \
   --control-panel-addr 192.168.88.6:50054 \
   --runtime-channel-addr 192.168.88.6:50055
 ```
+
+`--control-panel-addr` is a launcher-only certificate-bootstrap input. After
+bootstrap, the launcher does not place it in runtime-agent arguments,
+environment, or restart state.
 
 There is no `attach.json`. VS Code uses `.vscode/launch.json`; `attach` is the
 debug configuration's `request` mode. Use the tracked example as the base for
@@ -182,17 +184,17 @@ RUNTIME_CHANNEL_TLS_ENABLED=true \
 RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE=../hushine-deploy/certs/runtime-channel-server.pem \
 RUNTIME_CHANNEL_TLS_SERVER_NAME=runtime-channel.local \
 scripts/start-runtime-agent.sh -- --config config.local.yaml \
-  --control-panel-addr 127.0.0.1:50054 \
   --runtime-channel-addr 127.0.0.1:50055 \
   --user-id 123
 ```
 
-`core-service` is exported for config compatibility. Runtime traffic still goes
-through RuntimeChannel; direct core-service calls are ignored after startup.
+Runtime traffic goes through RuntimeChannel. The runtime-agent and Python worker
+never receive core-service, order-service, Kafka, database, or tracing
+endpoints from this launcher.
 
 Optional environment overrides include `DEBUG_HOST`, `DEBUG_PORT`,
-`DEBUG_WAIT`, `PLATFORM_HOST`, `CORE_SERVICE_ADDR`, `CONTROL_PANEL_ADDR`,
-`RUNTIME_CHANNEL_ADDR`, and `CONFIG_PATH`.
+`DEBUG_WAIT`, `PLATFORM_HOST`, `CONTROL_PANEL_ADDR`, `RUNTIME_CHANNEL_ADDR`, and
+`CONFIG_PATH`.
 
 When a bare debug run materializes strategy code locally, edits live under
 `.hushine-runtime/strategies`. Upload them back to the remote portfolio database

@@ -35,32 +35,54 @@ required_literals=(
   'STRATEGY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"'
   'REPO_ROOT="$(cd "${STRATEGY_DIR}/.." && pwd)"'
   '--platform-host|--host)'
-  '--core-service-addr|--core-addr)'
   '--control-panel-addr|--control-addr)'
   '--runtime-channel-addr|--runtime-addr)'
-  'CORE_SERVICE_GRPC_ADDR="${CORE_SERVICE_ADDR}"'
-  'CONTROL_PANEL_SERVICE_GRPC_ADDR="${CONTROL_PANEL_ADDR}"'
-  'RUNTIME_CHANNEL_GRPC_ADDR="${RUNTIME_CHANNEL_ADDR}"'
-  'RUNTIME_RUNTIME_ID="${RUNTIME_ID}"'
-  'RUNTIME_AGENT_CONTROL_ADDR="${RUNTIME_AGENT_CONTROL_ADDR}"'
+  'RUNTIME_CHANNEL_GRPC_ADDR=${RUNTIME_CHANNEL_ADDR}'
+  'exec env -i'
+  'RUNTIME_RUNTIME_ID=${RUNTIME_ID}'
+  'RUNTIME_AGENT_CONTROL_ADDR=${RUNTIME_AGENT_CONTROL_ADDR}'
   'RUNTIME_BARE_STATE_FILE="${RUNTIME_BARE_STATE_FILE}"'
   'RUNTIME_AGENT_CONTROL_URL="http://${RUNTIME_AGENT_CONTROL_ADDR}"'
   'previous_runtime_id="$(read_state_value RUNTIME_RUNTIME_ID)"'
   'RUNTIME_ID="${RUNTIME_RUNTIME_ID:-${previous_runtime_id:-bare-${USER_ID}-$(random_suffix 8)}}"'
   'paths = bare_bootstrap.load_existing_runtime_mtls_bundle(output_dir, runtime_id=runtime_id)'
+  'address="${CONTROL_PANEL_ADDR}"'
   'cat > "${RUNTIME_BARE_STATE_FILE}" <<EOF'
   'CONFIG_PATH="./config.yaml"'
   'config file not found: ${CONFIG_PATH}'
-  'LOG_TRACING_ENDPOINT="http://${PLATFORM_HOST}:4318"'
   'cd "${STRATEGY_DIR}"'
   'RUNTIME_AGENT_START_SCRIPT="${RUNTIME_AGENT_START_SCRIPT:-${STRATEGY_DIR}/scripts/start-runtime-agent.sh}"'
-  'exec "${RUNTIME_AGENT_START_SCRIPT}" --'
   '--user-id "${USER_ID}"'
 )
 
 for literal in "${required_literals[@]}"; do
   if ! grep -Fq -- "${literal}" "${RUNTIME_SCRIPT}"; then
     echo "missing bare debugpy launcher literal: ${literal}" >&2
+    exit 1
+  fi
+done
+
+forbidden_literals=(
+  '--core-service-addr|--core-addr)'
+  '--order-service-addr|--order-addr)'
+  'export CORE_SERVICE_GRPC_ADDR='
+  'export ORDER_SERVICE_GRPC_ADDR='
+  'export CONTROL_PANEL_SERVICE_GRPC_ADDR='
+  'export MARKET_DATA_CONTROL_PANEL_GRPC_ADDR='
+  'CORE_SERVICE_ADDR='
+  'ORDER_SERVICE_ADDR='
+  'MARKET_DATA_CONTROL_PANEL_ADDR='
+  'LOG_TRACING_ENDPOINT='
+  'export NO_PROXY='
+  'export no_proxy='
+  'export PLATFORM_HOST='
+  '--control-panel-addr "${CONTROL_PANEL_ADDR}"'
+  'export CORE_SERVICE_GRPC_ADDR="${CORE_SERVICE_ADDR}"'
+  'export CONTROL_PANEL_SERVICE_GRPC_ADDR="${CONTROL_PANEL_ADDR}"'
+)
+for literal in "${forbidden_literals[@]}"; do
+  if grep -Fq -- "${literal}" "${RUNTIME_SCRIPT}"; then
+    echo "forbidden bare launcher literal remains: ${literal}" >&2
     exit 1
   fi
 done
@@ -83,3 +105,70 @@ for literal in "${readme_literals[@]}"; do
     exit 1
   fi
 done
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "${tmp_dir}"' EXIT
+fake_start="${tmp_dir}/start-runtime-agent"
+env_out="${tmp_dir}/agent.env"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf 'env | sort > %q\n' "${env_out}"
+} > "${fake_start}"
+chmod +x "${fake_start}"
+
+env -i \
+  PATH="${PATH}" \
+  HOME="${HOME}" \
+  USER="${USER:-hushine-test}" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  DATABASE_PASSWORD=parent-db-secret \
+  KAFKA_BROKERS=parent-kafka-secret \
+  CORE_SERVICE_GRPC_ADDR=parent-core-secret \
+  ORDER_SERVICE_GRPC_ADDR=parent-order-secret \
+  CONTROL_PANEL_SERVICE_GRPC_ADDR=parent-control-secret \
+  MARKET_DATA_CONTROL_PANEL_GRPC_ADDR=parent-market-secret \
+  QUANT_HANDLER_JWT_SECRET=parent-jwt-secret \
+  LOG_TRACING_ENDPOINT=http://parent-tracing:4318 \
+  http_proxy=http://parent-proxy \
+  no_proxy=parent.internal \
+  RUNTIME_CHANNEL_TLS_ENABLED=false \
+  DEBUG_WAIT=0 \
+  RUNTIME_BARE_BOOTSTRAP_DIR="${tmp_dir}/bootstrap" \
+  RUNTIME_BARE_STATE_FILE="${tmp_dir}/runtime.env" \
+  RUNTIME_AGENT_START_SCRIPT="${fake_start}" \
+  CONFIG_PATH="${REPO_ROOT}/strategy-service/config.yaml" \
+  bash "${RUNTIME_SCRIPT}" --user-id 6 --platform-host 127.0.0.1
+
+while IFS='=' read -r key _; do
+  case "${key}" in
+    DEBUG_PORT|HOME|OLDPWD|PATH|PWD|PYTHONPATH|RUNTIME_AGENT_CONTROL_ADDR|RUNTIME_CHANNEL_GRPC_ADDR|RUNTIME_CHANNEL_TLS_ENABLED|RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE|RUNTIME_CHANNEL_TLS_SERVER_NAME|RUNTIME_NAME|RUNTIME_RUNTIME_ID|SHLVL|TMPDIR|USER|_) ;;
+    *)
+      echo "unexpected key reached runtime-agent: ${key}" >&2
+      exit 1
+      ;;
+  esac
+done < "${env_out}"
+
+for required in \
+  'RUNTIME_CHANNEL_GRPC_ADDR=127.0.0.1:50055' \
+  'RUNTIME_CHANNEL_TLS_ENABLED=false' \
+  'RUNTIME_NAME=' \
+  'RUNTIME_RUNTIME_ID=' \
+  'RUNTIME_AGENT_CONTROL_ADDR=' \
+  'DEBUG_PORT=5678'
+do
+  if [[ "${required}" == *= ]]; then
+    grep -q "^${required}" "${env_out}"
+  else
+    grep -Fxq "${required}" "${env_out}"
+  fi
+done
+
+state_keys="$(sed -n 's/^export \([^=]*\)=.*/\1/p' "${tmp_dir}/runtime.env" | LC_ALL=C sort)"
+expected_state_keys="$(printf '%s\n' \
+  DEBUG_HOST DEBUG_PORT RUNTIME_AGENT_CONTROL_ADDR RUNTIME_AGENT_CONTROL_URL \
+  RUNTIME_NAME RUNTIME_RUNTIME_ID USER_ID | LC_ALL=C sort)"
+if [[ "${state_keys}" != "${expected_state_keys}" ]]; then
+  echo "bare runtime state keys = ${state_keys}" >&2
+  exit 1
+fi
