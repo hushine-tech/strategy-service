@@ -1,25 +1,51 @@
 package runtimeagent
 
 import (
+	"context"
 	"testing"
 
-	elog "github.com/hushine-tech/golang-lib/pkg/log"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
-func TestNormalizeLogConfigDefaultsRuntimeAgentServiceName(t *testing.T) {
-	cfg := elog.Config{
-		OutputDir: "./logs",
-		Tracing: elog.TracingConfig{
-			Enabled:     true,
-			Endpoint:    "http://127.0.0.1:4318",
-			ServiceName: "strategy-service",
-		},
+func TestRuntimeLocalLogBackendConfigDisablesNetworkSinks(t *testing.T) {
+	cfg := RuntimeLocalLogBackendConfig(RuntimeLogConfig{OutputDir: "/tmp/runtime-logs"})
+	if cfg.OutputDir != "/tmp/runtime-logs" || !cfg.LocalFile.Enabled {
+		t.Fatalf("local log config = %+v", cfg)
 	}
+	if cfg.Kafka.Enabled || len(cfg.Kafka.Brokers) != 0 {
+		t.Fatalf("runtime Kafka must be disabled: %+v", cfg.Kafka)
+	}
+	if cfg.Elasticsearch.Enabled || len(cfg.Elasticsearch.Addresses) != 0 {
+		t.Fatalf("runtime Elasticsearch must be disabled: %+v", cfg.Elasticsearch)
+	}
+	if cfg.Tracing.Enabled || cfg.Tracing.Endpoint != "" {
+		t.Fatalf("runtime direct tracing must be disabled: %+v", cfg.Tracing)
+	}
+}
 
-	NormalizeLogConfig(&cfg)
+func TestRuntimeObservabilityKeepsW3CPropagationWithoutExporter(t *testing.T) {
+	shutdown, err := InitObservability(context.Background(), RuntimeLogConfig{OutputDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("InitObservability: %v", err)
+	}
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
 
-	if cfg.Tracing.ServiceName != "strategy-runtime-agent" {
-		t.Fatalf("service_name = %q, want strategy-runtime-agent", cfg.Tracing.ServiceName)
+	var traceID trace.TraceID
+	var spanID trace.SpanID
+	traceID[15] = 1
+	spanID[7] = 1
+	spanContext := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled,
+	})
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(
+		trace.ContextWithSpanContext(context.Background(), spanContext),
+		carrier,
+	)
+	if carrier.Get("traceparent") == "" {
+		t.Fatal("W3C traceparent propagation was not installed")
 	}
 }
 

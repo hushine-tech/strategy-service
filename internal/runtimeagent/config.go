@@ -1,11 +1,12 @@
 package runtimeagent
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
-	elog "github.com/hushine-tech/golang-lib/pkg/log"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,31 +22,35 @@ type TLSConfig struct {
 	BundleJSON     string
 }
 
+type RuntimeLogConfig struct {
+	OutputDir string `yaml:"output_dir"`
+}
+
 type Config struct {
 	RuntimeChannelAddr string
-	ControlPanelAddr   string
 	RuntimeSource      string
 	RuntimeID          string
 	RuntimeName        string
 	CredentialPath     string
+	WorkerStateRoot    string
 	Capabilities       []string
 	ResourceProfile    string
 	Version            string
 	HeartbeatSeconds   int
 	TLS                TLSConfig
-	Log                elog.Config
+	Log                RuntimeLogConfig
 }
 
 type rawConfig struct {
 	Dependencies struct {
 		RuntimeChannelGRPC string `yaml:"runtime_channel_grpc"`
-		ControlPanelGRPC   string `yaml:"control_panel_service_grpc"`
 	} `yaml:"dependencies"`
 	Runtime struct {
 		CredentialPath           string   `yaml:"credential_path"`
 		Source                   string   `yaml:"source"`
 		RuntimeID                string   `yaml:"runtime_id"`
 		Name                     string   `yaml:"name"`
+		WorkerStateRoot          string   `yaml:"worker_state_root"`
 		Capabilities             []string `yaml:"capabilities"`
 		ResourceProfile          string   `yaml:"resource_profile"`
 		Version                  string   `yaml:"version"`
@@ -59,7 +64,23 @@ type rawConfig struct {
 		ClientKeyFile  string `yaml:"client_key_file"`
 		BundleJSON     string `yaml:"bundle_json"`
 	} `yaml:"runtime_channel_tls"`
-	Log elog.Config `yaml:"log"`
+	Log RuntimeLogConfig `yaml:"log"`
+}
+
+func decodeRawConfig(body []byte, raw *rawConfig) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(body))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(raw); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("parse trailing config document: %w", err)
+		}
+		return fmt.Errorf("parse config: multiple YAML documents are not supported")
+	}
+	return nil
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -68,26 +89,22 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
 	var raw rawConfig
-	if err := yaml.Unmarshal(body, &raw); err != nil {
-		return Config{}, fmt.Errorf("parse config: %w", err)
+	if err := decodeRawConfig(body, &raw); err != nil {
+		return Config{}, err
 	}
 
 	logCfg := raw.Log
-	if logCfg.OutputDir == "" {
+	if strings.TrimSpace(logCfg.OutputDir) == "" {
 		logCfg.OutputDir = "./logs"
 	}
-	if !logCfg.Kafka.Enabled && !logCfg.LocalFile.Enabled && !logCfg.Elasticsearch.Enabled {
-		logCfg.LocalFile.Enabled = true
-	}
-	NormalizeLogConfig(&logCfg)
 
 	cfg := Config{
 		RuntimeChannelAddr: strings.TrimSpace(raw.Dependencies.RuntimeChannelGRPC),
-		ControlPanelAddr:   strings.TrimSpace(raw.Dependencies.ControlPanelGRPC),
 		RuntimeSource:      strings.TrimSpace(raw.Runtime.Source),
 		RuntimeID:          strings.TrimSpace(raw.Runtime.RuntimeID),
 		RuntimeName:        strings.TrimSpace(raw.Runtime.Name),
 		CredentialPath:     strings.TrimSpace(raw.Runtime.CredentialPath),
+		WorkerStateRoot:    defaultString(raw.Runtime.WorkerStateRoot, ".hushine-worker-state"),
 		Capabilities:       normalizeCapabilities(raw.Runtime.Capabilities),
 		ResourceProfile:    defaultString(raw.Runtime.ResourceProfile, "small"),
 		Version:            defaultString(raw.Runtime.Version, "0.1.0"),
@@ -112,9 +129,6 @@ func LoadConfig(path string) (Config, error) {
 func applyEnvOverrides(cfg *Config) {
 	if v := firstEnv("RUNTIME_CHANNEL_GRPC_ADDR", "DEPENDENCIES_RUNTIME_CHANNEL_GRPC"); v != "" {
 		cfg.RuntimeChannelAddr = v
-	}
-	if v := firstEnv("CONTROL_PANEL_SERVICE_GRPC_ADDR", "DEPENDENCIES_CONTROL_PANEL_SERVICE_GRPC"); v != "" {
-		cfg.ControlPanelAddr = v
 	}
 	if v := os.Getenv("RUNTIME_SOURCE"); v != "" {
 		cfg.RuntimeSource = strings.TrimSpace(v)
@@ -152,16 +166,6 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("RUNTIME_CHANNEL_TLS_BUNDLE_JSON"); v != "" {
 		cfg.TLS.BundleJSON = strings.TrimSpace(v)
 	}
-	if v := os.Getenv("LOG_TRACING_ENDPOINT"); v != "" {
-		cfg.Log.Tracing.Endpoint = strings.TrimSpace(v)
-	}
-	if v := os.Getenv("LOG_TRACING_ENABLED"); v != "" {
-		cfg.Log.Tracing.Enabled = parseBool(v)
-	}
-	if v := os.Getenv("LOG_TRACING_SERVICE_NAME"); v != "" {
-		cfg.Log.Tracing.ServiceName = strings.TrimSpace(v)
-	}
-	NormalizeLogConfig(&cfg.Log)
 }
 
 func normalizeCapabilities(values []string) []string {

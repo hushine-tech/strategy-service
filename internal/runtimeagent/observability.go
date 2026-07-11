@@ -2,6 +2,8 @@ package runtimeagent
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	grpcmw "github.com/hushine-tech/golang-lib/middleware/grpc"
 	grpcclientmw "github.com/hushine-tech/golang-lib/middleware/grpcclient"
@@ -11,32 +13,34 @@ import (
 
 const RuntimeAgentServiceName = "strategy-runtime-agent"
 
-func NormalizeLogConfig(cfg *elog.Config) {
-	if cfg == nil {
-		return
+func RuntimeLocalLogBackendConfig(cfg RuntimeLogConfig) *elog.Config {
+	outputDir := strings.TrimSpace(cfg.OutputDir)
+	if outputDir == "" {
+		outputDir = "./logs"
 	}
-	if cfg.OutputDir == "" {
-		cfg.OutputDir = "./logs"
-	}
-	if cfg.Tracing.ServiceName == "" || cfg.Tracing.ServiceName == "strategy-service" {
-		cfg.Tracing.ServiceName = RuntimeAgentServiceName
+	return &elog.Config{
+		OutputDir:     outputDir,
+		LocalFile:     elog.LocalFileConfig{Enabled: true},
+		Kafka:         elog.KafkaConfig{Enabled: false, Brokers: []string{}},
+		Elasticsearch: elog.ElasticsearchConfig{Enabled: false, Addresses: []string{}},
+		Tracing:       elog.TracingConfig{Enabled: false, Endpoint: "", ServiceName: RuntimeAgentServiceName},
 	}
 }
 
-func InitObservability(ctx context.Context, cfg *elog.Config) (func(context.Context) error, error) {
-	if cfg == nil {
-		cfg = elog.DefaultConfig()
-	}
-	NormalizeLogConfig(cfg)
-	if err := elog.InitLogWithConfig(cfg); err != nil {
+func InitObservability(ctx context.Context, cfg RuntimeLogConfig) (func(context.Context) error, error) {
+	local := RuntimeLocalLogBackendConfig(cfg)
+	if err := elog.InitLogWithConfig(local); err != nil {
 		return nil, err
 	}
-	shutdown, err := elog.InitTracerFromConfig(cfg.Tracing)
+	tracerShutdown, err := elog.InitTracerFromConfig(local.Tracing)
 	if err != nil {
+		_ = elog.Close()
 		return nil, err
 	}
-	elog.Info(ctx, "system", "strategy-runtime-agent observability initialized")
-	return shutdown, nil
+	elog.Info(ctx, "system", "strategy-runtime-agent local observability initialized")
+	return func(shutdownCtx context.Context) error {
+		return errors.Join(tracerShutdown(shutdownCtx), elog.Close())
+	}, nil
 }
 
 func RuntimeChannelDialOptions(logger elog.Logger) []grpc.DialOption {

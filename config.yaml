@@ -16,6 +16,7 @@ runtime:
   source: ""
   runtime_id: ""
   name: ""
+  worker_state_root: ".hushine-worker-state"
   capabilities: ["strategy", "spot", "futures"]
   resource_profile: "small"
   version: "0.1.0"
@@ -27,7 +28,4 @@ runtime_channel_tls:
   server_name: ""
 
 log:
-  tracing:
-    enabled: false
-    endpoint: ""
-    service_name: "strategy-service"
+  output_dir: "./logs"

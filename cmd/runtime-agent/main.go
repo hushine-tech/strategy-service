@@ -58,12 +58,12 @@ func run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	shutdownTracing, err := runtimeagent.InitObservability(ctx, &cfg.Log)
+	shutdownObservability, err := runtimeagent.InitObservability(ctx, cfg.Log)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init observability: %v\n", err)
 		return 1
 	}
-	defer func() { _ = shutdownTracing(context.Background()) }()
+	defer func() { _ = shutdownObservability(context.Background()) }()
 
 	workerListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
