@@ -212,6 +212,34 @@ func TestWorkerManagerStopSessionWorkerTreatsAlreadyExitedProcessAsStopped(t *te
 	}
 }
 
+func TestStopSessionWorkerAlreadyDonePreservesReplacementRegistry(t *testing.T) {
+	cmd := exec.Command("python3", "-c", "pass")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start short process: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait short process: %v", err)
+	}
+
+	m := NewWorkerManager(WorkerManagerConfig{})
+	old := &ManagedWorker{SessionID: "sess-replaced", Spec: WorkerStartSpec{Token: "old-token"}, Cmd: cmd}
+	m.active[old.SessionID] = old
+	if err := m.registry.ExpectWorker(old.SessionID, "replacement-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.registry.AdmitWorker(old.SessionID, "replacement-token", 424242); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.StopSessionWorker(context.Background(), old.SessionID, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := m.registry.ActiveWorker(old.SessionID)
+	if !ok || identity.PID != 424242 {
+		t.Fatalf("replacement identity=(%+v,%v), want pid 424242", identity, ok)
+	}
+}
+
 func TestStopSessionWorkerRequestsGracefulStopBeforeKill(t *testing.T) {
 	requirePOSIXSignals(t)
 	manager, worker, marker := startSignalAwareWorker(t)
@@ -350,6 +378,44 @@ func TestStopAllStopsSnapshottedWorkerAfterSessionReplacement(t *testing.T) {
 	}
 }
 
+func TestStopAllPreservesExpectedReplacementRegistration(t *testing.T) {
+	manager := NewWorkerManager(WorkerManagerConfig{})
+	original := startUnmanagedWorker(t, "expected-replacement-race")
+	original.Spec.Token = "original-token"
+	replacement := startUnmanagedWorker(t, "expected-replacement-race")
+	replacement.Spec.Token = "replacement-token"
+	if err := manager.registry.ExpectWorker(original.SessionID, original.Spec.Token); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.registry.AdmitWorker(original.SessionID, original.Spec.Token, int64(original.Cmd.Process.Pid)); err != nil {
+		t.Fatal(err)
+	}
+	manager.active[original.SessionID] = original
+
+	stopWorker := manager.stopWorker
+	manager.stopWorker = func(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
+		manager.registry.ForgetWorker(original.SessionID)
+		if err := manager.registry.ExpectWorker(replacement.SessionID, replacement.Spec.Token); err != nil {
+			t.Fatal(err)
+		}
+		manager.mu.Lock()
+		manager.active[original.SessionID] = replacement
+		manager.mu.Unlock()
+		return stopWorker(ctx, worker, timeout)
+	}
+
+	if err := manager.StopAll(context.Background(), 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.registry.AdmitWorker(replacement.SessionID, replacement.Spec.Token, int64(replacement.Cmd.Process.Pid)); err != nil {
+		t.Fatalf("replacement expectation was removed: %v", err)
+	}
+	identity, ok := manager.registry.ActiveWorker(replacement.SessionID)
+	if !ok || identity.PID != int64(replacement.Cmd.Process.Pid) {
+		t.Fatalf("replacement identity=(%+v,%v), want pid %d", identity, ok, replacement.Cmd.Process.Pid)
+	}
+}
+
 func TestWorkerManagerStopWaitsForManagedCleanupBeforeReleasingSession(t *testing.T) {
 	cmd := exec.Command("python3", "-c", "pass")
 	if err := cmd.Start(); err != nil {
@@ -366,6 +432,7 @@ func TestWorkerManagerStopWaitsForManagedCleanupBeforeReleasingSession(t *testin
 	managedDone := make(chan error)
 	m.active["sess-cleanup"] = &ManagedWorker{
 		SessionID: "sess-cleanup",
+		Spec:      WorkerStartSpec{Token: "token"},
 		Cmd:       cmd,
 		done:      managedDone,
 	}

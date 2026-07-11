@@ -133,16 +133,16 @@ func (r *SessionRegistry) ForgetWorker(sessionID string) {
 	}
 }
 
-func (r *SessionRegistry) ForgetWorkerIdentity(sessionID string, pid int64) {
+func (r *SessionRegistry) ForgetWorkerIdentity(sessionID string, pid int64, token string) {
 	sessionID = strings.TrimSpace(sessionID)
+	token = strings.TrimSpace(token)
 	if sessionID == "" {
 		return
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	current, hasCurrent := r.active[sessionID]
-	if !hasCurrent || current.PID == pid {
+	if expected, ok := r.expected[sessionID]; ok && token != "" && expected == token {
 		delete(r.expected, sessionID)
 	}
 	if pid <= 0 {

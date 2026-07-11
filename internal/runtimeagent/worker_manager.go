@@ -166,7 +166,7 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 		waitErr = errors.Join(waitErr, cleanupWorkerSessionError(sessionRoot, cleanupErr))
 		if cleanupErr == nil {
 			m.clearCleanupFailureForWorker(spec.SessionID, worker)
-			m.registry.ForgetWorkerIdentity(spec.SessionID, managedWorkerPID(worker))
+			m.registry.ForgetWorkerIdentity(spec.SessionID, managedWorkerPID(worker), spec.Token)
 			m.forgetWorker(worker)
 		} else {
 			m.retainCleanupFailureForWorker(spec.SessionID, worker, waitErr)
@@ -209,7 +209,7 @@ func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWo
 	}
 	if err := requestWorkerStop(worker.Cmd.Process); err != nil {
 		if errors.Is(err, os.ErrProcessDone) && worker.done == nil {
-			m.registry.ForgetWorker(sessionID)
+			m.registry.ForgetWorkerIdentity(sessionID, managedWorkerPID(worker), worker.Spec.Token)
 			m.forgetWorker(worker)
 			return nil
 		}
@@ -278,7 +278,7 @@ func (m *WorkerManager) finishWorkerStop(sessionID string, worker *ManagedWorker
 		return waitErr
 	}
 	m.clearCleanupFailureForWorker(sessionID, worker)
-	m.registry.ForgetWorkerIdentity(sessionID, managedWorkerPID(worker))
+	m.registry.ForgetWorkerIdentity(sessionID, managedWorkerPID(worker), worker.Spec.Token)
 	m.forgetWorker(worker)
 	return nil
 }
