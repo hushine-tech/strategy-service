@@ -29,7 +29,9 @@ def _dockerfile_stage(text: str, name: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def _recorded_docker_args(tmp_path: Path, *script_args: str) -> list[str]:
+def _run_build_script(
+    tmp_path: Path, *script_args: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -45,14 +47,20 @@ def _recorded_docker_args(tmp_path: Path, *script_args: str) -> list[str]:
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     env["DOCKER_ARGS_FILE"] = str(args_file)
     env["IMAGE_PREFIX"] = "hushine/strategy-runtime"
-    subprocess.run(
+    result = subprocess.run(
         [str(BUILD_SCRIPT), *script_args],
         cwd=SERVICE_DIR,
         env=env,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    return result, args_file
+
+
+def _recorded_docker_args(tmp_path: Path, *script_args: str) -> list[str]:
+    result, args_file = _run_build_script(tmp_path, *script_args)
+    result.check_returncode()
     return args_file.read_text(encoding="utf-8").splitlines()
 
 
@@ -99,6 +107,14 @@ def test_coverage_build_uses_only_the_dedicated_target_and_tag(tmp_path: Path):
     assert _option_values(args, "-t") == [
         "hushine/strategy-runtime:executor-coverage"
     ]
+
+
+def test_bare_coverage_version_is_rejected_before_docker(tmp_path: Path):
+    result, args_file = _run_build_script(tmp_path, "coverage")
+
+    assert result.returncode != 0
+    assert "version 'coverage' is reserved; use --coverage" in result.stderr
+    assert not args_file.exists()
 
 
 def test_normal_build_preserves_existing_targets_and_tags(tmp_path: Path):

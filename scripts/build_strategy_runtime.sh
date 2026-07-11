@@ -33,6 +33,11 @@ if [[ "${1:-}" == "--coverage" ]]; then
     exit 0
 fi
 
+if [[ "${1:-}" == "coverage" ]]; then
+    echo "error: version 'coverage' is reserved; use --coverage to build the coverage runtime image" >&2
+    exit 2
+fi
+
 VERSION="${1:-dev}"
 EXECUTOR_IMAGE="${IMAGE_PREFIX}:executor-${VERSION}"
 DEFAULT_IMAGE="${IMAGE_PREFIX}:${VERSION}"
