@@ -165,11 +165,11 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 		cleanupErr := runWorkerSessionCleanup(m.cleanupSessionRoot, sessionRoot)
 		waitErr = errors.Join(waitErr, cleanupWorkerSessionError(sessionRoot, cleanupErr))
 		if cleanupErr == nil {
-			m.clearCleanupFailure(spec.SessionID)
-			m.registry.ForgetWorker(spec.SessionID)
+			m.clearCleanupFailureForWorker(spec.SessionID, worker)
+			m.registry.ForgetWorkerIdentity(spec.SessionID, managedWorkerPID(worker))
 			m.forgetWorker(worker)
 		} else {
-			m.retainCleanupFailure(spec.SessionID, waitErr)
+			m.retainCleanupFailureForWorker(spec.SessionID, worker, waitErr)
 		}
 		done <- waitErr
 		close(done)
@@ -277,10 +277,17 @@ func (m *WorkerManager) finishWorkerStop(sessionID string, worker *ManagedWorker
 	if hasWorkerSessionCleanupError(waitErr) {
 		return waitErr
 	}
-	m.clearCleanupFailure(sessionID)
-	m.registry.ForgetWorker(sessionID)
+	m.clearCleanupFailureForWorker(sessionID, worker)
+	m.registry.ForgetWorkerIdentity(sessionID, managedWorkerPID(worker))
 	m.forgetWorker(worker)
 	return nil
+}
+
+func managedWorkerPID(worker *ManagedWorker) int64 {
+	if worker == nil || worker.Cmd == nil || worker.Cmd.Process == nil {
+		return 0
+	}
+	return int64(worker.Cmd.Process.Pid)
 }
 
 func (m *WorkerManager) retainCleanupFailure(sessionID string, err error) {
@@ -291,6 +298,18 @@ func (m *WorkerManager) retainCleanupFailure(sessionID string, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cleanupFailures[sessionID] = err
+}
+
+func (m *WorkerManager) retainCleanupFailureForWorker(sessionID string, worker *ManagedWorker, err error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || err == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active[sessionID] == worker {
+		m.cleanupFailures[sessionID] = err
+	}
 }
 
 func (m *WorkerManager) retainedCleanupFailure(sessionID string) error {
@@ -311,6 +330,18 @@ func (m *WorkerManager) clearCleanupFailure(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.cleanupFailures, sessionID)
+}
+
+func (m *WorkerManager) clearCleanupFailureForWorker(sessionID string, worker *ManagedWorker) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active[sessionID] == worker {
+		delete(m.cleanupFailures, sessionID)
+	}
 }
 
 func (m *WorkerManager) AliasWorkerSession(existingSessionID string, sessionID string) error {

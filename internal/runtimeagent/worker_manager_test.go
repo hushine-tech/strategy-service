@@ -232,14 +232,21 @@ func TestStopSessionWorkerForceKillsWorkerAfterTimeout(t *testing.T) {
 	maxElapsed := timeout + 5*time.Second
 	started := time.Now()
 
-	err := manager.StopSessionWorker(context.Background(), worker.SessionID, timeout)
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- manager.StopSessionWorker(context.Background(), worker.SessionID, timeout)
+	}()
+	var err error
+	select {
+	case err = <-stopDone:
+	case <-time.After(maxElapsed):
+		t.Fatalf("worker stop did not complete within %v", maxElapsed)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(started); elapsed < timeout {
 		t.Fatalf("worker stopped after %v, want force kill after at least %v", elapsed, timeout)
-	} else if elapsed > maxElapsed {
-		t.Fatalf("worker stopped after %v, want no more than %v", elapsed, maxElapsed)
 	}
 	if worker.Cmd.ProcessState == nil {
 		t.Fatal("worker process was not reaped after force kill")
@@ -299,10 +306,23 @@ func TestStopAllStopsSnapshottedWorkerAfterSessionReplacement(t *testing.T) {
 	manager := NewWorkerManager(WorkerManagerConfig{})
 	original := startUnmanagedWorker(t, "replacement-race")
 	replacement := startUnmanagedWorker(t, "replacement-race")
+	if err := manager.registry.ExpectWorker(original.SessionID, "original-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.registry.AdmitWorker(original.SessionID, "original-token", int64(original.Cmd.Process.Pid)); err != nil {
+		t.Fatal(err)
+	}
 	manager.active[original.SessionID] = original
 
 	stopWorker := manager.stopWorker
 	manager.stopWorker = func(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
+		manager.registry.ForgetWorker(original.SessionID)
+		if err := manager.registry.ExpectWorker(replacement.SessionID, "replacement-token"); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.registry.AdmitWorker(replacement.SessionID, "replacement-token", int64(replacement.Cmd.Process.Pid)); err != nil {
+			t.Fatal(err)
+		}
 		manager.mu.Lock()
 		manager.active[original.SessionID] = replacement
 		manager.mu.Unlock()
@@ -320,6 +340,13 @@ func TestStopAllStopsSnapshottedWorkerAfterSessionReplacement(t *testing.T) {
 	}
 	if got := manager.findWorker(original.SessionID); got != replacement {
 		t.Fatalf("active worker = %+v, want replacement", got)
+	}
+	identity, ok := manager.registry.ActiveWorker(replacement.SessionID)
+	if !ok {
+		t.Fatal("replacement worker registry state was removed")
+	}
+	if identity.PID != int64(replacement.Cmd.Process.Pid) {
+		t.Fatalf("replacement registry pid=%d want %d", identity.PID, replacement.Cmd.Process.Pid)
 	}
 }
 

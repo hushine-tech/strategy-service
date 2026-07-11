@@ -133,6 +133,28 @@ func (r *SessionRegistry) ForgetWorker(sessionID string) {
 	}
 }
 
+func (r *SessionRegistry) ForgetWorkerIdentity(sessionID string, pid int64) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, hasCurrent := r.active[sessionID]
+	if !hasCurrent || current.PID == pid {
+		delete(r.expected, sessionID)
+	}
+	if pid <= 0 {
+		return
+	}
+	for key, active := range r.active {
+		if active.PID == pid {
+			delete(r.active, key)
+		}
+	}
+}
+
 func (r *SessionRegistry) ActiveWorker(sessionID string) (WorkerIdentity, bool) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
