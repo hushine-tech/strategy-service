@@ -175,10 +175,12 @@ func (a *Agent) handleRunStrategy(
 		a.mu.Unlock()
 	}()
 
-	if _, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, pendingID, a.workerEnv()); err != nil {
+	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, pendingID, a.workerEnv())
+	if err != nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", err.Error())
 	}
 
+	workerExited := waitManagedWorker(worker)
 	timer := time.NewTimer(a.cfg.StartTimeout)
 	defer timer.Stop()
 	select {
@@ -186,6 +188,8 @@ func (a *Agent) handleRunStrategy(
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Cancelled", ctx.Err().Error())
 	case <-timer.C:
 		return runtimeErrorFrame(frame.GetCorrelationId(), "DeadlineExceeded", "session worker did not report started")
+	case waitErr := <-workerExited:
+		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", managedWorkerExitError("reporting started", waitErr).Error())
 	case message := <-pending.failed:
 		if strings.TrimSpace(message) == "" {
 			message = "session worker failed before start"
@@ -408,10 +412,11 @@ func (a *Agent) handleOneShotRuntimeUnary(
 		a.mu.Unlock()
 	}()
 
-	if _, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, pendingID, a.workerEnv()); err != nil {
+	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, pendingID, a.workerEnv())
+	if err != nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", err.Error())
 	}
-	if err := a.waitWorkerReady(ctx, ready, a.timeoutForFrame(frame)); err != nil {
+	if err := a.waitWorkerReady(ctx, ready, worker, a.timeoutForFrame(frame)); err != nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
 	}
 	resp, err := a.invokeWorkerUnary(ctx, pendingID, req.GetMethod(), req.GetRequest(), a.timeoutForFrame(frame))
@@ -846,10 +851,11 @@ func (a *Agent) invokeWorkerUnary(
 	}
 }
 
-func (a *Agent) waitWorkerReady(ctx context.Context, ready <-chan struct{}, timeout time.Duration) error {
+func (a *Agent) waitWorkerReady(ctx context.Context, ready <-chan struct{}, worker *ManagedWorker, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = a.cfg.RequestTimeout
 	}
+	workerExited := waitManagedWorker(worker)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
@@ -857,9 +863,29 @@ func (a *Agent) waitWorkerReady(ctx context.Context, ready <-chan struct{}, time
 		return ctx.Err()
 	case <-timer.C:
 		return fmt.Errorf("session worker did not connect")
+	case waitErr := <-workerExited:
+		return managedWorkerExitError("connecting", waitErr)
 	case <-ready:
 		return nil
 	}
+}
+
+func waitManagedWorker(worker *ManagedWorker) <-chan error {
+	if worker == nil || worker.Cmd == nil {
+		return nil
+	}
+	exited := make(chan error, 1)
+	go func() {
+		exited <- worker.Wait()
+	}()
+	return exited
+}
+
+func managedWorkerExitError(stage string, waitErr error) error {
+	if waitErr == nil {
+		return fmt.Errorf("session worker exited before %s", stage)
+	}
+	return fmt.Errorf("session worker exited before %s: %w", stage, waitErr)
 }
 
 func (a *Agent) timeoutForFrame(frame *cpv1.RuntimeFrame) time.Duration {

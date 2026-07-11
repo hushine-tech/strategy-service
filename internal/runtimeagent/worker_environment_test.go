@@ -4,9 +4,37 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestResolveWorkerExecutablePreservesSymlinkInvocationPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX symlink semantics")
+	}
+
+	binDir := filepath.Join(t.TempDir(), ".venv", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir venv bin: %v", err)
+	}
+	pythonPath := filepath.Join(binDir, "python")
+	if err := os.Symlink(mustCurrentExecutable(t), pythonPath); err != nil {
+		t.Fatalf("symlink venv python: %v", err)
+	}
+
+	got, err := resolveWorkerExecutable(pythonPath)
+	if err != nil {
+		t.Fatalf("resolveWorkerExecutable: %v", err)
+	}
+	want, err := filepath.Abs(pythonPath)
+	if err != nil {
+		t.Fatalf("absolute venv python: %v", err)
+	}
+	if got != filepath.Clean(want) {
+		t.Fatalf("resolved executable = %q, want invocation path %q", got, filepath.Clean(want))
+	}
+}
 
 func TestBuildWorkerEnvironmentDoesNotInheritParentSecrets(t *testing.T) {
 	t.Setenv("KAFKA_BROKERS", "secret-kafka:9092")

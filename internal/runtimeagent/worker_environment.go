@@ -198,26 +198,27 @@ func resolveWorkerExecutable(name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute python executable %q: %w", lookedUp, err)
 	}
-	resolvedExecutable, err := filepath.EvalSymlinks(absExecutable)
+	absExecutable = filepath.Clean(absExecutable)
+	validatedTarget, err := filepath.EvalSymlinks(absExecutable)
 	if err != nil {
 		return "", fmt.Errorf("resolve python executable symlinks %q: %w", absExecutable, err)
 	}
-	resolvedExecutable, err = filepath.Abs(resolvedExecutable)
+	validatedTarget, err = filepath.Abs(validatedTarget)
 	if err != nil {
-		return "", fmt.Errorf("resolve final python executable %q: %w", resolvedExecutable, err)
+		return "", fmt.Errorf("resolve final python executable %q: %w", validatedTarget, err)
 	}
-	resolvedExecutable = filepath.Clean(resolvedExecutable)
-	info, err := os.Stat(resolvedExecutable)
+	validatedTarget = filepath.Clean(validatedTarget)
+	info, err := os.Stat(validatedTarget)
 	if err != nil {
-		return "", fmt.Errorf("stat python executable %q: %w", resolvedExecutable, err)
+		return "", fmt.Errorf("stat python executable %q: %w", validatedTarget, err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("python executable is not a regular file: %s", resolvedExecutable)
+		return "", fmt.Errorf("python executable is not a regular file: %s", validatedTarget)
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("python executable is not executable: %s", resolvedExecutable)
+		return "", fmt.Errorf("python executable is not executable: %s", validatedTarget)
 	}
-	return resolvedExecutable, nil
+	return absExecutable, nil
 }
 
 func parseEnvItem(item string) (string, string, error) {

@@ -3,6 +3,7 @@ package runtimeagent
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -112,6 +113,55 @@ func TestAgentRunStrategyReturnsWorkerStartFailure(t *testing.T) {
 	}
 	if respFrame.GetError().GetCode() != "FailedPrecondition" || respFrame.GetError().GetMessage() != "backtest profile preflight failed" {
 		t.Fatalf("error frame = %+v", respFrame.GetError())
+	}
+}
+
+func TestAgentRunStrategyReturnsWorkerExitBeforeStartTimeout(t *testing.T) {
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_exit_before_start", `
+raise RuntimeError("worker bootstrap failed")
+`)
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_exit_before_start",
+		AgentAddr:        "127.0.0.1:59000",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStarter:  manager,
+		StartTimeout:   time.Second,
+		RequestTimeout: time.Second,
+	})
+	request, err := anypb.New(&strategyv1.RunStrategyRequest{
+		PortfolioId: 1,
+		UserId:      6,
+		RuntimeId:   "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	startedAt := time.Now()
+	respFrame := agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+		CorrelationId: "corr-run-worker-exit",
+		FrameType:     cpv1.FrameType_FRAME_TYPE_REQUEST,
+		Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+			Method:  "RunStrategy",
+			Request: request,
+		}},
+	})
+
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("worker exit surfaced after %v, want before start timeout", elapsed)
+	}
+	if respFrame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+		t.Fatalf("response frame type = %v", respFrame.GetFrameType())
+	}
+	if got := respFrame.GetError().GetMessage(); !strings.Contains(got, "session worker exited before reporting started") {
+		t.Fatalf("error message = %q, want worker exit before reporting started", got)
 	}
 }
 
@@ -226,6 +276,54 @@ func TestAgentPreviewRunStrategyRunsOneShotWorkerUnary(t *testing.T) {
 	}
 	if starter.extraEnv["HUSHINE_RUNTIME_SOURCE"] != "bare" || starter.extraEnv["HUSHINE_RUNTIME_ID"] != "rt-1" {
 		t.Fatalf("worker env = %+v", starter.extraEnv)
+	}
+}
+
+func TestAgentPreviewRunStrategyReturnsWorkerExitBeforeReadyTimeout(t *testing.T) {
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_exit_before_hello", `
+raise RuntimeError("worker bootstrap failed")
+`)
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_exit_before_hello",
+		AgentAddr:        "127.0.0.1:59000",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStarter:  manager,
+		RequestTimeout: time.Second,
+	})
+	request, err := anypb.New(&strategyv1.PreviewRunStrategyRequest{
+		PortfolioId: 1,
+		UserId:      6,
+		RuntimeId:   "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	startedAt := time.Now()
+	respFrame := agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+		CorrelationId: "corr-preview-worker-exit",
+		FrameType:     cpv1.FrameType_FRAME_TYPE_REQUEST,
+		Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+			Method:  "PreviewRunStrategy",
+			Request: request,
+		}},
+	})
+
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("worker exit surfaced after %v, want before readiness timeout", elapsed)
+	}
+	if respFrame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+		t.Fatalf("response frame type = %v", respFrame.GetFrameType())
+	}
+	if got := respFrame.GetError().GetMessage(); !strings.Contains(got, "session worker exited before connecting") {
+		t.Fatalf("error message = %q, want worker exit before connecting", got)
 	}
 }
 
