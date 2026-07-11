@@ -238,6 +238,120 @@ func TestWorkerManagerStopRetainsSessionWhenKillFails(t *testing.T) {
 	}
 }
 
+func TestWorkerManagerStartFailureRetainsSessionWhenCleanupFails(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(workDir, []byte("file"), 0o600); err != nil {
+		t.Fatalf("write workdir blocker: %v", err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	m := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: mustCurrentExecutable(t),
+		WorkerModule:     "worker_stub",
+		WorkDir:          workDir,
+		StateRoot:        stateRoot,
+	})
+	cleanupFailure := errors.New("start cleanup blocked")
+	cleanupCalls := 0
+	m.cleanupSessionRoot = func(path string) error {
+		cleanupCalls++
+		if want := workerSessionRoot(stateRoot, "sess-start-cleanup"); path != want {
+			t.Fatalf("cleanup path = %q, want %q", path, want)
+		}
+		return cleanupFailure
+	}
+
+	_, err := m.StartSessionWorker(context.Background(), "sess-start-cleanup", nil)
+	if !errors.Is(err, cleanupFailure) || !strings.Contains(err.Error(), "start session worker") {
+		t.Fatalf("StartSessionWorker error = %v, want start and cleanup failures", err)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", cleanupCalls)
+	}
+	if _, err := os.Stat(workerSessionRoot(stateRoot, "sess-start-cleanup")); err != nil {
+		t.Fatalf("session root was not retained: %v", err)
+	}
+	assertWorkerSessionReserved(t, m, "sess-start-cleanup")
+	if err := m.StopSessionWorker(context.Background(), "sess-start-cleanup", time.Second); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("StopSessionWorker tombstone error = %v, want cleanup failure", err)
+	}
+	assertWorkerSessionReserved(t, m, "sess-start-cleanup")
+}
+
+func TestWorkerManagerNaturalExitRetainsSessionWhenCleanupFails(t *testing.T) {
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_exit", "pass\n")
+	stateRoot := filepath.Join(dir, "state")
+	m := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_exit",
+		WorkDir:          dir,
+		StateRoot:        stateRoot,
+		PythonPath:       []string{dir},
+	})
+	cleanupFailure := errors.New("natural cleanup blocked")
+	m.cleanupSessionRoot = func(string) error { return cleanupFailure }
+
+	worker, err := m.StartSessionWorker(context.Background(), "sess-natural-cleanup", nil)
+	if err != nil {
+		t.Fatalf("StartSessionWorker: %v", err)
+	}
+	if err := worker.Wait(); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("worker.Wait error = %v, want cleanup failure", err)
+	}
+	if got := m.findWorker("sess-natural-cleanup"); got != worker {
+		t.Fatalf("worker ownership released after cleanup failure: %+v", got)
+	}
+	assertWorkerSessionReserved(t, m, "sess-natural-cleanup")
+}
+
+func TestWorkerManagerStopReturnsCleanupFailureAndRetainsSession(t *testing.T) {
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_stop_cleanup", "import time\ntime.sleep(10)\n")
+	stateRoot := filepath.Join(dir, "state")
+	m := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_stop_cleanup",
+		WorkDir:          dir,
+		StateRoot:        stateRoot,
+		PythonPath:       []string{dir},
+	})
+	cleanupFailure := errors.New("stop cleanup blocked")
+	m.cleanupSessionRoot = func(string) error { return cleanupFailure }
+
+	worker, err := m.StartSessionWorker(context.Background(), "sess-stop-cleanup", nil)
+	if err != nil {
+		t.Fatalf("StartSessionWorker: %v", err)
+	}
+	if err := m.StopSessionWorker(context.Background(), "sess-stop-cleanup", time.Second); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("StopSessionWorker error = %v, want cleanup failure", err)
+	}
+	if err := worker.Wait(); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("worker.Wait error = %v, want cleanup failure", err)
+	}
+	if got := m.findWorker("sess-stop-cleanup"); got != worker {
+		t.Fatalf("worker ownership released after cleanup failure: %+v", got)
+	}
+	assertWorkerSessionReserved(t, m, "sess-stop-cleanup")
+}
+
+func assertWorkerSessionReserved(t *testing.T, m *WorkerManager, sessionID string) {
+	t.Helper()
+	if _, err := m.PrepareSessionWorker(sessionID); !errors.Is(err, ErrWorkerAlreadyExists) {
+		t.Errorf("PrepareSessionWorker(%q) error = %v, want ErrWorkerAlreadyExists", sessionID, err)
+	}
+	if _, err := m.StartSessionWorker(context.Background(), sessionID, nil); !errors.Is(err, ErrWorkerAlreadyExists) {
+		t.Errorf("StartSessionWorker(%q) error = %v, want ErrWorkerAlreadyExists", sessionID, err)
+	}
+}
+
+func writePythonWorkerModule(t *testing.T, dir string, name string, source string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name+".py"), []byte(source), 0o600); err != nil {
+		t.Fatalf("write worker module: %v", err)
+	}
+}
+
 func TestWorkerManagerAliasWorkerSessionMakesRealSessionStoppable(t *testing.T) {
 	cmd := exec.Command("python3", "-c", "import time; time.sleep(60)")
 	if err := cmd.Start(); err != nil {

@@ -1,6 +1,7 @@
 package runtimeagent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,42 @@ func TestBuildWorkerEnvironmentRejectsUnmodeledExtraEnv(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "worker extra env key is not allowed") {
 			t.Fatalf("extra env %q error = %v", item, err)
 		}
+	}
+}
+
+func TestBuildWorkerEnvironmentPreservesSessionRootWhenPartialCreationCleanupFails(t *testing.T) {
+	stateRoot := t.TempDir()
+	sessionRoot := workerSessionRoot(stateRoot, "sess-partial")
+	if err := os.MkdirAll(sessionRoot, 0o700); err != nil {
+		t.Fatalf("create session root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionRoot, "home"), []byte("not-a-directory"), 0o600); err != nil {
+		t.Fatalf("write home blocker: %v", err)
+	}
+	cleanupFailure := errors.New("cleanup blocked")
+	cleanupCalls := 0
+
+	_, gotSessionRoot, _, err := buildWorkerEnvironmentWithCleanup(WorkerManagerConfig{
+		PythonExecutable: mustCurrentExecutable(t),
+		WorkDir:          stateRoot,
+		StateRoot:        stateRoot,
+	}, WorkerStartSpec{
+		SessionID: "sess-partial", Token: "token", AgentAddr: "127.0.0.1:1",
+	}, nil, func(path string) error {
+		cleanupCalls++
+		if path != sessionRoot {
+			t.Fatalf("cleanup path = %q, want %q", path, sessionRoot)
+		}
+		return cleanupFailure
+	})
+	if !errors.Is(err, cleanupFailure) || !strings.Contains(err.Error(), "create worker session directory") {
+		t.Fatalf("build error = %v, want creation and cleanup failures", err)
+	}
+	if gotSessionRoot != sessionRoot {
+		t.Fatalf("sessionRoot = %q, want %q", gotSessionRoot, sessionRoot)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", cleanupCalls)
 	}
 }
 

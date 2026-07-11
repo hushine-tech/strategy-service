@@ -3,6 +3,7 @@ package runtimeagent
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,10 +20,34 @@ var allowedWorkerExtraEnv = map[string]struct{}{
 	"HUSHINE_RUNTIME_NAME":   {},
 }
 
+type workerSessionCleanup func(string) error
+
+type workerSessionCleanupError struct {
+	sessionRoot string
+	err         error
+}
+
+func (e *workerSessionCleanupError) Error() string {
+	return fmt.Sprintf("remove worker session root %s: %v", e.sessionRoot, e.err)
+}
+
+func (e *workerSessionCleanupError) Unwrap() error {
+	return e.err
+}
+
 func buildWorkerEnvironment(
 	cfg WorkerManagerConfig,
 	spec WorkerStartSpec,
 	extraEnv []string,
+) (env []string, sessionRoot string, resolvedExecutable string, err error) {
+	return buildWorkerEnvironmentWithCleanup(cfg, spec, extraEnv, os.RemoveAll)
+}
+
+func buildWorkerEnvironmentWithCleanup(
+	cfg WorkerManagerConfig,
+	spec WorkerStartSpec,
+	extraEnv []string,
+	cleanup workerSessionCleanup,
 ) (env []string, sessionRoot string, resolvedExecutable string, err error) {
 	workDir, err := absoluteWorkerWorkDir(cfg.WorkDir)
 	if err != nil {
@@ -99,12 +124,20 @@ func buildWorkerEnvironment(
 
 	for _, dir := range []string{sessionRoot, homeDir, tmpDir, cacheDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			_ = os.RemoveAll(sessionRoot)
-			return nil, "", "", fmt.Errorf("create worker session directory %s: %w", dir, err)
+			createErr := fmt.Errorf("create worker session directory %s: %w", dir, err)
+			cleanupErr := runWorkerSessionCleanup(cleanup, sessionRoot)
+			return nil, sessionRoot, resolvedExecutable, errors.Join(
+				createErr,
+				cleanupWorkerSessionError(sessionRoot, cleanupErr),
+			)
 		}
 		if err := os.Chmod(dir, 0o700); err != nil {
-			_ = os.RemoveAll(sessionRoot)
-			return nil, "", "", fmt.Errorf("secure worker session directory %s: %w", dir, err)
+			secureErr := fmt.Errorf("secure worker session directory %s: %w", dir, err)
+			cleanupErr := runWorkerSessionCleanup(cleanup, sessionRoot)
+			return nil, sessionRoot, resolvedExecutable, errors.Join(
+				secureErr,
+				cleanupWorkerSessionError(sessionRoot, cleanupErr),
+			)
 		}
 	}
 
@@ -118,6 +151,25 @@ func buildWorkerEnvironment(
 		env = append(env, key+"="+values[key])
 	}
 	return env, sessionRoot, resolvedExecutable, nil
+}
+
+func runWorkerSessionCleanup(cleanup workerSessionCleanup, sessionRoot string) error {
+	if cleanup == nil {
+		cleanup = os.RemoveAll
+	}
+	return cleanup(sessionRoot)
+}
+
+func cleanupWorkerSessionError(sessionRoot string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &workerSessionCleanupError{sessionRoot: sessionRoot, err: err}
+}
+
+func hasWorkerSessionCleanupError(err error) bool {
+	var cleanupErr *workerSessionCleanupError
+	return errors.As(err, &cleanupErr)
 }
 
 func absoluteWorkerWorkDir(workDir string) (string, error) {
