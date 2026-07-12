@@ -253,6 +253,39 @@ func TestStopSessionWorkerRequestsGracefulStopBeforeKill(t *testing.T) {
 	}
 }
 
+func TestWaitSessionWorkerAllowsNaturalCoverageExitWithoutSignal(t *testing.T) {
+	requirePOSIXSignals(t)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "unexpected-signal")
+	writePythonWorkerModule(t, dir, "worker_natural_exit", fmt.Sprintf(`
+import pathlib
+import signal
+import time
+signal.signal(signal.SIGTERM, lambda *_: pathlib.Path(%q).write_text("signal", encoding="utf-8"))
+time.sleep(0.15)
+`, marker))
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_natural_exit",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+	worker, err := manager.StartSessionWorker(context.Background(), "sess-natural-exit", nil)
+	if err != nil {
+		t.Fatalf("StartSessionWorker: %v", err)
+	}
+	if err := manager.WaitSessionWorker(context.Background(), worker.SessionID, time.Second); err != nil {
+		t.Fatalf("WaitSessionWorker: %v", err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("natural wait signaled worker, marker error = %v", err)
+	}
+	if got := manager.findWorker(worker.SessionID); got != nil {
+		t.Fatalf("naturally exited worker remained active: %+v", got)
+	}
+}
+
 func TestStopSessionWorkerForceKillsWorkerAfterTimeout(t *testing.T) {
 	requirePOSIXSignals(t)
 	manager, worker := startSignalIgnoringWorker(t)
@@ -582,6 +615,66 @@ func TestStopAllDeadlineDoesNotWaitBehindCommandStart(t *testing.T) {
 	}
 	if worker := manager.findWorker("sess-slow-start"); worker != nil {
 		t.Fatalf("aborted command start was committed: %+v", worker)
+	}
+}
+
+func TestShutdownAbortClearsWorkerAdmittedDuringCommandStart(t *testing.T) {
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_admitted_start", "import time\ntime.sleep(30)\n")
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_admitted_start",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+	workerAdmitted := make(chan struct{})
+	releaseStart := make(chan struct{})
+	manager.startCommand = func(cmd *exec.Cmd) error {
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		manager.registry.mu.Lock()
+		token := manager.registry.expected["sess-admitted-start"]
+		manager.registry.mu.Unlock()
+		if err := manager.registry.AdmitWorker(
+			"sess-admitted-start",
+			token,
+			int64(cmd.Process.Pid),
+		); err != nil {
+			return err
+		}
+		close(workerAdmitted)
+		<-releaseStart
+		return nil
+	}
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := manager.StartSessionWorker(context.Background(), "sess-admitted-start", nil)
+		startDone <- err
+	}()
+	select {
+	case <-workerAdmitted:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not complete IPC admission in command start seam")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if err := manager.StopAll(ctx, time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StopAll error = %v, want context deadline", err)
+	}
+	close(releaseStart)
+	select {
+	case err := <-startDone:
+		if !errors.Is(err, ErrWorkerManagerStopping) {
+			t.Fatalf("StartSessionWorker error = %v, want ErrWorkerManagerStopping", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("aborted admitted start did not finish")
+	}
+	if identity, ok := manager.registry.ActiveWorker("sess-admitted-start"); ok {
+		t.Fatalf("aborted admitted worker remained registered: %+v", identity)
 	}
 }
 

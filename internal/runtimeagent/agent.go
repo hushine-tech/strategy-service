@@ -24,6 +24,10 @@ type WorkerStopper interface {
 	StopSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error
 }
 
+type WorkerExitWaiter interface {
+	WaitSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error
+}
+
 type PlatformInvoker interface {
 	InvokePlatformAny(ctx context.Context, method string, request *anypb.Any, timeout time.Duration) (*anypb.Any, error)
 }
@@ -451,6 +455,19 @@ func (a *Agent) handleSessionRuntimeUnary(
 	resp, err := a.invokeWorkerUnary(ctx, sessionID, req.GetMethod(), req.GetRequest(), a.timeoutForFrame(frame))
 	if err != nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+	}
+	if strings.TrimSpace(req.GetMethod()) == "StopStrategy" {
+		var stopResp strategyv1.StopStrategyResponse
+		if err := resp.UnmarshalTo(&stopResp); err != nil {
+			return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid StopStrategy response payload")
+		}
+		if stopResp.GetStopped() {
+			if waiter, ok := a.cfg.WorkerStopper.(WorkerExitWaiter); ok {
+				if err := waiter.WaitSessionWorker(ctx, sessionID, a.timeoutForFrame(frame)); err != nil {
+					return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+				}
+			}
+		}
 	}
 	return responseAnyFrame(frame.GetCorrelationId(), resp)
 }

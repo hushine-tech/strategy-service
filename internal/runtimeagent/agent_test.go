@@ -463,9 +463,11 @@ func TestWaitWorkerReadyPrefersReadyWhenProcessAlsoExited(t *testing.T) {
 
 func TestAgentRoutesStatusAndStopToRunningWorker(t *testing.T) {
 	sender := &fakeWorkerSender{}
+	stopper := &fakeWorkerStopper{}
 	agent := NewAgent(AgentConfig{
 		RuntimeID:      "rt-1",
 		WorkerSender:   sender,
+		WorkerStopper:  stopper,
 		RequestTimeout: time.Second,
 	})
 	sender.onSend = func(sessionID string, frame *rwv1.AgentFrame) {
@@ -530,6 +532,9 @@ func TestAgentRoutesStatusAndStopToRunningWorker(t *testing.T) {
 	}
 	if !stopResp.GetStopped() {
 		t.Fatalf("stop response = %+v", &stopResp)
+	}
+	if stopper.waitSessionID != "sess-1" || stopper.waitTimeout <= 0 {
+		t.Fatalf("worker exit wait = %q/%v, want sess-1 with positive bound", stopper.waitSessionID, stopper.waitTimeout)
 	}
 }
 
@@ -1189,14 +1194,23 @@ func (i *fakePlatformInvoker) InvokePlatformAny(ctx context.Context, method stri
 }
 
 type fakeWorkerStopper struct {
-	sessionID string
-	timeout   time.Duration
+	sessionID     string
+	timeout       time.Duration
+	waitSessionID string
+	waitTimeout   time.Duration
+	waitErr       error
 }
 
 func (s *fakeWorkerStopper) StopSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error {
 	s.sessionID = sessionID
 	s.timeout = timeout
 	return nil
+}
+
+func (s *fakeWorkerStopper) WaitSessionWorker(_ context.Context, sessionID string, timeout time.Duration) error {
+	s.waitSessionID = sessionID
+	s.waitTimeout = timeout
+	return s.waitErr
 }
 
 type fakeWorkerSender struct {

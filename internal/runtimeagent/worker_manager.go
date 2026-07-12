@@ -223,7 +223,7 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 		cleanupErr := runWorkerSessionCleanup(m.cleanupSessionRoot, sessionRoot)
 		err := errors.Join(abortErr, cleanupWorkerSessionError(sessionRoot, cleanupErr))
 		if cleanupErr == nil {
-			m.registry.ForgetWorkerIdentity(spec.SessionID, 0, spec.Token)
+			m.registry.ForgetWorkerIdentity(spec.SessionID, managedWorkerPID(worker), spec.Token)
 		} else {
 			m.retainCleanupFailure(spec.SessionID, err)
 		}
@@ -282,6 +282,45 @@ func (m *WorkerManager) StopSessionWorker(ctx context.Context, sessionID string,
 		return nil
 	}
 	return m.stopWorker(ctx, worker, timeout)
+}
+
+// WaitSessionWorker waits for a worker that has already been asked to stop by
+// the session protocol. It never sends a process signal, so the Python wrapper
+// can finish its final-status acknowledgement and coverage flush naturally.
+func (m *WorkerManager) WaitSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if err := m.retainedCleanupFailure(sessionID); err != nil {
+		return err
+	}
+	worker := m.findWorker(sessionID)
+	if worker == nil {
+		return nil
+	}
+	waited := make(chan error, 1)
+	go func() {
+		waitErr := worker.Wait()
+		if finishErr := m.finishWorkerStop(sessionID, worker, waitErr); finishErr != nil {
+			waited <- finishErr
+			return
+		}
+		waited <- waitErr
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return fmt.Errorf("wait session worker %s: %w", sessionID, context.DeadlineExceeded)
+	case err := <-waited:
+		return err
+	}
 }
 
 func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
