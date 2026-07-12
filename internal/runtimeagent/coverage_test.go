@@ -12,7 +12,7 @@ func TestCoverageConfigPythonArgs(t *testing.T) {
 	cfg := runtimeagent.CoverageConfig{RootDir: "/coverage"}
 	got := cfg.PythonArgsPrefix()
 	want := []string{
-		"-m", "coverage", "run", "--parallel-mode", "--sigterm",
+		"-m", "coverage", "run", "--parallel-mode",
 		"--data-file=/coverage/python/.coverage", "--source=strategy_service",
 	}
 	if !slices.Equal(got, want) {

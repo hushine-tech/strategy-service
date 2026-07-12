@@ -19,7 +19,6 @@ func (c CoverageConfig) PythonArgsPrefix() []string {
 		"coverage",
 		"run",
 		"--parallel-mode",
-		"--sigterm",
 		fmt.Sprintf("--data-file=%s", filepath.Join(c.RootDir, "python", ".coverage")),
 		"--source=strategy_service",
 	}
