@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -178,7 +179,7 @@ func TestShutdownStopsActiveWorkersBeforeBoundedGRPCStop(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		shutdownAgentOnContext(ctx, "", workers, grpcServer, 20*time.Millisecond, 5*time.Millisecond)
+		shutdownAgentOnContext(ctx, "", "", "", workers, grpcServer, 20*time.Millisecond, 5*time.Millisecond, defaultCoverageShutdownOps())
 		close(done)
 	}()
 
@@ -207,6 +208,110 @@ func TestShutdownStopsActiveWorkersBeforeBoundedGRPCStop(t *testing.T) {
 		t.Fatal("fake worker remains active after shutdown")
 	}
 }
+
+func TestShutdownFinalizesCoverageAfterWorkersAndSnapshot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make([]string, 0, 4)
+	workers := &orderedShutdownWorkers{events: &events}
+	grpcServer := &orderedShutdownGRPC{events: &events}
+	var final runtimeagent.CoverageFinalization
+	ops := coverageShutdownOps{
+		writeSnapshot: func(string) error {
+			events = append(events, "snapshot")
+			return nil
+		},
+		writeFinalization: func(_ string, record runtimeagent.CoverageFinalization) error {
+			events = append(events, "finalization")
+			final = record
+			return nil
+		},
+		now: func() time.Time { return time.Date(2026, 7, 12, 1, 2, 3, 0, time.UTC) },
+	}
+	done := make(chan struct{})
+	go func() {
+		shutdownAgentOnContext(ctx, "/coverage", "rt-1", "boot-1", workers, grpcServer, time.Second, time.Second, ops)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish")
+	}
+	want := []string{"workers", "snapshot", "finalization", "grpc"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+	if final.State != "complete" || final.WorkerShutdown != "ok" || final.GoSnapshot != "ok" || final.ForcedWorkers != 0 {
+		t.Fatalf("finalization = %+v", final)
+	}
+}
+
+func TestShutdownMarksCoverageIncompleteForForcedWorkerOrSnapshotFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		workers       *orderedShutdownWorkers
+		snapshotError error
+	}{
+		{name: "forced worker", workers: &orderedShutdownWorkers{forced: 1}},
+		{name: "worker stop error", workers: &orderedShutdownWorkers{stopErr: errors.New("stop failed")}},
+		{name: "snapshot error", workers: &orderedShutdownWorkers{}, snapshotError: errors.New("snapshot failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			var final runtimeagent.CoverageFinalization
+			ops := coverageShutdownOps{
+				writeSnapshot: func(string) error { return tc.snapshotError },
+				writeFinalization: func(_ string, record runtimeagent.CoverageFinalization) error {
+					final = record
+					return nil
+				},
+				now: time.Now,
+			}
+			done := make(chan struct{})
+			go func() {
+				shutdownAgentOnContext(ctx, "/coverage", "rt-1", "boot-1", tc.workers, &orderedShutdownGRPC{}, time.Second, time.Second, ops)
+				close(done)
+			}()
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("shutdown did not finish")
+			}
+			if final.State != "incomplete" {
+				t.Fatalf("finalization = %+v, want incomplete", final)
+			}
+		})
+	}
+}
+
+type orderedShutdownWorkers struct {
+	events  *[]string
+	stopErr error
+	forced  int
+}
+
+func (w *orderedShutdownWorkers) StopAll(context.Context, time.Duration) error {
+	if w.events != nil {
+		*w.events = append(*w.events, "workers")
+	}
+	return w.stopErr
+}
+
+func (w *orderedShutdownWorkers) ShutdownSummary() runtimeagent.WorkerShutdownSummary {
+	return runtimeagent.WorkerShutdownSummary{ForcedStops: w.forced}
+}
+
+type orderedShutdownGRPC struct{ events *[]string }
+
+func (g *orderedShutdownGRPC) GracefulStop() {
+	if g.events != nil {
+		*g.events = append(*g.events, "grpc")
+	}
+}
+
+func (*orderedShutdownGRPC) Stop() {}
 
 type shutdownTestWorkerManager struct {
 	active bool

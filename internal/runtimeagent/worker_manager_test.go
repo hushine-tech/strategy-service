@@ -279,6 +279,9 @@ func TestStopSessionWorkerForceKillsWorkerAfterTimeout(t *testing.T) {
 	if worker.Cmd.ProcessState == nil {
 		t.Fatal("worker process was not reaped after force kill")
 	}
+	if got := manager.ShutdownSummary().ForcedStops; got != 1 {
+		t.Fatalf("forced stops = %d, want 1", got)
+	}
 }
 
 func TestStopSessionWorkerCancellationForceKillsAndReapsWorker(t *testing.T) {
@@ -328,6 +331,133 @@ func TestStopAllDeduplicatesAliasedWorkers(t *testing.T) {
 	if got := readStopCount(t, counter); got != 1 {
 		t.Fatalf("stop count=%d want 1", got)
 	}
+}
+
+func TestStopAllClosesAdmissionAndDrainsInFlightStart(t *testing.T) {
+	requirePOSIXSignals(t)
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_shutdown_admission", "import time\ntime.sleep(30)\n")
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_shutdown_admission",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+
+	startEntered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	buildEnvironment := manager.buildEnvironment
+	manager.buildEnvironment = func(cfg WorkerManagerConfig, spec WorkerStartSpec, extraEnv []string, cleanup workerSessionCleanup) ([]string, string, string, error) {
+		close(startEntered)
+		<-releaseStart
+		return buildEnvironment(cfg, spec, extraEnv, cleanup)
+	}
+
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := manager.StartSessionWorker(context.Background(), "sess-admitted", nil)
+		startDone <- err
+	}()
+	select {
+	case <-startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight worker start did not reach the blocking seam")
+	}
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- manager.StopAll(context.Background(), 2*time.Second)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		manager.mu.Lock()
+		stopping := manager.stopping
+		manager.mu.Unlock()
+		if stopping {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("StopAll did not close worker admission")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := manager.StartSessionWorker(context.Background(), "sess-rejected", nil); !errors.Is(err, ErrWorkerManagerStopping) {
+		t.Fatalf("worker start error = %v, want ErrWorkerManagerStopping", err)
+	}
+
+	close(releaseStart)
+	if err := <-startDone; err != nil {
+		t.Fatalf("admitted StartSessionWorker: %v", err)
+	}
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("StopAll: %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("StopAll did not drain and stop the admitted worker")
+	}
+	if worker := manager.findWorker("sess-admitted"); worker != nil {
+		t.Fatalf("admitted worker remained after StopAll: %+v", worker)
+	}
+}
+
+func TestStopSessionWorkerBoundsPostExitCleanup(t *testing.T) {
+	requirePOSIXSignals(t)
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_blocked_cleanup", "import time\ntime.sleep(30)\n")
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_blocked_cleanup",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+
+	cleanupBlocked := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	manager.cleanupSessionRoot = func(path string) error {
+		select {
+		case <-cleanupBlocked:
+		default:
+			close(cleanupBlocked)
+		}
+		<-releaseCleanup
+		return os.RemoveAll(path)
+	}
+
+	worker, err := manager.StartSessionWorker(context.Background(), "sess-bounded-cleanup", nil)
+	if err != nil {
+		t.Fatalf("StartSessionWorker: %v", err)
+	}
+	stopDone := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		stopDone <- manager.StopSessionWorker(context.Background(), worker.SessionID, 100*time.Millisecond)
+	}()
+
+	select {
+	case <-cleanupBlocked:
+	case <-time.After(time.Second):
+		close(releaseCleanup)
+		t.Fatal("worker did not reach blocked post-exit cleanup")
+	}
+	select {
+	case err := <-stopDone:
+		close(releaseCleanup)
+		if !errors.Is(err, ErrWorkerCleanupPending) {
+			t.Fatalf("StopSessionWorker error = %v, want ErrWorkerCleanupPending", err)
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("StopSessionWorker returned after %v, want bounded cleanup wait", elapsed)
+		}
+	case <-time.After(time.Second):
+		close(releaseCleanup)
+		t.Fatal("StopSessionWorker blocked beyond its cleanup bound")
+	}
+	assertWorkerSessionReserved(t, manager, worker.SessionID)
 }
 
 func TestStopAllStopsSnapshottedWorkerAfterSessionReplacement(t *testing.T) {

@@ -35,14 +35,30 @@ type WorkerStartSpec struct {
 }
 
 type managedWorkerStop func(context.Context, *ManagedWorker, time.Duration) error
+type workerEnvironmentBuilder func(WorkerManagerConfig, WorkerStartSpec, []string, workerSessionCleanup) ([]string, string, string, error)
+
+var (
+	ErrWorkerManagerStopping = errors.New("worker manager is stopping")
+	ErrWorkerCleanupPending  = errors.New("worker process exited but session cleanup is still pending")
+)
+
+type WorkerShutdownSummary struct {
+	ForcedStops int
+}
 
 type WorkerManager struct {
 	cfg      WorkerManagerConfig
 	registry *SessionRegistry
 	mu       sync.Mutex
 	active   map[string]*ManagedWorker
+	stopping bool
+	starting int
+	drained  chan struct{}
+
+	forcedStops int
 
 	cleanupSessionRoot workerSessionCleanup
+	buildEnvironment   workerEnvironmentBuilder
 	cleanupFailures    map[string]error
 	stopWorker         managedWorkerStop
 }
@@ -57,6 +73,7 @@ type ManagedWorker struct {
 	done           <-chan error
 	waitOnce       sync.Once
 	waitErr        error
+	forceOnce      sync.Once
 }
 
 func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
@@ -80,6 +97,7 @@ func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
 		registry:           NewSessionRegistry(),
 		active:             map[string]*ManagedWorker{},
 		cleanupSessionRoot: os.RemoveAll,
+		buildEnvironment:   buildWorkerEnvironmentWithCleanup,
 		cleanupFailures:    map[string]error{},
 	}
 	manager.stopWorker = manager.stopManagedWorker
@@ -87,6 +105,16 @@ func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
 }
 
 func (m *WorkerManager) PrepareSessionWorker(sessionID string) (WorkerStartSpec, error) {
+	m.mu.Lock()
+	stopping := m.stopping
+	m.mu.Unlock()
+	if stopping {
+		return WorkerStartSpec{}, ErrWorkerManagerStopping
+	}
+	return m.prepareSessionWorker(sessionID)
+}
+
+func (m *WorkerManager) prepareSessionWorker(sessionID string) (WorkerStartSpec, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return WorkerStartSpec{}, fmt.Errorf("session_id is required")
@@ -116,7 +144,11 @@ func (m *WorkerManager) PrepareSessionWorker(sessionID string) (WorkerStartSpec,
 }
 
 func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string, extraEnv []string) (*ManagedWorker, error) {
-	spec, err := m.PrepareSessionWorker(sessionID)
+	if err := m.beginWorkerStart(); err != nil {
+		return nil, err
+	}
+	defer m.endWorkerStart()
+	spec, err := m.prepareSessionWorker(sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +160,7 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 	}
 	args := append([]string{}, m.cfg.PythonArgsPrefix...)
 	args = append(args, "-m", m.cfg.WorkerModule)
-	env, sessionRoot, resolvedExecutable, err := buildWorkerEnvironmentWithCleanup(m.cfg, spec, extraEnv, m.cleanupSessionRoot)
+	env, sessionRoot, resolvedExecutable, err := m.buildEnvironment(m.cfg, spec, extraEnv, m.cleanupSessionRoot)
 	if err != nil {
 		if hasWorkerSessionCleanupError(err) {
 			m.retainCleanupFailure(spec.SessionID, err)
@@ -232,29 +264,56 @@ func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWo
 	go func() {
 		waitDone <- worker.Wait()
 	}()
+	deadline := time.Now().Add(timeout)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	processExited := worker.processExitedSignal()
+	if processExited == nil {
+		processExited = make(chan struct{})
+	}
 	select {
 	case <-ctx.Done():
 		return errors.Join(ctx.Err(), m.forceStopWorker(sessionID, worker, waitDone))
 	case <-timer.C:
 		return m.forceStopWorker(sessionID, worker, waitDone)
+	case <-processExited:
+		return m.waitForWorkerCleanup(sessionID, worker, waitDone, time.Until(deadline))
 	case waitErr := <-waitDone:
 		return m.finishWorkerStop(sessionID, worker, waitErr)
 	}
 }
 
 func (m *WorkerManager) forceStopWorker(sessionID string, worker *ManagedWorker, waitDone <-chan error) error {
+	m.recordForcedStop(worker)
 	if err := worker.Cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("kill session worker %s: %w", sessionID, err)
 	}
-	return m.finishWorkerStop(sessionID, worker, <-waitDone)
+	forceWait := 2 * time.Second
+	processExited := worker.processExitedSignal()
+	if processExited == nil {
+		select {
+		case waitErr := <-waitDone:
+			return m.finishWorkerStop(sessionID, worker, waitErr)
+		case <-time.After(forceWait):
+			return fmt.Errorf("reap session worker %s after kill: %w", sessionID, context.DeadlineExceeded)
+		}
+	}
+	select {
+	case <-processExited:
+		return m.waitForWorkerCleanup(sessionID, worker, waitDone, forceWait)
+	case <-time.After(forceWait):
+		return fmt.Errorf("reap session worker %s after kill: %w", sessionID, context.DeadlineExceeded)
+	}
 }
 
 func (m *WorkerManager) StopAll(ctx context.Context, timeout time.Duration) error {
 	type workerSnapshot struct {
 		worker *ManagedWorker
 		pid    int
+	}
+
+	if err := m.closeAdmissionAndWait(ctx); err != nil {
+		return err
 	}
 
 	m.mu.Lock()
@@ -282,6 +341,79 @@ func (m *WorkerManager) StopAll(ctx context.Context, timeout time.Duration) erro
 		}
 	}
 	return errors.Join(stopErrors...)
+}
+
+func (m *WorkerManager) waitForWorkerCleanup(sessionID string, worker *ManagedWorker, waitDone <-chan error, timeout time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("session worker %s cleanup: %w", sessionID, ErrWorkerCleanupPending)
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case waitErr := <-waitDone:
+		return m.finishWorkerStop(sessionID, worker, waitErr)
+	case <-timer.C:
+		return fmt.Errorf("session worker %s cleanup: %w", sessionID, ErrWorkerCleanupPending)
+	}
+}
+
+func (m *WorkerManager) beginWorkerStart() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopping {
+		return ErrWorkerManagerStopping
+	}
+	m.starting++
+	return nil
+}
+
+func (m *WorkerManager) endWorkerStart() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.starting > 0 {
+		m.starting--
+	}
+	if m.stopping && m.starting == 0 && m.drained != nil {
+		close(m.drained)
+		m.drained = nil
+	}
+}
+
+func (m *WorkerManager) closeAdmissionAndWait(ctx context.Context) error {
+	m.mu.Lock()
+	m.stopping = true
+	if m.starting == 0 {
+		m.mu.Unlock()
+		return nil
+	}
+	if m.drained == nil {
+		m.drained = make(chan struct{})
+	}
+	drained := m.drained
+	m.mu.Unlock()
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *WorkerManager) recordForcedStop(worker *ManagedWorker) {
+	if worker == nil {
+		return
+	}
+	worker.forceOnce.Do(func() {
+		m.mu.Lock()
+		m.forcedStops++
+		m.mu.Unlock()
+	})
+}
+
+func (m *WorkerManager) ShutdownSummary() WorkerShutdownSummary {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return WorkerShutdownSummary{ForcedStops: m.forcedStops}
 }
 
 func (m *WorkerManager) finishWorkerStop(sessionID string, worker *ManagedWorker, waitErr error) error {

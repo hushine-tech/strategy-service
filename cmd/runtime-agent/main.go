@@ -131,6 +131,15 @@ func runAgent(
 ) int {
 	agentCtx, cancelAgent := context.WithCancel(ctx)
 	defer cancelAgent()
+	coverageBootID := ""
+	if coverageRoot != "" {
+		var err error
+		coverageBootID, err = runtimeagent.InitializeCoverageFinalization(coverageRoot, identity.RuntimeID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "initialize runtime coverage finalization: %v\n", err)
+			return 1
+		}
+	}
 
 	var agent *runtimeagent.Agent
 	runtimeClient := runtimeagent.NewRuntimeChannelClient(runtimeagent.RuntimeChannelClientConfig{
@@ -178,10 +187,13 @@ func runAgent(
 		shutdownAgentOnContext(
 			agentCtx,
 			coverageRoot,
+			identity.RuntimeID,
+			coverageBootID,
 			workerManager,
 			grpcServer,
 			10*time.Second,
 			5*time.Second,
+			defaultCoverageShutdownOps(),
 		)
 		close(shutdownDone)
 	}()
@@ -209,26 +221,79 @@ type agentWorkerStopper interface {
 	StopAll(context.Context, time.Duration) error
 }
 
+type agentWorkerShutdownReporter interface {
+	ShutdownSummary() runtimeagent.WorkerShutdownSummary
+}
+
 type agentGRPCStopper interface {
 	GracefulStop()
 	Stop()
 }
 
+type coverageShutdownOps struct {
+	writeSnapshot     func(string) error
+	writeFinalization func(string, runtimeagent.CoverageFinalization) error
+	now               func() time.Time
+}
+
+func defaultCoverageShutdownOps() coverageShutdownOps {
+	return coverageShutdownOps{
+		writeSnapshot:     runtimeagent.WriteGoCoverageSnapshot,
+		writeFinalization: runtimeagent.WriteCoverageFinalization,
+		now:               time.Now,
+	}
+}
+
 func shutdownAgentOnContext(
 	ctx context.Context,
 	coverageRoot string,
+	runtimeID string,
+	coverageBootID string,
 	workerManager agentWorkerStopper,
 	grpcServer agentGRPCStopper,
 	shutdownTimeout time.Duration,
 	workerTimeout time.Duration,
+	ops coverageShutdownOps,
 ) {
 	<-ctx.Done()
-	if coverageRoot != "" {
-		_ = runtimeagent.WriteGoCoverageSnapshot(filepath.Join(coverageRoot, "go"))
-	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	_ = workerManager.StopAll(shutdownCtx, workerTimeout)
+	workerErr := workerManager.StopAll(shutdownCtx, workerTimeout)
+	forcedWorkers := 0
+	if reporter, ok := workerManager.(agentWorkerShutdownReporter); ok {
+		forcedWorkers = reporter.ShutdownSummary().ForcedStops
+	}
+	var snapshotErr error
+	if coverageRoot != "" {
+		snapshotErr = ops.writeSnapshot(filepath.Join(coverageRoot, "go"))
+		workerStatus := runtimeagent.CoverageFinalizationOK
+		if workerErr != nil {
+			workerStatus = runtimeagent.CoverageFinalizationError
+		} else if forcedWorkers > 0 {
+			workerStatus = runtimeagent.CoverageFinalizationForced
+		}
+		snapshotStatus := runtimeagent.CoverageFinalizationOK
+		if snapshotErr != nil {
+			snapshotStatus = runtimeagent.CoverageFinalizationError
+		}
+		state := runtimeagent.CoverageFinalizationComplete
+		if workerErr != nil || forcedWorkers > 0 || snapshotErr != nil {
+			state = runtimeagent.CoverageFinalizationIncomplete
+		}
+		record := runtimeagent.CoverageFinalization{
+			SchemaVersion:  1,
+			RuntimeID:      runtimeID,
+			BootID:         coverageBootID,
+			State:          state,
+			WorkerShutdown: workerStatus,
+			ForcedWorkers:  forcedWorkers,
+			GoSnapshot:     snapshotStatus,
+			CompletedAt:    ops.now().UTC().Format(time.RFC3339Nano),
+		}
+		if err := ops.writeFinalization(coverageRoot, record); err != nil {
+			fmt.Fprintln(os.Stderr, "write runtime coverage finalization: failed")
+		}
+	}
 
 	gracefulDone := make(chan struct{})
 	go func() {
