@@ -28,6 +28,10 @@ type WorkerExitWaiter interface {
 	WaitSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error
 }
 
+type WorkerDrainer interface {
+	MarkSessionWorkerDraining(sessionID string)
+}
+
 type PlatformInvoker interface {
 	InvokePlatformAny(ctx context.Context, method string, request *anypb.Any, timeout time.Duration) (*anypb.Any, error)
 }
@@ -440,6 +444,17 @@ func (a *Agent) handleOneShotRuntimeUnary(
 	if err != nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
 	}
+	var previewResp strategyv1.PreviewRunStrategyResponse
+	if err := resp.UnmarshalTo(&previewResp); err != nil {
+		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid PreviewRunStrategy response payload")
+	}
+	if previewResp.GetOk() {
+		if waiter, ok := a.cfg.WorkerStarter.(WorkerExitWaiter); ok {
+			if err := waiter.WaitSessionWorker(ctx, pendingID, a.timeoutForFrame(frame)); err != nil {
+				return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+			}
+		}
+	}
 	return responseAnyFrame(frame.GetCorrelationId(), resp)
 }
 
@@ -647,6 +662,9 @@ func (a *Agent) handleWorkerFinalStatus(
 	case "finished", "failed", "stopped", "stop_failed", "recoverable":
 	default:
 		return fmt.Errorf("final status must be terminal, got %q", status.GetStatus())
+	}
+	if drainer, ok := a.cfg.WorkerStopper.(WorkerDrainer); ok {
+		drainer.MarkSessionWorkerDraining(sessionID)
 	}
 	flushCtx := ctx
 	var cancel context.CancelFunc

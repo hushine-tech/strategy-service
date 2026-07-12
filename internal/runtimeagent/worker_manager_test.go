@@ -253,6 +253,103 @@ func TestStopSessionWorkerRequestsGracefulStopBeforeKill(t *testing.T) {
 	}
 }
 
+func TestStopSessionWorkerAndStopAllShareSingleStopOperation(t *testing.T) {
+	requirePOSIXSignals(t)
+	manager, worker, signals, release := startReleaseDrivenSignalCountingWorker(t, "shared-stop")
+
+	stopEntered := make(chan struct{}, 2)
+	stopWorker := manager.stopWorker
+	manager.stopWorker = func(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
+		stopEntered <- struct{}{}
+		return stopWorker(ctx, worker, timeout)
+	}
+	stopSessionDone := make(chan error, 1)
+	stopAllDone := make(chan error, 1)
+	go func() {
+		stopSessionDone <- manager.StopSessionWorker(context.Background(), worker.SessionID, 2*time.Second)
+	}()
+	select {
+	case <-stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("StopSessionWorker did not reach worker")
+	}
+	waitForWorkerFile(t, signals)
+	go func() {
+		stopAllDone <- manager.StopAll(context.Background(), 2*time.Second)
+	}()
+	select {
+	case <-stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent StopAll did not reach shared worker")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := readSignalCount(t, signals); got != 1 {
+		t.Fatalf("graceful stop signals = %d, want one shared stop operation", got)
+	}
+	if err := os.WriteFile(release, []byte("exit"), 0o600); err != nil {
+		t.Fatalf("release worker: %v", err)
+	}
+	if err := <-stopSessionDone; err != nil {
+		t.Fatalf("StopSessionWorker: %v", err)
+	}
+	if err := <-stopAllDone; err != nil {
+		t.Fatalf("StopAll: %v", err)
+	}
+	if got := manager.ShutdownSummary().ForcedStops; got != 0 {
+		t.Fatalf("forced stops = %d, want shared graceful completion", got)
+	}
+}
+
+func TestSingleStopOperationFollowerCancellationDoesNotSignalAgain(t *testing.T) {
+	requirePOSIXSignals(t)
+	manager, worker, signals, release := startReleaseDrivenSignalCountingWorker(t, "follower-cancel")
+
+	stopEntered := make(chan struct{}, 2)
+	stopWorker := manager.stopWorker
+	manager.stopWorker = func(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
+		stopEntered <- struct{}{}
+		return stopWorker(ctx, worker, timeout)
+	}
+	ownerDone := make(chan error, 1)
+	go func() {
+		ownerDone <- manager.StopSessionWorker(context.Background(), worker.SessionID, 2*time.Second)
+	}()
+	select {
+	case <-stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("stop owner did not reach worker")
+	}
+	waitForWorkerFile(t, signals)
+
+	followerCtx, cancelFollower := context.WithCancel(context.Background())
+	followerDone := make(chan error, 1)
+	go func() {
+		followerDone <- manager.StopAll(followerCtx, 2*time.Second)
+	}()
+	select {
+	case <-stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("stop follower did not reach worker")
+	}
+	cancelFollower()
+	if err := <-followerDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("StopAll follower error = %v, want context cancellation", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := readSignalCount(t, signals); got != 1 {
+		t.Fatalf("graceful stop signals = %d, want canceled follower to send none", got)
+	}
+	if got := manager.ShutdownSummary().ForcedStops; got != 0 {
+		t.Fatalf("forced stops = %d, want canceled follower to leave owner in control", got)
+	}
+	if err := os.WriteFile(release, []byte("exit"), 0o600); err != nil {
+		t.Fatalf("release worker: %v", err)
+	}
+	if err := <-ownerDone; err != nil {
+		t.Fatalf("stop owner: %v", err)
+	}
+}
+
 func TestWaitSessionWorkerAllowsNaturalCoverageExitWithoutSignal(t *testing.T) {
 	requirePOSIXSignals(t)
 	dir := t.TempDir()
@@ -314,6 +411,27 @@ func TestStopSessionWorkerForceKillsWorkerAfterTimeout(t *testing.T) {
 	}
 	if got := manager.ShutdownSummary().ForcedStops; got != 1 {
 		t.Fatalf("forced stops = %d, want 1", got)
+	}
+}
+
+func TestDrainingWorkerTimeoutFallsBackToSignalAndForce(t *testing.T) {
+	requirePOSIXSignals(t)
+	manager, worker := startSignalIgnoringWorker(t)
+	manager.MarkSessionWorkerDraining(worker.SessionID)
+	timeout := 75 * time.Millisecond
+	started := time.Now()
+
+	if err := manager.StopAll(context.Background(), timeout); err != nil {
+		t.Fatalf("StopAll: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < 2*timeout {
+		t.Fatalf("StopAll elapsed = %v, want drain grace then normal stop timeout", elapsed)
+	}
+	if worker.Cmd.ProcessState == nil {
+		t.Fatal("draining worker was not reaped after timeout fallback")
+	}
+	if got := manager.ShutdownSummary().ForcedStops; got != 1 {
+		t.Fatalf("forced stops = %d, want timeout fallback force", got)
 	}
 }
 
@@ -1180,6 +1298,35 @@ while True:
 	return manager, worker, counter
 }
 
+func startReleaseDrivenSignalCountingWorker(t *testing.T, sessionID string) (*WorkerManager, *ManagedWorker, string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	release := filepath.Join(dir, "release")
+	signals := filepath.Join(dir, "signals")
+	writePythonWorkerModule(t, dir, "worker_release_driven_signal_counting", fmt.Sprintf(`
+import signal
+import time
+from pathlib import Path
+
+ready = Path(%q)
+release = Path(%q)
+signals = Path(%q)
+
+def stop(_signum, _frame):
+    with signals.open("a", encoding="utf-8") as output:
+        output.write("SIGTERM\n")
+
+signal.signal(signal.SIGTERM, stop)
+ready.write_text("ready", encoding="utf-8")
+while not release.exists():
+    time.sleep(0.01)
+`, ready, release, signals))
+	manager, worker := startWorkerModule(t, dir, "worker_release_driven_signal_counting", sessionID)
+	waitForWorkerFile(t, ready)
+	return manager, worker, signals, release
+}
+
 func startWorkerModule(t *testing.T, dir string, module string, sessionID string) (*WorkerManager, *ManagedWorker) {
 	t.Helper()
 	manager := NewWorkerManager(WorkerManagerConfig{
@@ -1243,6 +1390,15 @@ func readStopCount(t *testing.T, path string) int {
 		t.Fatalf("parse stop count %q: %v", string(body), err)
 	}
 	return count
+}
+
+func readSignalCount(t *testing.T, path string) int {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read worker signals: %v", err)
+	}
+	return strings.Count(string(body), "SIGTERM\n")
 }
 
 func TestWorkerManagerAliasWorkerSessionMakesRealSessionStoppable(t *testing.T) {

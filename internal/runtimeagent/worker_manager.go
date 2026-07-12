@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -75,7 +76,11 @@ type ManagedWorker struct {
 	done           <-chan error
 	waitOnce       sync.Once
 	waitErr        error
+	stopOnce       sync.Once
+	stopDone       chan struct{}
+	stopErr        error
 	forceOnce      sync.Once
+	draining       atomic.Bool
 }
 
 func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
@@ -323,6 +328,15 @@ func (m *WorkerManager) WaitSessionWorker(ctx context.Context, sessionID string,
 	}
 }
 
+// MarkSessionWorkerDraining records that the worker is completing its terminal
+// protocol handshake and should be allowed a bounded natural exit before any
+// process signal is sent.
+func (m *WorkerManager) MarkSessionWorkerDraining(sessionID string) {
+	if worker := m.findWorker(sessionID); worker != nil {
+		worker.draining.Store(true)
+	}
+}
+
 func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
 	if worker == nil || worker.Cmd == nil || worker.Cmd.Process == nil {
 		return nil
@@ -333,6 +347,38 @@ func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWo
 	sessionID := worker.SessionID
 	if err := m.retainedCleanupFailure(sessionID); err != nil {
 		return err
+	}
+	owner := false
+	worker.stopOnce.Do(func() {
+		owner = true
+		worker.stopDone = make(chan struct{})
+		allowDrainGrace := worker.draining.Load()
+		go func() {
+			worker.stopErr = m.runManagedWorkerStop(ctx, worker, timeout, allowDrainGrace)
+			close(worker.stopDone)
+		}()
+	})
+	if owner {
+		<-worker.stopDone
+		return worker.stopErr
+	}
+	return waitForSharedWorkerStop(ctx, sessionID, worker, timeout)
+}
+
+func (m *WorkerManager) runManagedWorkerStop(ctx context.Context, worker *ManagedWorker, timeout time.Duration, allowDrainGrace bool) error {
+	sessionID := worker.SessionID
+	var waitDone <-chan error
+	if allowDrainGrace {
+		waitDone = m.beginWorkerStopWait(sessionID, worker)
+		graceTimer := time.NewTimer(timeout)
+		select {
+		case waitErr := <-waitDone:
+			graceTimer.Stop()
+			return waitErr
+		case <-ctx.Done():
+			graceTimer.Stop()
+		case <-graceTimer.C:
+		}
 	}
 	initialStopForced, err := requestWorkerStop(worker.Cmd.Process)
 	if err == nil && initialStopForced {
@@ -348,10 +394,9 @@ func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWo
 			return fmt.Errorf("request stop for session worker %s: %w", sessionID, err)
 		}
 	}
-	waitDone := make(chan error, 1)
-	go func() {
-		waitDone <- m.finishWorkerStop(sessionID, worker, worker.Wait())
-	}()
+	if waitDone == nil {
+		waitDone = m.beginWorkerStopWait(sessionID, worker)
+	}
 	deadline := time.Now().Add(timeout)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -370,6 +415,27 @@ func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWo
 		return m.waitForWorkerCleanup(ctx, sessionID, worker, waitDone, time.Until(deadline))
 	case waitErr := <-waitDone:
 		return waitErr
+	}
+}
+
+func (m *WorkerManager) beginWorkerStopWait(sessionID string, worker *ManagedWorker) <-chan error {
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- m.finishWorkerStop(sessionID, worker, worker.Wait())
+	}()
+	return waitDone
+}
+
+func waitForSharedWorkerStop(ctx context.Context, sessionID string, worker *ManagedWorker, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return fmt.Errorf("wait for shared stop of session worker %s: %w", sessionID, context.DeadlineExceeded)
+	case <-worker.stopDone:
+		return worker.stopErr
 	}
 }
 

@@ -3,6 +3,8 @@ package runtimeagent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -328,6 +330,137 @@ func TestAgentPreviewRunStrategyRunsOneShotWorkerUnary(t *testing.T) {
 	}
 }
 
+func TestAgentPreviewRunStrategyWaitsForNaturalManagedCleanup(t *testing.T) {
+	manager := &blockingWorkerLifecycle{
+		waitStarted: make(chan workerExitWait, 1),
+		releaseWait: make(chan struct{}),
+	}
+	sender := &fakeWorkerSender{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStarter:  manager,
+		WorkerStopper:  manager,
+		WorkerSender:   sender,
+		RequestTimeout: time.Second,
+	})
+	manager.onStart = func(sessionID string) {
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{SessionId: sessionID}},
+			}, nil)
+		}()
+	}
+	response, err := anypb.New(&strategyv1.PreviewRunStrategyResponse{Ok: true, Profile: "backtest"})
+	if err != nil {
+		t.Fatalf("pack response: %v", err)
+	}
+	wireWorkerUnaryResponse(agent, sender, response)
+	request, err := anypb.New(&strategyv1.PreviewRunStrategyRequest{
+		PortfolioId: 1,
+		UserId:      6,
+		RuntimeId:   "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	responseDone := make(chan *cpv1.RuntimeFrame, 1)
+	go func() {
+		responseDone <- agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+			CorrelationId: "corr-preview-wait-cleanup",
+			FrameType:     cpv1.FrameType_FRAME_TYPE_REQUEST,
+			Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+				Method:  "PreviewRunStrategy",
+				Request: request,
+			}},
+		})
+	}()
+	var waitCall workerExitWait
+	select {
+	case waitCall = <-manager.waitStarted:
+	case frame := <-responseDone:
+		t.Fatalf("preview response returned before managed cleanup wait: %+v", frame)
+	case <-time.After(time.Second):
+		t.Fatal("preview did not begin managed cleanup wait")
+	}
+	if waitCall.sessionID != manager.startedSessionID || waitCall.timeout <= 0 {
+		t.Fatalf("worker wait = %+v, want started one-shot session with positive bound", waitCall)
+	}
+	select {
+	case frame := <-responseDone:
+		t.Fatalf("preview response returned while managed cleanup was blocked: %+v", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(manager.releaseWait)
+	select {
+	case frame := <-responseDone:
+		if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
+			t.Fatalf("response frame type = %v error=%v", frame.GetFrameType(), frame.GetError())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("preview response did not return after managed cleanup")
+	}
+	if got := manager.stopCount(); got != 0 {
+		t.Fatalf("preview sent %d stop signals while waiting for natural exit", got)
+	}
+}
+
+func TestAgentPreviewRunStrategyWaitTimeoutDoesNotSignalWorker(t *testing.T) {
+	manager := &blockingWorkerLifecycle{waitStarted: make(chan workerExitWait, 1)}
+	sender := &fakeWorkerSender{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStarter:  manager,
+		WorkerStopper:  manager,
+		WorkerSender:   sender,
+		RequestTimeout: time.Second,
+	})
+	manager.onStart = func(sessionID string) {
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{SessionId: sessionID}},
+			}, nil)
+		}()
+	}
+	response, err := anypb.New(&strategyv1.PreviewRunStrategyResponse{Ok: true, Profile: "backtest"})
+	if err != nil {
+		t.Fatalf("pack response: %v", err)
+	}
+	wireWorkerUnaryResponse(agent, sender, response)
+	request, err := anypb.New(&strategyv1.PreviewRunStrategyRequest{
+		PortfolioId: 1,
+		UserId:      6,
+		RuntimeId:   "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	frame := agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+		CorrelationId:  "corr-preview-wait-timeout",
+		DeadlineUnixMs: time.Now().Add(80 * time.Millisecond).UnixMilli(),
+		FrameType:      cpv1.FrameType_FRAME_TYPE_REQUEST,
+		Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+			Method:  "PreviewRunStrategy",
+			Request: request,
+		}},
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR || frame.GetError().GetCode() != "DeadlineExceeded" {
+		t.Fatalf("preview timeout frame = %+v, want DeadlineExceeded", frame)
+	}
+	select {
+	case waitCall := <-manager.waitStarted:
+		if waitCall.timeout <= 0 || waitCall.timeout > 100*time.Millisecond {
+			t.Fatalf("worker wait timeout = %v, want remaining frame bound", waitCall.timeout)
+		}
+	default:
+		t.Fatal("preview did not wait for managed cleanup")
+	}
+	if got := manager.stopCount(); got != 0 {
+		t.Fatalf("preview timeout sent %d stop signals", got)
+	}
+}
+
 func TestAgentPreviewRunStrategyReturnsWorkerExitBeforeReadyTimeout(t *testing.T) {
 	dir := t.TempDir()
 	writePythonWorkerModule(t, dir, "worker_exit_before_hello", `
@@ -538,6 +671,176 @@ func TestAgentRoutesStatusAndStopToRunningWorker(t *testing.T) {
 	}
 }
 
+func TestAgentStopStrategyWaitsForManagedCleanupBeforeResponse(t *testing.T) {
+	manager := &blockingWorkerLifecycle{
+		waitStarted: make(chan workerExitWait, 1),
+		releaseWait: make(chan struct{}),
+	}
+	sender := &fakeWorkerSender{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStopper:  manager,
+		WorkerSender:   sender,
+		RequestTimeout: time.Second,
+	})
+	response, err := anypb.New(&strategyv1.StopStrategyResponse{Stopped: true})
+	if err != nil {
+		t.Fatalf("pack response: %v", err)
+	}
+	wireWorkerUnaryResponse(agent, sender, response)
+	request, err := anypb.New(&strategyv1.StopStrategyRequest{
+		SessionId: "sess-stop-wait",
+		UserId:    6,
+		RuntimeId: "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	responseDone := make(chan *cpv1.RuntimeFrame, 1)
+	go func() {
+		responseDone <- agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+			CorrelationId: "corr-stop-wait-cleanup",
+			FrameType:     cpv1.FrameType_FRAME_TYPE_REQUEST,
+			Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+				Method:  "StopStrategy",
+				Request: request,
+			}},
+		})
+	}()
+	select {
+	case waitCall := <-manager.waitStarted:
+		if waitCall.sessionID != "sess-stop-wait" || waitCall.timeout <= 0 {
+			t.Fatalf("worker wait = %+v", waitCall)
+		}
+	case frame := <-responseDone:
+		t.Fatalf("stop response returned before managed cleanup wait: %+v", frame)
+	case <-time.After(time.Second):
+		t.Fatal("StopStrategy did not begin managed cleanup wait")
+	}
+	select {
+	case frame := <-responseDone:
+		t.Fatalf("stop response returned while cleanup was blocked: %+v", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(manager.releaseWait)
+	select {
+	case frame := <-responseDone:
+		if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
+			t.Fatalf("response frame type = %v error=%v", frame.GetFrameType(), frame.GetError())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop response did not return after managed cleanup")
+	}
+	if got := manager.stopCount(); got != 0 {
+		t.Fatalf("StopStrategy wait sent %d agent-side stop signals", got)
+	}
+}
+
+func TestAgentStopStrategyWaitCancellationDoesNotSignalWorker(t *testing.T) {
+	manager := &blockingWorkerLifecycle{waitStarted: make(chan workerExitWait, 1)}
+	sender := &fakeWorkerSender{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStopper:  manager,
+		WorkerSender:   sender,
+		RequestTimeout: time.Second,
+	})
+	response, err := anypb.New(&strategyv1.StopStrategyResponse{Stopped: true})
+	if err != nil {
+		t.Fatalf("pack response: %v", err)
+	}
+	wireWorkerUnaryResponse(agent, sender, response)
+	request, err := anypb.New(&strategyv1.StopStrategyRequest{
+		SessionId: "sess-stop-cancel",
+		UserId:    6,
+		RuntimeId: "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	responseDone := make(chan *cpv1.RuntimeFrame, 1)
+	go func() {
+		responseDone <- agent.HandleRuntimeRequest(ctx, &cpv1.RuntimeFrame{
+			CorrelationId: "corr-stop-wait-cancel",
+			FrameType:     cpv1.FrameType_FRAME_TYPE_REQUEST,
+			Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+				Method:  "StopStrategy",
+				Request: request,
+			}},
+		})
+	}()
+	select {
+	case <-manager.waitStarted:
+	case frame := <-responseDone:
+		t.Fatalf("stop response returned before managed cleanup wait: %+v", frame)
+	case <-time.After(time.Second):
+		t.Fatal("StopStrategy did not begin managed cleanup wait")
+	}
+	cancel()
+	select {
+	case frame := <-responseDone:
+		if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+			t.Fatalf("canceled stop frame = %+v, want error", frame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled StopStrategy wait did not return")
+	}
+	if got := manager.stopCount(); got != 0 {
+		t.Fatalf("canceled StopStrategy wait sent %d agent-side stop signals", got)
+	}
+}
+
+func TestAgentStopStrategyWaitTimeoutDoesNotSignalWorker(t *testing.T) {
+	manager := &blockingWorkerLifecycle{waitStarted: make(chan workerExitWait, 1)}
+	sender := &fakeWorkerSender{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStopper:  manager,
+		WorkerSender:   sender,
+		RequestTimeout: time.Second,
+	})
+	response, err := anypb.New(&strategyv1.StopStrategyResponse{Stopped: true})
+	if err != nil {
+		t.Fatalf("pack response: %v", err)
+	}
+	wireWorkerUnaryResponse(agent, sender, response)
+	request, err := anypb.New(&strategyv1.StopStrategyRequest{
+		SessionId: "sess-stop-timeout",
+		UserId:    6,
+		RuntimeId: "rt-1",
+	})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+
+	frame := agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+		CorrelationId:  "corr-stop-wait-timeout",
+		DeadlineUnixMs: time.Now().Add(80 * time.Millisecond).UnixMilli(),
+		FrameType:      cpv1.FrameType_FRAME_TYPE_REQUEST,
+		Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+			Method:  "StopStrategy",
+			Request: request,
+		}},
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR || frame.GetError().GetCode() != "DeadlineExceeded" {
+		t.Fatalf("StopStrategy timeout frame = %+v, want DeadlineExceeded", frame)
+	}
+	select {
+	case waitCall := <-manager.waitStarted:
+		if waitCall.sessionID != "sess-stop-timeout" || waitCall.timeout <= 0 || waitCall.timeout > 100*time.Millisecond {
+			t.Fatalf("worker wait = %+v, want remaining frame bound", waitCall)
+		}
+	default:
+		t.Fatal("StopStrategy did not wait for managed cleanup")
+	}
+	if got := manager.stopCount(); got != 0 {
+		t.Fatalf("timed-out StopStrategy wait sent %d agent-side stop signals", got)
+	}
+}
+
 func TestAgentRuntimeDataReturnsDeliveryError(t *testing.T) {
 	sender := &fakeWorkerSender{sendErr: errors.New("worker gone")}
 	agent := NewAgent(AgentConfig{WorkerSender: sender})
@@ -645,6 +948,132 @@ func TestAgentFinalStatusFlushesThenPersistsFinishedThenAcknowledges(t *testing.
 	}
 	if ack == nil || ack.GetReplyTo() != "final-1" || ack.GetPayload() != nil {
 		t.Fatalf("ack = %+v, want payloadless reply_to final-1", ack)
+	}
+}
+
+func TestAgentFinalStatusMarksWorkerDrainingBeforePlatformUpdate(t *testing.T) {
+	probe := &finalStatusDrainProbe{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		WorkerStopper:   probe,
+		PlatformInvoker: probe,
+	})
+	err := agent.HandleWorkerFrame(context.Background(), "sess-draining", &rwv1.WorkerFrame{
+		FrameId: "final-draining",
+		Payload: &rwv1.WorkerFrame_FinalStatus{FinalStatus: &rwv1.FinalStatus{
+			SessionId: "sess-draining",
+			Status:    "finished",
+		}},
+	}, func(*rwv1.AgentFrame) error { return nil })
+	if err != nil {
+		t.Fatalf("HandleWorkerFrame final: %v", err)
+	}
+	markedSession, updateBeforeDrain := probe.snapshot()
+	if markedSession != "sess-draining" {
+		t.Fatalf("marked draining session = %q, want sess-draining", markedSession)
+	}
+	if updateBeforeDrain {
+		t.Fatal("terminal platform update occurred before worker was marked draining")
+	}
+}
+
+func TestAgentFinalStatusDrainingLetsConcurrentStopAllWaitForAckExit(t *testing.T) {
+	requirePOSIXSignals(t)
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	ack := filepath.Join(dir, "ack")
+	signals := filepath.Join(dir, "signals")
+	writePythonWorkerModule(t, dir, "worker_final_status_ack", fmt.Sprintf(`
+import signal
+import time
+from pathlib import Path
+
+ready = Path(%q)
+ack = Path(%q)
+signals = Path(%q)
+
+def stop(_signum, _frame):
+    with signals.open("a", encoding="utf-8") as output:
+        output.write("SIGTERM\n")
+
+signal.signal(signal.SIGTERM, stop)
+ready.write_text("ready", encoding="utf-8")
+while not ack.exists():
+    time.sleep(0.01)
+`, ready, ack, signals))
+	manager, worker := startWorkerModule(t, dir, "worker_final_status_ack", "sess-final-ack")
+	waitForWorkerFile(t, ready)
+	platform := &blockingFinalUpdatePlatform{
+		updateStarted: make(chan struct{}),
+		releaseUpdate: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	releaseUpdate := func() {
+		releaseOnce.Do(func() { close(platform.releaseUpdate) })
+	}
+	defer releaseUpdate()
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		WorkerStopper:   manager,
+		PlatformInvoker: platform,
+	})
+	finalDone := make(chan error, 1)
+	go func() {
+		finalDone <- agent.HandleWorkerFrame(context.Background(), worker.SessionID, &rwv1.WorkerFrame{
+			FrameId: "final-ack",
+			Payload: &rwv1.WorkerFrame_FinalStatus{FinalStatus: &rwv1.FinalStatus{
+				SessionId: worker.SessionID,
+				Status:    "finished",
+			}},
+		}, func(*rwv1.AgentFrame) error {
+			return os.WriteFile(ack, []byte("ack"), 0o600)
+		})
+	}()
+	select {
+	case <-platform.updateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("terminal platform update did not start")
+	}
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- manager.StopAll(context.Background(), 400*time.Millisecond)
+	}()
+	observeUntil := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(observeUntil) {
+		if _, err := os.Stat(signals); err == nil {
+			t.Fatal("StopAll signaled draining worker before FinalStatus acknowledgement")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat worker signals: %v", err)
+		}
+		select {
+		case err := <-stopDone:
+			t.Fatalf("StopAll returned before FinalStatus acknowledgement: %v", err)
+		default:
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	releaseUpdate()
+	select {
+	case err := <-finalDone:
+		if err != nil {
+			t.Fatalf("HandleWorkerFrame final: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FinalStatus acknowledgement did not complete")
+	}
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("StopAll: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("StopAll did not observe ACK-driven natural worker exit")
+	}
+	if _, err := os.Stat(signals); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("draining worker received a stop signal, marker error = %v", err)
+	}
+	if got := manager.ShutdownSummary().ForcedStops; got != 0 {
+		t.Fatalf("forced stops = %d, want ACK-driven natural exit", got)
 	}
 }
 
@@ -1076,11 +1505,118 @@ func (s *fakeWorkerStarter) StartSessionWorker(ctx context.Context, sessionID st
 	return &ManagedWorker{SessionID: sessionID}, nil
 }
 
+type workerExitWait struct {
+	sessionID string
+	timeout   time.Duration
+}
+
+type blockingWorkerLifecycle struct {
+	fakeWorkerStarter
+	waitStarted chan workerExitWait
+	releaseWait chan struct{}
+	mu          sync.Mutex
+	stopCalls   int
+}
+
+func (m *blockingWorkerLifecycle) StopSessionWorker(context.Context, string, time.Duration) error {
+	m.mu.Lock()
+	m.stopCalls++
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *blockingWorkerLifecycle) WaitSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error {
+	if m.waitStarted != nil {
+		select {
+		case m.waitStarted <- workerExitWait{sessionID: sessionID, timeout: timeout}:
+		default:
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return context.DeadlineExceeded
+	case <-m.releaseWait:
+		return nil
+	}
+}
+
+func (m *blockingWorkerLifecycle) stopCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopCalls
+}
+
+func wireWorkerUnaryResponse(agent *Agent, sender *fakeWorkerSender, response *anypb.Any) {
+	sender.onSend = func(sessionID string, frame *rwv1.AgentFrame) {
+		call := frame.GetPlatformCall()
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_PlatformCallResult{PlatformCallResult: &rwv1.PlatformCallResult{
+					CallId:   call.GetCallId(),
+					Ok:       true,
+					Response: response,
+				}},
+			}, nil)
+		}()
+	}
+}
+
 type agentFinalPlatform struct {
 	mu      sync.Mutex
 	methods []string
 	updates []*portfoliov1.UpdateSessionRequest
 	saveErr error
+}
+
+type finalStatusDrainProbe struct {
+	mu                sync.Mutex
+	markedSession     string
+	updateBeforeDrain bool
+}
+
+func (p *finalStatusDrainProbe) StopSessionWorker(context.Context, string, time.Duration) error {
+	return nil
+}
+
+func (p *finalStatusDrainProbe) MarkSessionWorkerDraining(sessionID string) {
+	p.mu.Lock()
+	p.markedSession = sessionID
+	p.mu.Unlock()
+}
+
+func (p *finalStatusDrainProbe) InvokePlatformAny(_ context.Context, method string, _ *anypb.Any, _ time.Duration) (*anypb.Any, error) {
+	if method != "portfolio.UpdateSession" {
+		return nil, errors.New("unexpected method: " + method)
+	}
+	p.mu.Lock()
+	p.updateBeforeDrain = p.markedSession == ""
+	p.mu.Unlock()
+	return anypb.New(&portfoliov1.UpdateSessionResponse{})
+}
+
+func (p *finalStatusDrainProbe) snapshot() (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.markedSession, p.updateBeforeDrain
+}
+
+type blockingFinalUpdatePlatform struct {
+	updateOnce    sync.Once
+	updateStarted chan struct{}
+	releaseUpdate chan struct{}
+}
+
+func (p *blockingFinalUpdatePlatform) InvokePlatformAny(_ context.Context, method string, _ *anypb.Any, _ time.Duration) (*anypb.Any, error) {
+	if method != "portfolio.UpdateSession" {
+		return nil, errors.New("unexpected method: " + method)
+	}
+	p.updateOnce.Do(func() { close(p.updateStarted) })
+	<-p.releaseUpdate
+	return anypb.New(&portfoliov1.UpdateSessionResponse{})
 }
 
 type blockingRestartPlatform struct {
