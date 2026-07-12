@@ -7,6 +7,6 @@ import (
 	"syscall"
 )
 
-func requestWorkerStop(process *os.Process) error {
-	return process.Signal(syscall.SIGTERM)
+func requestWorkerStop(process *os.Process) (bool, error) {
+	return false, process.Signal(syscall.SIGTERM)
 }

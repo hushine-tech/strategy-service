@@ -121,3 +121,29 @@ func TestWriteCoverageFinalizationRejectsUnapprovedStatusText(t *testing.T) {
 		t.Fatal("WriteCoverageFinalization accepted arbitrary worker status text")
 	}
 }
+
+func TestWriteCoverageFinalizationRejectsInconsistentFacts(t *testing.T) {
+	validTime := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, record := range []runtimeagent.CoverageFinalization{
+		{
+			SchemaVersion: 1, RuntimeID: "rt-1", BootID: "boot-1",
+			State: "running", WorkerShutdown: "pending", ForcedWorkers: 1, GoSnapshot: "pending",
+		},
+		{
+			SchemaVersion: 1, RuntimeID: "rt-1", BootID: "boot-1",
+			State: "incomplete", WorkerShutdown: "forced", ForcedWorkers: 0, GoSnapshot: "ok", CompletedAt: validTime,
+		},
+		{
+			SchemaVersion: 1, RuntimeID: "rt-1", BootID: "boot-1",
+			State: "incomplete", WorkerShutdown: "ok", ForcedWorkers: 1, GoSnapshot: "ok", CompletedAt: validTime,
+		},
+		{
+			SchemaVersion: 1, RuntimeID: "rt-1", BootID: "boot-1",
+			State: "incomplete", WorkerShutdown: "error", GoSnapshot: "ok", CompletedAt: "not-a-time",
+		},
+	} {
+		if err := runtimeagent.WriteCoverageFinalization(t.TempDir(), record); err == nil {
+			t.Fatalf("WriteCoverageFinalization accepted inconsistent record: %+v", record)
+		}
+	}
+}

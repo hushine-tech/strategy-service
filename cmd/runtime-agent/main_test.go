@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -167,6 +168,62 @@ func TestPrepareRuntimeCoverageRootDisabled(t *testing.T) {
 	}
 }
 
+func TestRunInvalidatesStaleCoverageMarkerBeforeCredentialFailure(t *testing.T) {
+	dir := t.TempDir()
+	coverageRoot := filepath.Join(dir, "coverage")
+	if err := os.MkdirAll(coverageRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := runtimeagent.CoverageFinalization{
+		SchemaVersion:  1,
+		RuntimeID:      "runtime-early",
+		BootID:         "stale-boot",
+		State:          runtimeagent.CoverageFinalizationComplete,
+		WorkerShutdown: runtimeagent.CoverageFinalizationOK,
+		GoSnapshot:     runtimeagent.CoverageFinalizationOK,
+		CompletedAt:    time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := runtimeagent.WriteCoverageFinalization(coverageRoot, stale); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "config.yaml")
+	config := fmt.Sprintf(`dependencies:
+  runtime_channel_grpc: "127.0.0.1:50055"
+runtime:
+  source: "hosted"
+  runtime_id: "runtime-early"
+  name: "early failure"
+  credential_path: %q
+log:
+  output_dir: %q
+`, filepath.Join(dir, "missing.cred"), filepath.Join(dir, "logs"))
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HUSHINE_RUNTIME_COVERAGE_DIR", coverageRoot)
+	for _, name := range []string{
+		"RUNTIME_CHANNEL_GRPC_ADDR", "DEPENDENCIES_RUNTIME_CHANNEL_GRPC", "RUNTIME_SOURCE",
+		"RUNTIME_RUNTIME_ID", "RUNTIME_NAME", "RUNTIME_CREDENTIAL_PATH",
+	} {
+		t.Setenv(name, "")
+	}
+
+	if exitCode := run([]string{"--config", configPath}); exitCode != 1 {
+		t.Fatalf("run exit code = %d, want credential failure", exitCode)
+	}
+	body, err := os.ReadFile(filepath.Join(coverageRoot, runtimeagent.CoverageFinalizationFile))
+	if err != nil {
+		t.Fatalf("read running marker: %v", err)
+	}
+	var marker runtimeagent.CoverageFinalization
+	if err := json.Unmarshal(body, &marker); err != nil {
+		t.Fatalf("decode running marker: %v", err)
+	}
+	if marker.State != runtimeagent.CoverageFinalizationRunning || marker.BootID == stale.BootID {
+		t.Fatalf("marker after early failure = %+v, want fresh running boot", marker)
+	}
+}
+
 func TestShutdownStopsActiveWorkersBeforeBoundedGRPCStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan string, 4)
@@ -242,7 +299,9 @@ func TestShutdownFinalizesCoverageAfterWorkersAndSnapshot(t *testing.T) {
 	if !slices.Equal(events, want) {
 		t.Fatalf("events = %v, want %v", events, want)
 	}
-	if final.State != "complete" || final.WorkerShutdown != "ok" || final.GoSnapshot != "ok" || final.ForcedWorkers != 0 {
+	if final.SchemaVersion != 1 || final.RuntimeID != "rt-1" || final.BootID != "boot-1" ||
+		final.State != "complete" || final.WorkerShutdown != "ok" || final.GoSnapshot != "ok" ||
+		final.ForcedWorkers != 0 || final.CompletedAt != "2026-07-12T01:02:03Z" {
 		t.Fatalf("finalization = %+v", final)
 	}
 }
@@ -252,10 +311,13 @@ func TestShutdownMarksCoverageIncompleteForForcedWorkerOrSnapshotFailure(t *test
 		name          string
 		workers       *orderedShutdownWorkers
 		snapshotError error
+		workerStatus  string
+		forcedWorkers int
+		goStatus      string
 	}{
-		{name: "forced worker", workers: &orderedShutdownWorkers{forced: 1}},
-		{name: "worker stop error", workers: &orderedShutdownWorkers{stopErr: errors.New("stop failed")}},
-		{name: "snapshot error", workers: &orderedShutdownWorkers{}, snapshotError: errors.New("snapshot failed")},
+		{name: "forced worker", workers: &orderedShutdownWorkers{forced: 1}, workerStatus: "forced", forcedWorkers: 1, goStatus: "ok"},
+		{name: "worker stop error", workers: &orderedShutdownWorkers{stopErr: errors.New("stop failed")}, workerStatus: "error", goStatus: "ok"},
+		{name: "snapshot error", workers: &orderedShutdownWorkers{}, snapshotError: errors.New("snapshot failed"), workerStatus: "ok", goStatus: "error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -279,7 +341,9 @@ func TestShutdownMarksCoverageIncompleteForForcedWorkerOrSnapshotFailure(t *test
 			case <-time.After(time.Second):
 				t.Fatal("shutdown did not finish")
 			}
-			if final.State != "incomplete" {
+			if final.SchemaVersion != 1 || final.RuntimeID != "rt-1" || final.BootID != "boot-1" ||
+				final.State != "incomplete" || final.WorkerShutdown != tc.workerStatus ||
+				final.ForcedWorkers != tc.forcedWorkers || final.GoSnapshot != tc.goStatus || final.CompletedAt == "" {
 				t.Fatalf("finalization = %+v, want incomplete", final)
 			}
 		})

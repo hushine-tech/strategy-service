@@ -48,13 +48,22 @@ func run(args []string) int {
 	if strings.TrimSpace(*runtimeChannelAddr) != "" {
 		cfg.RuntimeChannelAddr = strings.TrimSpace(*runtimeChannelAddr)
 	}
-	if cfg.RuntimeChannelAddr == "" {
-		fmt.Fprintln(os.Stderr, "runtime-channel address is required")
-		return 1
-	}
 	coverageRoot, err := prepareRuntimeCoverageRoot(os.Getenv("HUSHINE_RUNTIME_COVERAGE_DIR"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "runtime coverage: %v\n", err)
+		return 1
+	}
+	identity := runtimeIdentityFromConfig(cfg, *userID)
+	coverageBootID := ""
+	if coverageRoot != "" {
+		coverageBootID, err = runtimeagent.InitializeCoverageFinalization(coverageRoot, identity.RuntimeID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "initialize runtime coverage finalization: %v\n", err)
+			return 1
+		}
+	}
+	if cfg.RuntimeChannelAddr == "" {
+		fmt.Fprintln(os.Stderr, "runtime-channel address is required")
 		return 1
 	}
 
@@ -100,7 +109,6 @@ func run(args []string) int {
 		},
 	})
 
-	identity := runtimeIdentityFromConfig(cfg, *userID)
 	var credential *runtimeagent.RuntimeCredential
 	if identity.Source != "bare" {
 		credential, err = runtimeagent.LoadRuntimeCredential(cfg.CredentialPath)
@@ -116,7 +124,7 @@ func run(args []string) int {
 		return 1
 	}
 
-	return runAgent(ctx, cfg, identity, credential, workerManager, workerListener, dialOptions, coverageRoot)
+	return runAgent(ctx, cfg, identity, credential, workerManager, workerListener, dialOptions, coverageRoot, coverageBootID)
 }
 
 func runAgent(
@@ -128,19 +136,10 @@ func runAgent(
 	workerListener net.Listener,
 	dialOptions []grpc.DialOption,
 	coverageRoot string,
+	coverageBootID string,
 ) int {
 	agentCtx, cancelAgent := context.WithCancel(ctx)
 	defer cancelAgent()
-	coverageBootID := ""
-	if coverageRoot != "" {
-		var err error
-		coverageBootID, err = runtimeagent.InitializeCoverageFinalization(coverageRoot, identity.RuntimeID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "initialize runtime coverage finalization: %v\n", err)
-			return 1
-		}
-	}
-
 	var agent *runtimeagent.Agent
 	runtimeClient := runtimeagent.NewRuntimeChannelClient(runtimeagent.RuntimeChannelClientConfig{
 		Address:          cfg.RuntimeChannelAddr,

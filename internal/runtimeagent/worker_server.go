@@ -22,6 +22,7 @@ type SessionRegistry struct {
 type WorkerIdentity struct {
 	SessionID string
 	PID       int64
+	token     string
 }
 
 func NewSessionRegistry() *SessionRegistry {
@@ -73,6 +74,7 @@ func (r *SessionRegistry) AdmitWorker(sessionID string, token string, pid int64)
 	r.active[sessionID] = WorkerIdentity{
 		SessionID: sessionID,
 		PID:       pid,
+		token:     token,
 	}
 	return nil
 }
@@ -97,14 +99,14 @@ func (r *SessionRegistry) AliasWorkerSession(existingSessionID string, sessionID
 		return ErrWorkerAlreadyExists
 	}
 	if existing, ok := r.active[sessionID]; ok {
-		if existing.PID == worker.PID && existing.SessionID == worker.SessionID {
+		if sameWorkerIdentity(existing, worker) {
 			return nil
 		}
 		return ErrWorkerAlreadyExists
 	}
 	worker.SessionID = sessionID
 	for key, active := range r.active {
-		if active.PID == worker.PID && (active.SessionID == existingSessionID || key == existingSessionID) {
+		if sameWorkerIdentity(active, worker) {
 			r.active[key] = worker
 		}
 	}
@@ -127,7 +129,7 @@ func (r *SessionRegistry) ForgetWorker(sessionID string) {
 		return
 	}
 	for key, active := range r.active {
-		if active.PID == worker.PID && active.SessionID == worker.SessionID {
+		if sameWorkerIdentity(active, worker) {
 			delete(r.active, key)
 		}
 	}
@@ -149,10 +151,14 @@ func (r *SessionRegistry) ForgetWorkerIdentity(sessionID string, pid int64, toke
 		return
 	}
 	for key, active := range r.active {
-		if active.PID == pid {
+		if active.PID == pid && token != "" && active.token == token {
 			delete(r.active, key)
 		}
 	}
+}
+
+func sameWorkerIdentity(left, right WorkerIdentity) bool {
+	return left.PID == right.PID && left.token != "" && left.token == right.token
 }
 
 func (r *SessionRegistry) ActiveWorker(sessionID string) (WorkerIdentity, bool) {

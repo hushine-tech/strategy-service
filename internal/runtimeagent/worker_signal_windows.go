@@ -4,6 +4,6 @@ package runtimeagent
 
 import "os"
 
-func requestWorkerStop(process *os.Process) error {
-	return process.Kill()
+func requestWorkerStop(process *os.Process) (bool, error) {
+	return true, process.Kill()
 }

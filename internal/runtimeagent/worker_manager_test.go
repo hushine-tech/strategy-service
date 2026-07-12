@@ -298,8 +298,19 @@ func TestStopSessionWorkerCancellationForceKillsAndReapsWorker(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatalf("canceled stop returned after %v, want no more than 5s", elapsed)
 	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- worker.Wait() }()
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker was not asynchronously reaped after canceled stop")
+	}
 	if worker.Cmd.ProcessState == nil {
-		t.Fatal("worker process was not reaped after canceled stop")
+		t.Fatal("worker process was not asynchronously reaped after canceled stop")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for manager.findWorker(worker.SessionID) != nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
 	if got := manager.findWorker(worker.SessionID); got != nil {
 		t.Fatalf("worker remained active after canceled stop: %+v", got)
@@ -330,6 +341,35 @@ func TestStopAllDeduplicatesAliasedWorkers(t *testing.T) {
 	}
 	if got := readStopCount(t, counter); got != 1 {
 		t.Fatalf("stop count=%d want 1", got)
+	}
+}
+
+func TestStopAllDoesNotDeduplicateDifferentWorkersWithReusedPID(t *testing.T) {
+	manager := NewWorkerManager(WorkerManagerConfig{})
+	process := &os.Process{Pid: 424242}
+	oldWorker := &ManagedWorker{
+		SessionID: "sess-old-pid",
+		Spec:      WorkerStartSpec{Token: "old-token"},
+		Cmd:       &exec.Cmd{Process: process},
+	}
+	replacement := &ManagedWorker{
+		SessionID: "sess-new-pid",
+		Spec:      WorkerStartSpec{Token: "new-token"},
+		Cmd:       &exec.Cmd{Process: process},
+	}
+	manager.active[oldWorker.SessionID] = oldWorker
+	manager.active[replacement.SessionID] = replacement
+	stopped := make(chan *ManagedWorker, 2)
+	manager.stopWorker = func(context.Context, *ManagedWorker, time.Duration) error {
+		stopped <- oldWorker
+		return nil
+	}
+
+	if err := manager.StopAll(context.Background(), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(stopped); got != 2 {
+		t.Fatalf("stop attempts = %d, want both same-PID generations", got)
 	}
 }
 
@@ -404,6 +444,99 @@ func TestStopAllClosesAdmissionAndDrainsInFlightStart(t *testing.T) {
 	}
 }
 
+func TestStopAllTimeoutPreventsAdmittedStartFromLaunchingLate(t *testing.T) {
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_late_start", "import time\ntime.sleep(30)\n")
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_late_start",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+
+	startEntered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	buildEnvironment := manager.buildEnvironment
+	manager.buildEnvironment = func(cfg WorkerManagerConfig, spec WorkerStartSpec, extraEnv []string, cleanup workerSessionCleanup) ([]string, string, string, error) {
+		close(startEntered)
+		<-releaseStart
+		return buildEnvironment(cfg, spec, extraEnv, cleanup)
+	}
+
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := manager.StartSessionWorker(context.Background(), "sess-late", nil)
+		startDone <- err
+	}()
+	select {
+	case <-startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight worker start did not reach blocking seam")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if err := manager.StopAll(ctx, time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StopAll error = %v, want context deadline", err)
+	}
+	close(releaseStart)
+	select {
+	case err := <-startDone:
+		if !errors.Is(err, ErrWorkerManagerStopping) {
+			t.Fatalf("late StartSessionWorker error = %v, want ErrWorkerManagerStopping", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late StartSessionWorker did not abort")
+	}
+	if worker := manager.findWorker("sess-late"); worker != nil {
+		t.Fatalf("late worker launched after StopAll returned: %+v", worker)
+	}
+}
+
+func TestStopAllUsesOneSharedDeadlineForBlockedCleanup(t *testing.T) {
+	manager := NewWorkerManager(WorkerManagerConfig{})
+	cleanupDone := make([]chan error, 0, 3)
+	for i := 0; i < 3; i++ {
+		cmd := exec.Command("python3", "-c", "pass")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start short process %d: %v", i, err)
+		}
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("wait short process %d: %v", i, err)
+		}
+		processExited := make(chan struct{})
+		close(processExited)
+		done := make(chan error)
+		cleanupDone = append(cleanupDone, done)
+		sessionID := fmt.Sprintf("sess-shared-deadline-%d", i)
+		manager.active[sessionID] = &ManagedWorker{
+			SessionID:     sessionID,
+			Spec:          WorkerStartSpec{Token: fmt.Sprintf("token-%d", i)},
+			Cmd:           cmd,
+			processExited: processExited,
+			done:          done,
+		}
+	}
+	defer func() {
+		for _, done := range cleanupDone {
+			close(done)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := manager.StopAll(ctx, 200*time.Millisecond)
+	elapsed := time.Since(started)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StopAll error = %v, want shared context deadline", err)
+	}
+	if elapsed > 350*time.Millisecond {
+		t.Fatalf("StopAll elapsed = %v, want one shared deadline rather than per-worker waits", elapsed)
+	}
+}
+
 func TestStopSessionWorkerBoundsPostExitCleanup(t *testing.T) {
 	requirePOSIXSignals(t)
 	dir := t.TempDir()
@@ -446,18 +579,62 @@ func TestStopSessionWorkerBoundsPostExitCleanup(t *testing.T) {
 	}
 	select {
 	case err := <-stopDone:
-		close(releaseCleanup)
 		if !errors.Is(err, ErrWorkerCleanupPending) {
 			t.Fatalf("StopSessionWorker error = %v, want ErrWorkerCleanupPending", err)
 		}
 		if elapsed := time.Since(started); elapsed > time.Second {
 			t.Fatalf("StopSessionWorker returned after %v, want bounded cleanup wait", elapsed)
 		}
+		assertWorkerSessionReserved(t, manager, worker.SessionID)
+		close(releaseCleanup)
 	case <-time.After(time.Second):
 		close(releaseCleanup)
 		t.Fatal("StopSessionWorker blocked beyond its cleanup bound")
 	}
-	assertWorkerSessionReserved(t, manager, worker.SessionID)
+}
+
+func TestForgetManagedWorkerPreservesDifferentGenerationWithReusedPID(t *testing.T) {
+	manager := NewWorkerManager(WorkerManagerConfig{})
+	process := &os.Process{Pid: 424242}
+	oldWorker := &ManagedWorker{
+		SessionID: "sess-old",
+		Spec:      WorkerStartSpec{Token: "old-token"},
+		Cmd:       &exec.Cmd{Process: process},
+	}
+	replacement := &ManagedWorker{
+		SessionID: "sess-new",
+		Spec:      WorkerStartSpec{Token: "new-token"},
+		Cmd:       &exec.Cmd{Process: process},
+	}
+	manager.active[oldWorker.SessionID] = oldWorker
+	manager.active[replacement.SessionID] = replacement
+
+	manager.forgetWorker(oldWorker)
+
+	if got := manager.active[replacement.SessionID]; got != replacement {
+		t.Fatalf("replacement worker = %+v, want same-PID new generation preserved", got)
+	}
+}
+
+func TestFindWorkerRejectsSamePIDWithDifferentToken(t *testing.T) {
+	manager := NewWorkerManager(WorkerManagerConfig{})
+	process := &os.Process{Pid: 424242}
+	oldWorker := &ManagedWorker{
+		SessionID: "sess-old",
+		Spec:      WorkerStartSpec{Token: "old-token"},
+		Cmd:       &exec.Cmd{Process: process},
+	}
+	manager.active[oldWorker.SessionID] = oldWorker
+	if err := manager.registry.ExpectWorker("sess-new", "new-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.registry.AdmitWorker("sess-new", "new-token", 424242); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := manager.findWorker("sess-new"); got != nil {
+		t.Fatalf("findWorker returned old generation: %+v", got)
+	}
 }
 
 func TestStopAllStopsSnapshottedWorkerAfterSessionReplacement(t *testing.T) {

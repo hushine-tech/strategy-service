@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime/coverage"
 	"strings"
+	"time"
 )
 
 const (
@@ -136,13 +137,16 @@ func validateCoverageFinalization(record CoverageFinalization) error {
 		return fmt.Errorf("coverage finalization forced_workers cannot be negative")
 	}
 	if record.State == CoverageFinalizationRunning {
-		if record.WorkerShutdown != CoverageFinalizationPending || record.GoSnapshot != CoverageFinalizationPending || record.CompletedAt != "" {
+		if record.WorkerShutdown != CoverageFinalizationPending || record.ForcedWorkers != 0 || record.GoSnapshot != CoverageFinalizationPending || record.CompletedAt != "" {
 			return fmt.Errorf("running coverage finalization must remain pending")
 		}
 		return nil
 	}
 	if record.CompletedAt == "" {
 		return fmt.Errorf("completed_at is required for final coverage state")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, record.CompletedAt); err != nil {
+		return fmt.Errorf("completed_at must be RFC3339")
 	}
 	switch record.WorkerShutdown {
 	case CoverageFinalizationOK, CoverageFinalizationError, CoverageFinalizationForced:
@@ -153,6 +157,12 @@ func validateCoverageFinalization(record CoverageFinalization) error {
 	case CoverageFinalizationOK, CoverageFinalizationError:
 	default:
 		return fmt.Errorf("invalid coverage finalization go_snapshot")
+	}
+	if record.WorkerShutdown == CoverageFinalizationForced && record.ForcedWorkers == 0 {
+		return fmt.Errorf("forced worker shutdown requires a positive forced_workers count")
+	}
+	if record.WorkerShutdown == CoverageFinalizationOK && record.ForcedWorkers != 0 {
+		return fmt.Errorf("successful worker shutdown requires zero forced workers")
 	}
 	completeFacts := record.WorkerShutdown == CoverageFinalizationOK && record.ForcedWorkers == 0 && record.GoSnapshot == CoverageFinalizationOK
 	if record.State == CoverageFinalizationComplete && !completeFacts {
