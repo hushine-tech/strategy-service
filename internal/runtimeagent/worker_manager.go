@@ -367,6 +367,7 @@ func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWo
 
 func (m *WorkerManager) runManagedWorkerStop(ctx context.Context, worker *ManagedWorker, timeout time.Duration, allowDrainGrace bool) error {
 	sessionID := worker.SessionID
+	stopTimeout := timeout
 	var waitDone <-chan error
 	if allowDrainGrace {
 		waitDone = m.beginWorkerStopWait(sessionID, worker)
@@ -379,6 +380,7 @@ func (m *WorkerManager) runManagedWorkerStop(ctx context.Context, worker *Manage
 			graceTimer.Stop()
 		case <-graceTimer.C:
 		}
+		stopTimeout = drainingSignalTimeout(ctx, timeout)
 	}
 	initialStopForced, err := requestWorkerStop(worker.Cmd.Process)
 	if err == nil && initialStopForced {
@@ -397,8 +399,8 @@ func (m *WorkerManager) runManagedWorkerStop(ctx context.Context, worker *Manage
 	if waitDone == nil {
 		waitDone = m.beginWorkerStopWait(sessionID, worker)
 	}
-	deadline := time.Now().Add(timeout)
-	timer := time.NewTimer(timeout)
+	deadline := time.Now().Add(stopTimeout)
+	timer := time.NewTimer(stopTimeout)
 	defer timer.Stop()
 	processExited := worker.processExitedSignal()
 	if processExited == nil {
@@ -416,6 +418,27 @@ func (m *WorkerManager) runManagedWorkerStop(ctx context.Context, worker *Manage
 	case waitErr := <-waitDone:
 		return waitErr
 	}
+}
+
+// drainingSignalTimeout leaves half of the shared shutdown time for force,
+// process reap, and managed cleanup after the graceful signal phase.
+func drainingSignalTimeout(ctx context.Context, configured time.Duration) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return configured
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return time.Nanosecond
+	}
+	signalBudget := remaining / 2
+	if signalBudget <= 0 {
+		signalBudget = time.Nanosecond
+	}
+	if signalBudget < configured {
+		return signalBudget
+	}
+	return configured
 }
 
 func (m *WorkerManager) beginWorkerStopWait(sessionID string, worker *ManagedWorker) <-chan error {

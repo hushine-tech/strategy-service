@@ -435,6 +435,74 @@ func TestDrainingWorkerTimeoutFallsBackToSignalAndForce(t *testing.T) {
 	}
 }
 
+func TestDrainingWorkerProductionDeadlineReservesForceReapAndCleanup(t *testing.T) {
+	requirePOSIXSignals(t)
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	writePythonWorkerModule(t, dir, "worker_draining_deadline", fmt.Sprintf(`
+import signal
+import time
+from pathlib import Path
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path(%q).write_text("ready", encoding="utf-8")
+while True:
+    time.sleep(0.05)
+`, ready))
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_draining_deadline",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+	cleanupDone := make(chan struct{})
+	manager.cleanupSessionRoot = func(path string) error {
+		time.Sleep(50 * time.Millisecond)
+		err := os.RemoveAll(path)
+		close(cleanupDone)
+		return err
+	}
+	worker, err := manager.StartSessionWorker(context.Background(), "draining-production-deadline", nil)
+	if err != nil {
+		t.Fatalf("StartSessionWorker: %v", err)
+	}
+	t.Cleanup(func() {
+		if worker.Cmd != nil && worker.Cmd.Process != nil {
+			_ = worker.Cmd.Process.Kill()
+		}
+		_ = worker.Wait()
+	})
+	waitForWorkerFile(t, ready)
+	manager.MarkSessionWorkerDraining(worker.SessionID)
+
+	workerTimeout := 300 * time.Millisecond
+	sharedTimeout := 2 * workerTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
+	defer cancel()
+	sharedDeadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("shared shutdown context has no deadline")
+	}
+	if err := manager.StopAll(ctx, workerTimeout); err != nil {
+		t.Fatalf("StopAll: %v", err)
+	}
+	if !time.Now().Before(sharedDeadline) {
+		t.Fatal("StopAll exhausted the shared shutdown deadline before force/reap/cleanup")
+	}
+	select {
+	case <-cleanupDone:
+	default:
+		t.Fatal("StopAll returned before managed cleanup completed")
+	}
+	if worker.Cmd.ProcessState == nil {
+		t.Fatal("forced draining worker was not reaped")
+	}
+	if got := manager.ShutdownSummary().ForcedStops; got != 1 {
+		t.Fatalf("forced stops = %d, want one", got)
+	}
+}
+
 func TestStopSessionWorkerCancellationForceKillsAndReapsWorker(t *testing.T) {
 	requirePOSIXSignals(t)
 	manager, worker := startSignalIgnoringWorker(t)
