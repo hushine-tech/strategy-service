@@ -65,7 +65,6 @@ func (s *WorkerIPCServer) Connect(stream grpc.BidiStreamingServer[rwv1.WorkerFra
 		}
 		close(outbound)
 		s.mu.Unlock()
-		s.registry.ForgetWorkerIdentity(sessionID, hello.GetPid(), hello.GetToken())
 	}()
 
 	sendErr := make(chan error, 1)

@@ -2,6 +2,8 @@ package runtimeagent
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -158,4 +160,64 @@ func TestWorkerIPCServerAliasesRealSessionID(t *testing.T) {
 	if frame.GetStopSession().GetSessionId() != "sess-real" {
 		t.Fatalf("stop session id = %q", frame.GetStopSession().GetSessionId())
 	}
+}
+
+func TestWorkerIPCDisconnectPreservesManagerLifecycleReservation(t *testing.T) {
+	manager := NewWorkerManager(WorkerManagerConfig{})
+	if err := manager.registry.ExpectWorker("sess-owned", "token-owned"); err != nil {
+		t.Fatal(err)
+	}
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	workerServer := NewWorkerIPCServer(manager.registry, nil)
+	rwv1.RegisterRuntimeWorkerAgentServer(server, workerServer)
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(
+		ctx,
+		"bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial worker ipc: %v", err)
+	}
+	defer conn.Close()
+	stream, err := rwv1.NewRuntimeWorkerAgentClient(conn).Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if err := stream.Send(&rwv1.WorkerFrame{
+		Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+			SessionId: "sess-owned", Token: "token-owned", Pid: 123,
+		}},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, ok := manager.registry.ActiveWorker("sess-owned"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("worker was not admitted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Recv after CloseSend = %v, want EOF", err)
+	}
+	if identity, ok := manager.registry.ActiveWorker("sess-owned"); !ok || identity.PID != 123 {
+		t.Fatalf("disconnect released manager lifecycle reservation: (%+v, %v)", identity, ok)
+	}
+	if _, err := manager.PrepareSessionWorker("sess-owned"); !errors.Is(err, ErrWorkerAlreadyExists) {
+		t.Fatalf("replacement reservation error = %v, want ErrWorkerAlreadyExists", err)
+	}
+	manager.registry.ForgetWorkerIdentity("sess-owned", 123, "token-owned")
 }

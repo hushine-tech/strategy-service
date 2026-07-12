@@ -60,6 +60,7 @@ type WorkerManager struct {
 
 	cleanupSessionRoot workerSessionCleanup
 	buildEnvironment   workerEnvironmentBuilder
+	startCommand       func(*exec.Cmd) error
 	cleanupFailures    map[string]error
 	stopWorker         managedWorkerStop
 }
@@ -99,6 +100,7 @@ func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
 		active:             map[string]*ManagedWorker{},
 		cleanupSessionRoot: os.RemoveAll,
 		buildEnvironment:   buildWorkerEnvironmentWithCleanup,
+		startCommand:       func(cmd *exec.Cmd) error { return cmd.Start() },
 		cleanupFailures:    map[string]error{},
 	}
 	manager.stopWorker = manager.stopManagedWorker
@@ -155,7 +157,7 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 	}
 	select {
 	case <-ctx.Done():
-		m.registry.ForgetWorker(sessionID)
+		m.registry.ForgetWorkerIdentity(spec.SessionID, 0, spec.Token)
 		return nil, ctx.Err()
 	default:
 	}
@@ -166,7 +168,7 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 		if hasWorkerSessionCleanupError(err) {
 			m.retainCleanupFailure(spec.SessionID, err)
 		} else {
-			m.registry.ForgetWorker(sessionID)
+			m.registry.ForgetWorkerIdentity(spec.SessionID, 0, spec.Token)
 		}
 		return nil, err
 	}
@@ -187,21 +189,37 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 		done:          done,
 	}
 	m.mu.Lock()
-	abortErr := error(nil)
-	if m.abortStarts {
-		abortErr = ErrWorkerManagerStopping
-	} else if err := ctx.Err(); err != nil {
-		abortErr = err
-	}
+	abortErr := m.workerStartAbortError(ctx)
+	m.mu.Unlock()
 	var startErr error
 	if abortErr == nil {
-		startErr = cmd.Start()
-		if startErr == nil {
+		startErr = m.startCommand(cmd)
+	}
+	if abortErr == nil && startErr == nil {
+		m.mu.Lock()
+		abortErr = m.workerStartAbortError(ctx)
+		if abortErr == nil {
 			m.active[spec.SessionID] = worker
 		}
+		m.mu.Unlock()
 	}
-	m.mu.Unlock()
 	if abortErr != nil {
+		var terminateErr error
+		if cmd.Process != nil {
+			m.recordForcedStop(worker)
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				terminateErr = fmt.Errorf("kill aborted session worker %s: %w", spec.SessionID, err)
+			} else {
+				_ = cmd.Wait()
+			}
+		}
+		if terminateErr != nil {
+			m.mu.Lock()
+			m.active[spec.SessionID] = worker
+			m.mu.Unlock()
+			m.watchStartedWorker(worker, sessionRoot, processExited, done)
+			return nil, errors.Join(abortErr, terminateErr)
+		}
 		cleanupErr := runWorkerSessionCleanup(m.cleanupSessionRoot, sessionRoot)
 		err := errors.Join(abortErr, cleanupWorkerSessionError(sessionRoot, cleanupErr))
 		if cleanupErr == nil {
@@ -224,23 +242,27 @@ func (m *WorkerManager) StartSessionWorker(ctx context.Context, sessionID string
 		}
 		return nil, startErr
 	}
+	m.watchStartedWorker(worker, sessionRoot, processExited, done)
+	return worker, nil
+}
+
+func (m *WorkerManager) watchStartedWorker(worker *ManagedWorker, sessionRoot string, processExited chan struct{}, done chan error) {
 	go func() {
-		waitErr := cmd.Wait()
+		waitErr := worker.Cmd.Wait()
 		worker.processExitErr = waitErr
 		close(processExited)
 		cleanupErr := runWorkerSessionCleanup(m.cleanupSessionRoot, sessionRoot)
 		waitErr = errors.Join(waitErr, cleanupWorkerSessionError(sessionRoot, cleanupErr))
 		if cleanupErr == nil {
-			m.clearCleanupFailureForWorker(spec.SessionID, worker)
-			m.registry.ForgetWorkerIdentity(spec.SessionID, managedWorkerPID(worker), spec.Token)
+			m.clearCleanupFailureForWorker(worker.Spec.SessionID, worker)
+			m.registry.ForgetWorkerIdentity(worker.Spec.SessionID, managedWorkerPID(worker), worker.Spec.Token)
 			m.forgetWorker(worker)
 		} else {
-			m.retainCleanupFailureForWorker(spec.SessionID, worker, waitErr)
+			m.retainCleanupFailureForWorker(worker.Spec.SessionID, worker, waitErr)
 		}
 		done <- waitErr
 		close(done)
 	}()
-	return worker, nil
 }
 
 func (m *WorkerManager) StopSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error {
@@ -289,7 +311,7 @@ func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWo
 	}
 	waitDone := make(chan error, 1)
 	go func() {
-		waitDone <- worker.Wait()
+		waitDone <- m.finishWorkerStop(sessionID, worker, worker.Wait())
 	}()
 	deadline := time.Now().Add(timeout)
 	timer := time.NewTimer(timeout)
@@ -308,7 +330,7 @@ func (m *WorkerManager) stopManagedWorker(ctx context.Context, worker *ManagedWo
 	case <-processExited:
 		return m.waitForWorkerCleanup(ctx, sessionID, worker, waitDone, time.Until(deadline))
 	case waitErr := <-waitDone:
-		return m.finishWorkerStop(sessionID, worker, waitErr)
+		return waitErr
 	}
 }
 
@@ -321,7 +343,7 @@ func (m *WorkerManager) forceStopWorker(ctx context.Context, sessionID string, w
 	if processExited == nil {
 		select {
 		case waitErr := <-waitDone:
-			return m.finishWorkerStop(sessionID, worker, waitErr)
+			return waitErr
 		case <-ctx.Done():
 			return fmt.Errorf("reap session worker %s after kill: %w", sessionID, ctx.Err())
 		}
@@ -381,7 +403,7 @@ func (m *WorkerManager) waitForWorkerCleanup(ctx context.Context, sessionID stri
 	if timeout < 0 {
 		select {
 		case waitErr := <-waitDone:
-			return m.finishWorkerStop(sessionID, worker, waitErr)
+			return waitErr
 		case <-ctx.Done():
 			return errors.Join(ctx.Err(), fmt.Errorf("session worker %s cleanup: %w", sessionID, ErrWorkerCleanupPending))
 		}
@@ -389,7 +411,7 @@ func (m *WorkerManager) waitForWorkerCleanup(ctx context.Context, sessionID stri
 	if timeout <= 0 {
 		select {
 		case waitErr := <-waitDone:
-			return m.finishWorkerStop(sessionID, worker, waitErr)
+			return waitErr
 		default:
 		}
 		if err := ctx.Err(); err != nil {
@@ -401,7 +423,7 @@ func (m *WorkerManager) waitForWorkerCleanup(ctx context.Context, sessionID stri
 	defer timer.Stop()
 	select {
 	case waitErr := <-waitDone:
-		return m.finishWorkerStop(sessionID, worker, waitErr)
+		return waitErr
 	case <-ctx.Done():
 		return errors.Join(ctx.Err(), fmt.Errorf("session worker %s cleanup: %w", sessionID, ErrWorkerCleanupPending))
 	case <-timer.C:
@@ -447,8 +469,24 @@ func (m *WorkerManager) closeAdmissionAndWait(ctx context.Context) error {
 	case <-drained:
 		return nil
 	case <-ctx.Done():
+		m.mu.Lock()
+		m.abortStarts = true
+		m.mu.Unlock()
 		return ctx.Err()
 	}
+}
+
+// workerStartAbortError is called only while m.mu is held. A start admitted
+// before shutdown may finish inside the drain budget, but it must not commit
+// after that budget expires or after its own request is canceled.
+func (m *WorkerManager) workerStartAbortError(ctx context.Context) error {
+	if m.abortStarts {
+		return ErrWorkerManagerStopping
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *WorkerManager) recordForcedStop(worker *ManagedWorker) {

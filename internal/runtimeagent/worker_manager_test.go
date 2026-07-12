@@ -317,6 +317,36 @@ func TestStopSessionWorkerCancellationForceKillsAndReapsWorker(t *testing.T) {
 	}
 }
 
+func TestCanceledUnmanagedStopEventuallyReleasesOwnership(t *testing.T) {
+	manager := NewWorkerManager(WorkerManagerConfig{})
+	worker := startUnmanagedWorker(t, "sess-unmanaged-cancel")
+	worker.Spec = WorkerStartSpec{SessionID: worker.SessionID, Token: "unmanaged-token"}
+	if err := manager.registry.ExpectWorker(worker.SessionID, worker.Spec.Token); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.registry.AdmitWorker(worker.SessionID, worker.Spec.Token, int64(worker.Cmd.Process.Pid)); err != nil {
+		t.Fatal(err)
+	}
+	manager.active[worker.SessionID] = worker
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := manager.StopSessionWorker(ctx, worker.SessionID, time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("StopSessionWorker error = %v, want context.Canceled", err)
+	}
+	_ = worker.Wait()
+	deadline := time.Now().Add(time.Second)
+	for manager.findWorker(worker.SessionID) != nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := manager.findWorker(worker.SessionID); got != nil {
+		t.Fatalf("reaped unmanaged worker remained active: %+v", got)
+	}
+	if identity, ok := manager.registry.ActiveWorker(worker.SessionID); ok {
+		t.Fatalf("reaped unmanaged worker remained registered: %+v", identity)
+	}
+}
+
 func TestStopAllDeduplicatesAliasedWorkers(t *testing.T) {
 	requirePOSIXSignals(t)
 	manager, worker, counter := startCountingWorker(t)
@@ -360,8 +390,8 @@ func TestStopAllDoesNotDeduplicateDifferentWorkersWithReusedPID(t *testing.T) {
 	manager.active[oldWorker.SessionID] = oldWorker
 	manager.active[replacement.SessionID] = replacement
 	stopped := make(chan *ManagedWorker, 2)
-	manager.stopWorker = func(context.Context, *ManagedWorker, time.Duration) error {
-		stopped <- oldWorker
+	manager.stopWorker = func(_ context.Context, worker *ManagedWorker, _ time.Duration) error {
+		stopped <- worker
 		return nil
 	}
 
@@ -370,6 +400,12 @@ func TestStopAllDoesNotDeduplicateDifferentWorkersWithReusedPID(t *testing.T) {
 	}
 	if got := len(stopped); got != 2 {
 		t.Fatalf("stop attempts = %d, want both same-PID generations", got)
+	}
+	seen := map[*ManagedWorker]bool{}
+	seen[<-stopped] = true
+	seen[<-stopped] = true
+	if !seen[oldWorker] || !seen[replacement] {
+		t.Fatalf("stopped workers = %+v, want both same-PID generations", seen)
 	}
 }
 
@@ -491,6 +527,61 @@ func TestStopAllTimeoutPreventsAdmittedStartFromLaunchingLate(t *testing.T) {
 	}
 	if worker := manager.findWorker("sess-late"); worker != nil {
 		t.Fatalf("late worker launched after StopAll returned: %+v", worker)
+	}
+}
+
+func TestStopAllDeadlineDoesNotWaitBehindCommandStart(t *testing.T) {
+	dir := t.TempDir()
+	writePythonWorkerModule(t, dir, "worker_slow_start", "import time\ntime.sleep(30)\n")
+	manager := NewWorkerManager(WorkerManagerConfig{
+		PythonExecutable: "python3",
+		WorkerModule:     "worker_slow_start",
+		WorkDir:          dir,
+		StateRoot:        filepath.Join(dir, "state"),
+		PythonPath:       []string{dir},
+	})
+	startEntered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	manager.startCommand = func(cmd *exec.Cmd) error {
+		close(startEntered)
+		<-releaseStart
+		return cmd.Start()
+	}
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := manager.StartSessionWorker(context.Background(), "sess-slow-start", nil)
+		startDone <- err
+	}()
+	select {
+	case <-startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not enter command start seam")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- manager.StopAll(ctx, time.Second) }()
+	select {
+	case err := <-stopDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("StopAll error = %v, want context deadline", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		close(releaseStart)
+		t.Fatal("StopAll waited behind command start beyond its shared deadline")
+	}
+	close(releaseStart)
+	select {
+	case err := <-startDone:
+		if !errors.Is(err, ErrWorkerManagerStopping) {
+			t.Fatalf("StartSessionWorker error = %v, want ErrWorkerManagerStopping", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("aborted command start did not finish")
+	}
+	if worker := manager.findWorker("sess-slow-start"); worker != nil {
+		t.Fatalf("aborted command start was committed: %+v", worker)
 	}
 }
 
