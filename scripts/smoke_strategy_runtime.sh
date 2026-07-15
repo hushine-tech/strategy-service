@@ -1,43 +1,71 @@
 #!/usr/bin/env bash
-# RuntimeChannel strategy-runtime container smoke.
-#
-# This is the *container-only* smoke that does not require external services.
-# It verifies:
-#   1. The image imports the Python config loader.
-#   2. RuntimeChannel proto stubs are importable.
-#   3. The Go runtime-agent entrypoint exposes help.
+# Run final image verification, a real one-shot worker, and runtime-agent help.
 
 set -euo pipefail
 
+usage() {
+    echo "usage: $0 --image IMAGE --coverage true|false --profile NAME --version VERSION --digest SHA256 [--allow-dirty]" >&2
+}
+
+fail_usage() {
+    echo "error: $1" >&2
+    usage
+    exit 2
+}
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SERVICE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+IMAGE=""
+COVERAGE=""
+PROFILE=""
+VERSION=""
+DIGEST=""
+ALLOW_DIRTY="false"
+while (($#)); do
+    case "$1" in
+        --image|--coverage|--profile|--version|--digest)
+            [[ $# -ge 2 ]] || fail_usage "$1 requires a value"
+            case "$1" in
+                --image) [[ -z "${IMAGE}" ]] || fail_usage "duplicate --image"; IMAGE="$2" ;;
+                --coverage) [[ -z "${COVERAGE}" ]] || fail_usage "duplicate --coverage"; COVERAGE="$2" ;;
+                --profile) [[ -z "${PROFILE}" ]] || fail_usage "duplicate --profile"; PROFILE="$2" ;;
+                --version) [[ -z "${VERSION}" ]] || fail_usage "duplicate --version"; VERSION="$2" ;;
+                --digest) [[ -z "${DIGEST}" ]] || fail_usage "duplicate --digest"; DIGEST="$2" ;;
+            esac
+            shift
+            ;;
+        --allow-dirty)
+            [[ "${ALLOW_DIRTY}" == "false" ]] || fail_usage "duplicate --allow-dirty"
+            ALLOW_DIRTY="true"
+            ;;
+        *) fail_usage "unknown argument: $1" ;;
+    esac
+    shift
+done
 
-TAG="${1:-dev}"
-IMAGE="hushine/strategy-runtime:${TAG}"
+[[ -n "${IMAGE}" ]] || fail_usage "--image is required"
+[[ "${COVERAGE}" == "true" || "${COVERAGE}" == "false" ]] \
+    || fail_usage "--coverage must be true or false"
+[[ -n "${PROFILE}" ]] || fail_usage "--profile is required"
+[[ -n "${VERSION}" ]] || fail_usage "--version is required"
+[[ "${DIGEST}" =~ ^[0-9a-f]{64}$ ]] || fail_usage "--digest must be a lowercase SHA-256 value"
 
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-    echo "image ${IMAGE} not found; building first…"
-    "${SCRIPT_DIR}/build_strategy_runtime.sh" "${TAG}"
-fi
+VERIFY_ARGS=(
+    --image "${IMAGE}"
+    --coverage "${COVERAGE}"
+    --profile "${PROFILE}"
+    --version "${VERSION}"
+    --digest "${DIGEST}"
+)
+[[ "${ALLOW_DIRTY}" == "false" ]] || VERIFY_ARGS+=(--allow-dirty)
+"${SCRIPT_DIR}/verify_runtime_image.sh" "${VERIFY_ARGS[@]}"
 
-echo
-echo "=== smoke 1: Python package imports ==="
-# Run a one-shot script inside the image; --rm cleans up.
-docker run --rm --entrypoint python "${IMAGE}" -c "
-import sys
-print('python:', sys.version.split()[0])
-from strategy_service.gen import control_panel_service_pb2 as cp
-from strategy_service.gen import runtime_worker_pb2 as worker
-from strategy_service.session_worker_entry import main as worker_main
-print('runtime proto:', cp.RuntimeHello.DESCRIPTOR.full_name)
-print('worker proto:', worker.WorkerFrame.DESCRIPTOR.full_name)
-print('worker entry:', worker_main.__name__)
-print('OK')
-"
-
-echo
-echo "=== smoke 2: runtime-agent help ==="
+docker run --rm --entrypoint /app/strategy-service/.venv/bin/python "${IMAGE}" \
+    /app/strategy-service/scripts/runtime_dependency_worker_smoke.py \
+    --strategy-body /app/strategy-service/scripts/fixtures/runtime_dependency_strategy_body.py \
+    --expected-profile "${PROFILE}" \
+    --expected-version "${VERSION}" \
+    --expected-digest "${DIGEST}" \
+    --coverage "${COVERAGE}"
 docker run --rm --entrypoint ./bin/runtime-agent "${IMAGE}" --help
 
-echo
-echo "All container smoke checks passed for ${IMAGE}."
+echo "All runtime image smoke checks passed for ${IMAGE}."

@@ -7,7 +7,7 @@ DEV_NO_PROXY_HOSTS ?= 127.0.0.1,localhost,::1,192.168.88.10
 DEV_NO_PROXY := env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY NO_PROXY=$(DEV_NO_PROXY_HOSTS),$${NO_PROXY} no_proxy=$(DEV_NO_PROXY_HOSTS),$${no_proxy}
 VERSION?=dev
 
-.PHONY: build build-release dependency-contract dev start stop clean test test-scripts
+.PHONY: build build-release dependency-contract dev start stop clean test test-scripts runtime-images runtime-images-verify runtime-images-verify-dev
 
 dependency-contract:
 	uv sync --python 3.13 --frozen --extra dev
@@ -32,6 +32,15 @@ build:
 
 build-release:
 	scripts/build-runtime-agent-release.sh --version $(VERSION)
+
+runtime-images:
+	./scripts/build_strategy_runtime.sh --all --allow-dirty dev
+
+runtime-images-verify:
+	./scripts/build_strategy_runtime.sh --all --no-cache --verify contract
+
+runtime-images-verify-dev:
+	./scripts/build_strategy_runtime.sh --all --no-cache --verify --allow-dirty contract
 
 dev:
 	$(DEV_NO_PROXY) PYTHONPATH=$(PYTHONPATH_VAL) go run ./cmd/runtime-agent --config $(CONFIG)

@@ -1,13 +1,23 @@
 from __future__ import annotations
 
-import os
+import ast
 from pathlib import Path
 import subprocess
+import sys
+
+from hushine_strategy.runtime_dependencies import load_runtime_dependency_profile
+
+from scripts.runtime_dependency_worker_smoke import representative_strategy_source
 
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
 DOCKERFILE = SERVICE_DIR / "Dockerfile"
-BUILD_SCRIPT = SERVICE_DIR / "scripts" / "build_strategy_runtime.sh"
+FIXTURE = (
+    SERVICE_DIR
+    / "scripts"
+    / "fixtures"
+    / "runtime_dependency_strategy_body.py"
+)
 
 
 def _dockerfile_stage(text: str, name: str) -> str:
@@ -29,104 +39,140 @@ def _dockerfile_stage(text: str, name: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def _run_build_script(
-    tmp_path: Path, *script_args: str
-) -> tuple[subprocess.CompletedProcess[str], Path]:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    docker = bin_dir / "docker"
-    docker.write_text(
-        "#!/usr/bin/env bash\n"
-        'printf \'%s\\n\' "$@" > "${DOCKER_ARGS_FILE}"\n',
-        encoding="utf-8",
-    )
-    docker.chmod(0o755)
-
-    args_file = tmp_path / "docker-args"
-    env = os.environ.copy()
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env["DOCKER_ARGS_FILE"] = str(args_file)
-    env["IMAGE_PREFIX"] = "hushine/strategy-runtime"
-    result = subprocess.run(
-        [str(BUILD_SCRIPT), *script_args],
-        cwd=SERVICE_DIR,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result, args_file
-
-
-def _recorded_docker_args(tmp_path: Path, *script_args: str) -> list[str]:
-    result, args_file = _run_build_script(tmp_path, *script_args)
-    result.check_returncode()
-    return args_file.read_text(encoding="utf-8").splitlines()
-
-
-def _option_values(args: list[str], option: str) -> list[str]:
-    return [args[index + 1] for index, value in enumerate(args) if value == option]
-
-
-def test_strategy_runtime_image_builds_executor_only():
+def test_strategy_runtime_image_has_only_executor_targets():
     content = DOCKERFILE.read_text(encoding="utf-8")
 
     assert "FROM python:3.13-slim AS runtime-base" in content
     assert "FROM runtime-base AS executor" in content
+    assert "FROM runtime-base AS executor-coverage" in content
     assert "FROM executor AS default" in content
     assert "AS debugger" not in content
     assert "debugpy" not in content
     assert "pydevd-pycharm" not in content
 
 
-def test_coverage_target_is_isolated_from_the_production_binary():
+def test_runtime_base_installs_both_projects_non_editably_before_closure_checks():
     text = DOCKERFILE.read_text(encoding="utf-8")
-    go_builder = _dockerfile_stage(text, "go-builder")
     runtime_base = _dockerfile_stage(text, "runtime-base")
-    coverage_builder = _dockerfile_stage(text, "go-coverage-builder")
-    executor = _dockerfile_stage(text, "executor")
-    coverage_executor = _dockerfile_stage(text, "executor-coverage")
-    command = 'CMD ["./bin/runtime-agent", "--config", "config.yaml"]'
 
-    assert "go build -o /out/runtime-agent ./cmd/runtime-agent" in go_builder
-    assert "-cover" not in go_builder
-    assert "COPY --from=go-builder /out/runtime-agent" in runtime_base
-    assert "go build -cover -covermode=atomic -coverpkg=./..." in coverage_builder
-    assert "COPY --from=go-coverage-builder /out/runtime-agent" in coverage_executor
-    assert "uv sync --frozen --no-dev --extra coverage" in coverage_executor
-    assert "COPY strategy-service/.coveragerc" in coverage_executor
-    assert command in executor
-    assert command in coverage_executor
-    assert text.rstrip().endswith("FROM executor AS default")
+    library_copy = runtime_base.index("COPY strategy-library/pyproject.toml")
+    service_project_copy = runtime_base.index("COPY strategy-service/pyproject.toml")
+    frozen_sync = runtime_base.index("uv sync --frozen --no-dev --no-editable")
+    assert library_copy < frozen_sync
+    assert service_project_copy < frozen_sync
+    assert "--no-install-package" not in runtime_base
+    assert "uv pip check --python /app/strategy-service/.venv/bin/python" in runtime_base
+    assert "check_runtime_dependency_contract.py" in runtime_base
+    assert "verify-installed" in runtime_base
+    assert "session_worker_entry" in runtime_base
+    assert "runtime_worker_pb2" in runtime_base
+    assert "control_panel_service_pb2" in runtime_base
+    assert "runtime_dependency_worker_smoke.py" in runtime_base
+    assert "COPY strategy-service/tests/" not in runtime_base
+    assert "COPY strategy-library/tests/" not in runtime_base
 
 
-def test_coverage_build_uses_only_the_dedicated_target_and_tag(tmp_path: Path):
-    args = _recorded_docker_args(tmp_path, "--coverage")
+def test_final_images_do_not_shadow_installed_library_and_repeat_closure():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    runtime_base = _dockerfile_stage(text, "runtime-base")
+    coverage = _dockerfile_stage(text, "executor-coverage")
 
-    assert _option_values(args, "--target") == ["executor-coverage"]
-    assert _option_values(args, "-t") == [
-        "hushine/strategy-runtime:executor-coverage"
+    pythonpath_lines = [
+        line for line in text.splitlines() if "PYTHONPATH=" in line
     ]
+    assert all("/app/strategy-library" not in line for line in pythonpath_lines)
+    assert "uv sync --frozen --no-dev --extra coverage --no-editable" in coverage
+    assert "uv pip check --python /app/strategy-service/.venv/bin/python" in coverage
+    assert "check_runtime_dependency_contract.py" in coverage
+    assert "verify-installed" in coverage
+    assert "runtime_dependency_worker_smoke.py" in coverage
+    assert "--coverage false --check-only" in runtime_base
+    assert "--coverage true --check-only" in coverage
 
 
-def test_bare_coverage_version_is_rejected_before_docker(tmp_path: Path):
-    result, args_file = _run_build_script(tmp_path, "coverage")
+def test_final_targets_embed_all_nine_identity_facts():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    expected_labels = {
+        "org.hushine.runtime.profile",
+        "org.hushine.runtime.profile.version",
+        "org.hushine.runtime.contract.sha256",
+        "org.hushine.runtime.strategy-service.commit",
+        "org.hushine.runtime.strategy-library.commit",
+        "org.hushine.runtime.golang-lib.commit",
+        "org.hushine.runtime.image-build-id",
+        "org.hushine.runtime.source-dirty",
+        "org.hushine.runtime.source-state.sha256",
+    }
+    expected_env = {
+        "HUSHINE_RUNTIME_PROFILE_NAME",
+        "HUSHINE_RUNTIME_PROFILE_VERSION",
+        "HUSHINE_RUNTIME_CONTRACT_SHA256",
+        "HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT",
+        "HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT",
+        "HUSHINE_RUNTIME_GOLANG_LIB_COMMIT",
+        "HUSHINE_RUNTIME_IMAGE_BUILD_ID",
+        "HUSHINE_RUNTIME_SOURCE_DIRTY",
+        "HUSHINE_RUNTIME_SOURCE_STATE_SHA256",
+    }
+    for fact in expected_labels | expected_env:
+        assert fact in text
 
-    assert result.returncode != 0
-    assert "version 'coverage' is reserved; use --coverage" in result.stderr
-    assert not args_file.exists()
 
-
-def test_normal_build_preserves_existing_targets_and_tags(tmp_path: Path):
-    args = _recorded_docker_args(tmp_path, "v1.2.3")
-
-    assert _option_values(args, "--target") == ["executor"]
-    assert _option_values(args, "-t") == [
-        "hushine/strategy-runtime:executor-v1.2.3",
-        "hushine/strategy-runtime:executor",
-        "hushine/strategy-runtime:dev",
-        "hushine/strategy-runtime:v1.2.3",
+def test_final_images_have_no_unlocked_install_or_public_root_allowlist():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    install_lines = [line.strip() for line in text.splitlines() if "uv sync" in line]
+    assert install_lines == [
+        "RUN uv sync --frozen --no-dev --no-editable \\",
+        "RUN uv sync --frozen --no-dev --extra coverage --no-editable \\",
     ]
+    assert "pip install" not in text
+    public_probes = {
+        dependency.probe
+        for dependency in load_runtime_dependency_profile().dependencies
+        if dependency.public
+    }
+    assert not any(
+        set(line.removeprefix("ENV ").split()) == public_probes
+        for line in text.splitlines()
+    )
+
+
+def test_representative_strategy_imports_are_generated_from_packaged_profile():
+    body = FIXTURE.read_text(encoding="utf-8")
+    source = representative_strategy_source(body)
+    imported = {
+        alias.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    profile = load_runtime_dependency_profile()
+
+    assert imported == {
+        dependency.probe for dependency in profile.dependencies if dependency.public
+    }
+    assert {name.split(".", 1)[0] for name in imported} == set(
+        profile.public_import_roots
+    )
+
+
+def test_sdk_validator_can_be_imported_before_service_strategy_gate():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import hushine_strategy.validator; "
+                "import strategy_service.strategy_imports"
+            ),
+        ],
+        cwd=SERVICE_DIR,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_coverage_python_configuration_is_locked_and_image_scoped():

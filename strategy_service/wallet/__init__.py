@@ -1,29 +1,42 @@
 """Wallet public API for strategy-service.
 
-After Phase C2b cleanup wallet construction goes through
-``strategy_service.wallet_factory.build_wallet_from_portfolio``.
-The package exposes concrete runtimes, canonical contract types, runtime
-Protocol types, and the spot + order/ledger event types.
+Concrete wallet modules are loaded lazily. Importing a leaf such as
+``strategy_service.wallet.order_types`` must not eagerly import portfolio.py,
+because portfolio normalization depends on strategy_service.inputs.
 """
 
-from .binance import BinanceWalletRuntime
-from .canonical import CanonicalPortfolioState, CanonicalFuturesPositionState, CanonicalFuturesState
-from .order_types import ExecutionFeedback, LedgerEvent, OrderResponse
-from .portfolio import PortfolioWalletRuntime
-from .runtime import ExchangeWalletRuntime, WalletRuntime
-from .spot import SpotAsset, SpotWallet
+from __future__ import annotations
 
-__all__ = [
-    "BinanceWalletRuntime",
-    "CanonicalPortfolioState",
-    "CanonicalFuturesPositionState",
-    "CanonicalFuturesState",
-    "ExecutionFeedback",
-    "ExchangeWalletRuntime",
-    "LedgerEvent",
-    "OrderResponse",
-    "PortfolioWalletRuntime",
-    "SpotAsset",
-    "SpotWallet",
-    "WalletRuntime",
-]
+from importlib import import_module
+
+
+_EXPORT_MODULES = {
+    "BinanceWalletRuntime": ".binance",
+    "CanonicalPortfolioState": ".canonical",
+    "CanonicalFuturesPositionState": ".canonical",
+    "CanonicalFuturesState": ".canonical",
+    "ExecutionFeedback": ".order_types",
+    "ExchangeWalletRuntime": ".runtime",
+    "LedgerEvent": ".order_types",
+    "OrderResponse": ".order_types",
+    "PortfolioWalletRuntime": ".portfolio",
+    "SpotAsset": ".spot",
+    "SpotWallet": ".spot",
+    "WalletRuntime": ".runtime",
+}
+
+
+def __getattr__(name: str):
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_EXPORT_MODULES))
+
+
+__all__ = list(_EXPORT_MODULES)

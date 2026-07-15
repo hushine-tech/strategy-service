@@ -1,0 +1,16 @@
+ARG BASE_IMAGE=hushine/strategy-runtime:executor-contract
+FROM ${BASE_IMAGE} AS fault-base
+
+ARG FAULT_DISTRIBUTION
+RUN test -n "${FAULT_DISTRIBUTION}" \
+    && uv pip uninstall \
+      --python /app/strategy-service/.venv/bin/python \
+      "${FAULT_DISTRIBUTION}"
+
+FROM fault-base AS startup-gate
+CMD ["./bin/runtime-agent", "--config", "config.yaml"]
+
+FROM fault-base AS build-gate
+RUN /app/strategy-service/.venv/bin/python -I \
+      -m hushine_strategy.runtime_dependencies verify-installed \
+      --python-constraint 3.13 --json
