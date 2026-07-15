@@ -90,6 +90,20 @@ def test_final_images_do_not_shadow_installed_library_and_repeat_closure():
     assert "--coverage true --check-only" in coverage
 
 
+def test_all_image_smokes_compare_the_inherited_runtime_identity_environment():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    runtime_base = _dockerfile_stage(text, "runtime-base")
+    coverage = _dockerfile_stage(text, "executor-coverage")
+
+    for stage in (runtime_base, coverage):
+        assert '--expected-profile "${HUSHINE_RUNTIME_PROFILE_NAME}"' in stage
+        assert '--expected-version "${HUSHINE_RUNTIME_PROFILE_VERSION}"' in stage
+        assert '--expected-digest "${HUSHINE_RUNTIME_CONTRACT_SHA256}"' in stage
+        assert '--expected-profile "${RUNTIME_PROFILE_NAME}"' not in stage
+        assert '--expected-version "${RUNTIME_PROFILE_VERSION}"' not in stage
+        assert '--expected-digest "${RUNTIME_CONTRACT_SHA256}"' not in stage
+
+
 def test_final_targets_embed_all_nine_identity_facts():
     text = DOCKERFILE.read_text(encoding="utf-8")
     expected_labels = {
@@ -107,6 +121,8 @@ def test_final_targets_embed_all_nine_identity_facts():
         "HUSHINE_RUNTIME_PROFILE_NAME",
         "HUSHINE_RUNTIME_PROFILE_VERSION",
         "HUSHINE_RUNTIME_CONTRACT_SHA256",
+        "HUSHINE_RUNTIME_HOSTED_PYTHON",
+        "HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS",
         "HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT",
         "HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT",
         "HUSHINE_RUNTIME_GOLANG_LIB_COMMIT",
@@ -183,3 +199,4 @@ def test_coverage_python_configuration_is_locked_and_image_scoped():
     assert "source = strategy_service" in coveragerc
     assert "parallel = true" in coveragerc
     assert "sigterm = true" in coveragerc
+    assert "disable_warnings = no-data-collected" in coveragerc

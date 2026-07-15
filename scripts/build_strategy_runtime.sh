@@ -81,12 +81,18 @@ profile = tomllib.loads(raw.decode("utf-8"))
 print(profile["profile_name"])
 print(profile["profile_version"])
 print(hashlib.sha256(raw).hexdigest())
+print(profile["hosted_python"])
+print(",".join(sorted(
+    item["import_root"] for item in profile["dependencies"] if item["public"]
+)))
 PY
 )"
 PROFILE_NAME="$(printf '%s\n' "${PROFILE_VALUES}" | sed -n '1p')"
 PROFILE_VERSION="$(printf '%s\n' "${PROFILE_VALUES}" | sed -n '2p')"
 CONTRACT_SHA256="$(printf '%s\n' "${PROFILE_VALUES}" | sed -n '3p')"
-[[ -n "${PROFILE_NAME}" && -n "${PROFILE_VERSION}" && ${#CONTRACT_SHA256} -eq 64 ]] \
+HOSTED_PYTHON="$(printf '%s\n' "${PROFILE_VALUES}" | sed -n '4p')"
+PUBLIC_IMPORT_ROOTS="$(printf '%s\n' "${PROFILE_VALUES}" | sed -n '5p')"
+[[ -n "${PROFILE_NAME}" && -n "${PROFILE_VERSION}" && ${#CONTRACT_SHA256} -eq 64 && "${HOSTED_PYTHON}" == "3.13" && -n "${PUBLIC_IMPORT_ROOTS}" ]] \
     || fail_usage "invalid runtime dependency profile"
 
 CONTEXT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hushine-runtime-context-XXXXXX")"
@@ -204,6 +210,8 @@ common_build_args() {
         "RUNTIME_PROFILE_NAME=${PROFILE_NAME}" \
         "RUNTIME_PROFILE_VERSION=${PROFILE_VERSION}" \
         "RUNTIME_CONTRACT_SHA256=${CONTRACT_SHA256}" \
+        "RUNTIME_HOSTED_PYTHON=${HOSTED_PYTHON}" \
+        "RUNTIME_PUBLIC_IMPORT_ROOTS=${PUBLIC_IMPORT_ROOTS}" \
         "RUNTIME_STRATEGY_SERVICE_COMMIT=${SERVICE_COMMIT}" \
         "RUNTIME_STRATEGY_LIBRARY_COMMIT=${LIBRARY_COMMIT}" \
         "RUNTIME_GOLANG_LIB_COMMIT=${GOLANG_LIB_COMMIT}" \

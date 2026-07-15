@@ -20,6 +20,213 @@ var allowedWorkerExtraEnv = map[string]struct{}{
 	"HUSHINE_RUNTIME_NAME":   {},
 }
 
+var embeddedRuntimeEnvironmentKeys = map[string]struct{}{
+	"HUSHINE_RUNTIME_PROFILE_NAME":            {},
+	"HUSHINE_RUNTIME_PROFILE_VERSION":         {},
+	"HUSHINE_RUNTIME_CONTRACT_SHA256":         {},
+	"HUSHINE_RUNTIME_HOSTED_PYTHON":           {},
+	"HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS":     {},
+	"HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT": {},
+	"HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT": {},
+	"HUSHINE_RUNTIME_IMAGE_BUILD_ID":          {},
+}
+
+type WorkerLaunchSpec struct {
+	Invocation      WorkerPythonInvocation
+	WorkerModule    string
+	AgentAddr       string
+	DebugpyBasePort int
+	DebugpyWait     bool
+	StateRoot       string
+}
+
+func ResolveWorkerLaunchSpec(
+	cfg WorkerManagerConfig,
+	runtimeSource string,
+	processEnv []string,
+) (WorkerLaunchSpec, error) {
+	var spec WorkerLaunchSpec
+	if runtimeSource != "hosted" && runtimeSource != "self_hosted" && runtimeSource != "bare" {
+		return spec, fmt.Errorf("invalid runtime source")
+	}
+	if len(cfg.PythonPath) != 0 {
+		return spec, fmt.Errorf("worker source paths are not allowed")
+	}
+	if cfg.DebugpyBasePort < 0 || cfg.DebugpyBasePort > 65535 {
+		return spec, fmt.Errorf("worker debug port is invalid")
+	}
+	executable, err := resolveWorkerVenvExecutable(cfg.PythonExecutable)
+	if err != nil {
+		return spec, err
+	}
+	workDir, err := absoluteWorkerWorkDir(cfg.WorkDir)
+	if err != nil {
+		return spec, err
+	}
+	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
+	if err != nil {
+		return spec, fmt.Errorf("resolve worker work directory identity: %w", err)
+	}
+	physicalWorkDir, err = filepath.Abs(physicalWorkDir)
+	if err != nil {
+		return spec, fmt.Errorf("resolve absolute worker work directory identity: %w", err)
+	}
+	workDir = filepath.Clean(physicalWorkDir)
+
+	parentEnv, err := exactEnvironmentMap(processEnv)
+	if err != nil {
+		return spec, err
+	}
+	argsPrefix := []string{"-I"}
+	if raw, ok := parentEnv["HUSHINE_WORKER_PYTHON_ARGS"]; ok && raw != "" {
+		if raw != "-Xfrozen_modules=off" {
+			return spec, fmt.Errorf("HUSHINE_WORKER_PYTHON_ARGS contains an unapproved Python argument")
+		}
+		argsPrefix = append(argsPrefix, raw)
+	}
+	if err := validateTrustedCoveragePythonArgs(cfg.PythonArgsPrefix); err != nil {
+		return spec, err
+	}
+	argsPrefix = append(argsPrefix, cfg.PythonArgsPrefix...)
+
+	values := map[string]string{
+		"PYTHONUNBUFFERED":        "1",
+		"PYTHONDONTWRITEBYTECODE": "1",
+	}
+	platformValues, err := trustedWorkerPlatformEnvironment(executable)
+	if err != nil {
+		return spec, err
+	}
+	for key, value := range platformValues {
+		values[key] = value
+	}
+	localDevBuildFacts := runtimeSource == "bare" &&
+		parentEnv["HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT"] == "local-dev" &&
+		parentEnv["HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT"] == "local-dev" &&
+		parentEnv["HUSHINE_RUNTIME_IMAGE_BUILD_ID"] == "local-dev"
+	for key := range embeddedRuntimeEnvironmentKeys {
+		value, ok := parentEnv[key]
+		if !ok {
+			continue
+		}
+		if value == "" || len(value) > 1024 || strings.ContainsAny(value, "\x00\r\n") {
+			return spec, fmt.Errorf("embedded runtime environment fact is invalid: %s", key)
+		}
+		if localDevBuildFacts && (key == "HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT" ||
+			key == "HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT" ||
+			key == "HUSHINE_RUNTIME_IMAGE_BUILD_ID") {
+			continue
+		}
+		values[key] = value
+	}
+	baseEnv := sortedEnvironment(values)
+
+	stateRoot := strings.TrimSpace(cfg.StateRoot)
+	if stateRoot == "" {
+		stateRoot = filepath.Join(workDir, ".hushine-worker-state")
+	} else if !filepath.IsAbs(stateRoot) {
+		stateRoot = filepath.Join(workDir, stateRoot)
+	}
+	stateRoot = filepath.Clean(stateRoot)
+	workerModule := strings.TrimSpace(cfg.WorkerModule)
+	if workerModule == "" {
+		workerModule = "strategy_service.session_worker_entry"
+	}
+	if !modulePattern.MatchString(workerModule) {
+		return spec, fmt.Errorf("worker module is invalid")
+	}
+	agentAddr := strings.TrimSpace(cfg.AgentAddr)
+	if agentAddr == "" {
+		agentAddr = "127.0.0.1:0"
+	}
+	spec = WorkerLaunchSpec{
+		Invocation: WorkerPythonInvocation{
+			Executable: executable,
+			ArgsPrefix: append([]string(nil), argsPrefix...),
+			WorkDir:    workDir,
+			Env:        baseEnv,
+		},
+		WorkerModule:    workerModule,
+		AgentAddr:       agentAddr,
+		DebugpyBasePort: cfg.DebugpyBasePort,
+		DebugpyWait:     cfg.DebugpyWait,
+		StateRoot:       stateRoot,
+	}
+	return spec, nil
+}
+
+func exactEnvironmentMap(environment []string) (map[string]string, error) {
+	values := make(map[string]string, len(environment))
+	for _, item := range environment {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok || key == "" || strings.ContainsAny(key, "\x00\r\n") {
+			return nil, fmt.Errorf("process environment contains an invalid entry")
+		}
+		if _, exists := values[key]; exists {
+			return nil, fmt.Errorf("process environment contains a duplicate key")
+		}
+		values[key] = value
+	}
+	return values, nil
+}
+
+func validateTrustedCoveragePythonArgs(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if len(args) != 6 || args[0] != "-m" || args[1] != "coverage" ||
+		args[2] != "run" || args[3] != "--parallel-mode" ||
+		args[5] != "--source=strategy_service" ||
+		!strings.HasPrefix(args[4], "--data-file=") {
+		return fmt.Errorf("trusted coverage Python prefix is invalid")
+	}
+	dataFile := strings.TrimPrefix(args[4], "--data-file=")
+	if len(dataFile) > 1024 || !filepath.IsAbs(dataFile) || filepath.Clean(dataFile) != dataFile ||
+		filepath.Base(dataFile) != ".coverage" || filepath.Base(filepath.Dir(dataFile)) != "python" {
+		return fmt.Errorf("trusted coverage data file is invalid")
+	}
+	return nil
+}
+
+func sortedEnvironment(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, key+"="+values[key])
+	}
+	return result
+}
+
+func resolveWorkerVenvExecutable(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || !filepath.IsAbs(name) {
+		return "", fmt.Errorf("worker Python must be an absolute virtualenv executable path")
+	}
+	resolved, err := resolveWorkerExecutable(name)
+	if err != nil {
+		return "", err
+	}
+	parent := filepath.Dir(resolved)
+	venvRoot := filepath.Dir(parent)
+	base := filepath.Base(resolved)
+	validLayout := filepath.Base(parent) == "bin" && base == "python"
+	if runtime.GOOS == "windows" {
+		validLayout = strings.EqualFold(filepath.Base(parent), "Scripts") && strings.EqualFold(base, "python.exe")
+	}
+	if !validLayout {
+		return "", fmt.Errorf("worker Python must use the guarded virtualenv launcher")
+	}
+	info, err := os.Stat(filepath.Join(venvRoot, "pyvenv.cfg"))
+	if err != nil || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("worker Python virtualenv marker is unavailable")
+	}
+	return resolved, nil
+}
+
 type workerSessionCleanup func(string) error
 
 type workerSessionCleanupError struct {
@@ -35,99 +242,61 @@ func (e *workerSessionCleanupError) Unwrap() error {
 	return e.err
 }
 
-func buildWorkerEnvironment(
-	cfg WorkerManagerConfig,
-	spec WorkerStartSpec,
-	extraEnv []string,
-) (env []string, sessionRoot string, resolvedExecutable string, err error) {
-	return buildWorkerEnvironmentWithCleanup(cfg, spec, extraEnv, os.RemoveAll)
-}
-
-func buildWorkerEnvironmentWithCleanup(
-	cfg WorkerManagerConfig,
-	spec WorkerStartSpec,
+func buildWorkerEnvironmentFromLaunchSpec(
+	launchSpec WorkerLaunchSpec,
+	startSpec WorkerStartSpec,
 	extraEnv []string,
 	cleanup workerSessionCleanup,
 ) (env []string, sessionRoot string, resolvedExecutable string, err error) {
-	workDir, err := absoluteWorkerWorkDir(cfg.WorkDir)
+	baseValues, err := exactEnvironmentMap(launchSpec.Invocation.Env)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", fmt.Errorf("invalid resolved worker base environment")
 	}
-
-	stateRoot := strings.TrimSpace(cfg.StateRoot)
-	if stateRoot == "" {
-		stateRoot = filepath.Join(workDir, ".hushine-worker-state")
-	} else if !filepath.IsAbs(stateRoot) {
-		stateRoot = filepath.Join(workDir, stateRoot)
-	}
-	stateRoot = filepath.Clean(stateRoot)
-
-	pythonPath := make([]string, 0, len(cfg.PythonPath))
-	for _, item := range cfg.PythonPath {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if !filepath.IsAbs(item) {
-			item = filepath.Join(workDir, item)
-		}
-		pythonPath = append(pythonPath, filepath.Clean(item))
-	}
-
-	resolvedExecutable, err = resolveWorkerExecutable(cfg.PythonExecutable)
-	if err != nil {
-		return nil, "", "", err
-	}
-
-	sessionRoot = workerSessionRoot(stateRoot, spec.SessionID)
+	sessionRoot = workerSessionRoot(launchSpec.StateRoot, startSpec.SessionID)
 	homeDir := filepath.Join(sessionRoot, "home")
 	tmpDir := filepath.Join(sessionRoot, "tmp")
 	cacheDir := filepath.Join(sessionRoot, "cache")
-	values := map[string]string{
-		"PYTHONPATH":              strings.Join(pythonPath, string(os.PathListSeparator)),
-		"HOME":                    homeDir,
-		"USERPROFILE":             homeDir,
-		"TMPDIR":                  tmpDir,
-		"TMP":                     tmpDir,
-		"TEMP":                    tmpDir,
-		"XDG_CACHE_HOME":          cacheDir,
-		"UV_CACHE_DIR":            cacheDir,
-		"PYTHONUNBUFFERED":        "1",
-		"PYTHONDONTWRITEBYTECODE": "1",
-		"HUSHINE_AGENT_ADDR":      strings.TrimSpace(spec.AgentAddr),
-		"HUSHINE_WORKER_TOKEN":    spec.Token,
-		"HUSHINE_SESSION_ID":      strings.TrimSpace(spec.SessionID),
-		"HUSHINE_DEBUGPY_PORT":    strconv.Itoa(spec.DebugpyPort),
-		"DEBUG_WAIT":              strconv.FormatBool(spec.DebugpyWait),
+	values := make(map[string]string, len(baseValues)+16)
+	for key, value := range baseValues {
+		values[key] = value
 	}
-
-	platformValues, err := trustedWorkerPlatformEnvironment(resolvedExecutable)
-	if err != nil {
-		return nil, "", "", err
-	}
-	for key, value := range platformValues {
+	for key, value := range map[string]string{
+		"HOME":                 homeDir,
+		"USERPROFILE":          homeDir,
+		"TMPDIR":               tmpDir,
+		"TMP":                  tmpDir,
+		"TEMP":                 tmpDir,
+		"XDG_CACHE_HOME":       cacheDir,
+		"UV_CACHE_DIR":         cacheDir,
+		"HUSHINE_AGENT_ADDR":   strings.TrimSpace(startSpec.AgentAddr),
+		"HUSHINE_WORKER_TOKEN": startSpec.Token,
+		"HUSHINE_SESSION_ID":   strings.TrimSpace(startSpec.SessionID),
+		"HUSHINE_DEBUGPY_PORT": strconv.Itoa(startSpec.DebugpyPort),
+		"DEBUG_WAIT":           strconv.FormatBool(startSpec.DebugpyWait),
+	} {
 		if _, exists := values[key]; exists {
-			return nil, "", "", fmt.Errorf("trusted worker platform env key conflicts with baseline: %s", key)
+			return nil, "", launchSpec.Invocation.Executable, fmt.Errorf("worker session environment conflicts with immutable base")
 		}
 		values[key] = value
 	}
-
 	for _, item := range extraEnv {
 		key, value, parseErr := parseEnvItem(item)
 		if parseErr != nil {
-			return nil, "", "", parseErr
+			return nil, "", launchSpec.Invocation.Executable, parseErr
 		}
 		if _, allowed := allowedWorkerExtraEnv[key]; !allowed {
-			return nil, "", "", fmt.Errorf("worker extra env key is not allowed: %s", key)
+			return nil, "", launchSpec.Invocation.Executable, fmt.Errorf("worker extra env key is not allowed: %s", key)
+		}
+		if _, exists := values[key]; exists {
+			return nil, "", launchSpec.Invocation.Executable, fmt.Errorf("worker extra env conflicts with immutable base: %s", key)
 		}
 		values[key] = value
 	}
-
 	for _, dir := range []string{sessionRoot, homeDir, tmpDir, cacheDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			createErr := fmt.Errorf("create worker session directory %s: %w", dir, err)
 			cleanupErr := runWorkerSessionCleanup(cleanup, sessionRoot)
-			return nil, sessionRoot, resolvedExecutable, errors.Join(
+			return nil, sessionRoot, launchSpec.Invocation.Executable, errors.Join(
 				createErr,
 				cleanupWorkerSessionError(sessionRoot, cleanupErr),
 			)
@@ -135,23 +304,13 @@ func buildWorkerEnvironmentWithCleanup(
 		if err := os.Chmod(dir, 0o700); err != nil {
 			secureErr := fmt.Errorf("secure worker session directory %s: %w", dir, err)
 			cleanupErr := runWorkerSessionCleanup(cleanup, sessionRoot)
-			return nil, sessionRoot, resolvedExecutable, errors.Join(
+			return nil, sessionRoot, launchSpec.Invocation.Executable, errors.Join(
 				secureErr,
 				cleanupWorkerSessionError(sessionRoot, cleanupErr),
 			)
 		}
 	}
-
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	env = make([]string, 0, len(keys))
-	for _, key := range keys {
-		env = append(env, key+"="+values[key])
-	}
-	return env, sessionRoot, resolvedExecutable, nil
+	return sortedEnvironment(values), sessionRoot, launchSpec.Invocation.Executable, nil
 }
 
 func runWorkerSessionCleanup(cleanup workerSessionCleanup, sessionRoot string) error {

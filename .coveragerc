@@ -2,3 +2,4 @@
 source = strategy_service
 parallel = true
 sigterm = true
+disable_warnings = no-data-collected

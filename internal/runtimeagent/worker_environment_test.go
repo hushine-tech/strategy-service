@@ -5,9 +5,130 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestResolveWorkerLaunchSpecBuildsOneSanitizedImmutableInvocation(t *testing.T) {
+	venvPython := makeFakeWorkerVenvPython(t)
+	workDir := t.TempDir()
+	coverageRoot := filepath.Join(t.TempDir(), "coverage")
+	poison := "/tmp/poison-secret"
+	processEnv := []string{
+		"PATH=" + poison,
+		"PYTHONPATH=" + poison,
+		"PYTHONHOME=" + poison,
+		"VIRTUAL_ENV=" + poison,
+		"UV_PROJECT_ENVIRONMENT=" + poison,
+		"DATABASE_URL=postgres://secret",
+		"KAFKA_BROKERS=secret:9092",
+		"CORE_SERVICE_GRPC_ADDR=secret:50051",
+		"ORDER_SERVICE_GRPC_ADDR=secret:50052",
+		"RUNTIME_CREDENTIAL_JSON=secret-token",
+		"HUSHINE_WORKER_PYTHON_ARGS=-Xfrozen_modules=off",
+		"HUSHINE_RUNTIME_PROFILE_NAME=platform-python-3.13",
+		"HUSHINE_RUNTIME_PROFILE_VERSION=1.0.0",
+		"HUSHINE_RUNTIME_CONTRACT_SHA256=" + strings.Repeat("a", 64),
+		"HUSHINE_RUNTIME_HOSTED_PYTHON=3.13",
+		"HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS=dateutil,grpc,numpy,pandas,pydantic,requests,yaml",
+		"HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT=local-dev",
+		"HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT=local-dev",
+		"HUSHINE_RUNTIME_IMAGE_BUILD_ID=local-dev",
+	}
+
+	spec, err := ResolveWorkerLaunchSpec(WorkerManagerConfig{
+		PythonExecutable: venvPython,
+		PythonArgsPrefix: (CoverageConfig{RootDir: coverageRoot}).PythonArgsPrefix(),
+		WorkerModule:     "strategy_service.session_worker_entry",
+		AgentAddr:        "127.0.0.1:50000",
+		WorkDir:          workDir,
+		StateRoot:        filepath.Join(workDir, "state"),
+	}, "bare", processEnv)
+	if err != nil {
+		t.Fatalf("ResolveWorkerLaunchSpec: %v", err)
+	}
+	wantPrefix := []string{
+		"-I", "-Xfrozen_modules=off", "-m", "coverage", "run",
+		"--parallel-mode", "--data-file=" + filepath.Join(coverageRoot, "python", ".coverage"),
+		"--source=strategy_service",
+	}
+	if !slices.Equal(spec.Invocation.ArgsPrefix, wantPrefix) {
+		t.Fatalf("args prefix = %v, want %v", spec.Invocation.ArgsPrefix, wantPrefix)
+	}
+	if spec.Invocation.Executable != venvPython {
+		t.Fatalf("executable = %q, want preserved venv path %q", spec.Invocation.Executable, venvPython)
+	}
+	expectedWorkDir, err := filepath.EvalSymlinks(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Invocation.WorkDir != filepath.Clean(expectedWorkDir) {
+		t.Fatalf("workdir = %q", spec.Invocation.WorkDir)
+	}
+	childEnv := envMap(spec.Invocation.Env)
+	for _, forbidden := range []string{
+		"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+		"DATABASE_URL", "KAFKA_BROKERS", "CORE_SERVICE_GRPC_ADDR",
+		"ORDER_SERVICE_GRPC_ADDR", "RUNTIME_CREDENTIAL_JSON", "HUSHINE_WORKER_PYTHON_ARGS",
+	} {
+		if _, ok := childEnv[forbidden]; ok {
+			t.Fatalf("forbidden parent env reached child: %s", forbidden)
+		}
+	}
+	if strings.Contains(strings.Join(spec.Invocation.Env, "\n"), poison) {
+		t.Fatalf("poisoned parent value reached child: %v", spec.Invocation.Env)
+	}
+	for _, required := range []string{
+		"HUSHINE_RUNTIME_PROFILE_NAME", "HUSHINE_RUNTIME_PROFILE_VERSION",
+		"HUSHINE_RUNTIME_CONTRACT_SHA256", "HUSHINE_RUNTIME_HOSTED_PYTHON",
+		"HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS",
+	} {
+		if childEnv[required] == "" {
+			t.Fatalf("missing embedded profile env %s", required)
+		}
+	}
+	for _, absentLocalDevFact := range []string{
+		"HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT",
+		"HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT",
+		"HUSHINE_RUNTIME_IMAGE_BUILD_ID",
+	} {
+		if _, ok := childEnv[absentLocalDevFact]; ok {
+			t.Fatalf("literal local-dev build fact must be represented by all-missing child facts: %s", absentLocalDevFact)
+		}
+	}
+}
+
+func TestResolveWorkerLaunchSpecRejectsEveryUnapprovedPythonPrefix(t *testing.T) {
+	venvPython := makeFakeWorkerVenvPython(t)
+	for _, value := range []string{
+		"-I", "-c", "-m", "--", "worker.py", "@args", "-X dev",
+		" -Xfrozen_modules=off", "-Xfrozen_modules=off ",
+		"-Xfrozen_modules=off -I", "-Xfrozen_modules=on",
+	} {
+		t.Run(strings.ReplaceAll(value, "/", "_"), func(t *testing.T) {
+			_, err := ResolveWorkerLaunchSpec(WorkerManagerConfig{
+				PythonExecutable: venvPython,
+				WorkDir:          t.TempDir(),
+			}, "bare", []string{"HUSHINE_WORKER_PYTHON_ARGS=" + value})
+			if err == nil {
+				t.Fatalf("prefix %q unexpectedly accepted", value)
+			}
+		})
+	}
+}
+
+func TestResolveWorkerLaunchSpecRejectsLauncherAndNonVenvPython(t *testing.T) {
+	for _, executable := range []string{"uv", "python3", mustCurrentExecutable(t)} {
+		_, err := ResolveWorkerLaunchSpec(WorkerManagerConfig{
+			PythonExecutable: executable,
+			WorkDir:          t.TempDir(),
+		}, "hosted", nil)
+		if err == nil {
+			t.Fatalf("executable %q unexpectedly accepted", executable)
+		}
+	}
+}
 
 func TestResolveWorkerExecutablePreservesSymlinkInvocationPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -188,4 +309,44 @@ func mustCurrentExecutable(t *testing.T) string {
 		t.Fatalf("os.Executable: %v", err)
 	}
 	return executable
+}
+
+func makeFakeWorkerVenvPython(t *testing.T) string {
+	t.Helper()
+	venvRoot := filepath.Join(t.TempDir(), ".venv")
+	if err := os.WriteFile(filepath.Join(venvRoot, "pyvenv.cfg"), []byte("home = test\n"), 0o600); err != nil {
+		if err := os.MkdirAll(venvRoot, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(venvRoot, "pyvenv.cfg"), []byte("home = test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binName := "bin"
+	pythonName := "python"
+	if runtime.GOOS == "windows" {
+		binName = "Scripts"
+		pythonName = "python.exe"
+	}
+	binDir := filepath.Join(venvRoot, binName)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pythonPath := filepath.Join(binDir, pythonName)
+	if runtime.GOOS == "windows" {
+		body, err := os.ReadFile(mustCurrentExecutable(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(pythonPath, body, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := os.Symlink(mustCurrentExecutable(t), pythonPath); err != nil {
+		t.Fatal(err)
+	}
+	abs, err := filepath.Abs(pythonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Clean(abs)
 }

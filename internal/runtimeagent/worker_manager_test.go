@@ -8,13 +8,119 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
+func TestWorkerManagerConsumesOneImmutableVerifiedLaunchSpec(t *testing.T) {
+	venvPython := makeFakeWorkerVenvPython(t)
+	workDir := t.TempDir()
+	launchSpec, err := ResolveWorkerLaunchSpec(WorkerManagerConfig{
+		PythonExecutable: venvPython,
+		WorkerModule:     "strategy_service.session_worker_entry",
+		AgentAddr:        "127.0.0.1:50000",
+		WorkDir:          workDir,
+		StateRoot:        filepath.Join(workDir, "state"),
+	}, "bare", []string{
+		"HUSHINE_RUNTIME_PROFILE_NAME=platform-python-3.13",
+		"HUSHINE_RUNTIME_PROFILE_VERSION=1.0.0",
+		"HUSHINE_RUNTIME_CONTRACT_SHA256=" + strings.Repeat("a", 64),
+		"HUSHINE_RUNTIME_HOSTED_PYTHON=3.13",
+		"HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS=dateutil,grpc,numpy,pandas,pydantic,requests,yaml",
+		"HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT=local-dev",
+		"HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT=local-dev",
+		"HUSHINE_RUNTIME_IMAGE_BUILD_ID=local-dev",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInvocation := cloneWorkerPythonInvocation(launchSpec.Invocation)
+	manager, err := NewWorkerManager(launchSpec)
+	if err != nil {
+		t.Fatalf("NewWorkerManager: %v", err)
+	}
+
+	launchSpec.Invocation.ArgsPrefix[0] = "-c"
+	launchSpec.Invocation.Env[0] = "PYTHONPATH=/tmp/poison"
+	gotInvocation := manager.Invocation()
+	if gotInvocation.Executable != wantInvocation.Executable ||
+		gotInvocation.WorkDir != wantInvocation.WorkDir ||
+		!slices.Equal(gotInvocation.ArgsPrefix, wantInvocation.ArgsPrefix) ||
+		!slices.Equal(gotInvocation.Env, wantInvocation.Env) {
+		t.Fatalf("manager invocation mutated: %+v, want %+v", gotInvocation, wantInvocation)
+	}
+
+	var command *exec.Cmd
+	manager.startCommand = func(cmd *exec.Cmd) error {
+		command = cmd
+		return errors.New("test start stop")
+	}
+	_, err = manager.StartSessionWorker(context.Background(), "session-exact", []string{
+		"HUSHINE_RUNTIME_ID=rt-local",
+		"HUSHINE_RUNTIME_SOURCE=bare",
+		"HUSHINE_RUNTIME_NAME=debug",
+	})
+	if err == nil {
+		t.Fatal("injected start failure was not returned")
+	}
+	if command == nil {
+		t.Fatal("worker command was not constructed")
+	}
+	wantArgs := append(append([]string(nil), wantInvocation.ArgsPrefix...), "-m", "strategy_service.session_worker_entry")
+	if command.Path != wantInvocation.Executable || !slices.Equal(command.Args[1:], wantArgs) || command.Dir != wantInvocation.WorkDir {
+		t.Fatalf("worker command = path=%q args=%v dir=%q", command.Path, command.Args, command.Dir)
+	}
+	childEnv := envMap(command.Env)
+	if _, ok := childEnv["PYTHONPATH"]; ok {
+		t.Fatalf("production worker inherited PYTHONPATH: %v", command.Env)
+	}
+	if childEnv["HUSHINE_WORKER_TOKEN"] == "" || childEnv["HUSHINE_SESSION_ID"] != "session-exact" {
+		t.Fatalf("session facts = %+v", childEnv)
+	}
+}
+
+func TestWorkerManagerRejectsInvocationThatBypassesResolvedLaunchContract(t *testing.T) {
+	base := WorkerLaunchSpec{
+		Invocation: WorkerPythonInvocation{
+			Executable: "/app/strategy-service/.venv/bin/python",
+			ArgsPrefix: []string{"-I"},
+			WorkDir:    "/app/strategy-service",
+			Env: []string{
+				"PATH=/app/strategy-service/.venv/bin:/usr/bin:/bin",
+				"PYTHONDONTWRITEBYTECODE=1",
+				"PYTHONUNBUFFERED=1",
+			},
+		},
+		WorkerModule: "strategy_service.session_worker_entry",
+		AgentAddr:    "127.0.0.1:50000",
+		StateRoot:    "/app/strategy-service/.hushine-worker-state",
+	}
+	for _, tc := range []struct {
+		name   string
+		prefix []string
+		env    []string
+	}{
+		{name: "inline-code", prefix: []string{"-I", "-c"}, env: base.Invocation.Env},
+		{name: "alternate-module", prefix: []string{"-I", "-m", "site"}, env: base.Invocation.Env},
+		{name: "response-file", prefix: []string{"-I", "@/tmp/args"}, env: base.Invocation.Env},
+		{name: "source-path", prefix: base.Invocation.ArgsPrefix, env: append(append([]string(nil), base.Invocation.Env...), "PYTHONPATH=/tmp/poison")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := base
+			candidate.Invocation = cloneWorkerPythonInvocation(base.Invocation)
+			candidate.Invocation.ArgsPrefix = append([]string(nil), tc.prefix...)
+			candidate.Invocation.Env = append([]string(nil), tc.env...)
+			if manager, err := NewWorkerManager(candidate); err == nil || manager != nil {
+				t.Fatalf("manager = %+v, error = %v; want rejection", manager, err)
+			}
+		})
+	}
+}
+
 func TestWorkerManagerAllocatesOneTokenPerSession(t *testing.T) {
-	m := NewWorkerManager(WorkerManagerConfig{
+	m := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "strategy_service.session_worker_entry",
 	})
@@ -32,7 +138,7 @@ func TestWorkerManagerAllocatesOneTokenPerSession(t *testing.T) {
 }
 
 func TestWorkerManagerRejectsDuplicateSession(t *testing.T) {
-	m := NewWorkerManager(WorkerManagerConfig{
+	m := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "strategy_service.session_worker_entry",
 	})
@@ -64,7 +170,7 @@ Path(%q).write_text("\n".join([
 	}
 	t.Setenv("DATABASE_PASSWORD", "parent-canary-secret")
 
-	m := NewWorkerManager(WorkerManagerConfig{
+	m := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_stub",
 		AgentAddr:        "127.0.0.1:59000",
@@ -122,7 +228,7 @@ import os
 from pathlib import Path
 Path(%q).write_text(os.environ.get("DEBUG_WAIT", ""), encoding="utf-8")
 `, out))
-			m := NewWorkerManager(WorkerManagerConfig{
+			m := newLegacyWorkerManager(WorkerManagerConfig{
 				PythonExecutable: "python3",
 				WorkerModule:     "worker_debug_wait",
 				AgentAddr:        "127.0.0.1:59000",
@@ -162,7 +268,7 @@ time.sleep(10)
 		t.Fatalf("write worker module: %v", err)
 	}
 
-	m := NewWorkerManager(WorkerManagerConfig{
+	m := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_sleep",
 		AgentAddr:        "127.0.0.1:59000",
@@ -200,7 +306,7 @@ func TestWorkerManagerStopSessionWorkerTreatsAlreadyExitedProcessAsStopped(t *te
 		t.Fatalf("wait short process: %v", err)
 	}
 
-	m := NewWorkerManager(WorkerManagerConfig{})
+	m := newLegacyWorkerManager(WorkerManagerConfig{})
 	m.active["sess-exited"] = &ManagedWorker{SessionID: "sess-exited", Cmd: cmd}
 
 	err := m.StopSessionWorker(context.Background(), "sess-exited", time.Second)
@@ -221,7 +327,7 @@ func TestStopSessionWorkerAlreadyDonePreservesReplacementRegistry(t *testing.T) 
 		t.Fatalf("wait short process: %v", err)
 	}
 
-	m := NewWorkerManager(WorkerManagerConfig{})
+	m := newLegacyWorkerManager(WorkerManagerConfig{})
 	old := &ManagedWorker{SessionID: "sess-replaced", Spec: WorkerStartSpec{Token: "old-token"}, Cmd: cmd}
 	m.active[old.SessionID] = old
 	if err := m.registry.ExpectWorker(old.SessionID, "replacement-token"); err != nil {
@@ -361,7 +467,7 @@ import time
 signal.signal(signal.SIGTERM, lambda *_: pathlib.Path(%q).write_text("signal", encoding="utf-8"))
 time.sleep(0.15)
 `, marker))
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_natural_exit",
 		WorkDir:          dir,
@@ -449,7 +555,7 @@ Path(%q).write_text("ready", encoding="utf-8")
 while True:
     time.sleep(0.05)
 `, ready))
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_draining_deadline",
 		WorkDir:          dir,
@@ -537,7 +643,7 @@ func TestStopSessionWorkerCancellationForceKillsAndReapsWorker(t *testing.T) {
 }
 
 func TestCanceledUnmanagedStopEventuallyReleasesOwnership(t *testing.T) {
-	manager := NewWorkerManager(WorkerManagerConfig{})
+	manager := newLegacyWorkerManager(WorkerManagerConfig{})
 	worker := startUnmanagedWorker(t, "sess-unmanaged-cancel")
 	worker.Spec = WorkerStartSpec{SessionID: worker.SessionID, Token: "unmanaged-token"}
 	if err := manager.registry.ExpectWorker(worker.SessionID, worker.Spec.Token); err != nil {
@@ -567,7 +673,7 @@ func TestCanceledUnmanagedStopEventuallyReleasesOwnership(t *testing.T) {
 }
 
 func TestStopAllDoesNotDeduplicateDifferentWorkersWithReusedPID(t *testing.T) {
-	manager := NewWorkerManager(WorkerManagerConfig{})
+	manager := newLegacyWorkerManager(WorkerManagerConfig{})
 	process := &os.Process{Pid: 424242}
 	oldWorker := &ManagedWorker{
 		SessionID: "sess-old-pid",
@@ -605,7 +711,7 @@ func TestStopAllClosesAdmissionAndDrainsInFlightStart(t *testing.T) {
 	requirePOSIXSignals(t)
 	dir := t.TempDir()
 	writePythonWorkerModule(t, dir, "worker_shutdown_admission", "import time\ntime.sleep(30)\n")
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_shutdown_admission",
 		WorkDir:          dir,
@@ -675,7 +781,7 @@ func TestStopAllClosesAdmissionAndDrainsInFlightStart(t *testing.T) {
 func TestStopAllTimeoutPreventsAdmittedStartFromLaunchingLate(t *testing.T) {
 	dir := t.TempDir()
 	writePythonWorkerModule(t, dir, "worker_late_start", "import time\ntime.sleep(30)\n")
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_late_start",
 		WorkDir:          dir,
@@ -725,7 +831,7 @@ func TestStopAllTimeoutPreventsAdmittedStartFromLaunchingLate(t *testing.T) {
 func TestStopAllDeadlineDoesNotWaitBehindCommandStart(t *testing.T) {
 	dir := t.TempDir()
 	writePythonWorkerModule(t, dir, "worker_slow_start", "import time\ntime.sleep(30)\n")
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_slow_start",
 		WorkDir:          dir,
@@ -780,7 +886,7 @@ func TestStopAllDeadlineDoesNotWaitBehindCommandStart(t *testing.T) {
 func TestShutdownAbortClearsWorkerAdmittedDuringCommandStart(t *testing.T) {
 	dir := t.TempDir()
 	writePythonWorkerModule(t, dir, "worker_admitted_start", "import time\ntime.sleep(30)\n")
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_admitted_start",
 		WorkDir:          dir,
@@ -838,7 +944,7 @@ func TestShutdownAbortClearsWorkerAdmittedDuringCommandStart(t *testing.T) {
 }
 
 func TestStopAllUsesOneSharedDeadlineForBlockedCleanup(t *testing.T) {
-	manager := NewWorkerManager(WorkerManagerConfig{})
+	manager := newLegacyWorkerManager(WorkerManagerConfig{})
 	cleanupDone := make([]chan error, 0, 3)
 	for i := 0; i < 3; i++ {
 		cmd := exec.Command("python3", "-c", "pass")
@@ -884,7 +990,7 @@ func TestStopSessionWorkerBoundsPostExitCleanup(t *testing.T) {
 	requirePOSIXSignals(t)
 	dir := t.TempDir()
 	writePythonWorkerModule(t, dir, "worker_blocked_cleanup", "import time\ntime.sleep(30)\n")
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_blocked_cleanup",
 		WorkDir:          dir,
@@ -937,7 +1043,7 @@ func TestStopSessionWorkerBoundsPostExitCleanup(t *testing.T) {
 }
 
 func TestForgetManagedWorkerPreservesDifferentGenerationWithReusedPID(t *testing.T) {
-	manager := NewWorkerManager(WorkerManagerConfig{})
+	manager := newLegacyWorkerManager(WorkerManagerConfig{})
 	process := &os.Process{Pid: 424242}
 	oldWorker := &ManagedWorker{
 		SessionID: "sess-old",
@@ -960,7 +1066,7 @@ func TestForgetManagedWorkerPreservesDifferentGenerationWithReusedPID(t *testing
 }
 
 func TestFindWorkerRejectsSamePIDWithDifferentToken(t *testing.T) {
-	manager := NewWorkerManager(WorkerManagerConfig{})
+	manager := newLegacyWorkerManager(WorkerManagerConfig{})
 	process := &os.Process{Pid: 424242}
 	oldWorker := &ManagedWorker{
 		SessionID: "sess-old",
@@ -981,7 +1087,7 @@ func TestFindWorkerRejectsSamePIDWithDifferentToken(t *testing.T) {
 }
 
 func TestStopAllStopsSnapshottedWorkerAfterSessionReplacement(t *testing.T) {
-	manager := NewWorkerManager(WorkerManagerConfig{})
+	manager := newLegacyWorkerManager(WorkerManagerConfig{})
 	original := startUnmanagedWorker(t, "replacement-race")
 	replacement := startUnmanagedWorker(t, "replacement-race")
 	if err := manager.registry.ExpectWorker(original.SessionID, "original-token"); err != nil {
@@ -1029,7 +1135,7 @@ func TestStopAllStopsSnapshottedWorkerAfterSessionReplacement(t *testing.T) {
 }
 
 func TestStopAllPreservesExpectedReplacementRegistration(t *testing.T) {
-	manager := NewWorkerManager(WorkerManagerConfig{})
+	manager := newLegacyWorkerManager(WorkerManagerConfig{})
 	original := startUnmanagedWorker(t, "expected-replacement-race")
 	original.Spec.Token = "original-token"
 	replacement := startUnmanagedWorker(t, "expected-replacement-race")
@@ -1075,7 +1181,7 @@ func TestWorkerManagerStopWaitsForManagedCleanupBeforeReleasingSession(t *testin
 		t.Fatalf("wait short process: %v", err)
 	}
 
-	m := NewWorkerManager(WorkerManagerConfig{})
+	m := newLegacyWorkerManager(WorkerManagerConfig{})
 	if err := m.registry.ExpectWorker("sess-cleanup", "token"); err != nil {
 		t.Fatalf("ExpectWorker: %v", err)
 	}
@@ -1124,7 +1230,7 @@ func TestWorkerManagerStopRetainsSessionWhenKillFails(t *testing.T) {
 		t.Fatalf("Release: %v", err)
 	}
 
-	m := NewWorkerManager(WorkerManagerConfig{})
+	m := newLegacyWorkerManager(WorkerManagerConfig{})
 	if err := m.registry.ExpectWorker("sess-kill-error", "token"); err != nil {
 		t.Fatalf("ExpectWorker: %v", err)
 	}
@@ -1149,7 +1255,7 @@ func TestWorkerManagerStartFailureRetainsSessionWhenCleanupFails(t *testing.T) {
 		t.Fatalf("write workdir blocker: %v", err)
 	}
 	stateRoot := filepath.Join(root, "state")
-	m := NewWorkerManager(WorkerManagerConfig{
+	m := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: mustCurrentExecutable(t),
 		WorkerModule:     "worker_stub",
 		WorkDir:          workDir,
@@ -1186,7 +1292,7 @@ func TestWorkerManagerNaturalExitRetainsSessionWhenCleanupFails(t *testing.T) {
 	dir := t.TempDir()
 	writePythonWorkerModule(t, dir, "worker_exit", "pass\n")
 	stateRoot := filepath.Join(dir, "state")
-	m := NewWorkerManager(WorkerManagerConfig{
+	m := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_exit",
 		WorkDir:          dir,
@@ -1213,7 +1319,7 @@ func TestWorkerManagerStopReturnsCleanupFailureAndRetainsSession(t *testing.T) {
 	dir := t.TempDir()
 	writePythonWorkerModule(t, dir, "worker_stop_cleanup", "import time\ntime.sleep(10)\n")
 	stateRoot := filepath.Join(dir, "state")
-	m := NewWorkerManager(WorkerManagerConfig{
+	m := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_stop_cleanup",
 		WorkDir:          dir,
@@ -1370,7 +1476,7 @@ while not release.exists():
 
 func startWorkerModule(t *testing.T, dir string, module string, sessionID string) (*WorkerManager, *ManagedWorker) {
 	t.Helper()
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     module,
 		AgentAddr:        "127.0.0.1:59000",

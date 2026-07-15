@@ -50,6 +50,7 @@ type WorkerShutdownSummary struct {
 
 type WorkerManager struct {
 	cfg         WorkerManagerConfig
+	launchSpec  *WorkerLaunchSpec
 	registry    *SessionRegistry
 	mu          sync.Mutex
 	active      map[string]*ManagedWorker
@@ -84,33 +85,74 @@ type ManagedWorker struct {
 	draining       atomic.Bool
 }
 
-func NewWorkerManager(cfg WorkerManagerConfig) *WorkerManager {
-	if strings.TrimSpace(cfg.PythonExecutable) == "" {
-		cfg.PythonExecutable = "python3"
-	}
-	if strings.TrimSpace(cfg.WorkerModule) == "" {
-		cfg.WorkerModule = "strategy_service.session_worker_entry"
-	}
-	if strings.TrimSpace(cfg.AgentAddr) == "" {
-		cfg.AgentAddr = "127.0.0.1:0"
-	}
-	if workDir, err := absoluteWorkerWorkDir(cfg.WorkDir); err == nil {
-		cfg.WorkDir = workDir
-	}
-	if strings.TrimSpace(cfg.StateRoot) == "" {
-		cfg.StateRoot = filepath.Join(cfg.WorkDir, ".hushine-worker-state")
-	}
+func newWorkerManagerState(
+	cfg WorkerManagerConfig,
+	launchSpec *WorkerLaunchSpec,
+	buildEnvironment workerEnvironmentBuilder,
+) *WorkerManager {
 	manager := &WorkerManager{
 		cfg:                cfg,
+		launchSpec:         launchSpec,
 		registry:           NewSessionRegistry(),
 		active:             map[string]*ManagedWorker{},
 		cleanupSessionRoot: os.RemoveAll,
-		buildEnvironment:   buildWorkerEnvironmentWithCleanup,
+		buildEnvironment:   buildEnvironment,
 		startCommand:       func(cmd *exec.Cmd) error { return cmd.Start() },
 		cleanupFailures:    map[string]error{},
 	}
 	manager.stopWorker = manager.stopManagedWorker
 	return manager
+}
+
+func NewWorkerManager(spec WorkerLaunchSpec) (*WorkerManager, error) {
+	if err := validateWorkerPythonInvocation(spec.Invocation); err != nil {
+		return nil, fmt.Errorf("invalid worker launch invocation")
+	}
+	if !modulePattern.MatchString(spec.WorkerModule) || strings.TrimSpace(spec.AgentAddr) == "" ||
+		!filepath.IsAbs(spec.StateRoot) || filepath.Clean(spec.StateRoot) != spec.StateRoot {
+		return nil, fmt.Errorf("invalid worker launch specification")
+	}
+	immutable := WorkerLaunchSpec{
+		Invocation:      cloneWorkerPythonInvocation(spec.Invocation),
+		WorkerModule:    spec.WorkerModule,
+		AgentAddr:       spec.AgentAddr,
+		DebugpyBasePort: spec.DebugpyBasePort,
+		DebugpyWait:     spec.DebugpyWait,
+		StateRoot:       spec.StateRoot,
+	}
+	cfg := WorkerManagerConfig{
+		PythonExecutable: immutable.Invocation.Executable,
+		PythonArgsPrefix: append([]string(nil), immutable.Invocation.ArgsPrefix...),
+		WorkerModule:     immutable.WorkerModule,
+		AgentAddr:        immutable.AgentAddr,
+		DebugpyBasePort:  immutable.DebugpyBasePort,
+		DebugpyWait:      immutable.DebugpyWait,
+		WorkDir:          immutable.Invocation.WorkDir,
+		StateRoot:        immutable.StateRoot,
+	}
+	buildEnvironment := func(
+		_ WorkerManagerConfig,
+		startSpec WorkerStartSpec,
+		extraEnv []string,
+		cleanup workerSessionCleanup,
+	) ([]string, string, string, error) {
+		return buildWorkerEnvironmentFromLaunchSpec(immutable, startSpec, extraEnv, cleanup)
+	}
+	return newWorkerManagerState(cfg, &immutable, buildEnvironment), nil
+}
+
+func (m *WorkerManager) Invocation() WorkerPythonInvocation {
+	if m == nil {
+		return WorkerPythonInvocation{}
+	}
+	if m.launchSpec != nil {
+		return cloneWorkerPythonInvocation(m.launchSpec.Invocation)
+	}
+	return WorkerPythonInvocation{
+		Executable: m.cfg.PythonExecutable,
+		ArgsPrefix: append([]string(nil), m.cfg.PythonArgsPrefix...),
+		WorkDir:    m.cfg.WorkDir,
+	}
 }
 
 func (m *WorkerManager) PrepareSessionWorker(sessionID string) (WorkerStartSpec, error) {

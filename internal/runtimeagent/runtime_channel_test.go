@@ -1,10 +1,12 @@
 package runtimeagent
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"net"
 	"testing"
@@ -15,18 +17,20 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestBuildInitialFrameUsesBareHelloForBareRuntime(t *testing.T) {
 	frame, err := BuildInitialRuntimeFrame(RuntimeIdentity{
-		Source:          "bare",
-		UserID:          6,
-		RuntimeID:       "bare-6-test",
-		Name:            "bare-debug-6-test",
-		Capabilities:    []string{"strategy"},
-		ResourceProfile: "small",
-		Version:         "0.1.0",
+		Source:            "bare",
+		UserID:            6,
+		RuntimeID:         "bare-6-test",
+		Name:              "bare-debug-6-test",
+		Capabilities:      []string{"strategy"},
+		ResourceProfile:   "small",
+		Version:           "0.1.0",
+		DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile,
 	}, nil)
 	if err != nil {
 		t.Fatalf("BuildInitialRuntimeFrame: %v", err)
@@ -42,12 +46,16 @@ func TestBuildInitialFrameUsesBareHelloForBareRuntime(t *testing.T) {
 	if hello.GetRuntimeId() != "bare-6-test" {
 		t.Fatalf("runtime_id = %q", hello.GetRuntimeId())
 	}
+	if hello.GetDependencyProfile().GetContractSha256() != validEmbeddedRuntimeFacts("bare").Profile.GetContractSha256() {
+		t.Fatalf("bare hello dependency profile = %+v", hello.GetDependencyProfile())
+	}
 }
 
 func TestBuildInitialFrameRejectsBareRuntimeWithoutUser(t *testing.T) {
 	_, err := BuildInitialRuntimeFrame(RuntimeIdentity{
-		Source:    "bare",
-		RuntimeID: "bare-missing-user",
+		Source:            "bare",
+		RuntimeID:         "bare-missing-user",
+		DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile,
 	}, nil)
 	if err == nil {
 		t.Fatalf("bare hello without user id was accepted")
@@ -66,12 +74,13 @@ func TestBuildInitialFrameSignsCredentialHello(t *testing.T) {
 	pemBody := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: raw}))
 
 	frame, err := BuildInitialRuntimeFrame(RuntimeIdentity{
-		Source:          "self_hosted",
-		RuntimeID:       "rt-signed",
-		Name:            "signed",
-		Capabilities:    []string{"strategy"},
-		ResourceProfile: "small",
-		Version:         "0.1.0",
+		Source:            "self_hosted",
+		RuntimeID:         "rt-signed",
+		Name:              "signed",
+		Capabilities:      []string{"strategy"},
+		ResourceProfile:   "small",
+		Version:           "0.1.0",
+		DependencyProfile: validEmbeddedRuntimeFacts("self_hosted").Profile,
 	}, &RuntimeCredential{
 		KeyID:         "key-1",
 		PrivateKeyPEM: pemBody,
@@ -86,6 +95,79 @@ func TestBuildInitialFrameSignsCredentialHello(t *testing.T) {
 	}
 	if hello.GetSource() != "self_hosted" {
 		t.Fatalf("source = %q", hello.GetSource())
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(hello.GetSignature())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ed25519.Verify(privateKey.Public().(ed25519.PublicKey), canonicalHelloPayload(hello), signature) {
+		t.Fatal("signed hello does not cover dependency profile")
+	}
+	hello.DependencyProfile.ProfileName = "mutated"
+	if ed25519.Verify(privateKey.Public().(ed25519.PublicKey), canonicalHelloPayload(hello), signature) {
+		t.Fatal("hello signature remained valid after dependency profile mutation")
+	}
+}
+
+func TestBuildInitialFrameRequiresCompleteDependencyProfile(t *testing.T) {
+	_, err := BuildInitialRuntimeFrame(RuntimeIdentity{
+		Source: "bare", UserID: 6, RuntimeID: "bare-6-test",
+	}, nil)
+	if err == nil {
+		t.Fatal("hello without verified dependency profile was accepted")
+	}
+}
+
+func TestCanonicalHelloPayloadCoversEveryDependencyProfileFact(t *testing.T) {
+	base := &cpv1.RuntimeHello{
+		RuntimeId: "rt-1", Source: "self_hosted",
+		DependencyProfile: validEmbeddedRuntimeFacts("self_hosted").Profile,
+	}
+	want := canonicalHelloPayload(base)
+	mutations := map[string]func(*strategyv1.RuntimeDependencyProfile){
+		"schema":  func(profile *strategyv1.RuntimeDependencyProfile) { profile.SchemaVersion++ },
+		"name":    func(profile *strategyv1.RuntimeDependencyProfile) { profile.ProfileName = "mutated" },
+		"version": func(profile *strategyv1.RuntimeDependencyProfile) { profile.ProfileVersion = "2.0.0" },
+		"digest": func(profile *strategyv1.RuntimeDependencyProfile) {
+			profile.ContractSha256 = "f" + profile.ContractSha256[1:]
+		},
+		"python": func(profile *strategyv1.RuntimeDependencyProfile) { profile.HostedPython = "3.14" },
+		"roots":  func(profile *strategyv1.RuntimeDependencyProfile) { profile.PublicImportRoots[0] = "mutated" },
+		"service": func(profile *strategyv1.RuntimeDependencyProfile) {
+			profile.StrategyServiceCommit = "f" + profile.StrategyServiceCommit[1:]
+		},
+		"library": func(profile *strategyv1.RuntimeDependencyProfile) {
+			profile.StrategyLibraryCommit = "f" + profile.StrategyLibraryCommit[1:]
+		},
+		"image": func(profile *strategyv1.RuntimeDependencyProfile) { profile.ImageBuildId += "-mutated" },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			changed := proto.Clone(base).(*cpv1.RuntimeHello)
+			mutate(changed.DependencyProfile)
+			if bytes.Equal(canonicalHelloPayload(changed), want) {
+				t.Fatal("canonical hello did not change")
+			}
+		})
+	}
+}
+
+func TestBuildResumeRuntimeFrameCarriesImmutableDependencyProfile(t *testing.T) {
+	profile := validEmbeddedRuntimeFacts("bare").Profile
+	frame, err := BuildResumeRuntimeFrame(RuntimeIdentity{
+		Source: "bare", RuntimeID: "bare-6-test", DependencyProfile: profile,
+	}, "resume-token", "fingerprint")
+	if err != nil {
+		t.Fatalf("BuildResumeRuntimeFrame: %v", err)
+	}
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESUME ||
+		frame.GetResume().GetRuntimeId() != "bare-6-test" ||
+		frame.GetResume().GetDependencyProfile().GetImageBuildId() != profile.GetImageBuildId() {
+		t.Fatalf("resume frame = %+v", frame)
+	}
+	profile.ImageBuildId = "mutated"
+	if frame.GetResume().GetDependencyProfile().GetImageBuildId() == "mutated" {
+		t.Fatal("resume profile aliases caller-owned profile")
 	}
 }
 
@@ -111,13 +193,14 @@ func TestRuntimeChannelClientSendsInitialHello(t *testing.T) {
 	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
 		Address: "bufnet",
 		Identity: RuntimeIdentity{
-			Source:          "bare",
-			UserID:          6,
-			RuntimeID:       "bare-6-test",
-			Name:            "bare-debug-6-test",
-			Capabilities:    []string{"strategy"},
-			ResourceProfile: "small",
-			Version:         "0.1.0",
+			Source:            "bare",
+			UserID:            6,
+			RuntimeID:         "bare-6-test",
+			Name:              "bare-debug-6-test",
+			Capabilities:      []string{"strategy"},
+			ResourceProfile:   "small",
+			Version:           "0.1.0",
+			DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile,
 		},
 		DialOptions: []grpc.DialOption{
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
@@ -167,9 +250,10 @@ func TestRuntimeChannelClientInvokesPlatformRequest(t *testing.T) {
 	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
 		Address: "bufnet",
 		Identity: RuntimeIdentity{
-			Source:    "bare",
-			UserID:    6,
-			RuntimeID: "bare-6-test",
+			Source:            "bare",
+			UserID:            6,
+			RuntimeID:         "bare-6-test",
+			DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile,
 		},
 		DialOptions: []grpc.DialOption{
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {

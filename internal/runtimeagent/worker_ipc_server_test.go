@@ -141,7 +141,7 @@ func TestWorkerIPCServerPassesImmutableGenerationAndDisconnectIdentity(t *testin
 }
 
 func TestWorkerIPCDisconnectPreservesManagerLifecycleReservation(t *testing.T) {
-	manager := NewWorkerManager(WorkerManagerConfig{})
+	manager := newLegacyWorkerManager(WorkerManagerConfig{})
 	if err := manager.registry.ExpectWorker("sess-owned", "token-owned"); err != nil {
 		t.Fatal(err)
 	}

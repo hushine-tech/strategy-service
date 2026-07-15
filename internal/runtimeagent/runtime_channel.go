@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,22 +19,24 @@ import (
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type RuntimeIdentity struct {
-	KeyID           string
-	PrivateKeyPEM   string
-	Source          string
-	UserID          int64
-	RuntimeID       string
-	Name            string
-	EndpointHost    string
-	GRPCPort        int32
-	DebugPort       int32
-	Capabilities    []string
-	ResourceProfile string
-	Version         string
+	KeyID             string
+	PrivateKeyPEM     string
+	Source            string
+	UserID            int64
+	RuntimeID         string
+	Name              string
+	EndpointHost      string
+	GRPCPort          int32
+	DebugPort         int32
+	Capabilities      []string
+	ResourceProfile   string
+	Version           string
+	DependencyProfile *strategyv1.RuntimeDependencyProfile
 }
 
 type RuntimeCredential struct {
@@ -109,7 +112,6 @@ func (c *RuntimeChannelClient) Run(ctx context.Context) error {
 	c.mu.Lock()
 	c.outbound = outbound
 	c.mu.Unlock()
-	c.connectOnce.Do(func() { close(c.connected) })
 	defer func() {
 		c.mu.Lock()
 		if c.outbound == outbound {
@@ -148,6 +150,7 @@ func (c *RuntimeChannelClient) Run(ctx context.Context) error {
 	if err := c.sendOutbound(runCtx, outbound, initial); err != nil {
 		return err
 	}
+	c.connectOnce.Do(func() { close(c.connected) })
 
 	heartbeatStop := make(chan struct{})
 	go c.heartbeatLoop(runCtx, outbound, heartbeatStop)
@@ -461,18 +464,23 @@ func buildBareHello(identity RuntimeIdentity) (*cpv1.RuntimeHello, error) {
 	if runtimeID == "" {
 		return nil, fmt.Errorf("bare RuntimeChannel hello requires runtime_id")
 	}
+	dependencyProfile, err := verifiedIdentityDependencyProfile(identity)
+	if err != nil {
+		return nil, err
+	}
 	return &cpv1.RuntimeHello{
-		Source:          "bare",
-		UserId:          identity.UserID,
-		RuntimeId:       runtimeID,
-		Name:            strings.TrimSpace(identity.Name),
-		EndpointHost:    strings.TrimSpace(identity.EndpointHost),
-		GrpcPort:        identity.GRPCPort,
-		DebugPort:       identity.DebugPort,
-		Capabilities:    normalizeCapabilities(identity.Capabilities),
-		ResourceProfile: defaultString(identity.ResourceProfile, "small"),
-		Version:         defaultString(identity.Version, "0.1.0"),
-		IssuedAtUnixMs:  time.Now().UnixMilli(),
+		Source:            "bare",
+		UserId:            identity.UserID,
+		RuntimeId:         runtimeID,
+		Name:              strings.TrimSpace(identity.Name),
+		EndpointHost:      strings.TrimSpace(identity.EndpointHost),
+		GrpcPort:          identity.GRPCPort,
+		DebugPort:         identity.DebugPort,
+		Capabilities:      normalizeCapabilities(identity.Capabilities),
+		ResourceProfile:   defaultString(identity.ResourceProfile, "small"),
+		Version:           defaultString(identity.Version, "0.1.0"),
+		IssuedAtUnixMs:    time.Now().UnixMilli(),
+		DependencyProfile: dependencyProfile,
 	}, nil
 }
 
@@ -486,24 +494,69 @@ func buildSignedHello(identity RuntimeIdentity, credential *RuntimeCredential) (
 	if err != nil {
 		return nil, err
 	}
+	dependencyProfile, err := verifiedIdentityDependencyProfile(identity)
+	if err != nil {
+		return nil, err
+	}
 	hello := &cpv1.RuntimeHello{
-		KeyId:           keyID,
-		Source:          strings.TrimSpace(identity.Source),
-		UserId:          identity.UserID,
-		RuntimeId:       strings.TrimSpace(identity.RuntimeID),
-		Name:            strings.TrimSpace(identity.Name),
-		EndpointHost:    strings.TrimSpace(identity.EndpointHost),
-		GrpcPort:        identity.GRPCPort,
-		DebugPort:       identity.DebugPort,
-		Capabilities:    normalizeCapabilities(identity.Capabilities),
-		ResourceProfile: defaultString(identity.ResourceProfile, "small"),
-		Version:         defaultString(identity.Version, "0.1.0"),
-		IssuedAtUnixMs:  time.Now().UnixMilli(),
-		Nonce:           b64URLNoPad(randomBytes(16)),
+		KeyId:             keyID,
+		Source:            strings.TrimSpace(identity.Source),
+		UserId:            identity.UserID,
+		RuntimeId:         strings.TrimSpace(identity.RuntimeID),
+		Name:              strings.TrimSpace(identity.Name),
+		EndpointHost:      strings.TrimSpace(identity.EndpointHost),
+		GrpcPort:          identity.GRPCPort,
+		DebugPort:         identity.DebugPort,
+		Capabilities:      normalizeCapabilities(identity.Capabilities),
+		ResourceProfile:   defaultString(identity.ResourceProfile, "small"),
+		Version:           defaultString(identity.Version, "0.1.0"),
+		IssuedAtUnixMs:    time.Now().UnixMilli(),
+		Nonce:             b64URLNoPad(randomBytes(16)),
+		DependencyProfile: dependencyProfile,
 	}
 	signature := ed25519.Sign(privateKey, canonicalHelloPayload(hello))
 	hello.Signature = b64URLNoPad(signature)
 	return hello, nil
+}
+
+func verifiedIdentityDependencyProfile(identity RuntimeIdentity) (*strategyv1.RuntimeDependencyProfile, error) {
+	profile := identity.DependencyProfile
+	if profile == nil {
+		return nil, fmt.Errorf("verified runtime dependency profile is required")
+	}
+	if err := validateEmbeddedRuntimeFacts(EmbeddedRuntimeFacts{
+		Source:  strings.TrimSpace(identity.Source),
+		Profile: profile,
+	}); err != nil {
+		return nil, fmt.Errorf("verified runtime dependency profile is invalid")
+	}
+	return proto.Clone(profile).(*strategyv1.RuntimeDependencyProfile), nil
+}
+
+func BuildResumeRuntimeFrame(
+	identity RuntimeIdentity,
+	resumeToken string,
+	fingerprint string,
+) (*cpv1.RuntimeFrame, error) {
+	runtimeID := strings.TrimSpace(identity.RuntimeID)
+	resumeToken = strings.TrimSpace(resumeToken)
+	fingerprint = strings.TrimSpace(fingerprint)
+	if runtimeID == "" || resumeToken == "" || fingerprint == "" {
+		return nil, fmt.Errorf("runtime_id, resume_token, and fingerprint are required")
+	}
+	profile, err := verifiedIdentityDependencyProfile(identity)
+	if err != nil {
+		return nil, err
+	}
+	return &cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_RESUME,
+		Payload: &cpv1.RuntimeFrame_Resume{Resume: &cpv1.RuntimeResume{
+			RuntimeId:         runtimeID,
+			ResumeToken:       resumeToken,
+			Fingerprint:       fingerprint,
+			DependencyProfile: profile,
+		}},
+	}, nil
 }
 
 func loadEd25519PrivateKey(privateKeyPEM string) (ed25519.PrivateKey, error) {
@@ -523,11 +576,23 @@ func loadEd25519PrivateKey(privateKeyPEM string) (ed25519.PrivateKey, error) {
 }
 
 func canonicalHelloPayload(hello *cpv1.RuntimeHello) []byte {
+	profile := hello.GetDependencyProfile()
+	publicImportRoots := append([]string(nil), profile.GetPublicImportRoots()...)
+	sort.Strings(publicImportRoots)
 	fields := []struct {
 		name  string
 		value any
 	}{
 		{"capabilities", hello.GetCapabilities()},
+		{"dependency_contract_sha256", profile.GetContractSha256()},
+		{"dependency_hosted_python", profile.GetHostedPython()},
+		{"dependency_image_build_id", profile.GetImageBuildId()},
+		{"dependency_profile_name", profile.GetProfileName()},
+		{"dependency_profile_version", profile.GetProfileVersion()},
+		{"dependency_public_import_roots", publicImportRoots},
+		{"dependency_schema_version", profile.GetSchemaVersion()},
+		{"dependency_strategy_library_commit", profile.GetStrategyLibraryCommit()},
+		{"dependency_strategy_service_commit", profile.GetStrategyServiceCommit()},
 		{"debug_port", int(hello.GetDebugPort())},
 		{"endpoint_host", hello.GetEndpointHost()},
 		{"grpc_port", int(hello.GetGrpcPort())},

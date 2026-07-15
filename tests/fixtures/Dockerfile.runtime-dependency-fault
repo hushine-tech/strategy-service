@@ -8,6 +8,8 @@ RUN test -n "${FAULT_DISTRIBUTION}" \
       "${FAULT_DISTRIBUTION}"
 
 FROM fault-base AS startup-gate
+ENV RUNTIME_SOURCE=hosted \
+    RUNTIME_RUNTIME_ID=dependency-fault-startup
 CMD ["./bin/runtime-agent", "--config", "config.yaml"]
 
 FROM fault-base AS build-gate

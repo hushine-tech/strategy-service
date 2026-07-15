@@ -6,19 +6,22 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/hushine-tech/strategy-service/gen/controlpanelv1"
 	"github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
+	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"github.com/hushine-tech/strategy-service/internal/runtimeagent"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -30,6 +33,64 @@ func main() {
 }
 
 func run(args []string) int {
+	return runWithOps(args, defaultRuntimeBootstrapOps())
+}
+
+type runtimeBootstrapResolution struct {
+	launchSpec runtimeagent.WorkerLaunchSpec
+	facts      runtimeagent.EmbeddedRuntimeFacts
+}
+
+type runtimeBootstrapOps struct {
+	loadConfig              func(string) (runtimeagent.Config, error)
+	resolveWorkerLaunchSpec func(
+		runtimeagent.Config,
+		runtimeagent.RuntimeIdentity,
+		string,
+		[]string,
+	) (runtimeBootstrapResolution, error)
+	verifyProfile func(
+		context.Context,
+		runtimeagent.WorkerPythonInvocation,
+		runtimeagent.EmbeddedRuntimeFacts,
+	) (*strategyv1.RuntimeDependencyProfile, error)
+	emitStartupFailure         func(io.Writer, runtimeagent.RuntimeIdentity, runtimeagent.EmbeddedRuntimeFacts, *runtimeagent.RuntimeDependencyProfileError)
+	loadCredential             func(string) (*runtimeagent.RuntimeCredential, error)
+	dialOptions                func(runtimeagent.TLSConfig) ([]grpc.DialOption, error)
+	buildStartupFailureRequest func(
+		runtimeagent.RuntimeIdentity,
+		*runtimeagent.RuntimeCredential,
+		*runtimeagent.RuntimeDependencyProfileError,
+		time.Time,
+		string,
+	) (*controlpanelv1.ReportRuntimeStartupFailureRequest, error)
+	reportStartupFailure func(context.Context, string, []grpc.DialOption, *controlpanelv1.ReportRuntimeStartupFailureRequest) error
+	now                  func() time.Time
+	nonce                func() (string, error)
+}
+
+func defaultRuntimeBootstrapOps() runtimeBootstrapOps {
+	return runtimeBootstrapOps{
+		loadConfig:              runtimeagent.LoadConfig,
+		resolveWorkerLaunchSpec: resolveRuntimeWorkerLaunchSpec,
+		verifyProfile: func(
+			ctx context.Context,
+			invocation runtimeagent.WorkerPythonInvocation,
+			facts runtimeagent.EmbeddedRuntimeFacts,
+		) (*strategyv1.RuntimeDependencyProfile, error) {
+			return runtimeagent.VerifyRuntimeDependencyProfile(ctx, invocation, facts, nil)
+		},
+		emitStartupFailure:         emitRuntimeStartupFailure,
+		loadCredential:             runtimeagent.LoadRuntimeCredential,
+		dialOptions:                dialOptionsFromConfig,
+		buildStartupFailureRequest: runtimeagent.BuildRuntimeStartupFailureRequest,
+		reportStartupFailure:       runtimeagent.ReportRuntimeStartupFailure,
+		now:                        time.Now,
+		nonce:                      runtimeagentTestRandomToken,
+	}
+}
+
+func runWithOps(args []string, ops runtimeBootstrapOps) int {
 	fs := flag.NewFlagSet("runtime-agent", flag.ContinueOnError)
 	configPath := fs.String("config", "config.yaml", "path to config.yaml")
 	runtimeChannelAddr := fs.String("runtime-channel-addr", "", "control-panel RuntimeChannel gRPC address")
@@ -40,7 +101,7 @@ func run(args []string) int {
 		}
 		return 2
 	}
-	cfg, err := runtimeagent.LoadConfig(*configPath)
+	cfg, err := ops.loadConfig(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		return 1
@@ -54,17 +115,33 @@ func run(args []string) int {
 		return 1
 	}
 	identity := runtimeIdentityFromConfig(cfg, *userID)
+	if cfg.RuntimeChannelAddr == "" {
+		fmt.Fprintln(os.Stderr, "runtime-channel address is required")
+		return 1
+	}
+	resolution, err := ops.resolveWorkerLaunchSpec(cfg, identity, coverageRoot, os.Environ())
+	if err != nil {
+		dependencyErr := runtimeDependencyErrorFrom(err, "worker Python invocation is invalid")
+		ops.emitStartupFailure(os.Stderr, identity, resolution.facts, dependencyErr)
+		return reportSelfHostedStartupFailure(cfg, identity, resolution.facts, dependencyErr, ops)
+	}
+	verifiedProfile, err := ops.verifyProfile(
+		context.Background(), resolution.launchSpec.Invocation, resolution.facts,
+	)
+	if err != nil {
+		dependencyErr := runtimeDependencyErrorFrom(err, "runtime dependency startup probe failed")
+		ops.emitStartupFailure(os.Stderr, identity, resolution.facts, dependencyErr)
+		return reportSelfHostedStartupFailure(cfg, identity, resolution.facts, dependencyErr, ops)
+	}
+	identity.DependencyProfile = verifiedProfile
+
 	coverageBootID := ""
 	if coverageRoot != "" {
 		coverageBootID, err = runtimeagent.InitializeCoverageFinalization(coverageRoot, identity.RuntimeID)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "initialize runtime coverage finalization: %v\n", err)
+			fmt.Fprintln(os.Stderr, "initialize runtime coverage finalization: failed")
 			return 1
 		}
-	}
-	if cfg.RuntimeChannelAddr == "" {
-		fmt.Fprintln(os.Stderr, "runtime-channel address is required")
-		return 1
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -84,47 +161,149 @@ func run(args []string) int {
 	}
 	defer workerListener.Close()
 
-	debugPort := 0
-	if raw := strings.TrimSpace(os.Getenv("DEBUG_PORT")); raw != "" {
-		_, _ = fmt.Sscanf(raw, "%d", &debugPort)
+	resolution.launchSpec.AgentAddr = workerListener.Addr().String()
+	workerManager, err := runtimeagent.NewWorkerManager(resolution.launchSpec)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "construct verified worker manager: failed")
+		return 1
 	}
-	debugpyWait := parseDebugpyWait(os.Getenv("DEBUG_WAIT"))
-	pythonArgsPrefix := append([]string{}, workerPythonArgsPrefix(debugPort)...)
-	pythonArgsPrefix = append(
-		pythonArgsPrefix,
-		(runtimeagent.CoverageConfig{RootDir: coverageRoot}).PythonArgsPrefix()...,
-	)
-	workerManager := runtimeagent.NewWorkerManager(runtimeagent.WorkerManagerConfig{
-		PythonExecutable: workerPythonExecutable(debugPort),
-		PythonArgsPrefix: pythonArgsPrefix,
-		WorkerModule:     "strategy_service.session_worker_entry",
-		AgentAddr:        workerListener.Addr().String(),
-		DebugpyBasePort:  debugPort,
-		DebugpyWait:      debugpyWait,
-		WorkDir:          ".",
-		StateRoot:        cfg.WorkerStateRoot,
-		PythonPath: []string{
-			".",
-			"../strategy-library",
-		},
-	})
 
 	var credential *runtimeagent.RuntimeCredential
 	if identity.Source != "bare" {
-		credential, err = runtimeagent.LoadRuntimeCredential(cfg.CredentialPath)
+		credential, err = ops.loadCredential(cfg.CredentialPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "load runtime credential: %v\n", err)
 			return 1
 		}
 		applyCredentialTLS(&cfg.TLS, credential)
 	}
-	dialOptions, err := dialOptionsFromConfig(cfg.TLS)
+	dialOptions, err := ops.dialOptions(cfg.TLS)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "runtime channel TLS config: %v\n", err)
 		return 1
 	}
 
 	return runAgent(ctx, cfg, identity, credential, workerManager, workerListener, dialOptions, coverageRoot, coverageBootID)
+}
+
+func resolveRuntimeWorkerLaunchSpec(
+	cfg runtimeagent.Config,
+	identity runtimeagent.RuntimeIdentity,
+	coverageRoot string,
+	processEnv []string,
+) (runtimeBootstrapResolution, error) {
+	var result runtimeBootstrapResolution
+	facts, err := runtimeagent.LoadEmbeddedRuntimeFacts(identity.Source, processEnv)
+	if err != nil {
+		return result, err
+	}
+	result.facts = facts
+	debugPort := 0
+	if raw := strings.TrimSpace(os.Getenv("DEBUG_PORT")); raw != "" {
+		debugPort, err = strconv.Atoi(raw)
+		if err != nil || debugPort < 0 || debugPort > 65535 {
+			return result, fmt.Errorf("invalid DEBUG_PORT")
+		}
+	}
+	launchSpec, err := runtimeagent.ResolveWorkerLaunchSpec(runtimeagent.WorkerManagerConfig{
+		PythonExecutable: workerPythonExecutable(debugPort),
+		PythonArgsPrefix: (runtimeagent.CoverageConfig{RootDir: coverageRoot}).PythonArgsPrefix(),
+		WorkerModule:     "strategy_service.session_worker_entry",
+		AgentAddr:        "127.0.0.1:0",
+		DebugpyBasePort:  debugPort,
+		DebugpyWait:      parseDebugpyWait(os.Getenv("DEBUG_WAIT")),
+		WorkDir:          ".",
+		StateRoot:        cfg.WorkerStateRoot,
+	}, identity.Source, processEnv)
+	if err != nil {
+		return result, err
+	}
+	result.launchSpec = launchSpec
+	return result, nil
+}
+
+func runtimeDependencyErrorFrom(err error, fallback string) *runtimeagent.RuntimeDependencyProfileError {
+	var dependencyErr *runtimeagent.RuntimeDependencyProfileError
+	if errors.As(err, &dependencyErr) {
+		return dependencyErr
+	}
+	return &runtimeagent.RuntimeDependencyProfileError{
+		Code:    "RUNTIME_DEPENDENCY_PROFILE_INVALID",
+		Module:  "strategy_service.runtime_startup_probe",
+		Message: fallback,
+	}
+}
+
+type runtimeStartupFailureLog struct {
+	Code           string `json:"code"`
+	Module         string `json:"module"`
+	ProfileName    string `json:"profile_name"`
+	ProfileVersion string `json:"profile_version"`
+	ImageBuildID   string `json:"image_build_id"`
+	Source         string `json:"source"`
+	Reason         string `json:"reason"`
+}
+
+func emitRuntimeStartupFailure(
+	output io.Writer,
+	identity runtimeagent.RuntimeIdentity,
+	facts runtimeagent.EmbeddedRuntimeFacts,
+	dependencyErr *runtimeagent.RuntimeDependencyProfileError,
+) {
+	record := runtimeStartupFailureLog{
+		Code:   "RUNTIME_DEPENDENCY_PROFILE_INVALID",
+		Source: identity.Source,
+		Reason: "runtime dependency profile verification failed",
+	}
+	if dependencyErr != nil {
+		record.Module = dependencyErr.Module
+	}
+	if facts.Profile != nil {
+		record.ProfileName = facts.Profile.GetProfileName()
+		record.ProfileVersion = facts.Profile.GetProfileVersion()
+		record.ImageBuildID = facts.Profile.GetImageBuildId()
+	}
+	_ = json.NewEncoder(output).Encode(record)
+}
+
+func reportSelfHostedStartupFailure(
+	cfg runtimeagent.Config,
+	identity runtimeagent.RuntimeIdentity,
+	facts runtimeagent.EmbeddedRuntimeFacts,
+	dependencyErr *runtimeagent.RuntimeDependencyProfileError,
+	ops runtimeBootstrapOps,
+) int {
+	if identity.Source != "self_hosted" {
+		return 1
+	}
+	credential, err := ops.loadCredential(cfg.CredentialPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "runtime startup failure report credential unavailable")
+		return 1
+	}
+	applyCredentialTLS(&cfg.TLS, credential)
+	dialOptions, err := ops.dialOptions(cfg.TLS)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "runtime startup failure report TLS unavailable")
+		return 1
+	}
+	identity.DependencyProfile = facts.Profile
+	nonce, err := ops.nonce()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "runtime startup failure report nonce unavailable")
+		return 1
+	}
+	request, err := ops.buildStartupFailureRequest(identity, credential, dependencyErr, ops.now(), nonce)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "runtime startup failure report could not be built")
+		return 1
+	}
+	reportCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ops.reportStartupFailure(reportCtx, cfg.RuntimeChannelAddr, dialOptions, request); err != nil {
+		fmt.Fprintln(os.Stderr, "runtime startup failure report failed")
+	}
+	return 1
 }
 
 func runAgent(
@@ -477,34 +656,11 @@ func parseDebugpyWait(value string) bool {
 }
 
 func workerPythonExecutable(debugPort int) string {
-	if value := firstNonEmpty(os.Getenv("HUSHINE_WORKER_PYTHON"), os.Getenv("PYTHON")); value != "" {
+	_ = debugPort
+	if value := strings.TrimSpace(os.Getenv("HUSHINE_WORKER_PYTHON")); value != "" {
 		return value
 	}
-	if venvPython := localVenvPythonExecutable(); venvPython != "" {
-		return venvPython
-	}
-	if _, err := exec.LookPath("uv"); err == nil {
-		return "uv"
-	}
-	return "python3"
-}
-
-func workerPythonArgsPrefix(debugPort int) []string {
-	if raw := strings.TrimSpace(os.Getenv("HUSHINE_WORKER_PYTHON_ARGS")); raw != "" {
-		return strings.Fields(raw)
-	}
-	if localVenvPythonExecutable() == "" && firstNonEmpty(os.Getenv("HUSHINE_WORKER_PYTHON"), os.Getenv("PYTHON")) == "" {
-		if _, err := exec.LookPath("uv"); err != nil {
-			return nil
-		}
-		args := []string{"run"}
-		if debugPort > 0 {
-			args = append(args, "--with", "debugpy")
-		}
-		args = append(args, "python", "-Xfrozen_modules=off")
-		return args
-	}
-	return nil
+	return localVenvPythonExecutable()
 }
 
 func localVenvPythonExecutable() string {

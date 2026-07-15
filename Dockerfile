@@ -27,6 +27,8 @@ FROM python:3.13-slim AS runtime-base
 ARG RUNTIME_PROFILE_NAME
 ARG RUNTIME_PROFILE_VERSION
 ARG RUNTIME_CONTRACT_SHA256
+ARG RUNTIME_HOSTED_PYTHON
+ARG RUNTIME_PUBLIC_IMPORT_ROOTS
 ARG RUNTIME_STRATEGY_SERVICE_COMMIT
 ARG RUNTIME_STRATEGY_LIBRARY_COMMIT
 ARG RUNTIME_GOLANG_LIB_COMMIT
@@ -51,6 +53,8 @@ ENV PYTHONUNBUFFERED=1 \
     HUSHINE_RUNTIME_PROFILE_NAME=${RUNTIME_PROFILE_NAME} \
     HUSHINE_RUNTIME_PROFILE_VERSION=${RUNTIME_PROFILE_VERSION} \
     HUSHINE_RUNTIME_CONTRACT_SHA256=${RUNTIME_CONTRACT_SHA256} \
+    HUSHINE_RUNTIME_HOSTED_PYTHON=${RUNTIME_HOSTED_PYTHON} \
+    HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS=${RUNTIME_PUBLIC_IMPORT_ROOTS} \
     HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT=${RUNTIME_STRATEGY_SERVICE_COMMIT} \
     HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT=${RUNTIME_STRATEGY_LIBRARY_COMMIT} \
     HUSHINE_RUNTIME_GOLANG_LIB_COMMIT=${RUNTIME_GOLANG_LIB_COMMIT} \
@@ -104,9 +108,9 @@ RUN /app/strategy-service/.venv/bin/python \
     && /app/strategy-service/.venv/bin/python \
       /app/strategy-service/scripts/runtime_dependency_worker_smoke.py \
       --strategy-body /app/strategy-service/scripts/fixtures/runtime_dependency_strategy_body.py \
-      --expected-profile "${RUNTIME_PROFILE_NAME}" \
-      --expected-version "${RUNTIME_PROFILE_VERSION}" \
-      --expected-digest "${RUNTIME_CONTRACT_SHA256}" \
+      --expected-profile "${HUSHINE_RUNTIME_PROFILE_NAME}" \
+      --expected-version "${HUSHINE_RUNTIME_PROFILE_VERSION}" \
+      --expected-digest "${HUSHINE_RUNTIME_CONTRACT_SHA256}" \
       --coverage false --check-only
 
 FROM runtime-base AS executor
@@ -133,9 +137,9 @@ RUN /app/strategy-service/.venv/bin/python \
     && /app/strategy-service/.venv/bin/python \
       /app/strategy-service/scripts/runtime_dependency_worker_smoke.py \
       --strategy-body /app/strategy-service/scripts/fixtures/runtime_dependency_strategy_body.py \
-      --expected-profile "${RUNTIME_PROFILE_NAME}" \
-      --expected-version "${RUNTIME_PROFILE_VERSION}" \
-      --expected-digest "${RUNTIME_CONTRACT_SHA256}" \
+      --expected-profile "${HUSHINE_RUNTIME_PROFILE_NAME}" \
+      --expected-version "${HUSHINE_RUNTIME_PROFILE_VERSION}" \
+      --expected-digest "${HUSHINE_RUNTIME_CONTRACT_SHA256}" \
       --coverage true --check-only
 ENV HUSHINE_RUNTIME_ROLE=executor
 CMD ["./bin/runtime-agent", "--config", "config.yaml"]

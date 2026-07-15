@@ -52,6 +52,10 @@ required_literals=(
   'config file not found: ${CONFIG_PATH}'
   'cd "${STRATEGY_DIR}"'
   'RUNTIME_AGENT_START_SCRIPT="${RUNTIME_AGENT_START_SCRIPT:-${STRATEGY_DIR}/scripts/start-runtime-agent.sh}"'
+  'WORKER_PYTHON="${HUSHINE_WORKER_PYTHON:-}"'
+  '"${WORKER_PYTHON}" -I -'
+  'metadata.distribution(distribution)'
+  'HUSHINE_WORKER_PYTHON=${WORKER_PYTHON}'
   '--user-id "${USER_ID}"'
 )
 
@@ -79,6 +83,8 @@ forbidden_literals=(
   '--control-panel-addr "${CONTROL_PANEL_ADDR}"'
   'export CORE_SERVICE_GRPC_ADDR="${CORE_SERVICE_ADDR}"'
   'export CONTROL_PANEL_SERVICE_GRPC_ADDR="${CONTROL_PANEL_ADDR}"'
+  'PYTHONPATH=${STRATEGY_DIR}:${REPO_ROOT}/strategy-library'
+  'uv run python'
 )
 for literal in "${forbidden_literals[@]}"; do
   if grep -Fq -- "${literal}" "${RUNTIME_SCRIPT}"; then
@@ -153,7 +159,7 @@ for debug_wait in 0 1 off; do
 
   while IFS='=' read -r key _; do
     case "${key}" in
-      DEBUG_PORT|DEBUG_WAIT|HOME|OLDPWD|PATH|PWD|PYTHONPATH|RUNTIME_AGENT_CONTROL_ADDR|RUNTIME_CHANNEL_GRPC_ADDR|RUNTIME_CHANNEL_TLS_ENABLED|RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE|RUNTIME_CHANNEL_TLS_SERVER_NAME|RUNTIME_NAME|RUNTIME_RUNTIME_ID|SHLVL|TMPDIR|USER|_) ;;
+      DEBUG_PORT|DEBUG_WAIT|HOME|HUSHINE_RUNTIME_CONTRACT_SHA256|HUSHINE_RUNTIME_HOSTED_PYTHON|HUSHINE_RUNTIME_IMAGE_BUILD_ID|HUSHINE_RUNTIME_PROFILE_NAME|HUSHINE_RUNTIME_PROFILE_VERSION|HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS|HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT|HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT|HUSHINE_WORKER_PYTHON|OLDPWD|PATH|PWD|RUNTIME_AGENT_CONTROL_ADDR|RUNTIME_CHANNEL_GRPC_ADDR|RUNTIME_CHANNEL_TLS_ENABLED|RUNTIME_CHANNEL_TLS_ROOT_CERT_FILE|RUNTIME_CHANNEL_TLS_SERVER_NAME|RUNTIME_NAME|RUNTIME_RUNTIME_ID|SHLVL|TMPDIR|USER|_) ;;
       *)
         echo "unexpected key reached runtime-agent: ${key}" >&2
         exit 1
@@ -168,7 +174,16 @@ for debug_wait in 0 1 off; do
     'RUNTIME_RUNTIME_ID=' \
     'RUNTIME_AGENT_CONTROL_ADDR=' \
     'DEBUG_PORT=5678' \
-    "DEBUG_WAIT=${debug_wait}"
+    "DEBUG_WAIT=${debug_wait}" \
+    'HUSHINE_RUNTIME_PROFILE_NAME=platform-python-3.13' \
+    'HUSHINE_RUNTIME_PROFILE_VERSION=1.0.0' \
+    'HUSHINE_RUNTIME_CONTRACT_SHA256=8457b3c35618558fc8bfc74d4135b7eb52e00c33a8c9a49d202830f3fd5b62c5' \
+    'HUSHINE_RUNTIME_HOSTED_PYTHON=3.13' \
+    'HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS=dateutil,google,grpc,numpy,pandas,pydantic,requests,yaml' \
+    'HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT=local-dev' \
+    'HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT=local-dev' \
+    'HUSHINE_RUNTIME_IMAGE_BUILD_ID=local-dev' \
+    'HUSHINE_WORKER_PYTHON='
   do
     if [[ "${required}" == *= ]]; then
       if ! grep -q "^${required}" "${env_out}"; then
@@ -183,6 +198,64 @@ for debug_wait in 0 1 off; do
     fi
   done
 done
+
+missing_start_marker="${tmp_dir}/missing-started"
+missing_start="${tmp_dir}/missing-start-runtime-agent"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf 'touch %q\n' "${missing_start_marker}"
+} > "${missing_start}"
+chmod +x "${missing_start}"
+if env -i \
+  PATH="${PATH}" \
+  HOME="${HOME}" \
+  USER="${USER:-hushine-test}" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  RUNTIME_CHANNEL_TLS_ENABLED=false \
+  HUSHINE_WORKER_PYTHON="${tmp_dir}/missing-venv/bin/python" \
+  RUNTIME_AGENT_START_SCRIPT="${missing_start}" \
+  CONFIG_PATH="${REPO_ROOT}/strategy-service/config.yaml" \
+  bash "${RUNTIME_SCRIPT}" --user-id 6 --platform-host 127.0.0.1 > "${tmp_dir}/missing.out" 2>&1
+then
+  echo "bare launcher accepted a missing guarded worker venv" >&2
+  exit 1
+fi
+if [[ -e "${missing_start_marker}" ]]; then
+  echo "runtime-agent was launched before guarded venv validation" >&2
+  exit 1
+fi
+
+unguarded_python="${tmp_dir}/python-outside-venv-layout"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf 'exec %q "$@"\n' "${REPO_ROOT}/strategy-service/.venv/bin/python"
+} > "${unguarded_python}"
+chmod +x "${unguarded_python}"
+unguarded_start_marker="${tmp_dir}/unguarded-started"
+unguarded_start="${tmp_dir}/unguarded-start-runtime-agent"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf 'touch %q\n' "${unguarded_start_marker}"
+} > "${unguarded_start}"
+chmod +x "${unguarded_start}"
+if env -i \
+  PATH="${PATH}" \
+  HOME="${HOME}" \
+  USER="${USER:-hushine-test}" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  RUNTIME_CHANNEL_TLS_ENABLED=false \
+  HUSHINE_WORKER_PYTHON="${unguarded_python}" \
+  RUNTIME_AGENT_START_SCRIPT="${unguarded_start}" \
+  CONFIG_PATH="${REPO_ROOT}/strategy-service/config.yaml" \
+  bash "${RUNTIME_SCRIPT}" --user-id 6 --platform-host 127.0.0.1 > "${tmp_dir}/unguarded.out" 2>&1
+then
+  echo "bare launcher accepted Python outside the guarded venv layout" >&2
+  exit 1
+fi
+if [[ -e "${unguarded_start_marker}" ]]; then
+  echo "runtime-agent was launched with Python outside the guarded venv layout" >&2
+  exit 1
+fi
 
 state_keys="$(sed -n 's/^export \([^=]*\)=.*/\1/p' "${tmp_dir}/runtime.env" | LC_ALL=C sort)"
 expected_state_keys="$(printf '%s\n' \

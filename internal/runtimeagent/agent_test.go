@@ -610,7 +610,7 @@ func TestAgentRunStrategyReturnsWorkerExitBeforeStartTimeout(t *testing.T) {
 	writePythonWorkerModule(t, dir, "worker_exit_before_start", `
 raise RuntimeError("worker bootstrap failed")
 `)
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_exit_before_start",
 		AgentAddr:        "127.0.0.1:59000",
@@ -953,7 +953,7 @@ func TestAgentPreviewRunStrategyReturnsWorkerExitBeforeReadyTimeout(t *testing.T
 	writePythonWorkerModule(t, dir, "worker_exit_before_hello", `
 raise RuntimeError("worker bootstrap failed")
 `)
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_exit_before_hello",
 		AgentAddr:        "127.0.0.1:59000",
@@ -1004,7 +1004,7 @@ func TestAgentPreviewRunStrategyWaitsForManagedCleanupAfterProcessExit(t *testin
 	writePythonWorkerModule(t, dir, "worker_exit_before_cleanup", `
 raise RuntimeError("worker bootstrap failed")
 `)
-	manager := NewWorkerManager(WorkerManagerConfig{
+	manager := newLegacyWorkerManager(WorkerManagerConfig{
 		PythonExecutable: "python3",
 		WorkerModule:     "worker_exit_before_cleanup",
 		AgentAddr:        "127.0.0.1:59000",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,11 +13,115 @@ import (
 	"testing"
 	"time"
 
+	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
 	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
 	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
+	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"github.com/hushine-tech/strategy-service/internal/runtimeagent"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/anypb"
 )
+
+func TestHostedDependencyGateFailsBeforeAnyRuntimeReadiness(t *testing.T) {
+	calls := make([]string, 0, 4)
+	facts := bootstrapTestFacts("hosted")
+	ops := runtimeBootstrapOps{
+		loadConfig: func(string) (runtimeagent.Config, error) {
+			calls = append(calls, "load-config")
+			return runtimeagent.Config{RuntimeSource: "hosted", RuntimeID: "rt-1", RuntimeChannelAddr: "127.0.0.1:50055"}, nil
+		},
+		resolveWorkerLaunchSpec: func(runtimeagent.Config, runtimeagent.RuntimeIdentity, string, []string) (runtimeBootstrapResolution, error) {
+			calls = append(calls, "resolve-worker-launch-spec")
+			return runtimeBootstrapResolution{launchSpec: bootstrapTestLaunchSpec(), facts: facts}, nil
+		},
+		verifyProfile: func(context.Context, runtimeagent.WorkerPythonInvocation, runtimeagent.EmbeddedRuntimeFacts) (*strategyv1.RuntimeDependencyProfile, error) {
+			calls = append(calls, "verify-profile")
+			return nil, &runtimeagent.RuntimeDependencyProfileError{
+				Code: "RUNTIME_DEPENDENCY_PROFILE_INVALID", Module: "grpc",
+				Message: "runtime dependency startup probe failed",
+			}
+		},
+		emitStartupFailure: func(io.Writer, runtimeagent.RuntimeIdentity, runtimeagent.EmbeddedRuntimeFacts, *runtimeagent.RuntimeDependencyProfileError) {
+			calls = append(calls, "emit-startup-failure")
+		},
+	}
+	if code := runWithOps([]string{"--config", "unused.yaml"}, ops); code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	want := []string{"load-config", "resolve-worker-launch-spec", "verify-profile", "emit-startup-failure"}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestSelfHostedDependencyFailureReportsOnceWithoutCreatingReadiness(t *testing.T) {
+	calls := make([]string, 0, 8)
+	facts := bootstrapTestFacts("self_hosted")
+	ops := runtimeBootstrapOps{
+		loadConfig: func(string) (runtimeagent.Config, error) {
+			calls = append(calls, "load-config")
+			return runtimeagent.Config{RuntimeSource: "self_hosted", RuntimeID: "rt-1", RuntimeChannelAddr: "127.0.0.1:50055"}, nil
+		},
+		resolveWorkerLaunchSpec: func(runtimeagent.Config, runtimeagent.RuntimeIdentity, string, []string) (runtimeBootstrapResolution, error) {
+			calls = append(calls, "resolve-worker-launch-spec")
+			return runtimeBootstrapResolution{launchSpec: bootstrapTestLaunchSpec(), facts: facts}, nil
+		},
+		verifyProfile: func(context.Context, runtimeagent.WorkerPythonInvocation, runtimeagent.EmbeddedRuntimeFacts) (*strategyv1.RuntimeDependencyProfile, error) {
+			calls = append(calls, "verify-profile")
+			return nil, &runtimeagent.RuntimeDependencyProfileError{
+				Code: "RUNTIME_DEPENDENCY_PROFILE_INVALID", Module: "grpc",
+				Message: "runtime dependency startup probe failed",
+			}
+		},
+		emitStartupFailure: func(io.Writer, runtimeagent.RuntimeIdentity, runtimeagent.EmbeddedRuntimeFacts, *runtimeagent.RuntimeDependencyProfileError) {
+			calls = append(calls, "emit-startup-failure")
+		},
+		loadCredential: func(string) (*runtimeagent.RuntimeCredential, error) {
+			calls = append(calls, "load-credential")
+			return &runtimeagent.RuntimeCredential{KeyID: "key-1"}, nil
+		},
+		dialOptions: func(runtimeagent.TLSConfig) ([]grpc.DialOption, error) {
+			calls = append(calls, "load-tls")
+			return []grpc.DialOption{grpc.WithInsecure()}, nil
+		},
+		buildStartupFailureRequest: func(runtimeagent.RuntimeIdentity, *runtimeagent.RuntimeCredential, *runtimeagent.RuntimeDependencyProfileError, time.Time, string) (*cpv1.ReportRuntimeStartupFailureRequest, error) {
+			calls = append(calls, "build-report")
+			return &cpv1.ReportRuntimeStartupFailureRequest{}, nil
+		},
+		reportStartupFailure: func(context.Context, string, []grpc.DialOption, *cpv1.ReportRuntimeStartupFailureRequest) error {
+			calls = append(calls, "report-failure")
+			return errors.New("report unavailable")
+		},
+		now:   func() time.Time { return time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC) },
+		nonce: func() (string, error) { return "nonce", nil },
+	}
+	if code := runWithOps([]string{"--config", "unused.yaml"}, ops); code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	want := []string{
+		"load-config", "resolve-worker-launch-spec", "verify-profile", "emit-startup-failure",
+		"load-credential", "load-tls", "build-report", "report-failure",
+	}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func bootstrapTestLaunchSpec() runtimeagent.WorkerLaunchSpec {
+	return runtimeagent.WorkerLaunchSpec{Invocation: runtimeagent.WorkerPythonInvocation{
+		Executable: "/app/.venv/bin/python", ArgsPrefix: []string{"-I"}, WorkDir: "/app", Env: []string{"PATH=/app/.venv/bin"},
+	}}
+}
+
+func bootstrapTestFacts(source string) runtimeagent.EmbeddedRuntimeFacts {
+	return runtimeagent.EmbeddedRuntimeFacts{Source: source, Profile: &strategyv1.RuntimeDependencyProfile{
+		SchemaVersion: 1, ProfileName: "platform-python-3.13", ProfileVersion: "1.0.0",
+		ContractSha256: strings.Repeat("a", 64), HostedPython: "3.13",
+		PublicImportRoots:     []string{"dateutil", "google", "grpc"},
+		StrategyServiceCommit: strings.Repeat("b", 40), StrategyLibraryCommit: strings.Repeat("c", 40),
+		ImageBuildId: strings.Repeat("b", 12) + "-" + strings.Repeat("c", 12) + "-" + strings.Repeat("d", 12) + "-1.0.0-executor",
+	}}
+}
 
 func TestRunAgentStartsIndicatorSyncLoopWithProcessContext(t *testing.T) {
 	invoker := &syncLoopPlatformInvoker{called: make(chan struct{}, 1)}
@@ -168,7 +273,7 @@ func TestPrepareRuntimeCoverageRootDisabled(t *testing.T) {
 	}
 }
 
-func TestRunInvalidatesStaleCoverageMarkerBeforeCredentialFailure(t *testing.T) {
+func TestDependencyGateFailureDoesNotPublishCoverageReadinessMarker(t *testing.T) {
 	dir := t.TempDir()
 	coverageRoot := filepath.Join(dir, "coverage")
 	if err := os.MkdirAll(coverageRoot, 0o755); err != nil {
@@ -219,8 +324,8 @@ log:
 	if err := json.Unmarshal(body, &marker); err != nil {
 		t.Fatalf("decode running marker: %v", err)
 	}
-	if marker.State != runtimeagent.CoverageFinalizationRunning || marker.BootID == stale.BootID {
-		t.Fatalf("marker after early failure = %+v, want fresh running boot", marker)
+	if marker.State != runtimeagent.CoverageFinalizationComplete || marker.BootID != stale.BootID {
+		t.Fatalf("marker after dependency gate failure = %+v, want untouched stale marker", marker)
 	}
 }
 

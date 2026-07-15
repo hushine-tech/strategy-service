@@ -314,6 +314,8 @@ def test_build_script_uses_sealed_context_and_target_identity(
         "RUNTIME_PROFILE_NAME",
         "RUNTIME_PROFILE_VERSION",
         "RUNTIME_CONTRACT_SHA256",
+        "RUNTIME_HOSTED_PYTHON",
+        "RUNTIME_PUBLIC_IMPORT_ROOTS",
         "RUNTIME_STRATEGY_SERVICE_COMMIT",
         "RUNTIME_STRATEGY_LIBRARY_COMMIT",
         "RUNTIME_GOLANG_LIB_COMMIT",
