@@ -4,16 +4,25 @@ import ast
 import sys
 from dataclasses import dataclass
 
+from hushine_strategy.import_validation import (
+    HOSTED_PLATFORM_IMPORT_POLICY,
+    validate_dependency_imports,
+    validate_dynamic_import_safety,
+    validate_platform_import_safety,
+)
+from hushine_strategy.runtime_dependencies import load_runtime_dependency_profile
 from strategy_service.inputs import (
     StrategyDeclarationError,
     parse_declared_inputs,
     parse_order_targets,
     parse_risk_controls,
 )
-from strategy_service.runtime_profile import DEBUGGER_ONLY_MODULES, current_runtime_profile
+from strategy_service.runtime_profile import current_runtime_profile
 
-PUBLIC_PLATFORM_MODULES = {"strategy_service.types"}
-PUBLIC_STRATEGY_SDK_MODULE = "hushine_strategy"
+_DEPENDENCY_PROFILE = load_runtime_dependency_profile()
+_HOSTED_PLATFORM_MODULES = frozenset(
+    module for module, _ in HOSTED_PLATFORM_IMPORT_POLICY.allowed_from_symbols
+)
 REQUIRED_ORDER_DECISION_FIELDS = {
     "exchange",
     "market",
@@ -45,6 +54,7 @@ class StrategyValidationIssue:
     code: str
     message: str
     module: str = ""
+    symbol: str = ""
     line: int = 0
 
 
@@ -58,7 +68,6 @@ class StrategyValidationResult:
 
 
 def validate_strategy_code(code: str) -> StrategyValidationResult:
-    profile = current_runtime_profile()
     issues: list[StrategyValidationIssue] = []
     try:
         tree = ast.parse(code)
@@ -72,14 +81,93 @@ def validate_strategy_code(code: str) -> StrategyValidationResult:
         )
         return _result(False, issues)
 
-    stdlib = _stdlib_modules()
-    allowed = set(profile.allowed_third_party_modules)
+    relative_issues: list[StrategyValidationIssue] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                _validate_module(alias.name, getattr(node, "lineno", 0), stdlib, allowed, issues)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            _validate_module(node.module, getattr(node, "lineno", 0), stdlib, allowed, issues)
+        if isinstance(node, ast.ImportFrom) and node.level > 0:
+            module = f"{'.' * node.level}{node.module or ''}"
+            relative_issues.append(
+                StrategyValidationIssue(
+                    code="forbidden_import",
+                    message=f"from {module} import is not allowed in strategy code",
+                    module=module,
+                    line=getattr(node, "lineno", 0),
+                )
+            )
+
+    shared_safety = (
+        validate_platform_import_safety(
+            tree,
+            policy=HOSTED_PLATFORM_IMPORT_POLICY,
+        )
+        + validate_dynamic_import_safety(tree)
+    )
+    safety_by_key = {}
+    for issue in shared_safety:
+        safety_by_key.setdefault(
+            (issue.line, issue.module, issue.symbol, issue.code),
+            issue,
+        )
+    safety_issues = tuple(
+        sorted(
+            safety_by_key.values(),
+            key=lambda issue: (
+                issue.line,
+                issue.module,
+                issue.symbol,
+                issue.code,
+            ),
+        )
+    )
+    rejected_imports = {
+        (issue.line, issue.module)
+        for issue in safety_issues
+        if issue.module
+    }
+
+    static_issues = relative_issues + [
+        StrategyValidationIssue(
+            code=issue.code,
+            message=issue.message,
+            module=issue.module,
+            symbol=issue.symbol,
+            line=issue.line,
+        )
+        for issue in safety_issues
+    ]
+    for issue in validate_dependency_imports(
+        tree,
+        profile=_DEPENDENCY_PROFILE,
+        stdlib_roots=_stdlib_modules(),
+        platform_modules=_HOSTED_PLATFORM_MODULES,
+    ):
+        if (issue.line, issue.module) in rejected_imports:
+            continue
+        static_issues.append(
+            StrategyValidationIssue(
+                code=issue.code,
+                message=issue.message,
+                module=issue.module,
+                line=issue.line,
+            )
+        )
+    static_by_key = {}
+    for issue in static_issues:
+        static_by_key.setdefault(
+            (issue.line, issue.module, issue.symbol, issue.code),
+            issue,
+        )
+    issues.extend(
+        sorted(
+            static_by_key.values(),
+            key=lambda issue: (
+                issue.line,
+                issue.module,
+                issue.symbol,
+                issue.code,
+                issue.message,
+            ),
+        )
+    )
 
     _validate_phase3_contract(tree, issues)
     return _result(len(issues) == 0, issues)
@@ -96,52 +184,10 @@ def _result(ok: bool, issues: list[StrategyValidationIssue]) -> StrategyValidati
     )
 
 
-def _root_module(name: str) -> str:
-    return name.split(".", 1)[0]
-
-
 def _stdlib_modules() -> set[str]:
     modules = set(getattr(sys, "stdlib_module_names", set()))
     modules.update({"__future__", "typing"})
     return modules
-
-
-def _validate_module(
-    import_name: str,
-    line: int,
-    stdlib: set[str],
-    allowed: set[str],
-    issues: list[StrategyValidationIssue],
-) -> None:
-    module_name = _root_module(import_name)
-    if not module_name:
-        return
-    if (
-        import_name in PUBLIC_PLATFORM_MODULES
-        or import_name == PUBLIC_STRATEGY_SDK_MODULE
-        or import_name.startswith(f"{PUBLIC_STRATEGY_SDK_MODULE}.")
-    ):
-        return
-    if module_name in DEBUGGER_ONLY_MODULES:
-        issues.append(
-            StrategyValidationIssue(
-                code="debugger_dependency_not_allowed",
-                module=module_name,
-                line=line,
-                message=f"debugger module {module_name!r} cannot be used in saved strategy code",
-            )
-        )
-        return
-    if module_name in stdlib or module_name in allowed:
-        return
-    issues.append(
-        StrategyValidationIssue(
-            code="unsupported_dependency",
-            module=module_name,
-            line=line,
-            message=f"module {module_name!r} is not part of the platform runtime profile",
-        )
-    )
 
 
 def _validate_phase3_contract(tree: ast.AST, issues: list[StrategyValidationIssue]) -> None:

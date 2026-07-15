@@ -94,6 +94,7 @@ def _strategy_validation_error(code: str | None) -> str:
             "code": issue.code,
             "message": issue.message,
             "module": issue.module,
+            "symbol": issue.symbol,
             "line": issue.line,
         }
         for issue in result.issues
