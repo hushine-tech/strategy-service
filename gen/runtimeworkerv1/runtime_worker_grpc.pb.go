@@ -26,6 +26,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RuntimeWorkerAgentClient interface {
+	// Connect carries session work plus typed dependency failures without
+	// collapsing admission diagnostics into unstructured status text.
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WorkerFrame, AgentFrame], error)
 }
 
@@ -54,6 +56,8 @@ type RuntimeWorkerAgent_ConnectClient = grpc.BidiStreamingClient[WorkerFrame, Ag
 // All implementations must embed UnimplementedRuntimeWorkerAgentServer
 // for forward compatibility.
 type RuntimeWorkerAgentServer interface {
+	// Connect carries session work plus typed dependency failures without
+	// collapsing admission diagnostics into unstructured status text.
 	Connect(grpc.BidiStreamingServer[WorkerFrame, AgentFrame]) error
 	mustEmbedUnimplementedRuntimeWorkerAgentServer()
 }

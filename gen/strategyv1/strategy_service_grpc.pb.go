@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StrategyService_RunStrategy_FullMethodName        = "/strategy.v1.StrategyService/RunStrategy"
-	StrategyService_PreviewRunStrategy_FullMethodName = "/strategy.v1.StrategyService/PreviewRunStrategy"
-	StrategyService_GetStrategyStatus_FullMethodName  = "/strategy.v1.StrategyService/GetStrategyStatus"
-	StrategyService_StopStrategy_FullMethodName       = "/strategy.v1.StrategyService/StopStrategy"
+	StrategyService_RunStrategy_FullMethodName            = "/strategy.v1.StrategyService/RunStrategy"
+	StrategyService_PreviewRunStrategy_FullMethodName     = "/strategy.v1.StrategyService/PreviewRunStrategy"
+	StrategyService_ValidateStrategySource_FullMethodName = "/strategy.v1.StrategyService/ValidateStrategySource"
+	StrategyService_GetStrategyStatus_FullMethodName      = "/strategy.v1.StrategyService/GetStrategyStatus"
+	StrategyService_StopStrategy_FullMethodName           = "/strategy.v1.StrategyService/StopStrategy"
 )
 
 // StrategyServiceClient is the client API for StrategyService service.
@@ -43,6 +44,9 @@ type StrategyServiceClient interface {
 	// declared inputs. The evaluator is guaranteed to be byte-for-byte the same
 	// code path RunStrategy uses, so the UI can never drift from startup.
 	PreviewRunStrategy(ctx context.Context, in *PreviewRunStrategyRequest, opts ...grpc.CallOption) (*PreviewRunStrategyResponse, error)
+	// ValidateStrategySource checks source against the exact dependency profile
+	// used by RunStrategy without creating or mutating a session.
+	ValidateStrategySource(ctx context.Context, in *ValidateStrategySourceRequest, opts ...grpc.CallOption) (*ValidateStrategySourceResponse, error)
 	// GetStrategyStatus returns the current execution status of a strategy session.
 	GetStrategyStatus(ctx context.Context, in *GetStrategyStatusRequest, opts ...grpc.CallOption) (*GetStrategyStatusResponse, error)
 	// StopStrategy stops a running strategy session.
@@ -71,6 +75,16 @@ func (c *strategyServiceClient) PreviewRunStrategy(ctx context.Context, in *Prev
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PreviewRunStrategyResponse)
 	err := c.cc.Invoke(ctx, StrategyService_PreviewRunStrategy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *strategyServiceClient) ValidateStrategySource(ctx context.Context, in *ValidateStrategySourceRequest, opts ...grpc.CallOption) (*ValidateStrategySourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateStrategySourceResponse)
+	err := c.cc.Invoke(ctx, StrategyService_ValidateStrategySource_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +129,9 @@ type StrategyServiceServer interface {
 	// declared inputs. The evaluator is guaranteed to be byte-for-byte the same
 	// code path RunStrategy uses, so the UI can never drift from startup.
 	PreviewRunStrategy(context.Context, *PreviewRunStrategyRequest) (*PreviewRunStrategyResponse, error)
+	// ValidateStrategySource checks source against the exact dependency profile
+	// used by RunStrategy without creating or mutating a session.
+	ValidateStrategySource(context.Context, *ValidateStrategySourceRequest) (*ValidateStrategySourceResponse, error)
 	// GetStrategyStatus returns the current execution status of a strategy session.
 	GetStrategyStatus(context.Context, *GetStrategyStatusRequest) (*GetStrategyStatusResponse, error)
 	// StopStrategy stops a running strategy session.
@@ -134,6 +151,9 @@ func (UnimplementedStrategyServiceServer) RunStrategy(context.Context, *RunStrat
 }
 func (UnimplementedStrategyServiceServer) PreviewRunStrategy(context.Context, *PreviewRunStrategyRequest) (*PreviewRunStrategyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PreviewRunStrategy not implemented")
+}
+func (UnimplementedStrategyServiceServer) ValidateStrategySource(context.Context, *ValidateStrategySourceRequest) (*ValidateStrategySourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateStrategySource not implemented")
 }
 func (UnimplementedStrategyServiceServer) GetStrategyStatus(context.Context, *GetStrategyStatusRequest) (*GetStrategyStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStrategyStatus not implemented")
@@ -198,6 +218,24 @@ func _StrategyService_PreviewRunStrategy_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StrategyService_ValidateStrategySource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateStrategySourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StrategyServiceServer).ValidateStrategySource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StrategyService_ValidateStrategySource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StrategyServiceServer).ValidateStrategySource(ctx, req.(*ValidateStrategySourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _StrategyService_GetStrategyStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetStrategyStatusRequest)
 	if err := dec(in); err != nil {
@@ -248,6 +286,10 @@ var StrategyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PreviewRunStrategy",
 			Handler:    _StrategyService_PreviewRunStrategy_Handler,
+		},
+		{
+			MethodName: "ValidateStrategySource",
+			Handler:    _StrategyService_ValidateStrategySource_Handler,
 		},
 		{
 			MethodName: "GetStrategyStatus",

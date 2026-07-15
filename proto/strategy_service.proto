@@ -19,12 +19,57 @@ service StrategyService {
   // code path RunStrategy uses, so the UI can never drift from startup.
   rpc PreviewRunStrategy(PreviewRunStrategyRequest) returns (PreviewRunStrategyResponse);
 
+  // ValidateStrategySource checks source against the exact dependency profile
+  // used by RunStrategy without creating or mutating a session.
+  rpc ValidateStrategySource(ValidateStrategySourceRequest) returns (ValidateStrategySourceResponse);
+
   // GetStrategyStatus returns the current execution status of a strategy session.
   rpc GetStrategyStatus(GetStrategyStatusRequest) returns (GetStrategyStatusResponse);
 
   // StopStrategy stops a running strategy session.
   rpc StopStrategy(StopStrategyRequest) returns (StopStrategyResponse);
 
+}
+
+message RuntimeDependencyProfile {
+  uint32 schema_version = 1;
+  string profile_name = 2;
+  string profile_version = 3;
+  string contract_sha256 = 4;
+  string hosted_python = 5;
+  repeated string public_import_roots = 6;
+  string strategy_service_commit = 7;
+  string strategy_library_commit = 8;
+  string image_build_id = 9;
+}
+
+message RuntimeDependencyError {
+  string code = 1;
+  string module = 2;
+  string runtime_profile = 3;
+  string runtime_profile_version = 4;
+  string image_build_id = 5;
+  string message = 6;
+}
+
+message StrategyValidationIssueProto {
+  string code = 1;
+  string message = 2;
+  string module = 3;
+  int32 line = 4;
+  string symbol = 5;
+}
+
+message ValidateStrategySourceRequest {
+  string source = 1;
+  int64 user_id = 100;
+  string runtime_id = 101;
+}
+
+message ValidateStrategySourceResponse {
+  bool ok = 1;
+  repeated StrategyValidationIssueProto issues = 2;
+  RuntimeDependencyProfile runtime_profile = 3;
 }
 
 message RunStrategyRequest {

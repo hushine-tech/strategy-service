@@ -5,7 +5,7 @@ import warnings
 
 from . import order_service_pb2 as order__service__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class OrderServiceStub(object):
+class OrderServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -71,7 +71,7 @@ class OrderServiceStub(object):
                 _registered_method=True)
 
 
-class OrderServiceServicer(object):
+class OrderServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def PlaceOrder(self, request, context):
@@ -171,7 +171,7 @@ def add_OrderServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class OrderService(object):
+class OrderService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod

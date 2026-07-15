@@ -31,12 +31,14 @@ const (
 	ControlPanelService_ListRuntimeAdmissionFailures_FullMethodName    = "/controlpanel.v1.ControlPanelService/ListRuntimeAdmissionFailures"
 	ControlPanelService_RevokeRuntimeCredential_FullMethodName         = "/controlpanel.v1.ControlPanelService/RevokeRuntimeCredential"
 	ControlPanelService_RuntimeChannel_FullMethodName                  = "/controlpanel.v1.ControlPanelService/RuntimeChannel"
+	ControlPanelService_ReportRuntimeStartupFailure_FullMethodName     = "/controlpanel.v1.ControlPanelService/ReportRuntimeStartupFailure"
 	ControlPanelService_PrepareDebugWorkspace_FullMethodName           = "/controlpanel.v1.ControlPanelService/PrepareDebugWorkspace"
 	ControlPanelService_LoadDebugDataset_FullMethodName                = "/controlpanel.v1.ControlPanelService/LoadDebugDataset"
 	ControlPanelService_GetRuntimeDebugDataset_FullMethodName          = "/controlpanel.v1.ControlPanelService/GetRuntimeDebugDataset"
 	ControlPanelService_PublishRuntimeNotification_FullMethodName      = "/controlpanel.v1.ControlPanelService/PublishRuntimeNotification"
 	ControlPanelService_RunStrategy_FullMethodName                     = "/controlpanel.v1.ControlPanelService/RunStrategy"
 	ControlPanelService_PreviewRunStrategy_FullMethodName              = "/controlpanel.v1.ControlPanelService/PreviewRunStrategy"
+	ControlPanelService_ValidateStrategySource_FullMethodName          = "/controlpanel.v1.ControlPanelService/ValidateStrategySource"
 	ControlPanelService_StopStrategy_FullMethodName                    = "/controlpanel.v1.ControlPanelService/StopStrategy"
 	ControlPanelService_GetStrategyStatus_FullMethodName               = "/controlpanel.v1.ControlPanelService/GetStrategyStatus"
 )
@@ -129,6 +131,10 @@ type ControlPanelServiceClient interface {
 	// HELLO succeeds, control-panel-service may send multiplexed strategy
 	// REQUEST frames and the runtime responds on the same correlation_id.
 	RuntimeChannel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RuntimeFrame, RuntimeFrame], error)
+	// ReportRuntimeStartupFailure authenticates a failure-only self-hosted
+	// startup report. It records admission diagnostics but never registers,
+	// leases, rotates, or makes a Runtime routable.
+	ReportRuntimeStartupFailure(ctx context.Context, in *ReportRuntimeStartupFailureRequest, opts ...grpc.CallOption) (*ReportRuntimeStartupFailureResponse, error)
 	// PrepareDebugWorkspace asks a connected self-hosted debugger runtime to
 	// prepare its mounted /workspace. The control-plane never writes to the
 	// user's local filesystem directly.
@@ -145,6 +151,9 @@ type ControlPanelServiceClient interface {
 	PublishRuntimeNotification(ctx context.Context, in *PublishRuntimeNotificationRequest, opts ...grpc.CallOption) (*PublishRuntimeNotificationResponse, error)
 	RunStrategy(ctx context.Context, in *strategyv1.RunStrategyRequest, opts ...grpc.CallOption) (*strategyv1.RunStrategyResponse, error)
 	PreviewRunStrategy(ctx context.Context, in *strategyv1.PreviewRunStrategyRequest, opts ...grpc.CallOption) (*strategyv1.PreviewRunStrategyResponse, error)
+	// ValidateStrategySource proxies dependency validation without creating a
+	// strategy session or mutating runtime state.
+	ValidateStrategySource(ctx context.Context, in *strategyv1.ValidateStrategySourceRequest, opts ...grpc.CallOption) (*strategyv1.ValidateStrategySourceResponse, error)
 	StopStrategy(ctx context.Context, in *strategyv1.StopStrategyRequest, opts ...grpc.CallOption) (*strategyv1.StopStrategyResponse, error)
 	GetStrategyStatus(ctx context.Context, in *strategyv1.GetStrategyStatusRequest, opts ...grpc.CallOption) (*strategyv1.GetStrategyStatusResponse, error)
 }
@@ -270,6 +279,16 @@ func (c *controlPanelServiceClient) RuntimeChannel(ctx context.Context, opts ...
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlPanelService_RuntimeChannelClient = grpc.BidiStreamingClient[RuntimeFrame, RuntimeFrame]
 
+func (c *controlPanelServiceClient) ReportRuntimeStartupFailure(ctx context.Context, in *ReportRuntimeStartupFailureRequest, opts ...grpc.CallOption) (*ReportRuntimeStartupFailureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportRuntimeStartupFailureResponse)
+	err := c.cc.Invoke(ctx, ControlPanelService_ReportRuntimeStartupFailure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlPanelServiceClient) PrepareDebugWorkspace(ctx context.Context, in *PrepareDebugWorkspaceRequest, opts ...grpc.CallOption) (*PrepareDebugWorkspaceResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PrepareDebugWorkspaceResponse)
@@ -324,6 +343,16 @@ func (c *controlPanelServiceClient) PreviewRunStrategy(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(strategyv1.PreviewRunStrategyResponse)
 	err := c.cc.Invoke(ctx, ControlPanelService_PreviewRunStrategy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPanelServiceClient) ValidateStrategySource(ctx context.Context, in *strategyv1.ValidateStrategySourceRequest, opts ...grpc.CallOption) (*strategyv1.ValidateStrategySourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(strategyv1.ValidateStrategySourceResponse)
+	err := c.cc.Invoke(ctx, ControlPanelService_ValidateStrategySource_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -438,6 +467,10 @@ type ControlPanelServiceServer interface {
 	// HELLO succeeds, control-panel-service may send multiplexed strategy
 	// REQUEST frames and the runtime responds on the same correlation_id.
 	RuntimeChannel(grpc.BidiStreamingServer[RuntimeFrame, RuntimeFrame]) error
+	// ReportRuntimeStartupFailure authenticates a failure-only self-hosted
+	// startup report. It records admission diagnostics but never registers,
+	// leases, rotates, or makes a Runtime routable.
+	ReportRuntimeStartupFailure(context.Context, *ReportRuntimeStartupFailureRequest) (*ReportRuntimeStartupFailureResponse, error)
 	// PrepareDebugWorkspace asks a connected self-hosted debugger runtime to
 	// prepare its mounted /workspace. The control-plane never writes to the
 	// user's local filesystem directly.
@@ -454,6 +487,9 @@ type ControlPanelServiceServer interface {
 	PublishRuntimeNotification(context.Context, *PublishRuntimeNotificationRequest) (*PublishRuntimeNotificationResponse, error)
 	RunStrategy(context.Context, *strategyv1.RunStrategyRequest) (*strategyv1.RunStrategyResponse, error)
 	PreviewRunStrategy(context.Context, *strategyv1.PreviewRunStrategyRequest) (*strategyv1.PreviewRunStrategyResponse, error)
+	// ValidateStrategySource proxies dependency validation without creating a
+	// strategy session or mutating runtime state.
+	ValidateStrategySource(context.Context, *strategyv1.ValidateStrategySourceRequest) (*strategyv1.ValidateStrategySourceResponse, error)
 	StopStrategy(context.Context, *strategyv1.StopStrategyRequest) (*strategyv1.StopStrategyResponse, error)
 	GetStrategyStatus(context.Context, *strategyv1.GetStrategyStatusRequest) (*strategyv1.GetStrategyStatusResponse, error)
 	mustEmbedUnimplementedControlPanelServiceServer()
@@ -499,6 +535,9 @@ func (UnimplementedControlPanelServiceServer) RevokeRuntimeCredential(context.Co
 func (UnimplementedControlPanelServiceServer) RuntimeChannel(grpc.BidiStreamingServer[RuntimeFrame, RuntimeFrame]) error {
 	return status.Error(codes.Unimplemented, "method RuntimeChannel not implemented")
 }
+func (UnimplementedControlPanelServiceServer) ReportRuntimeStartupFailure(context.Context, *ReportRuntimeStartupFailureRequest) (*ReportRuntimeStartupFailureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportRuntimeStartupFailure not implemented")
+}
 func (UnimplementedControlPanelServiceServer) PrepareDebugWorkspace(context.Context, *PrepareDebugWorkspaceRequest) (*PrepareDebugWorkspaceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PrepareDebugWorkspace not implemented")
 }
@@ -516,6 +555,9 @@ func (UnimplementedControlPanelServiceServer) RunStrategy(context.Context, *stra
 }
 func (UnimplementedControlPanelServiceServer) PreviewRunStrategy(context.Context, *strategyv1.PreviewRunStrategyRequest) (*strategyv1.PreviewRunStrategyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PreviewRunStrategy not implemented")
+}
+func (UnimplementedControlPanelServiceServer) ValidateStrategySource(context.Context, *strategyv1.ValidateStrategySourceRequest) (*strategyv1.ValidateStrategySourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateStrategySource not implemented")
 }
 func (UnimplementedControlPanelServiceServer) StopStrategy(context.Context, *strategyv1.StopStrategyRequest) (*strategyv1.StopStrategyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopStrategy not implemented")
@@ -731,6 +773,24 @@ func _ControlPanelService_RuntimeChannel_Handler(srv interface{}, stream grpc.Se
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlPanelService_RuntimeChannelServer = grpc.BidiStreamingServer[RuntimeFrame, RuntimeFrame]
 
+func _ControlPanelService_ReportRuntimeStartupFailure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportRuntimeStartupFailureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPanelServiceServer).ReportRuntimeStartupFailure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPanelService_ReportRuntimeStartupFailure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPanelServiceServer).ReportRuntimeStartupFailure(ctx, req.(*ReportRuntimeStartupFailureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ControlPanelService_PrepareDebugWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PrepareDebugWorkspaceRequest)
 	if err := dec(in); err != nil {
@@ -839,6 +899,24 @@ func _ControlPanelService_PreviewRunStrategy_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPanelService_ValidateStrategySource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(strategyv1.ValidateStrategySourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPanelServiceServer).ValidateStrategySource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPanelService_ValidateStrategySource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPanelServiceServer).ValidateStrategySource(ctx, req.(*strategyv1.ValidateStrategySourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ControlPanelService_StopStrategy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(strategyv1.StopStrategyRequest)
 	if err := dec(in); err != nil {
@@ -923,6 +1001,10 @@ var ControlPanelService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ControlPanelService_RevokeRuntimeCredential_Handler,
 		},
 		{
+			MethodName: "ReportRuntimeStartupFailure",
+			Handler:    _ControlPanelService_ReportRuntimeStartupFailure_Handler,
+		},
+		{
 			MethodName: "PrepareDebugWorkspace",
 			Handler:    _ControlPanelService_PrepareDebugWorkspace_Handler,
 		},
@@ -945,6 +1027,10 @@ var ControlPanelService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PreviewRunStrategy",
 			Handler:    _ControlPanelService_PreviewRunStrategy_Handler,
+		},
+		{
+			MethodName: "ValidateStrategySource",
+			Handler:    _ControlPanelService_ValidateStrategySource_Handler,
 		},
 		{
 			MethodName: "StopStrategy",

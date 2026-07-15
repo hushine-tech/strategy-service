@@ -5,7 +5,7 @@ import warnings
 
 from . import strategy_service_pb2 as strategy__service__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class StrategyServiceStub(object):
+class StrategyServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -44,6 +44,11 @@ class StrategyServiceStub(object):
                 request_serializer=strategy__service__pb2.PreviewRunStrategyRequest.SerializeToString,
                 response_deserializer=strategy__service__pb2.PreviewRunStrategyResponse.FromString,
                 _registered_method=True)
+        self.ValidateStrategySource = channel.unary_unary(
+                '/strategy.v1.StrategyService/ValidateStrategySource',
+                request_serializer=strategy__service__pb2.ValidateStrategySourceRequest.SerializeToString,
+                response_deserializer=strategy__service__pb2.ValidateStrategySourceResponse.FromString,
+                _registered_method=True)
         self.GetStrategyStatus = channel.unary_unary(
                 '/strategy.v1.StrategyService/GetStrategyStatus',
                 request_serializer=strategy__service__pb2.GetStrategyStatusRequest.SerializeToString,
@@ -56,7 +61,7 @@ class StrategyServiceStub(object):
                 _registered_method=True)
 
 
-class StrategyServiceServicer(object):
+class StrategyServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def RunStrategy(self, request, context):
@@ -77,6 +82,14 @@ class StrategyServiceServicer(object):
         clicks "run": profile classification, supported-ness, and any failing
         declared inputs. The evaluator is guaranteed to be byte-for-byte the same
         code path RunStrategy uses, so the UI can never drift from startup.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ValidateStrategySource(self, request, context):
+        """ValidateStrategySource checks source against the exact dependency profile
+        used by RunStrategy without creating or mutating a session.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -109,6 +122,11 @@ def add_StrategyServiceServicer_to_server(servicer, server):
                     request_deserializer=strategy__service__pb2.PreviewRunStrategyRequest.FromString,
                     response_serializer=strategy__service__pb2.PreviewRunStrategyResponse.SerializeToString,
             ),
+            'ValidateStrategySource': grpc.unary_unary_rpc_method_handler(
+                    servicer.ValidateStrategySource,
+                    request_deserializer=strategy__service__pb2.ValidateStrategySourceRequest.FromString,
+                    response_serializer=strategy__service__pb2.ValidateStrategySourceResponse.SerializeToString,
+            ),
             'GetStrategyStatus': grpc.unary_unary_rpc_method_handler(
                     servicer.GetStrategyStatus,
                     request_deserializer=strategy__service__pb2.GetStrategyStatusRequest.FromString,
@@ -127,7 +145,7 @@ def add_StrategyServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class StrategyService(object):
+class StrategyService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
@@ -174,6 +192,33 @@ class StrategyService(object):
             '/strategy.v1.StrategyService/PreviewRunStrategy',
             strategy__service__pb2.PreviewRunStrategyRequest.SerializeToString,
             strategy__service__pb2.PreviewRunStrategyResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ValidateStrategySource(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/strategy.v1.StrategyService/ValidateStrategySource',
+            strategy__service__pb2.ValidateStrategySourceRequest.SerializeToString,
+            strategy__service__pb2.ValidateStrategySourceResponse.FromString,
             options,
             channel_credentials,
             insecure,

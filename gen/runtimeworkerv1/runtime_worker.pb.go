@@ -7,6 +7,7 @@
 package runtimeworkerv1
 
 import (
+	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	anypb "google.golang.org/protobuf/types/known/anypb"
@@ -911,12 +912,13 @@ func (x *ShutdownWorker) GetReason() string {
 }
 
 type SessionProgress struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	SessionId        string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Status           string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	BarsProcessed    int64                  `protobuf:"varint,3,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
-	Error            string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	LastMarketTimeMs int64                  `protobuf:"varint,5,opt,name=last_market_time_ms,json=lastMarketTimeMs,proto3" json:"last_market_time_ms,omitempty"`
+	state            protoimpl.MessageState             `protogen:"open.v1"`
+	SessionId        string                             `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Status           string                             `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	BarsProcessed    int64                              `protobuf:"varint,3,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
+	Error            string                             `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	LastMarketTimeMs int64                              `protobuf:"varint,5,opt,name=last_market_time_ms,json=lastMarketTimeMs,proto3" json:"last_market_time_ms,omitempty"`
+	DependencyError  *strategyv1.RuntimeDependencyError `protobuf:"bytes,6,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -984,6 +986,13 @@ func (x *SessionProgress) GetLastMarketTimeMs() int64 {
 		return x.LastMarketTimeMs
 	}
 	return 0
+}
+
+func (x *SessionProgress) GetDependencyError() *strategyv1.RuntimeDependencyError {
+	if x != nil {
+		return x.DependencyError
+	}
+	return nil
 }
 
 type PlatformCall struct {
@@ -1055,13 +1064,14 @@ func (x *PlatformCall) GetTimeoutMs() int64 {
 }
 
 type PlatformCallResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CallId        string                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
-	Ok            bool                   `protobuf:"varint,2,opt,name=ok,proto3" json:"ok,omitempty"`
-	Response      *anypb.Any             `protobuf:"bytes,3,opt,name=response,proto3" json:"response,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState             `protogen:"open.v1"`
+	CallId          string                             `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
+	Ok              bool                               `protobuf:"varint,2,opt,name=ok,proto3" json:"ok,omitempty"`
+	Response        *anypb.Any                         `protobuf:"bytes,3,opt,name=response,proto3" json:"response,omitempty"`
+	Error           string                             `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	DependencyError *strategyv1.RuntimeDependencyError `protobuf:"bytes,5,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PlatformCallResult) Reset() {
@@ -1120,6 +1130,13 @@ func (x *PlatformCallResult) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *PlatformCallResult) GetDependencyError() *strategyv1.RuntimeDependencyError {
+	if x != nil {
+		return x.DependencyError
+	}
+	return nil
 }
 
 type IndicatorValue struct {
@@ -1527,13 +1544,14 @@ func (x *WalletSnapshot) GetWallet() *anypb.Any {
 }
 
 type FinalStatus struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	BarsProcessed int64                  `protobuf:"varint,3,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState             `protogen:"open.v1"`
+	SessionId       string                             `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Status          string                             `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	BarsProcessed   int64                              `protobuf:"varint,3,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
+	Error           string                             `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	DependencyError *strategyv1.RuntimeDependencyError `protobuf:"bytes,5,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *FinalStatus) Reset() {
@@ -1594,14 +1612,22 @@ func (x *FinalStatus) GetError() string {
 	return ""
 }
 
+func (x *FinalStatus) GetDependencyError() *strategyv1.RuntimeDependencyError {
+	if x != nil {
+		return x.DependencyError
+	}
+	return nil
+}
+
 type WorkerError struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	ErrorType     string                 `protobuf:"bytes,2,opt,name=error_type,json=errorType,proto3" json:"error_type,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
-	Stack         string                 `protobuf:"bytes,4,opt,name=stack,proto3" json:"stack,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState             `protogen:"open.v1"`
+	SessionId       string                             `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ErrorType       string                             `protobuf:"bytes,2,opt,name=error_type,json=errorType,proto3" json:"error_type,omitempty"`
+	Message         string                             `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	Stack           string                             `protobuf:"bytes,4,opt,name=stack,proto3" json:"stack,omitempty"`
+	DependencyError *strategyv1.RuntimeDependencyError `protobuf:"bytes,5,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *WorkerError) Reset() {
@@ -1660,6 +1686,13 @@ func (x *WorkerError) GetStack() string {
 		return x.Stack
 	}
 	return ""
+}
+
+func (x *WorkerError) GetDependencyError() *strategyv1.RuntimeDependencyError {
+	if x != nil {
+		return x.DependencyError
+	}
+	return nil
 }
 
 type LogEvent struct {
@@ -1786,7 +1819,7 @@ var File_runtime_worker_proto protoreflect.FileDescriptor
 
 const file_runtime_worker_proto_rawDesc = "" +
 	"\n" +
-	"\x14runtime_worker.proto\x12\x11runtime.worker.v1\x1a\x19google/protobuf/any.proto\"\xc2\x06\n" +
+	"\x14runtime_worker.proto\x12\x11runtime.worker.v1\x1a\x19google/protobuf/any.proto\x1a\x16strategy_service.proto\"\xc2\x06\n" +
 	"\vWorkerFrame\x12\x19\n" +
 	"\bframe_id\x18\x01 \x01(\tR\aframeId\x126\n" +
 	"\x05hello\x18\n" +
@@ -1858,25 +1891,27 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\x0eShutdownWorker\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xb4\x01\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x84\x02\n" +
 	"\x0fSessionProgress\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12%\n" +
 	"\x0ebars_processed\x18\x03 \x01(\x03R\rbarsProcessed\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12-\n" +
-	"\x13last_market_time_ms\x18\x05 \x01(\x03R\x10lastMarketTimeMs\"\x8e\x01\n" +
+	"\x13last_market_time_ms\x18\x05 \x01(\x03R\x10lastMarketTimeMs\x12N\n" +
+	"\x10dependency_error\x18\x06 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\x8e\x01\n" +
 	"\fPlatformCall\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x16\n" +
 	"\x06method\x18\x02 \x01(\tR\x06method\x12.\n" +
 	"\arequest\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\arequest\x12\x1d\n" +
 	"\n" +
-	"timeout_ms\x18\x04 \x01(\x03R\ttimeoutMs\"\x85\x01\n" +
+	"timeout_ms\x18\x04 \x01(\x03R\ttimeoutMs\"\xd5\x01\n" +
 	"\x12PlatformCallResult\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x0e\n" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x120\n" +
 	"\bresponse\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\bresponse\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\x89\x01\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12N\n" +
+	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\x89\x01\n" +
 	"\x0eIndicatorValue\x12#\n" +
 	"\rindicator_key\x18\x01 \x01(\tR\findicatorKey\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x01R\x05value\x12\x1b\n" +
@@ -1918,20 +1953,22 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12'\n" +
 	"\x0fsnapshot_reason\x18\x02 \x01(\tR\x0esnapshotReason\x12,\n" +
-	"\x06wallet\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\x06wallet\"\x81\x01\n" +
+	"\x06wallet\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\x06wallet\"\xd1\x01\n" +
 	"\vFinalStatus\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12%\n" +
 	"\x0ebars_processed\x18\x03 \x01(\x03R\rbarsProcessed\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"{\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12N\n" +
+	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\xcb\x01\n" +
 	"\vWorkerError\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
 	"\n" +
 	"error_type\x18\x02 \x01(\tR\terrorType\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12\x14\n" +
-	"\x05stack\x18\x04 \x01(\tR\x05stack\"\xd5\x01\n" +
+	"\x05stack\x18\x04 \x01(\tR\x05stack\x12N\n" +
+	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\xd5\x01\n" +
 	"\bLogEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
@@ -1962,29 +1999,30 @@ func file_runtime_worker_proto_rawDescGZIP() []byte {
 
 var file_runtime_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_runtime_worker_proto_goTypes = []any{
-	(*WorkerFrame)(nil),         // 0: runtime.worker.v1.WorkerFrame
-	(*AgentFrame)(nil),          // 1: runtime.worker.v1.AgentFrame
-	(*WorkerHello)(nil),         // 2: runtime.worker.v1.WorkerHello
-	(*WorkerHeartbeat)(nil),     // 3: runtime.worker.v1.WorkerHeartbeat
-	(*StartSession)(nil),        // 4: runtime.worker.v1.StartSession
-	(*MarketDataBatch)(nil),     // 5: runtime.worker.v1.MarketDataBatch
-	(*OrderUpdateBatch)(nil),    // 6: runtime.worker.v1.OrderUpdateBatch
-	(*StopSession)(nil),         // 7: runtime.worker.v1.StopSession
-	(*ShutdownWorker)(nil),      // 8: runtime.worker.v1.ShutdownWorker
-	(*SessionProgress)(nil),     // 9: runtime.worker.v1.SessionProgress
-	(*PlatformCall)(nil),        // 10: runtime.worker.v1.PlatformCall
-	(*PlatformCallResult)(nil),  // 11: runtime.worker.v1.PlatformCallResult
-	(*IndicatorValue)(nil),      // 12: runtime.worker.v1.IndicatorValue
-	(*IndicatorDefinition)(nil), // 13: runtime.worker.v1.IndicatorDefinition
-	(*IndicatorFrame)(nil),      // 14: runtime.worker.v1.IndicatorFrame
-	(*NotificationEvent)(nil),   // 15: runtime.worker.v1.NotificationEvent
-	(*WalletSnapshot)(nil),      // 16: runtime.worker.v1.WalletSnapshot
-	(*FinalStatus)(nil),         // 17: runtime.worker.v1.FinalStatus
-	(*WorkerError)(nil),         // 18: runtime.worker.v1.WorkerError
-	(*LogEvent)(nil),            // 19: runtime.worker.v1.LogEvent
-	(*AgentError)(nil),          // 20: runtime.worker.v1.AgentError
-	nil,                         // 21: runtime.worker.v1.LogEvent.FieldsEntry
-	(*anypb.Any)(nil),           // 22: google.protobuf.Any
+	(*WorkerFrame)(nil),                       // 0: runtime.worker.v1.WorkerFrame
+	(*AgentFrame)(nil),                        // 1: runtime.worker.v1.AgentFrame
+	(*WorkerHello)(nil),                       // 2: runtime.worker.v1.WorkerHello
+	(*WorkerHeartbeat)(nil),                   // 3: runtime.worker.v1.WorkerHeartbeat
+	(*StartSession)(nil),                      // 4: runtime.worker.v1.StartSession
+	(*MarketDataBatch)(nil),                   // 5: runtime.worker.v1.MarketDataBatch
+	(*OrderUpdateBatch)(nil),                  // 6: runtime.worker.v1.OrderUpdateBatch
+	(*StopSession)(nil),                       // 7: runtime.worker.v1.StopSession
+	(*ShutdownWorker)(nil),                    // 8: runtime.worker.v1.ShutdownWorker
+	(*SessionProgress)(nil),                   // 9: runtime.worker.v1.SessionProgress
+	(*PlatformCall)(nil),                      // 10: runtime.worker.v1.PlatformCall
+	(*PlatformCallResult)(nil),                // 11: runtime.worker.v1.PlatformCallResult
+	(*IndicatorValue)(nil),                    // 12: runtime.worker.v1.IndicatorValue
+	(*IndicatorDefinition)(nil),               // 13: runtime.worker.v1.IndicatorDefinition
+	(*IndicatorFrame)(nil),                    // 14: runtime.worker.v1.IndicatorFrame
+	(*NotificationEvent)(nil),                 // 15: runtime.worker.v1.NotificationEvent
+	(*WalletSnapshot)(nil),                    // 16: runtime.worker.v1.WalletSnapshot
+	(*FinalStatus)(nil),                       // 17: runtime.worker.v1.FinalStatus
+	(*WorkerError)(nil),                       // 18: runtime.worker.v1.WorkerError
+	(*LogEvent)(nil),                          // 19: runtime.worker.v1.LogEvent
+	(*AgentError)(nil),                        // 20: runtime.worker.v1.AgentError
+	nil,                                       // 21: runtime.worker.v1.LogEvent.FieldsEntry
+	(*anypb.Any)(nil),                         // 22: google.protobuf.Any
+	(*strategyv1.RuntimeDependencyError)(nil), // 23: strategy.v1.RuntimeDependencyError
 }
 var file_runtime_worker_proto_depIdxs = []int32{
 	2,  // 0: runtime.worker.v1.WorkerFrame.hello:type_name -> runtime.worker.v1.WorkerHello
@@ -2010,19 +2048,23 @@ var file_runtime_worker_proto_depIdxs = []int32{
 	22, // 20: runtime.worker.v1.StartSession.session_bootstrap:type_name -> google.protobuf.Any
 	22, // 21: runtime.worker.v1.MarketDataBatch.klines:type_name -> google.protobuf.Any
 	22, // 22: runtime.worker.v1.OrderUpdateBatch.events:type_name -> google.protobuf.Any
-	22, // 23: runtime.worker.v1.PlatformCall.request:type_name -> google.protobuf.Any
-	22, // 24: runtime.worker.v1.PlatformCallResult.response:type_name -> google.protobuf.Any
-	12, // 25: runtime.worker.v1.IndicatorFrame.values:type_name -> runtime.worker.v1.IndicatorValue
-	13, // 26: runtime.worker.v1.IndicatorFrame.definitions:type_name -> runtime.worker.v1.IndicatorDefinition
-	22, // 27: runtime.worker.v1.WalletSnapshot.wallet:type_name -> google.protobuf.Any
-	21, // 28: runtime.worker.v1.LogEvent.fields:type_name -> runtime.worker.v1.LogEvent.FieldsEntry
-	0,  // 29: runtime.worker.v1.RuntimeWorkerAgent.Connect:input_type -> runtime.worker.v1.WorkerFrame
-	1,  // 30: runtime.worker.v1.RuntimeWorkerAgent.Connect:output_type -> runtime.worker.v1.AgentFrame
-	30, // [30:31] is the sub-list for method output_type
-	29, // [29:30] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	23, // 23: runtime.worker.v1.SessionProgress.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	22, // 24: runtime.worker.v1.PlatformCall.request:type_name -> google.protobuf.Any
+	22, // 25: runtime.worker.v1.PlatformCallResult.response:type_name -> google.protobuf.Any
+	23, // 26: runtime.worker.v1.PlatformCallResult.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	12, // 27: runtime.worker.v1.IndicatorFrame.values:type_name -> runtime.worker.v1.IndicatorValue
+	13, // 28: runtime.worker.v1.IndicatorFrame.definitions:type_name -> runtime.worker.v1.IndicatorDefinition
+	22, // 29: runtime.worker.v1.WalletSnapshot.wallet:type_name -> google.protobuf.Any
+	23, // 30: runtime.worker.v1.FinalStatus.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	23, // 31: runtime.worker.v1.WorkerError.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	21, // 32: runtime.worker.v1.LogEvent.fields:type_name -> runtime.worker.v1.LogEvent.FieldsEntry
+	0,  // 33: runtime.worker.v1.RuntimeWorkerAgent.Connect:input_type -> runtime.worker.v1.WorkerFrame
+	1,  // 34: runtime.worker.v1.RuntimeWorkerAgent.Connect:output_type -> runtime.worker.v1.AgentFrame
+	34, // [34:35] is the sub-list for method output_type
+	33, // [33:34] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_runtime_worker_proto_init() }

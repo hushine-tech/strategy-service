@@ -6,7 +6,7 @@ import warnings
 from . import control_panel_service_pb2 as control__panel__service__pb2
 from . import strategy_service_pb2 as strategy__service__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -26,7 +26,7 @@ if _version_not_supported:
     )
 
 
-class ControlPanelServiceStub(object):
+class ControlPanelServiceStub:
     """ControlPanelService owns runtime registry, route resolution, heartbeat,
     runtime credentials, and per-user plan/quota for strategy-runtime instances.
 
@@ -97,6 +97,11 @@ class ControlPanelServiceStub(object):
                 request_serializer=control__panel__service__pb2.RuntimeFrame.SerializeToString,
                 response_deserializer=control__panel__service__pb2.RuntimeFrame.FromString,
                 _registered_method=True)
+        self.ReportRuntimeStartupFailure = channel.unary_unary(
+                '/controlpanel.v1.ControlPanelService/ReportRuntimeStartupFailure',
+                request_serializer=control__panel__service__pb2.ReportRuntimeStartupFailureRequest.SerializeToString,
+                response_deserializer=control__panel__service__pb2.ReportRuntimeStartupFailureResponse.FromString,
+                _registered_method=True)
         self.PrepareDebugWorkspace = channel.unary_unary(
                 '/controlpanel.v1.ControlPanelService/PrepareDebugWorkspace',
                 request_serializer=control__panel__service__pb2.PrepareDebugWorkspaceRequest.SerializeToString,
@@ -127,6 +132,11 @@ class ControlPanelServiceStub(object):
                 request_serializer=strategy__service__pb2.PreviewRunStrategyRequest.SerializeToString,
                 response_deserializer=strategy__service__pb2.PreviewRunStrategyResponse.FromString,
                 _registered_method=True)
+        self.ValidateStrategySource = channel.unary_unary(
+                '/controlpanel.v1.ControlPanelService/ValidateStrategySource',
+                request_serializer=strategy__service__pb2.ValidateStrategySourceRequest.SerializeToString,
+                response_deserializer=strategy__service__pb2.ValidateStrategySourceResponse.FromString,
+                _registered_method=True)
         self.StopStrategy = channel.unary_unary(
                 '/controlpanel.v1.ControlPanelService/StopStrategy',
                 request_serializer=strategy__service__pb2.StopStrategyRequest.SerializeToString,
@@ -139,7 +149,7 @@ class ControlPanelServiceStub(object):
                 _registered_method=True)
 
 
-class ControlPanelServiceServicer(object):
+class ControlPanelServiceServicer:
     """ControlPanelService owns runtime registry, route resolution, heartbeat,
     runtime credentials, and per-user plan/quota for strategy-runtime instances.
 
@@ -287,6 +297,15 @@ class ControlPanelServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ReportRuntimeStartupFailure(self, request, context):
+        """ReportRuntimeStartupFailure authenticates a failure-only self-hosted
+        startup report. It records admission diagnostics but never registers,
+        leases, rotates, or makes a Runtime routable.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def PrepareDebugWorkspace(self, request, context):
         """PrepareDebugWorkspace asks a connected self-hosted debugger runtime to
         prepare its mounted /workspace. The control-plane never writes to the
@@ -331,6 +350,14 @@ class ControlPanelServiceServicer(object):
 
     def PreviewRunStrategy(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ValidateStrategySource(self, request, context):
+        """ValidateStrategySource proxies dependency validation without creating a
+        strategy session or mutating runtime state.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -405,6 +432,11 @@ def add_ControlPanelServiceServicer_to_server(servicer, server):
                     request_deserializer=control__panel__service__pb2.RuntimeFrame.FromString,
                     response_serializer=control__panel__service__pb2.RuntimeFrame.SerializeToString,
             ),
+            'ReportRuntimeStartupFailure': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReportRuntimeStartupFailure,
+                    request_deserializer=control__panel__service__pb2.ReportRuntimeStartupFailureRequest.FromString,
+                    response_serializer=control__panel__service__pb2.ReportRuntimeStartupFailureResponse.SerializeToString,
+            ),
             'PrepareDebugWorkspace': grpc.unary_unary_rpc_method_handler(
                     servicer.PrepareDebugWorkspace,
                     request_deserializer=control__panel__service__pb2.PrepareDebugWorkspaceRequest.FromString,
@@ -435,6 +467,11 @@ def add_ControlPanelServiceServicer_to_server(servicer, server):
                     request_deserializer=strategy__service__pb2.PreviewRunStrategyRequest.FromString,
                     response_serializer=strategy__service__pb2.PreviewRunStrategyResponse.SerializeToString,
             ),
+            'ValidateStrategySource': grpc.unary_unary_rpc_method_handler(
+                    servicer.ValidateStrategySource,
+                    request_deserializer=strategy__service__pb2.ValidateStrategySourceRequest.FromString,
+                    response_serializer=strategy__service__pb2.ValidateStrategySourceResponse.SerializeToString,
+            ),
             'StopStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.StopStrategy,
                     request_deserializer=strategy__service__pb2.StopStrategyRequest.FromString,
@@ -453,7 +490,7 @@ def add_ControlPanelServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ControlPanelService(object):
+class ControlPanelService:
     """ControlPanelService owns runtime registry, route resolution, heartbeat,
     runtime credentials, and per-user plan/quota for strategy-runtime instances.
 
@@ -761,6 +798,33 @@ class ControlPanelService(object):
             _registered_method=True)
 
     @staticmethod
+    def ReportRuntimeStartupFailure(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/controlpanel.v1.ControlPanelService/ReportRuntimeStartupFailure',
+            control__panel__service__pb2.ReportRuntimeStartupFailureRequest.SerializeToString,
+            control__panel__service__pb2.ReportRuntimeStartupFailureResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def PrepareDebugWorkspace(request,
             target,
             options=(),
@@ -912,6 +976,33 @@ class ControlPanelService(object):
             '/controlpanel.v1.ControlPanelService/PreviewRunStrategy',
             strategy__service__pb2.PreviewRunStrategyRequest.SerializeToString,
             strategy__service__pb2.PreviewRunStrategyResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ValidateStrategySource(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/controlpanel.v1.ControlPanelService/ValidateStrategySource',
+            strategy__service__pb2.ValidateStrategySourceRequest.SerializeToString,
+            strategy__service__pb2.ValidateStrategySourceResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -5,7 +5,7 @@ import warnings
 
 from . import runtime_worker_pb2 as runtime__worker__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class RuntimeWorkerAgentStub(object):
+class RuntimeWorkerAgentStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -41,11 +41,13 @@ class RuntimeWorkerAgentStub(object):
                 _registered_method=True)
 
 
-class RuntimeWorkerAgentServicer(object):
+class RuntimeWorkerAgentServicer:
     """Missing associated documentation comment in .proto file."""
 
     def Connect(self, request_iterator, context):
-        """Missing associated documentation comment in .proto file."""
+        """Connect carries session work plus typed dependency failures without
+        collapsing admission diagnostics into unstructured status text.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -66,7 +68,7 @@ def add_RuntimeWorkerAgentServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class RuntimeWorkerAgent(object):
+class RuntimeWorkerAgent:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod

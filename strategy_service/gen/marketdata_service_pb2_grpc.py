@@ -5,7 +5,7 @@ import warnings
 
 from . import marketdata_service_pb2 as marketdata__service__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class MarketDataControlPlaneServiceStub(object):
+class MarketDataControlPlaneServiceStub:
     """MarketDataControlPlaneService owns the demand-driven market-data control
     plane: user-declared stream requests, aggregated physical-stream state,
     session-scoped TTL leases, and finite historical backfill windows.
@@ -155,7 +155,7 @@ class MarketDataControlPlaneServiceStub(object):
                 _registered_method=True)
 
 
-class MarketDataControlPlaneServiceServicer(object):
+class MarketDataControlPlaneServiceServicer:
     """MarketDataControlPlaneService owns the demand-driven market-data control
     plane: user-declared stream requests, aggregated physical-stream state,
     session-scoped TTL leases, and finite historical backfill windows.
@@ -451,7 +451,7 @@ def add_MarketDataControlPlaneServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class MarketDataControlPlaneService(object):
+class MarketDataControlPlaneService:
     """MarketDataControlPlaneService owns the demand-driven market-data control
     plane: user-declared stream requests, aggregated physical-stream state,
     session-scoped TTL leases, and finite historical backfill windows.

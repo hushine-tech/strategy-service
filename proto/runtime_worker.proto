@@ -5,8 +5,11 @@ package runtime.worker.v1;
 option go_package = "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1;runtimeworkerv1";
 
 import "google/protobuf/any.proto";
+import "strategy_service.proto";
 
 service RuntimeWorkerAgent {
+  // Connect carries session work plus typed dependency failures without
+  // collapsing admission diagnostics into unstructured status text.
   rpc Connect(stream WorkerFrame) returns (stream AgentFrame);
 }
 
@@ -95,6 +98,7 @@ message SessionProgress {
   int64 bars_processed = 3;
   string error = 4;
   int64 last_market_time_ms = 5;
+  strategy.v1.RuntimeDependencyError dependency_error = 6;
 }
 
 message PlatformCall {
@@ -109,6 +113,7 @@ message PlatformCallResult {
   bool ok = 2;
   google.protobuf.Any response = 3;
   string error = 4;
+  strategy.v1.RuntimeDependencyError dependency_error = 5;
 }
 
 message IndicatorValue {
@@ -159,6 +164,7 @@ message FinalStatus {
   string status = 2;
   int64 bars_processed = 3;
   string error = 4;
+  strategy.v1.RuntimeDependencyError dependency_error = 5;
 }
 
 message WorkerError {
@@ -166,6 +172,7 @@ message WorkerError {
   string error_type = 2;
   string message = 3;
   string stack = 4;
+  strategy.v1.RuntimeDependencyError dependency_error = 5;
 }
 
 message LogEvent {
