@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import sys
 
 import pytest
 
@@ -21,9 +22,38 @@ from strategy_service.types import (
     OrderType,
     PositionSide,
 )
+from strategy_service.strategy_imports import (
+    gate_strategy_source,
+    prepare_strategy,
+    resolve_strategy_source,
+)
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from tests.helpers.order_client import FilledOrderClient
 from tests.helpers.wallet_fixtures import make_backtest_wallet
+
+
+def _create_strategy(
+    engine,
+    user_id,
+    strategy_path,
+    wallet,
+    *args,
+    strategy_code=None,
+    **kwargs,
+):
+    gate = gate_strategy_source(
+        resolve_strategy_source(strategy_path, strategy_code),
+        python_invocation_path=sys.executable,
+    )
+    assert gate.ok, gate.issues
+    assert gate.gated_source is not None
+    return engine.create_strategy(
+        user_id,
+        prepare_strategy(gate.gated_source),
+        wallet,
+        *args,
+        **kwargs,
+    )
 
 
 def _portfolio_wallet(default_wallet, *routes: tuple[str, str]) -> PortfolioWalletRuntime:
@@ -269,7 +299,7 @@ class MyStrategy:
     def on_market_data(self, data, wallet):
         return None
 """
-    svc.create_strategy("u1", "<db:router_test>", _empty_wallet(), strategy_code=code)
+    _create_strategy(svc, "u1", "<db:router_test>", _empty_wallet(), strategy_code=code)
 
     assert (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "ETHUSDT", "1m") in svc.strategy_router
     assert (Exchange.BINANCE, Market.PERPETUAL_FUTURES, "BTCUSDT", "1m") not in svc.strategy_router
@@ -287,7 +317,7 @@ class MyStrategy:
     def on_market_data(self, data, wallet):
         return None
 """
-    svc.create_strategy("u1", "<db:drop_test>", _empty_wallet(), strategy_code=code)
+    _create_strategy(svc, "u1", "<db:drop_test>", _empty_wallet(), strategy_code=code)
 
     assert svc.running_strategy(_md("ETHUSDT", Market.PERPETUAL_FUTURES, "1m")) is True
     assert svc.running_strategy(_md("ETHUSDT", Market.SPOT, "1m")) is False
@@ -309,7 +339,7 @@ class MyStrategy:
         self.ticks_seen += 1
         return None
 """
-    strat = svc.create_strategy("u1", "<db:empty_wallet_routes>", _empty_wallet(), strategy_code=code)
+    strat = _create_strategy(svc, "u1", "<db:empty_wallet_routes>", _empty_wallet(), strategy_code=code)
     svc.running_strategy(_md("ETHUSDT", Market.PERPETUAL_FUTURES, "1m"))
     assert strat._strategy_instance.ticks_seen == 1
 
@@ -331,7 +361,7 @@ class MyStrategy:
         self.seen.append((data.trigger.market, data.trigger.symbol, data.trigger.interval))
         return None
 """
-    strat = svc.create_strategy("u1", "<db:multi_symbol>", _empty_wallet(), strategy_code=code)
+    strat = _create_strategy(svc, "u1", "<db:multi_symbol>", _empty_wallet(), strategy_code=code)
     svc.running_strategy(_md("BTCUSDT", Market.PERPETUAL_FUTURES, "1m"))
     svc.running_strategy(_md("ETHUSDT", Market.PERPETUAL_FUTURES, "1m"))
     assert strat._strategy_instance.seen == [
@@ -357,7 +387,7 @@ class MyStrategy:
         self.markets.append(data.trigger.market)
         return None
 """
-    strat = svc.create_strategy("u1", "<db:mixed>", _empty_wallet(), strategy_code=code)
+    strat = _create_strategy(svc, "u1", "<db:mixed>", _empty_wallet(), strategy_code=code)
     svc.running_strategy(_md("BTCUSDT", Market.PERPETUAL_FUTURES, "1m"))
     svc.running_strategy(_md("BTCUSDT", Market.SPOT, "1m"))
     assert strat._strategy_instance.markets == [Market.PERPETUAL_FUTURES, Market.SPOT]
@@ -380,7 +410,7 @@ class MyStrategy:
         self.intervals.append(data.trigger.interval)
         return None
 """
-    strat = svc.create_strategy("u1", "<db:multi_interval>", _empty_wallet(), strategy_code=code)
+    strat = _create_strategy(svc, "u1", "<db:multi_interval>", _empty_wallet(), strategy_code=code)
     svc.running_strategy(_md("BTCUSDT", Market.PERPETUAL_FUTURES, "1m"))
     svc.running_strategy(_md("BTCUSDT", Market.PERPETUAL_FUTURES, "5m"))
     assert strat._strategy_instance.intervals == ["1m", "5m"]
@@ -406,7 +436,7 @@ class MyStrategy:
         self.snapshot = {"1m": perp["1m"], "5m": perp["5m"]}
         return None
 """
-    strat = svc.create_strategy("u1", "<db:multi_interval_view>", _empty_wallet(), strategy_code=code)
+    strat = _create_strategy(svc, "u1", "<db:multi_interval_view>", _empty_wallet(), strategy_code=code)
     svc.running_strategy(_md("BTCUSDT", Market.PERPETUAL_FUTURES, "1m", price=50_000.0))
     svc.running_strategy(_md("BTCUSDT", Market.PERPETUAL_FUTURES, "5m", price=50_100.0))
     snap = strat._strategy_instance.snapshot
@@ -416,21 +446,27 @@ class MyStrategy:
 
 
 def test_create_strategy_without_inputs_fails_fast():
-    svc = StrategyEngine()
     code = "class MyStrategy:\n    ORDER_TARGETS = []\n    def on_market_data(self, data, wallet):\n        return None\n"
-    with pytest.raises(StrategyDeclarationError, match="at least one stream"):
-        svc.create_strategy("u1", "<db:no_inputs>", _empty_wallet(), strategy_code=code)
+    gate = gate_strategy_source(
+        resolve_strategy_source("<db:no_inputs>", code),
+        python_invocation_path=sys.executable,
+    )
+    assert not gate.ok
+    assert [issue.code for issue in gate.issues] == ["missing_inputs"]
 
 
 def test_create_strategy_with_empty_inputs_fails_fast():
-    svc = StrategyEngine()
     code = "class MyStrategy:\n    INPUTS = []\n    ORDER_TARGETS = []\n    def on_market_data(self, data, wallet):\n        return None\n"
-    with pytest.raises(StrategyDeclarationError, match="at least one stream"):
-        svc.create_strategy("u1", "<db:empty_inputs>", _empty_wallet(), strategy_code=code)
+    gate = gate_strategy_source(
+        resolve_strategy_source("<db:empty_inputs>", code),
+        python_invocation_path=sys.executable,
+    )
+    assert not gate.ok
+    assert [issue.code for issue in gate.issues] == ["invalid_inputs"]
+    assert "at least one stream" in gate.issues[0].message
 
 
 def test_create_strategy_with_invalid_market_fails_fast():
-    svc = StrategyEngine()
     code = (
         "class MyStrategy:\n"
         '    INPUTS = [{"exchange": "binance", "market": "margin", "symbol": "BTCUSDT", "interval": "1m"}]\n'
@@ -438,8 +474,13 @@ def test_create_strategy_with_invalid_market_fails_fast():
         "    def on_market_data(self, data, wallet):\n"
         "        return None\n"
     )
-    with pytest.raises(StrategyDeclarationError, match="unsupported market"):
-        svc.create_strategy("u1", "<db:bad_market>", _empty_wallet(), strategy_code=code)
+    gate = gate_strategy_source(
+        resolve_strategy_source("<db:bad_market>", code),
+        python_invocation_path=sys.executable,
+    )
+    assert not gate.ok
+    assert [issue.code for issue in gate.issues] == ["invalid_inputs"]
+    assert "unsupported market" in gate.issues[0].message
 
 
 def test_order_guard_rejects_undeclared_symbol():
@@ -469,7 +510,7 @@ class MyStrategy:
     def on_market_data(self, data, wallet):
         return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="BTCUSDT", side=OrderSide.BUY, qty="0.1", order_type=OrderType.MARKET, position_side=PositionSide.BOTH)
 """
-    svc.create_strategy("u1", "<db:rogue_symbol>", _portfolio_wallet(raw_wallet), strategy_code=code)
+    _create_strategy(svc, "u1", "<db:rogue_symbol>", _portfolio_wallet(raw_wallet), strategy_code=code)
     with pytest.raises(ValueError, match="outside ORDER_TARGETS"):
         svc.running_strategy(_md("TESTUSDT", Market.PERPETUAL_FUTURES, "1m"))
     assert raw_wallet.futures.positions[("BTCUSDT", 0)].net_qty == 0.0
@@ -491,7 +532,7 @@ class MyStrategy:
     def on_market_data(self, data, wallet):
         return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="TESTUSDT", side=OrderSide.BUY, qty="0.5", order_type=OrderType.MARKET)
 """
-    svc.create_strategy("u1", "<db:rogue_market>", _portfolio_wallet(raw_wallet), strategy_code=code)
+    _create_strategy(svc, "u1", "<db:rogue_market>", _portfolio_wallet(raw_wallet), strategy_code=code)
     with pytest.raises(ValueError, match="outside ORDER_TARGETS"):
         svc.running_strategy(_md("TESTUSDT", Market.PERPETUAL_FUTURES, "1m"))
 
@@ -523,7 +564,7 @@ class MyStrategy:
     def on_market_data(self, data, wallet):
         return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="TESTUSDT", side=OrderSide.BUY, qty="0.1", order_type=OrderType.MARKET, position_side=PositionSide.BOTH)
 """
-    svc.create_strategy(
+    _create_strategy(svc,
         "u1",
         "<db:declared_ok>",
         _portfolio_wallet(raw_wallet),
@@ -545,6 +586,6 @@ class MyStrategy:
     def on_market_data(self, data, wallet):
         return OrderDecision(exchange=Exchange.BINANCE, market=Market.SPOT, symbol="TESTUSDT", side=OrderSide.BUY, qty="0.1", order_type=OrderType.MARKET)
 """
-    svc.create_strategy("u1", "<db:override>", _empty_wallet(), strategy_code=code)
+    _create_strategy(svc, "u1", "<db:override>", _empty_wallet(), strategy_code=code)
     with pytest.raises(ValueError, match="outside ORDER_TARGETS"):
         svc.running_strategy(_md("TESTUSDT", Market.PERPETUAL_FUTURES, "1m"))

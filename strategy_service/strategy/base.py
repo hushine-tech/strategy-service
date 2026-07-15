@@ -1,32 +1,39 @@
 from __future__ import annotations
 
-import importlib
 import logging
 import math
 import re
+import threading
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
-from strategy_service.indicators import IndicatorDefinition, IndicatorFrame, IndicatorWriter, parse_indicator_definitions
+from strategy_service.indicators import IndicatorDefinition, IndicatorFrame, IndicatorWriter
 from strategy_service.inputs import (
     InputView,
     StrategyDeclarations,
-    StrategyDeclarationError,
     StrategyInput,
     _normalize_exchange,
     _normalize_market,
-    extract_declarations,
-    parse_declared_inputs,
 )
 from strategy_service.notification import StrategyNotifier
 from strategy_service.order_client import OrderClient
 from strategy_service.types import MarketData, OrderDecision, OrderSide, OrderType, OrderUpdateEvent
 from strategy_service.wallet.order_types import ExecutionFeedback, OrderResponse
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from strategy_service.strategy_imports import (
+    CapturedFileSignature,
+    GatedStrategySource,
+    PreparedStrategy,
+    StrategySourceLoadError,
+    _claim_prepared_strategy,
+    gate_strategy_source,
+    prepare_strategy,
+    resolve_strategy_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +49,45 @@ _TERMINAL_ORDER_STATUSES = {
 
 class StrategyUserCodeError(RuntimeError):
     """Raised when user strategy code fails inside a runtime callback."""
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyUserCodeFatalError(BaseException):
+    stage: Literal[
+        "attribute",
+        "callback",
+        "result_iteration",
+        "decision_normalization",
+    ]
+
+    def __str__(self) -> str:
+        return "strategy user code terminated"
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyActivationError(Exception):
+    reason: Literal["order_cursor_failed"]
+
+    def __str__(self) -> str:
+        return "strategy activation failed"
+
+
+def _exception_setattr(self: BaseException, name: str, value: object) -> None:
+    if name in {"__traceback__", "__cause__", "__context__", "__suppress_context__"}:
+        BaseException.__setattr__(self, name, value)
+        return
+    raise FrozenInstanceError(f"cannot assign to field {name!r}")
+
+
+StrategyActivationError.__setattr__ = _exception_setattr  # type: ignore[method-assign]
+StrategyUserCodeFatalError.__setattr__ = _exception_setattr  # type: ignore[method-assign]
+
+
+def _user_code_fatal(stage: str) -> StrategyUserCodeFatalError:
+    error = StrategyUserCodeFatalError(stage=stage)  # type: ignore[arg-type]
+    error.__cause__ = None
+    error.__context__ = None
+    return error
 
 
 USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX = "user strategy on_market_data failed:"
@@ -199,125 +245,6 @@ class _PreparedOrderDecision:
     route_wallet: Any
 
 
-def _load_strategy_instance_from_code(filename: str, source: str) -> Any:
-    ns: dict = {}
-    try:
-        code = compile(source, filename, "exec")
-        exec(code, ns)  # noqa: S102
-    except Exception as e:
-        raise ImportError(
-            f"failed to exec strategy code: {e}"
-        ) from e
-    if "MyStrategy" not in ns:
-        raise AttributeError(
-            "strategy code has no 'MyStrategy' class"
-        )
-    return ns["MyStrategy"]()
-
-
-def _load_strategy_instance(strategy_path: str, strategy_code: str | None = None) -> Any:
-    if strategy_code is not None:
-        # Dynamic exec for DB-backed strategies.
-        return _load_strategy_instance_from_code(strategy_path, strategy_code)
-
-    source_path = Path(strategy_path)
-    if source_path.is_file():
-        try:
-            source = source_path.read_text(encoding="utf-8")
-        except OSError as e:
-            raise ImportError(f"failed to read strategy source {strategy_path!r}: {e}") from e
-        return _load_strategy_instance_from_code(str(source_path), source)
-
-    try:
-        module = importlib.import_module(strategy_path)
-    except ImportError as e:
-        raise ImportError(
-            f"failed to import strategy module {strategy_path!r}: {e}"
-        ) from e
-    if not hasattr(module, "MyStrategy"):
-        raise AttributeError(
-            f"module {strategy_path!r} has no 'MyStrategy' class"
-        )
-    cls = getattr(module, "MyStrategy")
-    return cls()
-
-
-def _read_declared_inputs(strategy_instance: Any) -> list[StrategyInput]:
-    """Extract + normalize ``MyStrategy.INPUTS`` from an already-loaded strategy.
-
-    Accepted forms (see ``inputs.parse_declared_inputs``):
-      - class attribute ``INPUTS``
-      - callable ``inputs()`` / ``declared_inputs()`` returning the same shape
-    """
-    raw = getattr(strategy_instance, "INPUTS", None)
-    if raw is None:
-        # Also accept a method variant for future compatibility.
-        for attr in ("inputs", "declared_inputs"):
-            fn = getattr(strategy_instance, attr, None)
-            if callable(fn):
-                try:
-                    raw = fn()
-                except Exception as e:
-                    raise StrategyDeclarationError(
-                        f"strategy.{attr}() raised: {e}"
-                    ) from e
-                break
-    return parse_declared_inputs(raw)
-
-
-def _read_indicator_definitions(strategy_instance: Any) -> list[IndicatorDefinition]:
-    try:
-        return parse_indicator_definitions(getattr(strategy_instance, "INDICATORS", None))
-    except ValueError as exc:
-        raise StrategyDeclarationError(f"invalid INDICATORS: {exc}") from exc
-
-
-def extract_strategy_inputs(
-    strategy_path: str,
-    strategy_code: str | None = None,
-) -> list[StrategyInput]:
-    """Introspection helper — loads the strategy and returns its declared inputs.
-
-    Callers that want a best-effort symbol preview (e.g. gateway / preflight)
-    can use this; it will raise ``StrategyDeclarationError`` if the strategy
-    has no valid declaration, surfacing the same contract violation the
-    runtime would see.
-    """
-    strategy = _load_strategy_instance(strategy_path, strategy_code)
-    return _read_declared_inputs(strategy)
-
-
-def extract_strategy_declarations(
-    strategy_path: str,
-    strategy_code: str | None = None,
-) -> StrategyDeclarations:
-    """Load a strategy and return normalized INPUTS + ORDER_TARGETS."""
-    strategy = _load_strategy_instance(strategy_path, strategy_code)
-    return extract_declarations(strategy)
-
-
-def flatten_declared_inputs_to_symbols(
-    declared: list[StrategyInput],
-) -> list[tuple[str, str]]:
-    """Collapse a list of declared inputs to ``[(symbol, market), ...]`` for
-    the preflight / live-subscription code that still operates at that
-    granularity. Deduplicates by ``(symbol, market)``.
-
-    Callers MUST call ``extract_strategy_inputs`` (which raises on declaration
-    errors) first and surface those errors themselves; this helper deliberately
-    does not swallow anything.
-    """
-    seen: set[tuple[str, str]] = set()
-    out: list[tuple[str, str]] = []
-    for inp in declared:
-        key = (inp.symbol, inp.market)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(key)
-    return out
-
-
 class BaseStrategy:
     """Dispatcher from declared-input ticks to wallet + user signal + order.
 
@@ -332,66 +259,98 @@ class BaseStrategy:
 
     def __init__(
         self,
-        strategy_path: str,
+        prepared_strategy: PreparedStrategy,
         wallet: PortfolioWalletRuntime,
         order_client: OrderClient | None = None,
         portfolio_id: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
-        strategy_code: str | None = None,
         notifier: StrategyNotifier | None = None,
-        hot_reload: bool = False,
         on_user_code_error: Callable[[str], None] | None = None,
         on_user_code_recovered: Callable[[], None] | None = None,
+        on_user_code_fatal: Callable[[StrategyUserCodeFatalError], None] | None = None,
     ) -> None:
-        if not isinstance(wallet, PortfolioWalletRuntime):
-            raise TypeError("BaseStrategy wallet must be PortfolioWalletRuntime")
-        self.strategy_path = strategy_path
-        self.wallet = wallet
-        self.on_order_callback: Any | None = None
-        self.on_indicator_frame: Callable[[str, int, int, IndicatorFrame], None] | None = None
-        self._order_client: OrderClient = order_client or OrderClient()
-        self._portfolio_id: int = portfolio_id
-        self._strategy_id: int = strategy_id
-        self._session_id: str = session_id
-        self._strategy_code: str | None = strategy_code
-        self._hot_reload_enabled = bool(hot_reload and strategy_code is None)
-        self._hot_reload_source_path: Path | None = self._resolve_hot_reload_source_path(strategy_path)
-        self._hot_reload_signature: tuple[int, int] | None = None
-        self._on_user_code_error = on_user_code_error
-        self._on_user_code_recovered = on_user_code_recovered
-        self._notifier = (notifier or StrategyNotifier()).bind_context(
-            portfolio_id=portfolio_id,
-            strategy_id=strategy_id,
-            session_id=session_id,
-        )
+        def bind_candidate(
+            strategy_instance: object,
+            declarations: StrategyDeclarations,
+            indicator_definitions: tuple[IndicatorDefinition, ...],
+            gated_source: GatedStrategySource,
+        ) -> dict[str, object]:
+            failed = False
+            candidate: dict[str, object] = {}
+            try:
+                if not isinstance(wallet, PortfolioWalletRuntime):
+                    raise TypeError("BaseStrategy wallet must be PortfolioWalletRuntime")
+                resolved_order_client = order_client or OrderClient()
+                resolved_notifier = notifier or StrategyNotifier()
+                bound_notifier = resolved_notifier.bind_context(
+                    portfolio_id=portfolio_id,
+                    strategy_id=strategy_id,
+                    session_id=session_id,
+                )
+                writer = IndicatorWriter(list(indicator_definitions))
+                setattr(strategy_instance, "notify", bound_notifier)
+                setattr(strategy_instance, "indicators", writer)
+                resolved = gated_source.resolved
+                inputs = list(declarations.inputs)
+                candidate = {
+                    "strategy_path": resolved.filename,
+                    "wallet": wallet,
+                    "on_order_callback": None,
+                    "on_indicator_frame": None,
+                    "_order_client": resolved_order_client,
+                    "_portfolio_id": portfolio_id,
+                    "_strategy_id": strategy_id,
+                    "_session_id": session_id,
+                    "_hot_reload_enabled": resolved.hot_reload_path is not None,
+                    "_hot_reload_source_path": (
+                        Path(resolved.hot_reload_path)
+                        if resolved.hot_reload_path is not None
+                        else None
+                    ),
+                    "_hot_reload_signature": resolved.hot_reload_signature,
+                    "_python_invocation_path": gated_source.python_invocation_path,
+                    "_on_user_code_error": on_user_code_error,
+                    "_on_user_code_recovered": on_user_code_recovered,
+                    "_on_user_code_fatal": on_user_code_fatal,
+                    "_notifier": bound_notifier,
+                    "_strategy_instance": strategy_instance,
+                    "_decl": declarations,
+                    "_indicator_definitions": list(indicator_definitions),
+                    "_indicator_writer": writer,
+                    "_inputs": inputs,
+                    "_order_targets": list(declarations.order_targets),
+                    "_input_keys": declarations.input_keys,
+                    "_order_target_keys": declarations.order_target_keys,
+                    "_required_routes": declarations.required_routes,
+                    "_view": InputView(inputs),
+                    "_blocked_order_keys": set(),
+                    "_order_event_cursor": 0,
+                    "_order_cursor_activated": False,
+                    "_order_cursor_lock": threading.Lock(),
+                    "_strategy_swap_lock": threading.Lock(),
+                    "_reload_lock": threading.Lock(),
+                    "_fatal_lock": threading.Lock(),
+                    "_callback_execution_lock": threading.RLock(),
+                    "_callback_generation_depth": 0,
+                    "_fatal_error": None,
+                    "_callbacks_disarmed": False,
+                    "_fatal_event": threading.Event(),
+                    "_settled_lifecycle_event_ids": set(),
+                    "_sync_settled_order_quantities": {},
+                    "_last_market_time": None,
+                }
+            except BaseException:
+                failed = True
+            if failed:
+                error = StrategySourceLoadError(reason="binding_failed")
+                error.__cause__ = None
+                error.__context__ = None
+                raise error
+            return candidate
 
-        # Load + validate the user strategy at construction time so any
-        # declaration error fails fast (before any tick is routed).
-        self._strategy_instance: Any = _load_strategy_instance(
-            strategy_path, strategy_code=strategy_code,
-        )
-        setattr(self._strategy_instance, "notify", self._notifier)
-        self._decl = extract_declarations(self._strategy_instance)
-        self._indicator_definitions = _read_indicator_definitions(self._strategy_instance)
-        self._indicator_writer = self._install_indicator_writer(
-            self._strategy_instance,
-            self._indicator_definitions,
-        )
-        self._inputs: list[StrategyInput] = self._decl.inputs
-        self._order_targets = self._decl.order_targets
-        self._input_keys: set[tuple[str, str, str, str]] = self._decl.input_keys
-        self._order_target_keys: set[tuple[str, str, str]] = self._decl.order_target_keys
-        self._required_routes: set[tuple[str, str]] = self._decl.required_routes
-        self._view: InputView = InputView(self._inputs)
-        self._blocked_order_keys: set[tuple[str, str, str]] = set()
-        self._order_event_cursor: int = 0
-        self._settled_lifecycle_event_ids: set[int] = set()
-        self._sync_settled_order_quantities: dict[str, float] = {}
-        self._last_market_time: Any | None = None
-        if self._hot_reload_source_path is not None:
-            self._hot_reload_signature = self._strategy_file_signature(self._hot_reload_source_path)
-        self._initialize_order_event_cursor()
+        candidate = _claim_prepared_strategy(prepared_strategy, bind_candidate)
+        self.__dict__.update(candidate)
 
     @property
     def declared_inputs(self) -> list[StrategyInput]:
@@ -404,6 +363,44 @@ class BaseStrategy:
 
     def _get_strategy(self) -> Any:
         return self._strategy_instance
+
+    def _callbacks_are_armed(self) -> bool:
+        with self._fatal_lock:
+            return not self._callbacks_disarmed
+
+    def _latch_user_code_fatal(self, stage: str) -> None:
+        self._record_user_code_fatal(_user_code_fatal(stage))
+
+    def _record_user_code_fatal(self, fatal: StrategyUserCodeFatalError) -> None:
+        callback: Callable[[StrategyUserCodeFatalError], None] | None = None
+        with self._callback_execution_lock:
+            with self._fatal_lock:
+                if self._fatal_error is not None:
+                    return
+                self._fatal_error = fatal
+                self._callbacks_disarmed = True
+                self._fatal_event.set()
+                callback = self._on_user_code_fatal
+        if callback is None:
+            return
+        try:
+            callback(fatal)
+        except BaseException:
+            logger.error(
+                "STRATEGY_USER_CODE_FATAL_WAKE_FAILED session=%s strategy_id=%s",
+                self._session_id,
+                self._strategy_id,
+            )
+
+    def has_user_code_fatal(self) -> bool:
+        with self._fatal_lock:
+            return self._fatal_error is not None
+
+    def raise_if_user_code_fatal(self) -> None:
+        with self._fatal_lock:
+            fatal = self._fatal_error
+        if fatal is not None:
+            raise fatal
 
     @property
     def indicator_definitions(self) -> list[IndicatorDefinition]:
@@ -425,149 +422,331 @@ class BaseStrategy:
         if source_path.is_file():
             return source_path
         logger.warning(
-            "strategy hot reload disabled: source file does not exist: session=%s path=%s",
+            "STRATEGY_HOT_RELOAD_SOURCE_UNAVAILABLE session=%s strategy_id=%s",
             self._session_id,
-            strategy_path,
+            self._strategy_id,
         )
         return None
 
     @staticmethod
-    def _strategy_file_signature(path: Path) -> tuple[int, int]:
+    def _strategy_file_signature(path: Path) -> CapturedFileSignature:
         stat = path.stat()
-        return int(stat.st_mtime_ns), int(stat.st_size)
+        return CapturedFileSignature(
+            device=int(stat.st_dev),
+            inode=int(stat.st_ino),
+            mtime_ns=int(stat.st_mtime_ns),
+            ctime_ns=int(stat.st_ctime_ns),
+            size=int(stat.st_size),
+        )
 
     def _maybe_reload_strategy(self) -> None:
+        with self._callback_execution_lock:
+            if self._callback_generation_depth > 1:
+                return
+            with self._reload_lock:
+                self._maybe_reload_strategy_locked()
+
+    def _begin_callback_generation(self) -> None:
+        self._callback_generation_depth += 1
+
+    def _finish_callback_generation(self) -> None:
+        self._callback_generation_depth -= 1
+
+    def _maybe_reload_strategy_locked(self) -> None:
         source_path = self._hot_reload_source_path
         if source_path is None:
             return
         try:
             signature = self._strategy_file_signature(source_path)
         except OSError:
-            logger.warning(
-                "strategy hot reload skipped: source file unavailable: session=%s path=%s",
-                self._session_id,
-                source_path,
-                exc_info=True,
-            )
+            logger.warning("STRATEGY_HOT_RELOAD_SOURCE_UNAVAILABLE session=%s", self._session_id)
             return
         if signature == self._hot_reload_signature:
             return
 
         try:
-            candidate = _load_strategy_instance(str(source_path))
-            candidate_decl = extract_declarations(candidate)
-            candidate_indicator_definitions = _read_indicator_definitions(candidate)
-        except Exception:  # noqa: BLE001
+            resolved = resolve_strategy_source(str(source_path), None, hot_reload=True)
+            gate = gate_strategy_source(
+                resolved,
+                python_invocation_path=self._python_invocation_path,
+            )
+            if not gate.ok or gate.gated_source is None:
+                self._hot_reload_signature = signature
+                logger.warning("STRATEGY_HOT_RELOAD_GATE_FAILED session=%s", self._session_id)
+                return
+            prepared = prepare_strategy(gate.gated_source)
+            candidate_decl = prepared.declarations
+        except BaseException:
+            self._hot_reload_signature = signature
+            logger.warning("STRATEGY_HOT_RELOAD_PREPARE_FAILED session=%s", self._session_id)
+            return
+
+        if candidate_decl != self._decl:
             self._hot_reload_signature = signature
             logger.warning(
-                "strategy hot reload failed: session=%s path=%s",
-                self._session_id,
-                source_path,
-                exc_info=True,
-            )
-            return
-
-        if (
-            candidate_decl.input_keys != self._input_keys
-            or candidate_decl.order_target_keys != self._order_target_keys
-            or candidate_decl.required_routes != self._required_routes
-        ):
-            self._hot_reload_signature = signature
-            logger.warning(
-                "strategy hot reload skipped: declaration changed; restart session required: "
-                "session=%s path=%s old_inputs=%s new_inputs=%s old_order_targets=%s new_order_targets=%s",
-                self._session_id,
-                source_path,
-                sorted(self._input_keys),
-                sorted(candidate_decl.input_keys),
-                sorted(self._order_target_keys),
-                sorted(candidate_decl.order_target_keys),
-            )
-            return
-
-        setattr(candidate, "notify", self._notifier)
-        self._indicator_definitions = candidate_indicator_definitions
-        self._indicator_writer = self._install_indicator_writer(candidate, self._indicator_definitions)
-        self._strategy_instance = candidate
-        self._hot_reload_signature = signature
-        logger.info(
-            "strategy hot reloaded: session=%s path=%s",
-            self._session_id,
-            source_path,
-        )
-
-    def _prepare_indicator_frame(self) -> None:
-        writer = getattr(self._strategy_instance, "indicators", None)
-        if writer is not None:
-            writer.reset_bar()
-
-    def _drain_indicator_frame(self, stream_key: str, market_time_ms: int, interval_ms: int) -> None:
-        writer = getattr(self._strategy_instance, "indicators", None)
-        if writer is None or not self._indicator_definitions:
-            return
-        frame = writer.drain()
-        for warning in frame.warnings:
-            logger.warning(
-                "strategy indicator warning: session=%s strategy_id=%s %s",
+                "STRATEGY_HOT_RELOAD_DECLARATION_CHANGED session=%s strategy_id=%s",
                 self._session_id,
                 self._strategy_id,
-                warning,
+            )
+            return
+
+        def bind_candidate(
+            candidate_instance: object,
+            declarations: StrategyDeclarations,
+            definitions: tuple[IndicatorDefinition, ...],
+            gated_source: GatedStrategySource,
+        ) -> tuple[object, StrategyDeclarations, list[IndicatorDefinition], IndicatorWriter, CapturedFileSignature | None]:
+            del gated_source
+            failed = False
+            try:
+                candidate_definitions = list(definitions)
+                candidate_writer = IndicatorWriter(candidate_definitions)
+                setattr(candidate_instance, "notify", self._notifier)
+                setattr(candidate_instance, "indicators", candidate_writer)
+            except BaseException:
+                failed = True
+            if failed:
+                error = StrategySourceLoadError(reason="binding_failed")
+                error.__cause__ = None
+                error.__context__ = None
+                raise error
+            return (
+                candidate_instance,
+                declarations,
+                candidate_definitions,
+                candidate_writer,
+                resolved.hot_reload_signature,
+            )
+
+        try:
+            candidate = _claim_prepared_strategy(prepared, bind_candidate)
+        except BaseException:
+            self._hot_reload_signature = signature
+            logger.warning("STRATEGY_HOT_RELOAD_BIND_FAILED session=%s", self._session_id)
+            return
+        with self._strategy_swap_lock:
+            (
+                self._strategy_instance,
+                self._decl,
+                self._indicator_definitions,
+                self._indicator_writer,
+                self._hot_reload_signature,
+            ) = candidate
+        logger.info("STRATEGY_HOT_RELOADED session=%s", self._session_id)
+
+    def _prepare_indicator_frame(self) -> None:
+        attribute_fatal = False
+        try:
+            writer = getattr(self._strategy_instance, "indicators", None)
+        except Exception:
+            raise
+        except BaseException:
+            writer = None
+            attribute_fatal = True
+        if attribute_fatal:
+            raise _user_code_fatal("attribute")
+        if writer is not None:
+            callback_fatal = False
+            try:
+                writer.reset_bar()
+            except Exception:
+                raise
+            except BaseException:
+                callback_fatal = True
+            if callback_fatal:
+                raise _user_code_fatal("callback")
+
+    def _drain_indicator_frame(self, stream_key: str, market_time_ms: int, interval_ms: int) -> None:
+        attribute_fatal = False
+        try:
+            writer = getattr(self._strategy_instance, "indicators", None)
+        except Exception:
+            raise
+        except BaseException:
+            writer = None
+            attribute_fatal = True
+        if attribute_fatal:
+            raise _user_code_fatal("attribute")
+        if writer is None or not self._indicator_definitions:
+            return
+        callback_fatal = False
+        try:
+            frame = writer.drain()
+        except Exception:
+            raise
+        except BaseException:
+            frame = None
+            callback_fatal = True
+        if callback_fatal:
+            raise _user_code_fatal("callback")
+        attribute_fatal = False
+        try:
+            raw_warnings = frame.warnings
+        except Exception:
+            raise
+        except BaseException:
+            raw_warnings = ()
+            attribute_fatal = True
+        if attribute_fatal:
+            raise _user_code_fatal("attribute")
+        iteration_fatal = False
+        try:
+            warnings = list(raw_warnings)
+        except Exception:
+            raise
+        except BaseException:
+            warnings = []
+            iteration_fatal = True
+        if iteration_fatal:
+            raise _user_code_fatal("result_iteration")
+        for _warning in warnings:
+            logger.warning(
+                "STRATEGY_INDICATOR_WARNING session=%s strategy_id=%s",
+                self._session_id,
+                self._strategy_id,
             )
         if self.on_indicator_frame is None:
             return
+        callback_fatal = False
         try:
             self.on_indicator_frame(stream_key, market_time_ms, interval_ms, frame)
         except Exception:  # noqa: BLE001
             logger.warning(
-                "strategy indicator callback failed: session=%s strategy_id=%s stream_key=%s",
+                "STRATEGY_INDICATOR_CALLBACK_FAILED session=%s strategy_id=%s",
                 self._session_id,
                 self._strategy_id,
-                stream_key,
-                exc_info=True,
             )
+        except BaseException:
+            callback_fatal = True
+        if callback_fatal:
+            raise _user_code_fatal("callback")
 
     def _emit_user_code_error(self, message: str) -> None:
         if self._on_user_code_error is None:
             return
+        callback_fatal = False
         try:
             self._on_user_code_error(message)
         except Exception:  # noqa: BLE001
-            logger.warning("user code error callback failed: session=%s", self._session_id, exc_info=True)
+            logger.warning(
+                "STRATEGY_USER_CODE_ERROR_CALLBACK_FAILED session=%s strategy_id=%s",
+                self._session_id,
+                self._strategy_id,
+            )
+        except BaseException:
+            callback_fatal = True
+        if callback_fatal:
+            raise _user_code_fatal("callback")
 
     def _emit_user_code_recovered(self) -> None:
         if self._on_user_code_recovered is None:
             return
+        callback_fatal = False
         try:
             self._on_user_code_recovered()
         except Exception:  # noqa: BLE001
-            logger.warning("user code recovery callback failed: session=%s", self._session_id, exc_info=True)
+            logger.warning(
+                "STRATEGY_USER_CODE_RECOVERY_CALLBACK_FAILED session=%s strategy_id=%s",
+                self._session_id,
+                self._strategy_id,
+            )
+        except BaseException:
+            callback_fatal = True
+        if callback_fatal:
+            raise _user_code_fatal("callback")
 
     def _notify_order_response(self, order_resp: Any) -> None:
-        self._maybe_reload_strategy()
-        fn = getattr(self._strategy_instance, "on_order_response", None)
-        if callable(fn):
+        with self._callback_execution_lock:
             try:
-                fn(order_resp)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "order response callback failed: session=%s",
-                    self._session_id,
-                    exc_info=True,
-                )
+                self._begin_callback_generation()
+                if not self._callbacks_are_armed():
+                    return
+                self._maybe_reload_strategy()
+                attribute_fatal = False
+                try:
+                    fn = getattr(self._strategy_instance, "on_order_response", None)
+                except Exception:
+                    raise
+                except BaseException:
+                    fn = None
+                    attribute_fatal = True
+                if attribute_fatal:
+                    self._latch_user_code_fatal("attribute")
+                    return
+                if callable(fn):
+                    callback_fatal = False
+                    try:
+                        fn(order_resp)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "STRATEGY_ORDER_RESPONSE_CALLBACK_FAILED session=%s strategy_id=%s",
+                            self._session_id,
+                            self._strategy_id,
+                        )
+                    except BaseException:
+                        callback_fatal = True
+                    if callback_fatal:
+                        self._latch_user_code_fatal("callback")
+            finally:
+                self._finish_callback_generation()
 
     def _notify_order_update(self, event: OrderUpdateEvent) -> None:
-        self._maybe_reload_strategy()
-        fn = getattr(self._strategy_instance, "on_order_update", None)
-        if callable(fn):
+        with self._callback_execution_lock:
             try:
-                fn(event, self.wallet)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "order lifecycle callback failed: session=%s event_id=%s",
-                    self._session_id,
-                    int(getattr(event, "event_id", 0) or 0),
-                    exc_info=True,
-                )
+                self._begin_callback_generation()
+                if not self._callbacks_are_armed():
+                    return
+                self._maybe_reload_strategy()
+                attribute_fatal = False
+                try:
+                    fn = getattr(self._strategy_instance, "on_order_update", None)
+                except Exception:
+                    raise
+                except BaseException:
+                    fn = None
+                    attribute_fatal = True
+                if attribute_fatal:
+                    self._latch_user_code_fatal("attribute")
+                    return
+                if callable(fn):
+                    callback_fatal = False
+                    try:
+                        fn(event, self.wallet)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "STRATEGY_ORDER_UPDATE_CALLBACK_FAILED session=%s strategy_id=%s event_id=%s",
+                            self._session_id,
+                            self._strategy_id,
+                            int(getattr(event, "event_id", 0) or 0),
+                        )
+                    except BaseException:
+                        callback_fatal = True
+                    if callback_fatal:
+                        self._latch_user_code_fatal("callback")
+            finally:
+                self._finish_callback_generation()
+
+    def _notify_order_snapshot(self) -> None:
+        with self._callback_execution_lock:
+            try:
+                self._begin_callback_generation()
+                if not self._callbacks_are_armed() or self.on_order_callback is None:
+                    return
+                callback_fatal = False
+                try:
+                    self.on_order_callback()
+                except Exception:
+                    logger.warning(
+                        "STRATEGY_ORDER_SNAPSHOT_CALLBACK_FAILED session=%s strategy_id=%s",
+                        self._session_id,
+                        self._strategy_id,
+                    )
+                except BaseException:
+                    callback_fatal = True
+                if callback_fatal:
+                    self._latch_user_code_fatal("callback")
+            finally:
+                self._finish_callback_generation()
 
     def _venue_id_for_route(self, exchange: str, market: str) -> int:
         route = (_norm_exchange(exchange), _norm_market(market))
@@ -598,26 +777,42 @@ class BaseStrategy:
         route_venue_id = self._venue_id_for_route(exchange, market) if venue_id is None else int(venue_id)
         self.wallet.on_order(exchange, market, route_venue_id, symbol, symbol_type, order_resp)
 
-    def _initialize_order_event_cursor(self) -> None:
-        if not self._session_id or not hasattr(self._order_client, "list_order_lifecycle_events"):
-            return
-        cursor = 0
-        for _ in range(100):
-            try:
-                events = self._order_client.list_order_lifecycle_events(
-                    session_id=self._session_id,
-                    after_event_id=cursor,
-                    limit=500,
-                )
-            except Exception:
-                logger.warning("order lifecycle cursor initialization failed", exc_info=True)
-                break
-            if not events:
-                break
-            cursor = max(cursor, *(int(getattr(event, "event_id", 0) or 0) for event in events))
-            if len(events) < 500:
-                break
-        self._order_event_cursor = cursor
+    def activate_order_event_cursor(self) -> None:
+        failed = False
+        with self._order_cursor_lock:
+            if self._order_cursor_activated:
+                return
+            cursor = 0
+            if self._session_id and hasattr(self._order_client, "list_order_lifecycle_events"):
+                try:
+                    for _ in range(100):
+                        events = self._order_client.list_order_lifecycle_events(
+                            session_id=self._session_id,
+                            after_event_id=cursor,
+                            limit=500,
+                        )
+                        if not events:
+                            break
+                        cursor = max(
+                            cursor,
+                            *(int(getattr(event, "event_id", 0) or 0) for event in events),
+                        )
+                        if len(events) < 500:
+                            break
+                except BaseException:
+                    failed = True
+            if not failed:
+                self._order_event_cursor = cursor
+                self._order_cursor_activated = True
+        if failed:
+            logger.warning(
+                "STRATEGY_ORDER_CURSOR_ACTIVATION_FAILED session=%s",
+                self._session_id,
+            )
+            error = StrategyActivationError(reason="order_cursor_failed")
+            error.__cause__ = None
+            error.__context__ = None
+            raise error
 
     def _consume_order_updates(self) -> None:
         if not self._session_id or not hasattr(self._order_client, "list_order_lifecycle_events"):
@@ -629,7 +824,11 @@ class BaseStrategy:
                 limit=100,
             )
         except Exception:
-            logger.warning("order lifecycle event fetch failed", exc_info=True)
+            logger.warning(
+                "STRATEGY_ORDER_LIFECYCLE_FETCH_FAILED session=%s strategy_id=%s",
+                self._session_id,
+                self._strategy_id,
+            )
             return
         for event in events:
             self.handle_order_update(event)
@@ -679,17 +878,16 @@ class BaseStrategy:
                 self._blocked_order_keys.discard(self._blocked_key_for_event(event, None))
         except Exception:
             logger.warning(
-                "order lifecycle event handling failed: session=%s event_id=%s",
+                "STRATEGY_ORDER_LIFECYCLE_HANDLE_FAILED session=%s strategy_id=%s event_id=%s",
                 self._session_id,
+                self._strategy_id,
                 event_id,
-                exc_info=True,
             )
         self._notify_order_update(event)
-        if wallet_updated and self.on_order_callback is not None:
-            try:
-                self.on_order_callback()
-            except Exception:
-                logger.warning("on_order_callback failed after lifecycle update", exc_info=True)
+        if self.has_user_code_fatal():
+            return wallet_updated
+        if wallet_updated:
+            self._notify_order_snapshot()
         if event_id > self._order_event_cursor:
             self._order_event_cursor = event_id
         return wallet_updated
@@ -818,72 +1016,154 @@ class BaseStrategy:
         raise TypeError(f"unsupported execution feedback payload: {type(payload)!r}")
 
     def running_strategy(self, market_data: MarketData) -> None:
+        self.raise_if_user_code_fatal()
         exchange = _norm_exchange(getattr(market_data, "exchange", "binance"))
         market = _norm_market(market_data.market)
         sym = _norm_symbol(market_data.symbol)
         interval = _norm_interval(getattr(market_data, "interval", ""))
-        key = (exchange, market, sym, interval)
+        with self._callback_execution_lock:
+            try:
+                self._begin_callback_generation()
+                self.raise_if_user_code_fatal()
+                self._run_admitted_strategy(
+                    market_data,
+                    exchange=exchange,
+                    market=market,
+                    symbol=sym,
+                    interval=interval,
+                )
+                self.raise_if_user_code_fatal()
+            except StrategyUserCodeFatalError as fatal:
+                self._record_user_code_fatal(fatal)
+                raise
+            finally:
+                self._finish_callback_generation()
+
+    def _run_admitted_strategy(
+        self,
+        market_data: MarketData,
+        *,
+        exchange: str,
+        market: str,
+        symbol: str,
+        interval: str,
+    ) -> None:
+        key = (exchange, market, symbol, interval)
 
         # Declaration gate: only declared (market, symbol, interval) keys reach
         # the strategy. Wallet state is irrelevant here per pre_C3.
         if key not in self._input_keys:
+            self.raise_if_user_code_fatal()
             return
 
         # Refresh the bound view with this tick.
         if not self._view.update(market_data):
             # Defensive: update() also enforces the declaration. Stay silent
             # rather than raise — the router gate above already screened.
+            self.raise_if_user_code_fatal()
             return
 
+        self.raise_if_user_code_fatal()
         self._last_market_time = getattr(market_data, "timestamp", None)
         self.wallet.on_market_data(
             exchange,
             market,
-            sym,
+            symbol,
             _wallet_market(market),
             float(market_data.price),
         )
         self._consume_order_updates()
+        self.raise_if_user_code_fatal()
 
         # Call user strategy with the view, not the raw tick.
         self._maybe_reload_strategy()
+        self.raise_if_user_code_fatal()
+        attribute_fatal = False
         try:
             self._prepare_indicator_frame()
-            raw_signals = self._strategy_instance.on_market_data(self._view, self.wallet)
+            self.raise_if_user_code_fatal()
+            callback = getattr(self._strategy_instance, "on_market_data")
         except Exception as exc:  # noqa: BLE001
-            message = (
-                f"{USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX} "
-                f"{type(exc).__name__}: {exc}"
-            )
-            logger.warning(
-                "%s session=%s strategy_id=%s",
-                message,
-                self._session_id,
-                self._strategy_id,
-                exc_info=True,
-            )
-            if self._hot_reload_source_path is not None:
-                self._emit_user_code_error(message)
-                self._notifier.error(
-                    message,
-                    title="Strategy code error",
-                    dedupe_key=f"strategy-user-code-error:{self._session_id}:on_market_data",
-                )
-                return
-            raise StrategyUserCodeError(message) from exc
+            self._handle_on_market_data_exception(exc)
+            self.raise_if_user_code_fatal()
+            return
+        except StrategyUserCodeFatalError:
+            raise
+        except BaseException:
+            attribute_fatal = True
+            callback = None
+        if attribute_fatal:
+            raise _user_code_fatal("attribute")
+
+        self.raise_if_user_code_fatal()
+        callback_fatal = False
+        try:
+            raw_signals = callback(self._view, self.wallet)
+        except Exception as exc:  # noqa: BLE001
+            self._handle_on_market_data_exception(exc)
+            self.raise_if_user_code_fatal()
+            return
+        except BaseException:
+            callback_fatal = True
+            raw_signals = None
+        if callback_fatal:
+            raise _user_code_fatal("callback")
+        self.raise_if_user_code_fatal()
         self._drain_indicator_frame(
-            _stream_key(exchange, market, sym, interval),
+            _stream_key(exchange, market, symbol, interval),
             _market_time_ms(market_data),
             _interval_to_ms(interval),
         )
+        self.raise_if_user_code_fatal()
         self._emit_user_code_recovered()
-        signals = _normalize_decisions(raw_signals)
-        prepared = [
-            self._prepare_order_decision(signal, market_data)
-            for signal in signals
-        ]
+        self.raise_if_user_code_fatal()
+        result_fatal = False
+        try:
+            signals = _normalize_decisions(raw_signals)
+        except Exception:
+            raise
+        except BaseException:
+            signals = []
+            result_fatal = True
+        if result_fatal:
+            raise _user_code_fatal("result_iteration")
+        decision_fatal = False
+        try:
+            prepared = [
+                self._prepare_order_decision(signal, market_data)
+                for signal in signals
+            ]
+        except Exception:
+            raise
+        except BaseException:
+            prepared = []
+            decision_fatal = True
+        if decision_fatal:
+            raise _user_code_fatal("decision_normalization")
         for item in prepared:
+            self.raise_if_user_code_fatal()
             self._execute_prepared_order(item)
+        self.raise_if_user_code_fatal()
+
+    def _handle_on_market_data_exception(self, exc: Exception) -> None:
+        message = (
+            f"{USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX} "
+            f"{type(exc).__name__}: {exc}"
+        )
+        logger.warning(
+            "STRATEGY_USER_CODE_ERROR session=%s strategy_id=%s",
+            self._session_id,
+            self._strategy_id,
+        )
+        if self._hot_reload_source_path is not None:
+            self._emit_user_code_error(message)
+            self._notifier.error(
+                message,
+                title="Strategy code error",
+                dedupe_key=f"strategy-user-code-error:{self._session_id}:on_market_data",
+            )
+            return
+        raise StrategyUserCodeError(message) from exc
 
     def _prepare_order_decision(
         self,
@@ -1102,6 +1382,7 @@ class BaseStrategy:
             self._blocked_order_keys.discard(blocked_key)
         if feedback.attempt_status not in {"ACCEPTED", "RECOVERED"} or pending_fill_confirmation:
             self._notify_order_response(feedback)
+            self.raise_if_user_code_fatal()
             logger.warning(
                 "order attempt unresolved or failed: symbol=%s market=%s attempt=%s status=%s error=%s",
                 sig_sym, sig_market, feedback.attempt_id, feedback.attempt_status, feedback.error_message,
@@ -1110,6 +1391,7 @@ class BaseStrategy:
 
         if feedback.order is None:
             self._notify_order_response(feedback)
+            self.raise_if_user_code_fatal()
             logger.warning(
                 "attempt accepted without order payload: symbol=%s market=%s attempt=%s",
                 sig_sym, sig_market, feedback.attempt_id,
@@ -1127,14 +1409,13 @@ class BaseStrategy:
             self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order, venue_id=item.venue_id)
         else:
             self._notify_order_response(feedback)
+            self.raise_if_user_code_fatal()
             logger.warning(
                 "attempt accepted without confirmed fill details: symbol=%s market=%s attempt=%s",
                 sig_sym, sig_market, feedback.attempt_id,
             )
             return
         self._notify_order_response(feedback)
-        if self.on_order_callback is not None:
-            try:
-                self.on_order_callback()
-            except Exception:
-                logger.warning("on_order_callback failed", exc_info=True)
+        self.raise_if_user_code_fatal()
+        self._notify_order_snapshot()
+        self.raise_if_user_code_fatal()

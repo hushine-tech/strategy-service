@@ -5,10 +5,40 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+import weakref
+from dataclasses import FrozenInstanceError, dataclass, field
+import re
+from typing import Literal
 
 _TERMINAL_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
 _ACTIVE_STATUSES = frozenset({"running", "stopping"})
+_SESSION_ID_RE = re.compile(r"[0-9a-f]{32}")
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRegistrationError(Exception):
+    reason: Literal[
+        "invalid_session_id",
+        "state_mismatch",
+        "session_id_in_use",
+    ]
+
+    def __str__(self) -> str:
+        return "session registration failed"
+
+
+def _exception_setattr(self: BaseException, name: str, value: object) -> None:
+    if name in {"__traceback__", "__cause__", "__context__", "__suppress_context__"}:
+        BaseException.__setattr__(self, name, value)
+        return
+    raise FrozenInstanceError(f"cannot assign to field {name!r}")
+
+
+SessionRegistrationError.__setattr__ = _exception_setattr  # type: ignore[method-assign]
+
+
+class _SessionOwnershipToken:
+    __slots__ = ("__weakref__",)
 
 
 @dataclass(frozen=True)
@@ -24,6 +54,8 @@ class StreamBinding:
 
 @dataclass
 class SessionState:
+    session_id: str = ""
+    _ownership_token: object | None = field(default=None, repr=False, compare=False)
     status: str = "running"          # running / stopping / recoverable / finished / stopped / failed / stop_failed
     bars_processed: int = 0
     error: str = ""
@@ -52,6 +84,8 @@ class SessionState:
     leverage_source: str = "platform_default"
     initial_margin_balance: float = 0.0
     max_loss_close_triggered: bool = False
+    user_code_fatal_stage: str = ""
+    user_code_fatal_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def transition(self, new_status: str, bars: int | None = None, error: str | None = None) -> bool:
@@ -70,11 +104,8 @@ class SessionState:
     def force_failed(self, error: str) -> None:
         """Mark the session failed even after a terminal runtime transition."""
         with self._lock:
-            if self.status not in {"failed", "stop_failed", "recoverable"}:
-                self.status = "failed"
-                self.error = error
-            elif not self.error:
-                self.error = error
+            self.status = "failed"
+            self.error = error
 
     def is_active(self) -> bool:
         with self._lock:
@@ -183,6 +214,27 @@ class SessionState:
             self.error = ""
             return True
 
+    def latch_user_code_fatal(self, stage: str) -> bool:
+        with self._lock:
+            if self.user_code_fatal_stage:
+                return False
+            self.user_code_fatal_stage = str(stage)
+            stop_event = getattr(self, "_stop_event", None)
+            lease_stop_event = self.lease_stop_event
+            self.user_code_fatal_event.set()
+        if stop_event is not None:
+            stop_event.set()
+        if lease_stop_event is not None:
+            lease_stop_event.set()
+        return True
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionIssuance:
+    session_id: str
+    ownership_token: _SessionOwnershipToken
+    state_ref: weakref.ReferenceType[SessionState]
+
 
 class SessionManager:
     """线程安全的 session 注册表。"""
@@ -192,7 +244,80 @@ class SessionManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._sessions: dict[str, SessionState] = {}
-        self._completed_at: dict[str, float] = {}  # session_id → time.time() when terminal
+        self._completed_at: dict[str, tuple[SessionState, float]] = {}
+        self._issuances: dict[int, _SessionIssuance] = {}
+
+    @staticmethod
+    def _validate_session_id(session_id: object) -> str:
+        if type(session_id) is not str or _SESSION_ID_RE.fullmatch(session_id) is None:
+            raise SessionRegistrationError(reason="invalid_session_id")
+        return session_id
+
+    def prepare(
+        self,
+        *,
+        session_id: str | None = None,
+        environment: int = 0,
+        user_id: int = 0,
+        portfolio_id: int = 0,
+        runtime_id: str = "",
+        runtime_source: str = "",
+        runtime_name: str = "",
+    ) -> tuple[str, SessionState]:
+        final_id = uuid.uuid4().hex if session_id is None else self._validate_session_id(session_id)
+        token = _SessionOwnershipToken()
+        state = SessionState(
+            session_id=final_id,
+            _ownership_token=token,
+            environment=environment,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            runtime_id=str(runtime_id or ""),
+            runtime_source=str(runtime_source or ""),
+            runtime_name=str(runtime_name or ""),
+        )
+        state_key = id(state)
+        manager_ref = weakref.ref(self)
+
+        def discard_abandoned_issuance(state_ref: weakref.ReferenceType[SessionState]) -> None:
+            manager = manager_ref()
+            if manager is None:
+                return
+            with manager._lock:
+                issuance = manager._issuances.get(state_key)
+                if issuance is not None and issuance.state_ref is state_ref:
+                    del manager._issuances[state_key]
+
+        state_ref = weakref.ref(state, discard_abandoned_issuance)
+        issuance = _SessionIssuance(
+            session_id=final_id,
+            ownership_token=token,
+            state_ref=state_ref,
+        )
+        with self._lock:
+            self._issuances[state_key] = issuance
+        return final_id, state
+
+    def register(self, session_id: str, state: SessionState) -> None:
+        with self._lock:
+            if type(state) is not SessionState:
+                raise SessionRegistrationError(reason="state_mismatch")
+            issuance = self._issuances.get(id(state))
+            if issuance is None or issuance.state_ref() is not state:
+                raise SessionRegistrationError(reason="state_mismatch")
+            del self._issuances[id(state)]
+            final_id = self._validate_session_id(session_id)
+            if (
+                state._ownership_token is not issuance.ownership_token
+                or type(state.session_id) is not str
+                or state.session_id != issuance.session_id
+                or final_id != issuance.session_id
+            ):
+                raise SessionRegistrationError(reason="state_mismatch")
+            if final_id in self._sessions:
+                raise SessionRegistrationError(reason="session_id_in_use")
+            self._sessions[final_id] = state
+            self._completed_at.pop(final_id, None)
 
     def create(
         self,
@@ -203,8 +328,7 @@ class SessionManager:
         runtime_source: str = "",
         runtime_name: str = "",
     ) -> tuple[str, SessionState]:
-        session_id = uuid.uuid4().hex
-        state = SessionState(
+        session_id, state = self.prepare(
             environment=environment,
             user_id=user_id,
             portfolio_id=portfolio_id,
@@ -212,23 +336,24 @@ class SessionManager:
             runtime_source=str(runtime_source or ""),
             runtime_name=str(runtime_name or ""),
         )
-        with self._lock:
-            self._sessions[session_id] = state
+        self.register(session_id, state)
         return session_id, state
-
-    def restore(self, session_id: str, state: SessionState) -> None:
-        with self._lock:
-            self._sessions[session_id] = state
-            self._completed_at.pop(session_id, None)
 
     def get(self, session_id: str) -> SessionState | None:
         with self._lock:
             return self._sessions.get(session_id)
 
-    def discard(self, session_id: str) -> None:
+    def list_ids(self) -> tuple[str, ...]:
         with self._lock:
-            self._sessions.pop(session_id, None)
+            return tuple(sorted(self._sessions))
+
+    def discard(self, session_id: str, expected_state: SessionState) -> bool:
+        with self._lock:
+            if self._sessions.get(session_id) is not expected_state:
+                return False
+            del self._sessions[session_id]
             self._completed_at.pop(session_id, None)
+            return True
 
     def find_active_session_for_portfolio(self, portfolio_id: int) -> tuple[str, SessionState] | None:
         with self._lock:
@@ -239,25 +364,41 @@ class SessionManager:
                     return session_id, state
         return None
 
-    def set_thread(self, session_id: str, thread: threading.Thread) -> None:
+    def set_thread(
+        self,
+        session_id: str,
+        expected_state: SessionState,
+        thread: threading.Thread,
+    ) -> bool:
         with self._lock:
             s = self._sessions.get(session_id)
-            if s is not None:
-                s.thread = thread
+            if s is not expected_state:
+                return False
+            s.thread = thread
+            return True
 
 
-    def mark_terminal(self, session_id: str) -> None:
+    def mark_terminal(self, session_id: str, expected_state: SessionState) -> bool:
         """Mark a session for eventual cleanup."""
         with self._lock:
-            self._completed_at[session_id] = time.time()
+            if self._sessions.get(session_id) is not expected_state:
+                return False
+            self._completed_at[session_id] = (expected_state, time.time())
         self._cleanup()
+        return True
 
     def _cleanup(self) -> None:
         """Remove sessions that have been terminal for longer than the threshold."""
         now = time.time()
         with self._lock:
-            expired = [sid for sid, t in self._completed_at.items()
-                       if now - t > self._CLEANUP_AFTER_SECS]
-            for sid in expired:
-                self._sessions.pop(sid, None)
-                self._completed_at.pop(sid, None)
+            expired = [
+                (sid, expected_state)
+                for sid, (expected_state, completed_at) in self._completed_at.items()
+                if now - completed_at > self._CLEANUP_AFTER_SECS
+            ]
+            for sid, expected_state in expired:
+                if self._sessions.get(sid) is expected_state:
+                    del self._sessions[sid]
+                retained = self._completed_at.get(sid)
+                if retained is not None and retained[0] is expected_state:
+                    del self._completed_at[sid]

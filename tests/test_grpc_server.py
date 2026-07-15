@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import types
 from datetime import datetime, timezone
@@ -14,7 +15,14 @@ from strategy_service import grpc_server
 from strategy_service.gen import portfolio_service_pb2
 from strategy_service.gen import strategy_service_pb2 as pb2
 from strategy_service.grpc_server import StrategyServiceServicer
+from strategy_service.indicators import IndicatorDefinition, IndicatorFrame
 from strategy_service.session import SessionState, StreamBinding
+from strategy_service.strategy_imports import (
+    gate_strategy_source,
+    prepare_strategy,
+    resolve_strategy_source,
+)
+from strategy_service.strategy import base as strategy_base
 from strategy_service.types import OrderUpdateEvent, OrderUpdateFill
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from strategy_service.wallet.order_types import OrderResponse
@@ -28,6 +36,15 @@ def _make_fake_client(cls, addr: str):
         return cls(addr)
     except TypeError:
         return cls()
+
+
+def _prepare_strategy_code_for_test(path: str, code: str):
+    gate = gate_strategy_source(
+        resolve_strategy_source(path, code),
+        python_invocation_path=sys.executable,
+    )
+    assert gate.ok and gate.gated_source is not None
+    return prepare_strategy(gate.gated_source)
 
 
 class _NoopMarketDataClient:
@@ -522,7 +539,7 @@ def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
             return None
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
-    monkeypatch.setattr(threading, "Thread", FakeThread)
+    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "127.0.0.1:9092",
         market_data_policy={"preflight_enabled": False},
@@ -590,7 +607,7 @@ def test_run_strategy_fails_start_when_backtest_wallet_sync_is_missing(monkeypat
             raise AssertionError("session thread must not start when startup wallet sync fails")
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
-    monkeypatch.setattr(threading, "Thread", FakeThread)
+    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "127.0.0.1:9092",
         market_data_policy={"preflight_enabled": False},
@@ -614,7 +631,7 @@ def test_run_strategy_fails_start_when_backtest_wallet_sync_is_missing(monkeypat
     assert "failed to persist strategy_start snapshot" in context.details
     assert calls["wallet_update"] == 1
     assert calls["update_session"][0]["status"] == "failed"
-    assert "UpdatePortfolioWalletState returned no response" in calls["update_session"][0]["error"]
+    assert calls["update_session"][0]["error"] == "failed to persist strategy_start snapshot"
 
 
 def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
@@ -656,7 +673,7 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
             return None
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
-    monkeypatch.setattr(threading, "Thread", FakeThread)
+    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "127.0.0.1:9092",
         market_data_policy={"preflight_enabled": False},
@@ -744,6 +761,16 @@ def test_run_session_order_callback_updates_portfolio_wallet_state(monkeypatch):
         wallet,
         allowed_routes={("binance", "perpetual_futures"), ("binance", "spot")},
     )
+    fake_strategy.on_order_callback = lambda: grpc_server._sync_strategy_snapshot(
+        servicer._portfolio_client(),
+        portfolio_id=406,
+        user_id=17,
+        environment=0,
+        wallet=portfolio_wallet,
+        snapshot_reason=grpc_server.SNAPSHOT_REASON_EVENT,
+        strategy_id=42,
+        session_id="sess-portfolio",
+    )
     servicer._run_session(
         "sess-portfolio",
         state,
@@ -753,9 +780,9 @@ def test_run_session_order_callback_updates_portfolio_wallet_state(monkeypatch):
         406,
         17,
         [],
-        "<db:phase3@v1>",
+        FakeEngine(),
+        fake_strategy,
         42,
-        _phase3_strategy_code(),
     )
 
     assert calls["wallet_update"] >= 1
@@ -818,6 +845,16 @@ def test_backtest_run_persists_wallet_snapshots(monkeypatch):
         snapshot,
         allowed_routes={("binance", "perpetual_futures"), ("binance", "spot")},
     )
+    fake_strategy.on_order_callback = lambda: grpc_server._sync_strategy_snapshot(
+        servicer._portfolio_client(),
+        portfolio_id=407,
+        user_id=17,
+        environment=0,
+        wallet=wallet,
+        snapshot_reason=grpc_server.SNAPSHOT_REASON_EVENT,
+        strategy_id=43,
+        session_id="sess-portfolio-sync",
+    )
     servicer._run_session(
         "sess-portfolio-sync",
         state,
@@ -827,9 +864,9 @@ def test_backtest_run_persists_wallet_snapshots(monkeypatch):
         407,
         17,
         [],
-        "<db:phase3@v1>",
+        FakeEngine(),
+        fake_strategy,
         43,
-        _phase3_strategy_code(),
     )
 
     assert calls["wallet_update"] >= 2
@@ -879,6 +916,9 @@ def test_backtest_run_restores_portfolio_wallet_state_after_finish(monkeypatch):
             self.on_order_callback = None
             self.last_market_time = 1780274580000
 
+        def activate_order_event_cursor(self) -> None:
+            return None
+
     fake_strategy = FakeStrategy()
 
     class FakeEngine:
@@ -896,7 +936,7 @@ def test_backtest_run_restores_portfolio_wallet_state_after_finish(monkeypatch):
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
     monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
-    monkeypatch.setattr(threading, "Thread", InlineThread)
+    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: InlineThread(target=target, daemon=True))
 
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "127.0.0.1:9092",
@@ -1006,9 +1046,9 @@ def test_backtest_final_snapshot_failure_marks_session_recoverable(monkeypatch):
         407,
         17,
         [],
-        "<db:phase3@v1>",
+        FakeEngine(),
+        FakeStrategy(),
         43,
-        _phase3_strategy_code(),
     )
 
     assert session_updates[-1]["status"] == "recoverable"
@@ -1566,7 +1606,7 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
     _install_marketdata_client(monkeypatch, FakeMarketDataClient)
     monkeypatch.setattr(grpc_server, "_live_consumer_group", lambda strategy_id, session_id: f"cg-{strategy_id}-{session_id}")
-    monkeypatch.setattr(threading, "Thread", FakeThread)
+    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
     monkeypatch.setattr(servicer, "_run_profile_preflight", capturing_preflight)
 
     resp = servicer.RunStrategy(request, context)
@@ -1679,7 +1719,7 @@ class MyStrategy:
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
     _install_marketdata_client(monkeypatch, FakeMarketDataClient)
     monkeypatch.setattr(servicer, "_run_profile_preflight", fake_preflight)
-    monkeypatch.setattr(threading, "Thread", FakeThread)
+    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
 
     resp = servicer.RunStrategy(request, context)
 
@@ -1738,6 +1778,65 @@ def test_run_strategy_mode2_creates_subscriptions_from_required_streams(monkeypa
             "streams": [StreamBinding(1002, "binance", "futures", "kline", "ETHUSDT", "1m")],
         }
     ]
+
+
+def test_subscription_baseexception_is_contained_before_save_and_released(monkeypatch):
+    from strategy_service.preflight import PreflightResult, RuntimeSourceProfile
+
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=1,
+        strategy_code=(
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
+            "    ORDER_TARGETS = []\n"
+            "    def on_market_data(self, data, wallet): return None\n"
+        ),
+    )
+    monkeypatch.setattr(
+        servicer,
+        "_run_profile_preflight",
+        lambda **_kwargs: PreflightResult(
+            profile=RuntimeSourceProfile.DEMO,
+            required_streams=[
+                StreamBinding(1002, "binance", "futures", "kline", "ETHUSDT", "1m")
+            ],
+        ),
+    )
+    released: list[dict] = []
+    monkeypatch.setattr(
+        servicer._platform_proxy.marketdata,
+        "create_session_market_data_subscriptions",
+        lambda **_kwargs: (_ for _ in ()).throw(SystemExit("subscription-secret")),
+    )
+    monkeypatch.setattr(
+        servicer._platform_proxy.marketdata,
+        "release_session_market_data_subscriptions",
+        lambda **kwargs: released.append(dict(kwargs)) or True,
+    )
+    context = _FakeContext()
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=203,
+            user_id=17,
+            strategy_path="",
+            interval="1m",
+            start_time_ms=0,
+            end_time_ms=0,
+            runtime_id="rt-test",
+        ),
+        context,
+    )
+
+    assert response.session_id == ""
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details == (
+        "failed to create required live delivery subscriptions for demo session"
+    )
+    assert calls["save_session"] == 0
+    assert servicer._sessions.list_ids() == ()
+    assert len(released) == 1
 
 
 def test_renew_stream_leases_once_updates_heartbeat(monkeypatch):
@@ -1981,6 +2080,17 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
     monkeypatch.setattr(servicer, "_run_backtest", fake_run_backtest)
 
     from strategy_service.inputs import StrategyInput
+    fake_user.on_order_callback = lambda: grpc_server._sync_strategy_snapshot(
+        servicer._portfolio_client(),
+        portfolio_id=101,
+        user_id=17,
+        environment=0,
+        wallet=wallet,
+        snapshot_reason=grpc_server.SNAPSHOT_REASON_EVENT,
+        strategy_id=202,
+        session_id="sess-backtest",
+        snapshot_time=getattr(fake_user, "last_market_time", None),
+    )
     servicer._run_session(
         session_id="sess-backtest",
         state=state,
@@ -1990,9 +2100,9 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
         portfolio_id=101,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
-        strategy_path="strategies.buy_once",
+        engine=FakeEngine(),
+        user_strategy=fake_user,
         strategy_id=202,
-        strategy_code=None,
     )
 
     assert events == [
@@ -2061,9 +2171,9 @@ def test_run_session_snapshot_failure_marks_session_recoverable(monkeypatch):
         portfolio_id=101,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
-        strategy_path="strategies.buy_once",
+        engine=FakeEngine(),
+        user_strategy=fake_user,
         strategy_id=202,
-        strategy_code=None,
     )
 
     assert state.status == "recoverable"
@@ -2072,6 +2182,821 @@ def test_run_session_snapshot_failure_marks_session_recoverable(monkeypatch):
     assert events == [
         ("session_update", "recoverable", 9, state.error, "sess-finished-with-snapshot-timeout"),
     ]
+
+
+def test_finalizer_baseexception_emits_one_terminal_result(monkeypatch) -> None:
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    state = SessionState(environment=0, portfolio_id=101, strategy_id=202, user_id=17)
+    terminal_updates: list[tuple[str, str, str]] = []
+    terminal_marks: list[tuple[str, SessionState]] = []
+    finalizer_calls: list[str] = []
+
+    class FakeEngine:
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            return None
+
+    monkeypatch.setattr(
+        servicer,
+        "_run_backtest",
+        lambda *_args, **_kwargs: state.transition("finished", bars=3),
+    )
+    monkeypatch.setattr(
+        servicer,
+        "_release_stream_leases",
+        lambda *_args: finalizer_calls.append("release_leases"),
+    )
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda *_args: finalizer_calls.append("release_subscriptions"),
+    )
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: object())
+
+    def final_snapshot_fatal(*_args, **kwargs):
+        reason = int(kwargs["snapshot_reason"])
+        finalizer_calls.append(f"snapshot:{reason}")
+        if reason == grpc_server.SNAPSHOT_REASON_STRATEGY_END:
+            raise SystemExit("finalizer-controlled secret")
+        raise KeyboardInterrupt("second-finalizer-controlled secret")
+
+    monkeypatch.setattr(grpc_server, "_sync_strategy_snapshot", final_snapshot_fatal)
+    monkeypatch.setattr(
+        servicer,
+        "_persist_session_status",
+        lambda session_id, inner_state, **_kwargs: terminal_updates.append(
+            (session_id, inner_state.status, inner_state.error)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        servicer._sessions,
+        "mark_terminal",
+        lambda session_id, inner_state: terminal_marks.append((session_id, inner_state)) or True,
+    )
+
+    servicer._run_session(
+        session_id="sess-finalizer-fatal",
+        state=state,
+        request=SimpleNamespace(end_time_ms=2),
+        wallet=_wallet_with_futures_slot(),
+        environment=0,
+        portfolio_id=101,
+        user_id=17,
+        declared_inputs=[],
+        engine=FakeEngine(),
+        user_strategy=SimpleNamespace(last_market_time=None),
+        strategy_id=202,
+        backtest_restore_wallet=object(),
+    )
+
+    assert state.status == "failed"
+    assert state.error == "strategy session terminated"
+    assert terminal_updates == [
+        ("sess-finalizer-fatal", "failed", "strategy session terminated"),
+    ]
+    assert terminal_marks == [("sess-finalizer-fatal", state)]
+    assert finalizer_calls == [
+        "release_leases",
+        "release_subscriptions",
+        f"snapshot:{grpc_server.SNAPSHOT_REASON_STRATEGY_END}",
+        "snapshot:0",
+    ]
+
+
+def test_user_fatal_overrides_recoverable_finalizer_and_second_fatal_once(
+    monkeypatch,
+    caplog,
+) -> None:
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    state = SessionState(environment=0, portfolio_id=101, strategy_id=202, user_id=17)
+    state.latch_user_code_fatal("callback")
+    fatal = strategy_base.StrategyUserCodeFatalError(stage="callback")
+
+    class FatalEngine:
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            raise fatal
+
+    second_fatal_results: list[bool] = []
+
+    def ordinary_finalizer_failure(*_args) -> None:
+        second_fatal_results.append(state.latch_user_code_fatal("attribute"))
+        raise RuntimeError("ordinary-finalizer-log-canary")
+
+    monkeypatch.setattr(servicer, "_release_stream_leases", ordinary_finalizer_failure)
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: object())
+    monkeypatch.setattr(grpc_server, "_sync_strategy_snapshot", lambda *_args, **_kwargs: None)
+    terminal_updates: list[tuple[str, str, str]] = []
+    terminal_marks: list[tuple[str, SessionState]] = []
+    monkeypatch.setattr(
+        servicer,
+        "_persist_session_status",
+        lambda session_id, inner_state, **_kwargs: terminal_updates.append(
+            (session_id, inner_state.status, inner_state.error)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        servicer._sessions,
+        "mark_terminal",
+        lambda session_id, inner_state: terminal_marks.append(
+            (session_id, inner_state)
+        ) or True,
+    )
+
+    with caplog.at_level("WARNING"):
+        servicer._run_session(
+            session_id="e" * 32,
+            state=state,
+            request=SimpleNamespace(end_time_ms=2),
+            wallet=_wallet_with_futures_slot(),
+            environment=0,
+            portfolio_id=101,
+            user_id=17,
+            declared_inputs=[],
+            engine=FatalEngine(),
+            user_strategy=SimpleNamespace(last_market_time=None),
+            strategy_id=202,
+        )
+
+    assert second_fatal_results == [False]
+    assert state.user_code_fatal_stage == "callback"
+    assert state.status == "failed"
+    assert state.error == "strategy user code terminated"
+    assert terminal_updates == [
+        ("e" * 32, "failed", "strategy user code terminated")
+    ]
+    assert terminal_marks == [("e" * 32, state)]
+    assert [record.getMessage() for record in caplog.records] == [
+        f"STRATEGY_SESSION_STREAM_LEASE_RELEASE_FAILED session={'e' * 32}",
+        (
+            f"STRATEGY_USER_CODE_FATAL session={'e' * 32} "
+            "portfolio_id=101 strategy_id=202"
+        ),
+    ]
+    assert "ordinary-finalizer-log-canary" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_user_fatal_survives_finalizer_baseexception_and_all_cleanup_is_attempted(
+    monkeypatch,
+    caplog,
+) -> None:
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    state = SessionState(environment=0, portfolio_id=101, strategy_id=202, user_id=17)
+    fatal = strategy_base.StrategyUserCodeFatalError(stage="callback")
+    cleanup_calls: list[str] = []
+
+    class FatalEngine:
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            raise fatal
+
+    def fatal_lease_release(*_args) -> None:
+        cleanup_calls.append("release_leases")
+        raise SystemExit("finalizer-fatal-log-canary")
+
+    monkeypatch.setattr(servicer, "_release_stream_leases", fatal_lease_release)
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda *_args: cleanup_calls.append("release_subscriptions") or True,
+    )
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: object())
+    monkeypatch.setattr(
+        grpc_server,
+        "_sync_strategy_snapshot",
+        lambda *_args, **_kwargs: cleanup_calls.append("snapshot"),
+    )
+    terminal_updates: list[tuple[str, str, str]] = []
+    terminal_marks: list[tuple[str, SessionState]] = []
+    monkeypatch.setattr(
+        servicer,
+        "_persist_session_status",
+        lambda session_id, inner_state, **_kwargs: terminal_updates.append(
+            (session_id, inner_state.status, inner_state.error)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        servicer._sessions,
+        "mark_terminal",
+        lambda session_id, inner_state: terminal_marks.append(
+            (session_id, inner_state)
+        ) or True,
+    )
+
+    with caplog.at_level("ERROR"):
+        servicer._run_session(
+            session_id="d" * 32,
+            state=state,
+            request=SimpleNamespace(end_time_ms=2),
+            wallet=_wallet_with_futures_slot(),
+            environment=0,
+            portfolio_id=101,
+            user_id=17,
+            declared_inputs=[],
+            engine=FatalEngine(),
+            user_strategy=SimpleNamespace(last_market_time=None),
+            strategy_id=202,
+        )
+
+    assert cleanup_calls == ["release_leases", "release_subscriptions", "snapshot"]
+    assert state.status == "failed"
+    assert state.error == "strategy user code terminated"
+    assert terminal_updates == [
+        ("d" * 32, "failed", "strategy user code terminated")
+    ]
+    assert terminal_marks == [("d" * 32, state)]
+    assert [record.getMessage() for record in caplog.records] == [
+        (
+            f"STRATEGY_USER_CODE_FATAL session={'d' * 32} "
+            "portfolio_id=101 strategy_id=202"
+        )
+    ]
+    assert "finalizer-fatal-log-canary" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.parametrize("fatal_type", [RuntimeError, SystemExit])
+def test_user_fatal_survives_terminal_persist_baseexception(
+    monkeypatch,
+    caplog,
+    fatal_type,
+) -> None:
+    patches = []
+    platform_proxy = SimpleNamespace(
+        send_session_status_patch=lambda **kwargs: patches.append(dict(kwargs))
+    )
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+        platform_proxy=platform_proxy,
+    )
+    state = SessionState(environment=0, portfolio_id=101, strategy_id=202, user_id=17)
+    state.latch_user_code_fatal("callback")
+    fatal = strategy_base.StrategyUserCodeFatalError(stage="callback")
+    updates = []
+
+    class FatalEngine:
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            raise fatal
+
+    class FailingPortfolioClient:
+        @staticmethod
+        def update_session(**kwargs):
+            updates.append(dict(kwargs))
+            raise fatal_type("terminal-persist-log-canary")
+
+    monkeypatch.setattr(servicer, "_portfolio_client", FailingPortfolioClient)
+    monkeypatch.setattr(servicer, "_release_stream_leases", lambda *_args: None)
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(grpc_server, "_sync_strategy_snapshot", lambda *_args, **_kwargs: None)
+    terminal_marks = []
+    monkeypatch.setattr(
+        servicer._sessions,
+        "mark_terminal",
+        lambda session_id, inner_state: terminal_marks.append(
+            (session_id, inner_state)
+        ) or True,
+    )
+
+    with caplog.at_level("ERROR"):
+        servicer._run_session(
+            session_id="9" * 32,
+            state=state,
+            request=SimpleNamespace(end_time_ms=2),
+            wallet=_wallet_with_futures_slot(),
+            environment=0,
+            portfolio_id=101,
+            user_id=17,
+            declared_inputs=[],
+            engine=FatalEngine(),
+            user_strategy=SimpleNamespace(last_market_time=None),
+            strategy_id=202,
+        )
+
+    assert state.status == "failed"
+    assert state.error == "strategy user code terminated"
+    assert state.user_code_fatal_stage == "callback"
+    assert updates == [
+        {
+            "session_id": "9" * 32,
+            "status": "failed",
+            "bars_processed": 0,
+            "error": "strategy user code terminated",
+            "runtime_id": "",
+        }
+    ]
+    assert patches == updates
+    assert terminal_marks == [("9" * 32, state)]
+    assert [record.getMessage() for record in caplog.records] == [
+        (
+            f"STRATEGY_USER_CODE_FATAL session={'9' * 32} "
+            "portfolio_id=101 strategy_id=202"
+        ),
+        (
+            f"STRATEGY_SESSION_TERMINAL_PERSIST_FAILED session={'9' * 32} "
+            "portfolio_id=101 strategy_id=202"
+        ),
+    ]
+    assert "terminal-persist-log-canary" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_run_session_ordinary_failures_log_only_fixed_events(monkeypatch, caplog) -> None:
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    state = SessionState(environment=0, portfolio_id=101, strategy_id=202, user_id=17)
+
+    class FailingStopEvent:
+        @staticmethod
+        def set() -> None:
+            raise RuntimeError("lease-stop-log-canary")
+
+    class FakeEngine:
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            return None
+
+    state.lease_stop_event = FailingStopEvent()
+    monkeypatch.setattr(
+        servicer,
+        "_run_backtest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("business-log-canary")
+        ),
+    )
+    monkeypatch.setattr(
+        servicer,
+        "_release_stream_leases",
+        lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("stream-release-log-canary")
+        ),
+    )
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("subscription-release-log-canary")
+        ),
+    )
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: object())
+
+    def fail_snapshot(*_args, **kwargs):
+        if int(kwargs["snapshot_reason"]) == grpc_server.SNAPSHOT_REASON_STRATEGY_END:
+            raise RuntimeError("end-snapshot-log-canary")
+        raise RuntimeError("restore-snapshot-log-canary")
+
+    monkeypatch.setattr(grpc_server, "_sync_strategy_snapshot", fail_snapshot)
+    terminal_updates: list[tuple[str, str, str]] = []
+    terminal_marks: list[tuple[str, SessionState]] = []
+    monkeypatch.setattr(
+        servicer,
+        "_persist_session_status",
+        lambda session_id, inner_state, **_kwargs: terminal_updates.append(
+            (session_id, inner_state.status, inner_state.error)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        servicer._sessions,
+        "mark_terminal",
+        lambda session_id, inner_state: terminal_marks.append(
+            (session_id, inner_state)
+        ) or True,
+    )
+
+    with caplog.at_level("WARNING"):
+        servicer._run_session(
+            session_id="b" * 32,
+            state=state,
+            request=SimpleNamespace(end_time_ms=2),
+            wallet=_wallet_with_futures_slot(),
+            environment=0,
+            portfolio_id=101,
+            user_id=17,
+            declared_inputs=[],
+            engine=FakeEngine(),
+            user_strategy=SimpleNamespace(last_market_time=None),
+            strategy_id=202,
+            backtest_restore_wallet=object(),
+        )
+
+    assert [record.getMessage() for record in caplog.records] == [
+        f"STRATEGY_SESSION_ERROR session={'b' * 32} portfolio_id=101 strategy_id=202",
+        f"STRATEGY_SESSION_LEASE_STOP_FAILED session={'b' * 32}",
+        f"STRATEGY_SESSION_STREAM_LEASE_RELEASE_FAILED session={'b' * 32}",
+        f"STRATEGY_SESSION_SUBSCRIPTION_RELEASE_FAILED session={'b' * 32}",
+        f"STRATEGY_SESSION_END_SNAPSHOT_FAILED session={'b' * 32}",
+        f"STRATEGY_SESSION_BACKTEST_RESTORE_FAILED session={'b' * 32}",
+    ]
+    for canary in (
+        "business-log-canary",
+        "lease-stop-log-canary",
+        "stream-release-log-canary",
+        "subscription-release-log-canary",
+        "end-snapshot-log-canary",
+        "restore-snapshot-log-canary",
+        "tests/test_grpc_server.py",
+        "raise RuntimeError",
+        "Traceback",
+    ):
+        assert canary not in caplog.text
+    assert len(terminal_updates) == 1
+    assert terminal_marks == [("b" * 32, state)]
+
+
+def test_run_session_finalizer_client_failure_log_is_fixed(monkeypatch, caplog) -> None:
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    state = SessionState(environment=0, portfolio_id=101, strategy_id=202, user_id=17)
+
+    class FakeEngine:
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            return None
+
+    monkeypatch.setattr(
+        servicer,
+        "_run_backtest",
+        lambda *_args, **_kwargs: state.transition("finished", bars=1),
+    )
+    monkeypatch.setattr(servicer, "_release_stream_leases", lambda *_args: None)
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda *_args: True,
+    )
+    portfolio_client_calls = 0
+
+    def finalizer_client_failure():
+        nonlocal portfolio_client_calls
+        portfolio_client_calls += 1
+        if portfolio_client_calls == 1:
+            return object()
+        raise RuntimeError("finalizer-client-log-canary")
+
+    monkeypatch.setattr(servicer, "_portfolio_client", finalizer_client_failure)
+    monkeypatch.setattr(servicer, "_persist_session_status", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(servicer._sessions, "mark_terminal", lambda *_args: True)
+
+    with caplog.at_level("WARNING"):
+        servicer._run_session(
+            session_id="c" * 32,
+            state=state,
+            request=SimpleNamespace(end_time_ms=2),
+            wallet=_wallet_with_futures_slot(),
+            environment=0,
+            portfolio_id=101,
+            user_id=17,
+            declared_inputs=[],
+            engine=FakeEngine(),
+            user_strategy=SimpleNamespace(last_market_time=None),
+            strategy_id=202,
+        )
+
+    assert [record.getMessage() for record in caplog.records] == [
+        f"STRATEGY_SESSION_FINALIZER_CLIENT_FAILED session={'c' * 32}"
+    ]
+    assert "finalizer-client-log-canary" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_indicator_collection_failure_logs_are_fixed_and_redacted(monkeypatch, caplog) -> None:
+    definition = IndicatorDefinition(
+        key="alpha",
+        name="Alpha",
+        type="line",
+        pane="strategy",
+    )
+    state = SessionState(environment=1, user_id=17, strategy_id=202)
+
+    def make_servicer_and_strategy():
+        servicer = StrategyServiceServicer(
+            "acct:1",
+            "order:1",
+            {},
+            "127.0.0.1:9092",
+            restore_running_sessions=False,
+        )
+        strategy = SimpleNamespace(
+            indicator_definitions=[definition],
+            on_indicator_frame=None,
+        )
+        return servicer, strategy, SimpleNamespace(strategies={"active": strategy})
+
+    client_servicer, _client_strategy, client_engine = make_servicer_and_strategy()
+
+    def unavailable_client():
+        raise RuntimeError("indicator-client-log-canary")
+
+    monkeypatch.setattr(client_servicer, "_portfolio_client", unavailable_client)
+
+    sink_servicer, sink_strategy, sink_engine = make_servicer_and_strategy()
+    monkeypatch.setattr(sink_servicer, "_portfolio_client", lambda: object())
+
+    def failing_sink(**_kwargs):
+        raise RuntimeError("indicator-sink-log-canary")
+
+    sink_servicer._indicator_frame_sink = failing_sink
+
+    missing_save_servicer, missing_save_strategy, missing_save_engine = (
+        make_servicer_and_strategy()
+    )
+    monkeypatch.setattr(missing_save_servicer, "_portfolio_client", lambda: object())
+
+    save_servicer, save_strategy, save_engine = make_servicer_and_strategy()
+
+    class FailingSaveClient:
+        @staticmethod
+        def save_strategy_indicators(**_kwargs):
+            raise RuntimeError("indicator-save-log-canary")
+
+    monkeypatch.setattr(save_servicer, "_portfolio_client", FailingSaveClient)
+
+    with caplog.at_level("WARNING"):
+        client_servicer._install_indicator_collection(
+            "indicator-log-session",
+            state,
+            client_engine,
+        )
+        sink_servicer._install_indicator_collection(
+            "indicator-log-session",
+            state,
+            sink_engine,
+        )
+        sink_strategy.on_indicator_frame(
+            "indicator-stream-key-log-canary",
+            1,
+            1,
+            IndicatorFrame(values={"alpha": 1.0}),
+        )
+        missing_save_servicer._install_indicator_collection(
+            "indicator-log-session",
+            state,
+            missing_save_engine,
+        )
+        missing_save_strategy.on_indicator_frame(
+            "indicator-stream-key-log-canary",
+            1,
+            1,
+            IndicatorFrame(values={"alpha": 1.0}),
+        )
+        save_servicer._install_indicator_collection(
+            "indicator-log-session",
+            state,
+            save_engine,
+        )
+        save_strategy.on_indicator_frame(
+            "indicator-stream-key-log-canary",
+            1,
+            1,
+            IndicatorFrame(values={"alpha": 1.0}),
+        )
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "STRATEGY_INDICATOR_CLIENT_UNAVAILABLE session=indicator-log-session strategy_id=202",
+        "STRATEGY_INDICATOR_SINK_FAILED session=indicator-log-session strategy_id=202",
+        "STRATEGY_INDICATOR_SAVE_UNAVAILABLE session=indicator-log-session strategy_id=202",
+        "STRATEGY_INDICATOR_SAVE_FAILED session=indicator-log-session strategy_id=202",
+    ]
+    assert all(record.exc_info is None for record in caplog.records)
+    for canary in (
+        "indicator-client-log-canary",
+        "indicator-sink-log-canary",
+        "indicator-save-log-canary",
+        "indicator-stream-key-log-canary",
+        "Traceback",
+    ):
+        assert canary not in caplog.text
+
+
+def test_backtest_indicator_flush_baseexception_preserves_exact_user_fatal(
+    monkeypatch,
+) -> None:
+    from market_data.models import MarketKline
+    from strategy_service.inputs import StrategyInput
+
+    fatal = strategy_base.StrategyUserCodeFatalError(stage="callback")
+    flush_calls: list[str] = []
+
+    class OneBarMarketDataClient:
+        @staticmethod
+        def fetch_backtest_page(**_kwargs):
+            return SimpleNamespace(
+                klines=[
+                    MarketKline(
+                        symbol="BTCUSDT",
+                        interval="1m",
+                        open_time=1,
+                        close_time=2,
+                        open=1.0,
+                        high=2.0,
+                        low=0.5,
+                        close=1.5,
+                        volume=10.0,
+                        timestamp=2,
+                        market="futures",
+                    )
+                ],
+                next_cursor_time_ms=1,
+                has_more=False,
+            )
+
+    class FatalEngine:
+        strategies = {}
+
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            raise fatal
+
+    def fatal_flush() -> None:
+        flush_calls.append("flush")
+        raise SystemExit("indicator-flush-canary")
+
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    monkeypatch.setattr(servicer, "_marketdata_client", OneBarMarketDataClient)
+    monkeypatch.setattr(
+        servicer,
+        "_install_indicator_collection",
+        lambda *_args, **_kwargs: fatal_flush,
+    )
+
+    with pytest.raises(strategy_base.StrategyUserCodeFatalError) as captured:
+        servicer._run_backtest_via_platform_proxy(
+            session_id="backtest-indicator-fatal",
+            state=SessionState(environment=0),
+            engine=FatalEngine(),
+            request=SimpleNamespace(start_time_ms=1, end_time_ms=2, user_id=17),
+            declared_inputs=[
+                StrategyInput(
+                    "binance",
+                    "perpetual_futures",
+                    "BTCUSDT",
+                    "1m",
+                )
+            ],
+        )
+
+    assert captured.value is fatal
+    assert flush_calls == ["flush"]
+
+
+def test_live_indicator_flush_baseexception_preserves_exact_user_fatal(
+    monkeypatch,
+) -> None:
+    fatal = strategy_base.StrategyUserCodeFatalError(stage="callback")
+    flush_calls: list[str] = []
+
+    class OneEventDelivery:
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            yield SimpleNamespace(kind="kline", payload=object())
+
+    class FatalEngine:
+        strategies = {}
+
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            raise fatal
+
+    def fatal_flush() -> None:
+        flush_calls.append("flush")
+        raise GeneratorExit("indicator-flush-canary")
+
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    servicer._lease_management_enabled = False
+    servicer.set_runtime_data_source(OneEventDelivery())
+    monkeypatch.setattr(
+        servicer,
+        "_install_indicator_collection",
+        lambda *_args, **_kwargs: fatal_flush,
+    )
+
+    with pytest.raises(strategy_base.StrategyUserCodeFatalError) as captured:
+        servicer._run_live_via_platform_proxy(
+            "live-indicator-fatal",
+            SessionState(environment=1),
+            FatalEngine(),
+        )
+
+    assert captured.value is fatal
+    assert flush_calls == ["flush"]
+
+
+def test_live_progress_persist_failure_log_is_fixed_and_redacted(monkeypatch, caplog) -> None:
+    from market_data.models import MarketKline
+
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    servicer._lease_management_enabled = False
+
+    class OneBarDelivery:
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            yield SimpleNamespace(
+                kind="kline",
+                payload=MarketKline(
+                    symbol="BTCUSDT",
+                    interval="1m",
+                    open_time=1,
+                    close_time=2,
+                    open=1.0,
+                    high=2.0,
+                    low=0.5,
+                    close=1.5,
+                    volume=10.0,
+                    timestamp=2,
+                    market="futures",
+                ),
+            )
+
+    class FakeEngine:
+        strategies = {}
+
+        @staticmethod
+        def running_strategy(_market_data):
+            return True
+
+    state = SessionState(environment=1, portfolio_id=101, strategy_id=202)
+    state.configure_live_runtime(
+        portfolio_id=101,
+        strategy_id=202,
+        required_streams=[],
+        consumer_group="strategy-session-202-live-log-session",
+    )
+    servicer.set_runtime_data_source(OneBarDelivery())
+
+    def fail_progress_persist(*_args, **_kwargs):
+        raise RuntimeError("live-progress-log-canary")
+
+    monkeypatch.setattr(servicer, "_persist_session_status", fail_progress_persist)
+
+    with caplog.at_level("WARNING"):
+        servicer._run_live_via_platform_proxy("live-log-session", state, FakeEngine())
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "STRATEGY_LIVE_PROGRESS_PERSIST_FAILED session=live-log-session strategy_id=202"
+    ]
+    assert caplog.records[0].exc_info is None
+    assert "live-progress-log-canary" not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypatch):
@@ -2152,9 +3077,9 @@ def test_run_session_live_finalizes_strategy_end_before_session_update(monkeypat
         portfolio_id=303,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
-        strategy_path="strategies.buy_once",
+        engine=FakeEngine(),
+        user_strategy=fake_user,
         strategy_id=404,
-        strategy_code=None,
     )
 
     assert events == [
@@ -2221,9 +3146,9 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
         portfolio_id=505,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
-        strategy_path="strategies.buy_once",
+        engine=FakeEngine(),
+        user_strategy=fake_user,
         strategy_id=606,
-        strategy_code=None,
     )
 
     assert state.status == "failed"
@@ -3220,6 +4145,9 @@ def _build_servicer_with_faked_preflight_deps(
     calls.setdefault("save_kwargs", [])
     calls.setdefault("update_portfolio", 0)
     calls.setdefault("update_wallet", 0)
+    calls.setdefault("snapshot_reads", 0)
+    calls.setdefault("thread_created", 0)
+    calls.setdefault("update_session", [])
 
     class FakePortfolioClient:
         def __init__(self, _addr: str) -> None:
@@ -3229,6 +4157,7 @@ def _build_servicer_with_faked_preflight_deps(
             return []
 
         def get_portfolio_snapshot(self, _portfolio_id: int, _user_id: int):
+            calls["snapshot_reads"] += 1
             return make_portfolio_snapshot_with_binance_perp_and_spot(
                 _portfolio_id,
                 user_id=_user_id,
@@ -3253,6 +4182,10 @@ def _build_servicer_with_faked_preflight_deps(
             calls["save_session"] += 1
             calls["save_kwargs"].append(dict(_kwargs))
             return save_session_ok
+
+        def update_session(self, **kwargs) -> bool:
+            calls["update_session"].append(dict(kwargs))
+            return True
 
         def update_portfolio_snapshot(self, *_args, **_kwargs):
             calls["update_portfolio"] += 1
@@ -3292,8 +4225,16 @@ def _build_servicer_with_faked_preflight_deps(
             calls.setdefault("release_session_subscriptions", []).append(dict(kwargs))
             return True
 
+    real_thread = threading.Thread
+
     class FakeThread:
-        def __init__(self, target=None, args=(), daemon=None) -> None:
+        def __new__(cls, target=None, args=(), daemon=None, **kwargs):
+            if getattr(target, "__name__", "") != "_run_session_with_context":
+                return real_thread(target=target, args=args, daemon=daemon, **kwargs)
+            return super().__new__(cls)
+
+        def __init__(self, target=None, args=(), daemon=None, **_kwargs) -> None:
+            calls["thread_created"] += 1
             self.target = target
             self.args = args
             self.daemon = daemon
@@ -3322,7 +4263,7 @@ def _build_servicer_with_faked_preflight_deps(
         def iter_live_klines(self, **_kwargs):
             return iter(())
 
-    monkeypatch.setattr(threading, "Thread", FakeThread)
+    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
 
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "kafka:9092",
@@ -3332,6 +4273,1262 @@ def _build_servicer_with_faked_preflight_deps(
     )
     servicer.set_runtime_data_source(FakeRuntimeDataSource())
     return servicer, calls
+
+
+@pytest.mark.parametrize("method_name", ["RunStrategy", "PreviewRunStrategy"])
+def test_bare_materialization_failure_is_symmetric_and_stops_before_gate(
+    monkeypatch,
+    method_name,
+):
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=_phase3_strategy_code(),
+        market_data_policy={"preflight_enabled": False},
+    )
+    servicer._runtime_source = "bare"
+
+    def fail_materialization(**_kwargs):
+        raise grpc_server.DebugStrategySourceError("materialization_failed")
+
+    monkeypatch.setattr(servicer, "_debug_strategy_source_for_db_code", fail_materialization)
+    monkeypatch.setattr(
+        grpc_server,
+        "_prepare_gated_strategy_for_rpc",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("gate must not run after Bare materialization failure")
+        ),
+    )
+    request = SimpleNamespace(
+        portfolio_id=900,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    response = getattr(servicer, method_name)(request, context)
+
+    assert getattr(response, "session_id", "") == ""
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details == "failed to materialize bare debug strategy source"
+    assert calls["snapshot_reads"] == 1
+    assert calls["save_session"] == 0
+    assert calls["thread_created"] == 0
+    assert servicer._sessions.list_ids() == ()
+
+
+@pytest.mark.parametrize("method_name", ["RunStrategy", "PreviewRunStrategy"])
+def test_dependency_gate_rejects_unsupported_import_before_side_effects(monkeypatch, method_name):
+    source = (
+        "import talib\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    request = SimpleNamespace(
+        portfolio_id=901,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    response = getattr(servicer, method_name)(request, context)
+
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details.startswith("STRATEGY_DEPENDENCY_ERROR:")
+    payload = json.loads(context.details.removeprefix("STRATEGY_DEPENDENCY_ERROR:"))
+    assert payload["code"] == "UNSUPPORTED_STRATEGY_DEPENDENCY"
+    assert payload["module"] == "talib"
+    assert calls["snapshot_reads"] == 1
+    assert calls["save_session"] == 0
+    assert calls["thread_created"] == 0
+    assert servicer._sessions.list_ids() == ()
+    assert getattr(response, "session_id", "") == ""
+
+
+@pytest.mark.parametrize("method_name", ["RunStrategy", "PreviewRunStrategy"])
+def test_strategy_source_gate_rejects_missing_allowed_child_symmetrically(monkeypatch, method_name):
+    source = (
+        "import google.hushine_missing\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    request = SimpleNamespace(
+        portfolio_id=902,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    getattr(servicer, method_name)(request, context)
+
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details.startswith("STRATEGY_DEPENDENCY_ERROR:")
+    payload = json.loads(context.details.removeprefix("STRATEGY_DEPENDENCY_ERROR:"))
+    assert payload["code"] == "STRATEGY_DEPENDENCY_UNAVAILABLE"
+    assert payload["module"] == "google.hushine_missing"
+    assert calls["snapshot_reads"] == 1
+    assert calls["save_session"] == 0
+    assert calls["thread_created"] == 0
+    assert servicer._sessions.list_ids() == ()
+
+
+@pytest.mark.parametrize("method_name", ["RunStrategy", "PreviewRunStrategy"])
+def test_strategy_source_gate_internal_failure_is_fixed_and_side_effect_free(monkeypatch, method_name):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    def fail_gate(*_args, **_kwargs):
+        raise RuntimeError("gate-canary-secret")
+
+    monkeypatch.setattr(grpc_server, "_resolve_and_gate_strategy_source", fail_gate, raising=False)
+    request = SimpleNamespace(
+        portfolio_id=903,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    getattr(servicer, method_name)(request, context)
+
+    assert context.code == grpc.StatusCode.INTERNAL
+    assert context.details == "strategy source gate failed"
+    assert "canary" not in context.details
+    assert calls["snapshot_reads"] == 1
+    assert calls["save_session"] == 0
+    assert calls["thread_created"] == 0
+    assert servicer._sessions.list_ids() == ()
+
+
+@pytest.mark.parametrize("method_name", ["RunStrategy", "PreviewRunStrategy"])
+@pytest.mark.parametrize(
+    ("serializer_name", "source"),
+    [
+        (
+            "_dependency_error_details",
+            "import talib\n"
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            "    ORDER_TARGETS = []\n"
+            "    def on_market_data(self, data, wallet): return None\n",
+        ),
+        (
+            "_gate_validation_details",
+            "class MyStrategy:\n"
+            "    ORDER_TARGETS = []\n"
+            "    def on_market_data(self, data, wallet): return None\n",
+        ),
+    ],
+)
+def test_failed_gate_serializer_baseexception_is_symmetric_internal_and_side_effect_free(
+    monkeypatch,
+    caplog,
+    method_name,
+    serializer_name,
+    source,
+):
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    def fail_serializer(_value):
+        raise SystemExit("gate-serializer-log-canary")
+
+    monkeypatch.setattr(grpc_server, serializer_name, fail_serializer)
+    request = SimpleNamespace(
+        portfolio_id=903,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    with caplog.at_level("ERROR"):
+        response = getattr(servicer, method_name)(request, context)
+
+    assert getattr(response, "session_id", "") == ""
+    assert context.code == grpc.StatusCode.INTERNAL
+    assert context.details == "strategy source gate failed"
+    assert calls["snapshot_reads"] == 1
+    assert calls["save_session"] == 0
+    assert calls["thread_created"] == 0
+    assert servicer._sessions.list_ids() == ()
+    assert [record.getMessage() for record in caplog.records] == [
+        f"STRATEGY_SOURCE_GATE_INTERNAL operation={method_name}"
+    ]
+    assert "gate-serializer-log-canary" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.parametrize("method_name", ["RunStrategy", "PreviewRunStrategy"])
+def test_strategy_source_resolution_internal_failure_is_distinct_and_side_effect_free(
+    monkeypatch,
+    method_name,
+    caplog,
+):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    def fail_resolution(*_args, **_kwargs):
+        raise SystemExit("resolution-canary-secret")
+
+    monkeypatch.setattr(grpc_server, "resolve_strategy_source", fail_resolution)
+    request = SimpleNamespace(
+        portfolio_id=903,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    with caplog.at_level("ERROR"):
+        getattr(servicer, method_name)(request, context)
+
+    assert context.code == grpc.StatusCode.INTERNAL
+    assert context.details == "strategy source resolution failed"
+    assert [record.getMessage() for record in caplog.records] == [
+        f"STRATEGY_SOURCE_RESOLUTION_INTERNAL operation={method_name}"
+    ]
+    assert "resolution-canary-secret" not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert calls["snapshot_reads"] == 1
+    assert calls["save_session"] == 0
+    assert calls["thread_created"] == 0
+    assert servicer._sessions.list_ids() == ()
+
+
+def test_strategy_source_gate_run_claims_once_before_register(monkeypatch):
+    import os
+
+    os.environ["HUSHINE_RUN_TOP_LEVEL_COUNT"] = "0"
+    os.environ["HUSHINE_RUN_CONSTRUCTOR_COUNT"] = "0"
+    source = (
+        "import os\n"
+        "os.environ['HUSHINE_RUN_TOP_LEVEL_COUNT'] = "
+        "str(int(os.environ['HUSHINE_RUN_TOP_LEVEL_COUNT']) + 1)\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def __init__(self):\n"
+        "        os.environ['HUSHINE_RUN_CONSTRUCTOR_COUNT'] = "
+        "str(int(os.environ['HUSHINE_RUN_CONSTRUCTOR_COUNT']) + 1)\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    try:
+        servicer, calls = _build_servicer_with_faked_preflight_deps(
+            monkeypatch=monkeypatch,
+            environment=0,
+            strategy_code=source,
+            market_data_policy={"preflight_enabled": False},
+        )
+        request = SimpleNamespace(
+            portfolio_id=904,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        )
+        context = _FakeContext()
+
+        response = servicer.RunStrategy(request, context)
+
+        assert context.code is None
+        assert response.session_id
+        assert calls["save_session"] == 1
+        assert calls["thread_created"] == 1
+        assert os.environ["HUSHINE_RUN_TOP_LEVEL_COUNT"] == "1"
+        assert os.environ["HUSHINE_RUN_CONSTRUCTOR_COUNT"] == "1"
+        assert calls["portfolio_preflight"][0]["session_id"] == response.session_id
+        assert servicer._sessions.get(response.session_id) is not None
+    finally:
+        del os.environ["HUSHINE_RUN_TOP_LEVEL_COUNT"]
+        del os.environ["HUSHINE_RUN_CONSTRUCTOR_COUNT"]
+
+
+def test_strategy_source_gate_binding_failure_is_invisible(monkeypatch, caplog):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def __setattr__(self, name, value):\n"
+        "        if name == 'notify': raise SystemExit('binding-canary')\n"
+        "        object.__setattr__(self, name, value)\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    request = SimpleNamespace(
+        portfolio_id=905,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    with caplog.at_level("ERROR"):
+        response = servicer.RunStrategy(request, context)
+
+    assert response.session_id == ""
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details == "strategy could not be loaded"
+    assert calls["save_session"] == 0
+    assert calls["thread_created"] == 0
+    assert servicer._sessions.list_ids() == ()
+    assert [record.getMessage() for record in caplog.records] == [
+        "STRATEGY_SOURCE_LOAD_FAILED operation=RunStrategy"
+    ]
+    assert "binding-canary" not in caplog.text
+    assert "raise SystemExit" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_strategy_source_gate_cursor_failure_updates_failed_without_thread(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    class FailingOrderClient:
+        def list_order_lifecycle_events(self, **_kwargs):
+            raise RuntimeError("order-canary")
+
+    monkeypatch.setattr(servicer._platform_proxy, "order_client", lambda: FailingOrderClient())
+    request = SimpleNamespace(
+        portfolio_id=906,
+        user_id=17,
+        runtime_id="rt-test",
+        strategy_path="",
+        interval="1m",
+        start_time_ms=1,
+        end_time_ms=2,
+    )
+    context = _FakeContext()
+
+    response = servicer.RunStrategy(request, context)
+
+    assert response.session_id == ""
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details == "strategy activation failed"
+    assert calls["save_session"] == 1
+    assert calls["thread_created"] == 0
+    assert calls["update_session"][-1]["status"] == "failed"
+    assert servicer._sessions.list_ids() == ()
+
+
+@pytest.mark.parametrize("update_failure", ["false", "baseexception"])
+def test_cursor_startup_failure_retains_owner_when_terminal_update_is_unconfirmed(
+    monkeypatch,
+    update_failure,
+):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    class FailingOrderClient:
+        def list_order_lifecycle_events(self, **_kwargs):
+            raise SystemExit("cursor-startup-secret")
+
+    monkeypatch.setattr(servicer._platform_proxy, "order_client", lambda: FailingOrderClient())
+    if update_failure == "false":
+        monkeypatch.setattr(
+            servicer._platform_proxy.portfolio,
+            "update_session",
+            lambda **_kwargs: False,
+        )
+    else:
+        monkeypatch.setattr(
+            servicer._platform_proxy.portfolio,
+            "update_session",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                KeyboardInterrupt("status-update-secret")
+            ),
+        )
+    context = _FakeContext()
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=906,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        ),
+        context,
+    )
+
+    assert response.session_id == ""
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details == "strategy activation failed"
+    session_id = calls["save_kwargs"][0]["session_id"]
+    retained = servicer._sessions.get(session_id)
+    assert retained is not None
+    assert retained.status == "failed"
+    assert retained.error == "strategy activation failed"
+    assert calls["thread_created"] == 0
+
+
+@pytest.mark.parametrize(
+    ("failure_seam", "expected_code", "expected_detail"),
+    [
+        (
+            "snapshot",
+            grpc.StatusCode.UNAVAILABLE,
+            "failed to persist strategy_start snapshot",
+        ),
+        ("cursor", grpc.StatusCode.FAILED_PRECONDITION, "strategy activation failed"),
+        (
+            "thread_registration",
+            grpc.StatusCode.INTERNAL,
+            "session thread registration failed",
+        ),
+        ("thread_start", grpc.StatusCode.INTERNAL, "session thread start failed"),
+    ],
+)
+@pytest.mark.parametrize("update_failure", ["false", "baseexception"])
+def test_post_save_startup_failure_matrix_retains_unconfirmed_owner(
+    monkeypatch,
+    failure_seam,
+    expected_code,
+    expected_detail,
+    update_failure,
+):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    if update_failure == "false":
+        monkeypatch.setattr(
+            servicer._platform_proxy.portfolio,
+            "update_session",
+            lambda **_kwargs: False,
+        )
+    else:
+        monkeypatch.setattr(
+            servicer._platform_proxy.portfolio,
+            "update_session",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                KeyboardInterrupt("terminal-update-secret")
+            ),
+        )
+
+    if failure_seam == "snapshot":
+        monkeypatch.setattr(
+            grpc_server,
+            "_sync_strategy_snapshot",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                SystemExit("snapshot-secret")
+            ),
+        )
+    elif failure_seam == "cursor":
+        monkeypatch.setattr(
+            strategy_base.BaseStrategy,
+            "activate_order_event_cursor",
+            lambda _self: (_ for _ in ()).throw(GeneratorExit("cursor-secret")),
+        )
+    elif failure_seam == "thread_registration":
+        monkeypatch.setattr(servicer._sessions, "set_thread", lambda *_args: False)
+    else:
+        class FailingThread:
+            def __init__(self, target):
+                self.target = target
+
+            def start(self):
+                raise SystemExit("thread-start-secret")
+
+        monkeypatch.setattr(grpc_server, "_create_session_thread", FailingThread)
+
+    context = _FakeContext()
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=909,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        ),
+        context,
+    )
+
+    assert response.session_id == ""
+    assert context.code == expected_code
+    assert context.details == expected_detail
+    session_id = calls["save_kwargs"][0]["session_id"]
+    state = servicer._sessions.get(session_id)
+    assert state is not None
+    assert state.status == "failed"
+    assert state.error == expected_detail
+
+
+@pytest.mark.parametrize("release_failure", [False, None, "baseexception"])
+def test_abort_persisted_startup_retains_owner_until_subscription_release_is_confirmed(
+    monkeypatch,
+    release_failure,
+):
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    session_id, state = servicer._sessions.prepare(
+        session_id="d" * 32,
+        environment=1,
+        runtime_id="rt-test",
+    )
+    servicer._sessions.register(session_id, state)
+    monkeypatch.setattr(servicer, "_persist_session_status", lambda *_args, **_kwargs: True)
+    if release_failure == "baseexception":
+        monkeypatch.setattr(
+            servicer,
+            "_release_session_market_data_subscriptions",
+            lambda *_args: (_ for _ in ()).throw(
+                SystemExit("release-result-log-canary")
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            servicer,
+            "_release_session_market_data_subscriptions",
+            lambda *_args: release_failure,
+        )
+    context = _FakeContext()
+
+    response = servicer._abort_persisted_startup(
+        session_id=session_id,
+        state=state,
+        environment=1,
+        context=context,
+        error="strategy activation failed",
+        status_code=grpc.StatusCode.FAILED_PRECONDITION,
+        detail="strategy activation failed",
+    )
+
+    assert response.session_id == ""
+    assert servicer._sessions.get(session_id) is state
+    assert state.status == "failed"
+    assert state.error == "strategy activation failed"
+
+
+@pytest.mark.parametrize(
+    ("core_result", "owner_retained", "patch_count"),
+    [
+        (True, False, 0),
+        (False, True, 1),
+    ],
+)
+def test_agent_managed_startup_abort_still_requires_real_core_confirmation(
+    monkeypatch,
+    core_result,
+    owner_retained,
+    patch_count,
+):
+    updates = []
+    patches = []
+    platform_proxy = SimpleNamespace(
+        send_session_status_patch=lambda **kwargs: patches.append(dict(kwargs))
+    )
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+        platform_proxy=platform_proxy,
+        agent_managed_final_status=True,
+    )
+    portfolio_client = SimpleNamespace(
+        update_session=lambda **kwargs: updates.append(dict(kwargs)) or core_result
+    )
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: portfolio_client)
+    session_id, state = servicer._sessions.prepare(
+        session_id="e" * 32,
+        environment=0,
+        runtime_id="rt-test",
+    )
+    servicer._sessions.register(session_id, state)
+
+    servicer._abort_persisted_startup(
+        session_id=session_id,
+        state=state,
+        environment=0,
+        context=_FakeContext(),
+        error="strategy activation failed",
+        status_code=grpc.StatusCode.FAILED_PRECONDITION,
+        detail="strategy activation failed",
+    )
+
+    assert len(updates) == 1
+    assert updates[0]["status"] == "failed"
+    assert len(patches) == patch_count
+    if owner_retained:
+        assert servicer._sessions.get(session_id) is state
+    else:
+        assert servicer._sessions.get(session_id) is None
+
+
+@pytest.mark.parametrize(
+    "core_result",
+    [
+        False,
+        None,
+        1,
+        pytest.param(object(), id="truthy-object"),
+    ],
+)
+def test_startup_status_patch_submission_never_confirms_core_persistence(
+    monkeypatch,
+    core_result,
+):
+    updates = []
+    patches = []
+    platform_proxy = SimpleNamespace(
+        send_session_status_patch=lambda **kwargs: patches.append(dict(kwargs))
+    )
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+        platform_proxy=platform_proxy,
+    )
+    portfolio_client = SimpleNamespace(
+        update_session=lambda **kwargs: updates.append(dict(kwargs)) or core_result
+    )
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: portfolio_client)
+    session_id, state = servicer._sessions.prepare(
+        session_id="f" * 32,
+        environment=0,
+        runtime_id="rt-test",
+    )
+    servicer._sessions.register(session_id, state)
+
+    servicer._abort_persisted_startup(
+        session_id=session_id,
+        state=state,
+        environment=0,
+        context=_FakeContext(),
+        error="strategy activation failed",
+        status_code=grpc.StatusCode.FAILED_PRECONDITION,
+        detail="strategy activation failed",
+    )
+
+    assert len(updates) == 1
+    assert len(patches) == 1
+    assert servicer._sessions.get(session_id) is state
+
+
+@pytest.mark.parametrize("fatal_type", [RuntimeError, SystemExit])
+def test_startup_terminal_update_failure_still_submits_patch_and_retains_owner(
+    monkeypatch,
+    fatal_type,
+):
+    patches = []
+    platform_proxy = SimpleNamespace(
+        send_session_status_patch=lambda **kwargs: patches.append(dict(kwargs))
+    )
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+        platform_proxy=platform_proxy,
+    )
+    portfolio_client = SimpleNamespace(
+        update_session=lambda **_kwargs: (_ for _ in ()).throw(
+            fatal_type("startup-terminal-update-canary")
+        )
+    )
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: portfolio_client)
+    session_id, state = servicer._sessions.prepare(
+        session_id="1" * 32,
+        environment=0,
+        runtime_id="rt-test",
+    )
+    servicer._sessions.register(session_id, state)
+
+    servicer._abort_persisted_startup(
+        session_id=session_id,
+        state=state,
+        environment=0,
+        context=_FakeContext(),
+        error="strategy activation failed",
+        status_code=grpc.StatusCode.FAILED_PRECONDITION,
+        detail="strategy activation failed",
+    )
+
+    assert len(patches) == 1
+    assert servicer._sessions.get(session_id) is state
+
+
+@pytest.mark.parametrize("fatal_type", [RuntimeError, SystemExit])
+def test_startup_terminal_client_acquisition_failure_still_patches_releases_and_retains(
+    monkeypatch,
+    fatal_type,
+):
+    patches = []
+    releases = []
+    platform_proxy = SimpleNamespace(
+        send_session_status_patch=lambda **kwargs: patches.append(dict(kwargs))
+    )
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+        platform_proxy=platform_proxy,
+    )
+
+    def fail_client_acquisition():
+        raise fatal_type("startup-terminal-client-canary")
+
+    monkeypatch.setattr(servicer, "_portfolio_client", fail_client_acquisition)
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda session_id, state: releases.append((session_id, state)) or True,
+    )
+    session_id, state = servicer._sessions.prepare(
+        session_id="3" * 32,
+        environment=1,
+        runtime_id="rt-test",
+    )
+    servicer._sessions.register(session_id, state)
+
+    servicer._abort_persisted_startup(
+        session_id=session_id,
+        state=state,
+        environment=1,
+        context=_FakeContext(),
+        error="strategy activation failed",
+        status_code=grpc.StatusCode.FAILED_PRECONDITION,
+        detail="strategy activation failed",
+    )
+
+    assert patches == [
+        {
+            "session_id": session_id,
+            "status": "failed",
+            "bars_processed": 0,
+            "error": "strategy activation failed",
+            "runtime_id": "rt-test",
+        }
+    ]
+    assert releases == [(session_id, state)]
+    assert servicer._sessions.get(session_id) is state
+
+
+@pytest.mark.parametrize(
+    "release_result",
+    [1, pytest.param(object(), id="truthy-object")],
+)
+def test_startup_abort_rejects_truthy_non_boolean_subscription_release(
+    monkeypatch,
+    release_result,
+):
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    monkeypatch.setattr(servicer, "_persist_session_status", lambda *_args, **_kwargs: True)
+    marketdata_client = SimpleNamespace(
+        release_session_market_data_subscriptions=lambda **_kwargs: release_result
+    )
+    monkeypatch.setattr(servicer, "_marketdata_client", lambda: marketdata_client)
+    session_id, state = servicer._sessions.prepare(
+        session_id="2" * 32,
+        environment=1,
+        runtime_id="rt-test",
+    )
+    servicer._sessions.register(session_id, state)
+
+    servicer._abort_persisted_startup(
+        session_id=session_id,
+        state=state,
+        environment=1,
+        context=_FakeContext(),
+        error="strategy activation failed",
+        status_code=grpc.StatusCode.FAILED_PRECONDITION,
+        detail="strategy activation failed",
+    )
+
+    assert servicer._sessions.get(session_id) is state
+
+
+def test_session_thread_registration_failure_never_starts_or_leaks_session(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    thread_calls = {"created": 0, "started": 0}
+
+    class FakeThread:
+        def __init__(self, target):
+            thread_calls["created"] += 1
+            self.target = target
+
+        def start(self):
+            thread_calls["started"] += 1
+
+    monkeypatch.setattr(grpc_server, "_create_session_thread", FakeThread)
+    monkeypatch.setattr(servicer._sessions, "set_thread", lambda *_args: False)
+    context = _FakeContext()
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=907,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        ),
+        context,
+    )
+
+    assert response.session_id == ""
+    assert context.code == grpc.StatusCode.INTERNAL
+    assert context.details == "session thread registration failed"
+    assert thread_calls == {"created": 1, "started": 0}
+    assert calls["update_session"][-1]["status"] == "failed"
+    assert servicer._sessions.list_ids() == ()
+
+
+@pytest.mark.parametrize("fatal_stage", ["before_business", "after_business"])
+def test_otel_baseexception_is_owned_by_one_session_terminal_boundary(
+    monkeypatch,
+    fatal_stage,
+):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    class InlineThread:
+        def __init__(self, target):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    def fatal_instrumentation(_parent, _span_name, fn):
+        if fatal_stage == "before_business":
+            raise SystemExit("otel-before-secret")
+        fn()
+        raise GeneratorExit("otel-after-secret")
+
+    monkeypatch.setattr(grpc_server, "_create_session_thread", InlineThread)
+    monkeypatch.setattr(grpc_server, "_run_in_otel_context", fatal_instrumentation)
+    context = _FakeContext()
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=908,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        ),
+        context,
+    )
+
+    assert context.code is None
+    state = servicer._sessions.get(response.session_id)
+    assert state is not None
+    assert state.status == "failed"
+    assert state.error == "strategy session terminated"
+    terminal_updates = [
+        item for item in calls["update_session"] if item["session_id"] == response.session_id
+    ]
+    assert len(terminal_updates) == 1
+    assert terminal_updates[0]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "otel_stage",
+    ["tracer_lookup", "attach", "span_start", "span_enter", "span_exit", "detach"],
+)
+@pytest.mark.parametrize("fatal_type", [SystemExit, KeyboardInterrupt, GeneratorExit])
+def test_each_otel_stage_baseexception_reaches_one_terminal_owner(
+    monkeypatch,
+    caplog,
+    otel_stage,
+    fatal_type,
+):
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    state = SessionState(environment=0, portfolio_id=101, strategy_id=202, user_id=17)
+    business_calls: list[str] = []
+
+    class FakeEngine:
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            return None
+
+    def raise_stage(stage: str) -> None:
+        if otel_stage == stage:
+            raise fatal_type("otel-stage-log-canary")
+
+    class FakeSpan:
+        def __enter__(self):
+            raise_stage("span_enter")
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            raise_stage("span_exit")
+            return False
+
+    class FakeTracer:
+        @staticmethod
+        def start_as_current_span(_name):
+            raise_stage("span_start")
+            return FakeSpan()
+
+    class FakeTrace:
+        @staticmethod
+        def get_tracer(_name):
+            raise_stage("tracer_lookup")
+            return FakeTracer()
+
+    class FakeContext:
+        @staticmethod
+        def attach(_parent):
+            raise_stage("attach")
+            return object()
+
+        @staticmethod
+        def detach(_token):
+            raise_stage("detach")
+
+    monkeypatch.setattr(grpc_server, "_OTEL_AVAILABLE", True)
+    monkeypatch.setattr(grpc_server, "_otel_trace", FakeTrace())
+    monkeypatch.setattr(grpc_server, "_otel_context", FakeContext())
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: object())
+    monkeypatch.setattr(
+        servicer,
+        "_run_backtest",
+        lambda *_args, **_kwargs: (
+            business_calls.append("business"),
+            state.transition("finished", bars=1),
+        ),
+    )
+    monkeypatch.setattr(servicer, "_release_stream_leases", lambda *_args: None)
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(grpc_server, "_sync_strategy_snapshot", lambda *_args, **_kwargs: None)
+    terminal_updates: list[tuple[str, str, str]] = []
+    terminal_marks: list[tuple[str, SessionState]] = []
+    monkeypatch.setattr(
+        servicer,
+        "_persist_session_status",
+        lambda session_id, inner_state, **_kwargs: terminal_updates.append(
+            (session_id, inner_state.status, inner_state.error)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        servicer._sessions,
+        "mark_terminal",
+        lambda session_id, inner_state: terminal_marks.append(
+            (session_id, inner_state)
+        ) or True,
+    )
+
+    with caplog.at_level("ERROR"):
+        servicer._run_session(
+            session_id="f" * 32,
+            state=state,
+            request=SimpleNamespace(end_time_ms=2),
+            wallet=_wallet_with_futures_slot(),
+            environment=0,
+            portfolio_id=101,
+            user_id=17,
+            declared_inputs=[],
+            engine=FakeEngine(),
+            user_strategy=SimpleNamespace(last_market_time=None),
+            strategy_id=202,
+            otel_parent_context=object(),
+        )
+
+    expected_business_calls = 1 if otel_stage in {"span_exit", "detach"} else 0
+    assert len(business_calls) == expected_business_calls
+    assert state.status == "failed"
+    assert state.error == "strategy session terminated"
+    assert terminal_updates == [
+        ("f" * 32, "failed", "strategy session terminated")
+    ]
+    assert terminal_marks == [("f" * 32, state)]
+    assert [record.getMessage() for record in caplog.records] == [
+        (
+            f"STRATEGY_SESSION_FATAL session={'f' * 32} "
+            "portfolio_id=101 strategy_id=202"
+        )
+    ]
+    assert "otel-stage-log-canary" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.parametrize("teardown_stage", ["span_exit", "detach"])
+def test_user_fatal_survives_otel_teardown_baseexception(
+    monkeypatch,
+    caplog,
+    teardown_stage,
+) -> None:
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    state = SessionState(environment=0, portfolio_id=101, strategy_id=202, user_id=17)
+    fatal = strategy_base.StrategyUserCodeFatalError(stage="callback")
+    instrumentation_calls: list[str] = []
+    cleanup_calls: list[str] = []
+
+    class FatalEngine:
+        @staticmethod
+        def raise_if_user_code_fatal() -> None:
+            instrumentation_calls.append("business")
+            raise fatal
+
+    class FakeSpan:
+        def __enter__(self):
+            instrumentation_calls.append("span_enter")
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            instrumentation_calls.append("span_exit")
+            if teardown_stage == "span_exit":
+                raise SystemExit("span-exit-log-canary")
+            return False
+
+    class FakeTracer:
+        @staticmethod
+        def start_as_current_span(_name):
+            return FakeSpan()
+
+    class FakeTrace:
+        @staticmethod
+        def get_tracer(_name):
+            return FakeTracer()
+
+    class FakeContext:
+        @staticmethod
+        def attach(_parent):
+            instrumentation_calls.append("attach")
+            return object()
+
+        @staticmethod
+        def detach(_token):
+            instrumentation_calls.append("detach")
+            if teardown_stage == "detach":
+                raise KeyboardInterrupt("detach-log-canary")
+
+    monkeypatch.setattr(grpc_server, "_OTEL_AVAILABLE", True)
+    monkeypatch.setattr(grpc_server, "_otel_trace", FakeTrace())
+    monkeypatch.setattr(grpc_server, "_otel_context", FakeContext())
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: object())
+    monkeypatch.setattr(
+        servicer,
+        "_release_stream_leases",
+        lambda *_args: cleanup_calls.append("release_leases"),
+    )
+    monkeypatch.setattr(
+        servicer,
+        "_release_session_market_data_subscriptions",
+        lambda *_args: cleanup_calls.append("release_subscriptions") or True,
+    )
+    monkeypatch.setattr(
+        grpc_server,
+        "_sync_strategy_snapshot",
+        lambda *_args, **_kwargs: cleanup_calls.append("snapshot"),
+    )
+    terminal_updates: list[tuple[str, str, str]] = []
+    terminal_marks: list[tuple[str, SessionState]] = []
+    monkeypatch.setattr(
+        servicer,
+        "_persist_session_status",
+        lambda session_id, inner_state, **_kwargs: terminal_updates.append(
+            (session_id, inner_state.status, inner_state.error)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        servicer._sessions,
+        "mark_terminal",
+        lambda session_id, inner_state: terminal_marks.append(
+            (session_id, inner_state)
+        ) or True,
+    )
+
+    with caplog.at_level("ERROR"):
+        servicer._run_session(
+            session_id="c" * 32,
+            state=state,
+            request=SimpleNamespace(end_time_ms=2),
+            wallet=_wallet_with_futures_slot(),
+            environment=0,
+            portfolio_id=101,
+            user_id=17,
+            declared_inputs=[],
+            engine=FatalEngine(),
+            user_strategy=SimpleNamespace(last_market_time=None),
+            strategy_id=202,
+            otel_parent_context=object(),
+        )
+
+    assert instrumentation_calls == [
+        "attach",
+        "span_enter",
+        "business",
+        "span_exit",
+        "detach",
+    ]
+    assert cleanup_calls == ["release_leases", "release_subscriptions", "snapshot"]
+    assert state.status == "failed"
+    assert state.error == "strategy user code terminated"
+    assert terminal_updates == [
+        ("c" * 32, "failed", "strategy user code terminated")
+    ]
+    assert terminal_marks == [("c" * 32, state)]
+    assert [record.getMessage() for record in caplog.records] == [
+        (
+            f"STRATEGY_USER_CODE_FATAL session={'c' * 32} "
+            "portfolio_id=101 strategy_id=202"
+        )
+    ]
+    assert "log-canary" not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_run_strategy_rejects_mode1_as_unsupported_profile(monkeypatch):
@@ -3488,7 +5685,7 @@ def test_run_strategy_portfolio_preflight_passes_persistence_session_id(monkeypa
     assert resp.session_id != ""
     preflight = calls["portfolio_preflight"][0]
     assert preflight["session_id"]
-    assert preflight["session_id"] != resp.session_id
+    assert preflight["session_id"] == resp.session_id
     assert preflight["strategy_id"] == 42
 
 
@@ -3867,10 +6064,9 @@ def test_proxy_only_backtest_flushes_custom_indicator_chunks():
     engine = StrategyEngine()
     engine.create_strategy(
         "u1",
-        "<db:indicator_backtest>",
+        _prepare_strategy_code_for_test("<db:indicator_backtest>", strategy_code),
         wallet,
         session_id="sess-indicators",
-        strategy_code=strategy_code,
     )
 
     proxy = FakeProxy()
@@ -4708,4 +6904,7 @@ def test_run_and_preview_reject_saved_code_with_same_validation_error(monkeypatc
     getattr(servicer, method_name)(request, context)
 
     assert context.code == grpc.StatusCode.FAILED_PRECONDITION
-    assert context.details == grpc_server._strategy_validation_error(strategy_code)
+    assert context.details.startswith("STRATEGY_DEPENDENCY_ERROR:")
+    assert json.loads(context.details.removeprefix("STRATEGY_DEPENDENCY_ERROR:"))["code"] == (
+        "UNSUPPORTED_STRATEGY_DEPENDENCY"
+    )

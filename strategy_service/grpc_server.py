@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import sys
 import threading
 import time
 import uuid
@@ -31,7 +33,12 @@ from strategy_service.gen import strategy_service_pb2_grpc as pb2_grpc
 from strategy_service.indicators import IndicatorChunkBuffer
 from strategy_service.notification import StrategyNotifier
 from strategy_service.service import StrategyEngine
-from strategy_service.session import SessionManager, SessionState, StreamBinding
+from strategy_service.session import (
+    SessionManager,
+    SessionRegistrationError,
+    SessionState,
+    StreamBinding,
+)
 from strategy_service.inputs import (
     StrategyDeclarationError,
     StrategyInput,
@@ -54,10 +61,21 @@ from strategy_service.debug_strategy_sources import (
     ensure_bare_strategy_source,
 )
 from strategy_service.strategy.base import (
+    StrategyActivationError,
+    StrategyUserCodeFatalError,
     USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX,
-    extract_strategy_declarations,
 )
 from strategy_service.strategy_validator import validate_strategy_code
+from strategy_service.strategy_imports import (
+    PreparedStrategy,
+    StrategyDependencyError,
+    StrategySourceGateResult,
+    StrategySourceLoadError,
+    StrategySourceResolutionError,
+    gate_strategy_source,
+    prepare_strategy,
+    resolve_strategy_source,
+)
 from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
@@ -104,6 +122,129 @@ def _strategy_validation_error(code: str | None) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+class _StrategySourceResolutionInternal(BaseException):
+    __slots__ = ()
+
+
+def _resolve_and_gate_strategy_source(
+    strategy_path: str,
+    strategy_code: str | None,
+    *,
+    hot_reload: bool,
+) -> StrategySourceGateResult:
+    resolution_failed = False
+    resolved = None
+    try:
+        resolved = resolve_strategy_source(
+            strategy_path,
+            strategy_code,
+            hot_reload=hot_reload,
+        )
+    except StrategySourceResolutionError:
+        raise
+    except BaseException:
+        resolution_failed = True
+    if resolution_failed or resolved is None:
+        raise _StrategySourceResolutionInternal()
+    return gate_strategy_source(
+        resolved,
+        python_invocation_path=os.path.abspath(os.path.normpath(sys.executable)),
+    )
+
+
+def _dependency_error_details(error: StrategyDependencyError) -> str:
+    return "STRATEGY_DEPENDENCY_ERROR:" + json.dumps(
+        {
+            "code": error.code,
+            "image_build_id": error.image_build_id,
+            "message": error.message,
+            "module": error.module,
+            "runtime_profile": error.runtime_profile,
+            "runtime_profile_version": error.runtime_profile_version,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _gate_validation_details(result: StrategySourceGateResult) -> str:
+    return "strategy code validation failed: " + json.dumps(
+        [
+            {
+                "code": issue.code,
+                "message": issue.message,
+                "module": issue.module,
+                "symbol": issue.symbol,
+                "line": issue.line,
+            }
+            for issue in result.issues
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _prepare_gated_strategy_for_rpc(
+    *,
+    strategy_path: str,
+    strategy_code: str | None,
+    hot_reload: bool,
+    context: Any,
+    operation: str,
+) -> PreparedStrategy | None:
+    try:
+        gate = _resolve_and_gate_strategy_source(
+            strategy_path,
+            strategy_code,
+            hot_reload=hot_reload,
+        )
+    except StrategySourceResolutionError as error:
+        context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+        context.set_details(f"strategy source invalid: {error}")
+        return None
+    except _StrategySourceResolutionInternal:
+        logger.error("STRATEGY_SOURCE_RESOLUTION_INTERNAL operation=%s", operation)
+        context.set_code(grpc.StatusCode.INTERNAL)
+        context.set_details("strategy source resolution failed")
+        return None
+    except BaseException:
+        logger.error("STRATEGY_SOURCE_GATE_INTERNAL operation=%s", operation)
+        context.set_code(grpc.StatusCode.INTERNAL)
+        context.set_details("strategy source gate failed")
+        return None
+    try:
+        gate_failed = not gate.ok or gate.gated_source is None
+        failure_details = ""
+        if gate_failed:
+            if gate.dependency_error is not None:
+                failure_details = _dependency_error_details(gate.dependency_error)
+            else:
+                failure_details = _gate_validation_details(gate)
+    except BaseException:
+        logger.error("STRATEGY_SOURCE_GATE_INTERNAL operation=%s", operation)
+        context.set_code(grpc.StatusCode.INTERNAL)
+        context.set_details("strategy source gate failed")
+        return None
+    if gate_failed:
+        context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+        context.set_details(failure_details)
+        return None
+    try:
+        return prepare_strategy(gate.gated_source)
+    except StrategySourceLoadError:
+        logger.error("STRATEGY_SOURCE_LOAD_FAILED operation=%s", operation)
+        context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+        context.set_details("strategy could not be loaded")
+        return None
+    except BaseException:
+        logger.error("STRATEGY_SOURCE_LOAD_INTERNAL operation=%s", operation)
+        context.set_code(grpc.StatusCode.INTERNAL)
+        context.set_details("strategy source gate failed")
+        return None
 RESTORE_RUNNING_SESSIONS_RETRIES = 5
 RESTORE_RUNNING_SESSIONS_RETRY_SECONDS = 1.0
 PLATFORM_ACCESS_PROXY_ONLY = "proxy_only"
@@ -120,11 +261,34 @@ def _run_in_otel_context(parent_context, span_name: str, fn):
         return fn()
     tracer = _otel_trace.get_tracer("strategy-service/session")
     token = _otel_context.attach(parent_context)
+    primary_user_fatal: StrategyUserCodeFatalError | None = None
+    result = None
     try:
-        with tracer.start_as_current_span(span_name):
-            return fn()
+        try:
+            with tracer.start_as_current_span(span_name):
+                try:
+                    result = fn()
+                except StrategyUserCodeFatalError as fatal:
+                    primary_user_fatal = fatal
+        except StrategyUserCodeFatalError as fatal:
+            if primary_user_fatal is None:
+                primary_user_fatal = fatal
+        except BaseException:
+            if primary_user_fatal is None:
+                raise
     finally:
-        _otel_context.detach(token)
+        try:
+            _otel_context.detach(token)
+        except BaseException:
+            if primary_user_fatal is None:
+                raise
+    if primary_user_fatal is not None:
+        raise primary_user_fatal
+    return result
+
+
+def _create_session_thread(target: Callable[[], None]) -> threading.Thread:
+    return threading.Thread(target=target, daemon=True)
 
 
 @dataclass(frozen=True)
@@ -189,10 +353,10 @@ def _safe_send_session_status_patch(
     bars_processed: int,
     error: str,
     runtime_id: str,
-) -> None:
+) -> bool:
     send = getattr(platform_proxy, "send_session_status_patch", None)
     if not callable(send):
-        return
+        return False
     try:
         send(
             session_id=session_id,
@@ -201,8 +365,10 @@ def _safe_send_session_status_patch(
             error=error,
             runtime_id=runtime_id,
         )
-    except Exception:
-        logger.warning("session %s: failed to send final status patch", session_id, exc_info=True)
+    except BaseException:
+        logger.warning("STRATEGY_STATUS_PATCH_FAILED session=%s", session_id)
+        return False
+    return True
 
 
 def _wallet_parts_for_portfolio_sync(wallet: Any) -> tuple[Any | None, Any | None]:
@@ -427,7 +593,7 @@ def _target_close_margin_balance(
 
 # Note: wallet-derived symbol inference was intentionally removed (pre_C3 §2.1/§2.2).
 # The authoritative universe is the strategy's ``INPUTS`` declaration, which is
-# resolved via ``extract_strategy_declarations`` at RPC entry.
+# detached from the one sealed PreparedStrategy used by the RPC admission path.
 
 
 def _live_consumer_group(strategy_id: int, session_id: str) -> str:
@@ -659,10 +825,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_code=strategy_code,
         )
         logger.info(
-            "bare runtime using local strategy source: user_id=%s strategy_id=%s path=%s",
+            "BARE_STRATEGY_SOURCE_READY user_id=%s strategy_id=%s",
             user_id,
             strategy_id,
-            path,
         )
         return str(path), None, True
 
@@ -979,32 +1144,27 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 strategy_path=strategy_path,
                 strategy_code=strategy_code,
             )
-        except DebugStrategySourceError as e:
+        except DebugStrategySourceError:
+            logger.warning("BARE_STRATEGY_SOURCE_ERROR user_id=%s strategy_id=%s", user_id, strategy_id)
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"failed to materialize bare debug strategy source: {e}")
+            context.set_details("failed to materialize bare debug strategy source")
+            return pb2.RunStrategyResponse()
+        except BaseException:
+            logger.error("BARE_STRATEGY_SOURCE_INTERNAL user_id=%s strategy_id=%s", user_id, strategy_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("strategy source materialization failed")
             return pb2.RunStrategyResponse()
 
-        validation_error = _strategy_validation_error(strategy_code)
-        if validation_error:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(validation_error)
+        prepared_strategy = _prepare_gated_strategy_for_rpc(
+            strategy_path=strategy_path,
+            strategy_code=strategy_code,
+            hot_reload=strategy_hot_reload,
+            context=context,
+            operation="RunStrategy",
+        )
+        if prepared_strategy is None:
             return pb2.RunStrategyResponse()
-
-        # Resolve the strategy's declared input universe. Per pre_C3
-        # gate 1 this is the ONLY authoritative source for what a strategy
-        # consumes — wallet positions / spot assets MUST NOT contribute. Any
-        # declaration error surfaces as FAILED_PRECONDITION on the RPC itself,
-        # never as a background-thread session failure.
-        try:
-            declarations = extract_strategy_declarations(strategy_path, strategy_code)
-        except StrategyDeclarationError as e:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"strategy input declaration invalid: {e}")
-            return pb2.RunStrategyResponse()
-        except (ImportError, AttributeError) as e:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"strategy could not be loaded: {e}")
-            return pb2.RunStrategyResponse()
+        declarations = prepared_strategy.declarations
         try:
             effective_risk = _effective_risk_controls_from_request(
                 declarations,
@@ -1119,13 +1279,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.RunStrategyResponse()
         required_streams = list(preflight.required_streams)
 
-        # 4. 创建 session（内存 + DB 持久化）
+        # 4. Prepare and synchronously bind the one final Session generation.
         runtime_id, runtime_source, runtime_name = self._runtime_binding_for_request(request)
         if not runtime_id:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details("runtime_id is required to start a strategy session")
             return pb2.RunStrategyResponse()
-        session_id, state = self._sessions.create(
+        session_id, state = self._sessions.prepare(
+            session_id=preflight_session_id,
             environment=environment,
             user_id=user_id,
             portfolio_id=portfolio_id,
@@ -1133,27 +1294,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             runtime_source=runtime_source,
             runtime_name=runtime_name,
         )
-        if environment == 1:
-            state.configure_live_runtime(
-                portfolio_id=portfolio_id,
-                strategy_id=strategy_id,
-                required_streams=required_streams,
-                consumer_group=_live_consumer_group(strategy_id, session_id),
-            )
-            if not self._create_session_market_data_subscriptions(
-                session_id=session_id,
-                state=state,
-                user_id=user_id,
-            ):
-                self._sessions.discard(session_id)
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(
-                    "failed to create required live delivery subscriptions for demo session"
-                )
-                return pb2.RunStrategyResponse()
-        else:
-            state.portfolio_id = portfolio_id
-            state.strategy_id = strategy_id
+        state.portfolio_id = portfolio_id
+        state.strategy_id = strategy_id
         state.configure_risk_runtime(
             order_target_keys=set(declarations.order_target_keys),
             max_loss_close_pct=effective_risk.max_loss_close_pct,
@@ -1162,6 +1304,127 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             leverage_source=effective_risk.leverage_source,
             initial_margin_balance=initial_margin_balance,
         )
+
+        callbacks_lock = threading.Lock()
+        callbacks_armed = False
+
+        def _persist_runtime_error(message: str) -> None:
+            with callbacks_lock:
+                if not callbacks_armed:
+                    return
+            if state.record_runtime_error(message):
+                self._persist_session_status(session_id, state)
+
+        def _clear_runtime_error() -> None:
+            with callbacks_lock:
+                if not callbacks_armed:
+                    return
+            if state.clear_runtime_error(USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX):
+                self._persist_session_status(session_id, state)
+
+        def _wake_user_code_fatal(fatal: StrategyUserCodeFatalError) -> None:
+            state.latch_user_code_fatal(fatal.stage)
+
+        order_client = self._order_client()
+        engine = StrategyEngine()
+        try:
+            user_strategy = engine.create_strategy(
+                user_id=f"user:{user_id}:session:{session_id}",
+                prepared_strategy=prepared_strategy,
+                wallet=wallet,
+                order_client=order_client,
+                portfolio_id=portfolio_id,
+                strategy_id=strategy_id,
+                session_id=session_id,
+                notifier=StrategyNotifier(self._notification_client),
+                on_user_code_error=_persist_runtime_error if strategy_hot_reload else None,
+                on_user_code_recovered=_clear_runtime_error if strategy_hot_reload else None,
+                on_user_code_fatal=_wake_user_code_fatal,
+            )
+        except StrategySourceLoadError:
+            logger.error("STRATEGY_SOURCE_LOAD_FAILED operation=RunStrategy")
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details("strategy could not be loaded")
+            return pb2.RunStrategyResponse()
+        except BaseException:
+            logger.error("STRATEGY_SOURCE_LOAD_INTERNAL operation=RunStrategy")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("strategy source gate failed")
+            return pb2.RunStrategyResponse()
+
+        def _on_order_sync() -> None:
+            _sync_strategy_snapshot(
+                acct_client,
+                portfolio_id=portfolio_id,
+                user_id=user_id,
+                environment=environment,
+                wallet=wallet,
+                snapshot_reason=SNAPSHOT_REASON_EVENT,
+                strategy_id=strategy_id,
+                session_id=session_id,
+                snapshot_time=getattr(user_strategy, "last_market_time", None),
+            )
+
+        user_strategy.on_order_callback = _on_order_sync
+        state.configure_stop_runtime(wallet=wallet, order_client=order_client)
+        if environment == 1:
+            self._install_periodic_sample_trigger(
+                engine=engine,
+                portfolio_id=portfolio_id,
+                user_id=user_id,
+                strategy_id=strategy_id,
+                session_id=session_id,
+                wallet=wallet,
+                portfolio_client=acct_client,
+                every_n_bars=DEFAULT_PERIODIC_SAMPLE_EVERY_BARS,
+                max_idle_seconds=float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS),
+            )
+        self._install_max_loss_close_guard(
+            engine=engine,
+            session_id=session_id,
+            state=state,
+            wallet=wallet,
+        )
+
+        try:
+            self._sessions.register(session_id, state)
+        except SessionRegistrationError:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details("session registration failed")
+            return pb2.RunStrategyResponse()
+
+        if environment == 1:
+            state.configure_live_runtime(
+                portfolio_id=portfolio_id,
+                strategy_id=strategy_id,
+                required_streams=required_streams,
+                consumer_group=_live_consumer_group(strategy_id, session_id),
+            )
+            subscription_created = False
+            try:
+                subscription_created = self._create_session_market_data_subscriptions(
+                    session_id=session_id,
+                    state=state,
+                    user_id=user_id,
+                )
+            except BaseException:
+                logger.error("STRATEGY_SUBSCRIPTION_CREATE_FAILED session=%s", session_id)
+            if not subscription_created:
+                release_confirmed = False
+                try:
+                    release_confirmed = self._release_session_market_data_subscriptions(
+                        session_id,
+                        state,
+                    )
+                except BaseException:
+                    logger.error("STRATEGY_SUBSCRIPTION_RELEASE_FAILED session=%s", session_id)
+                if release_confirmed:
+                    self._sessions.discard(session_id, state)
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(
+                    "failed to create required live delivery subscriptions for demo session"
+                )
+                return pb2.RunStrategyResponse()
 
         if not self._persist_session_or_set_error(
             acct_client,
@@ -1180,7 +1443,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         ):
             if environment == 1:
                 self._release_session_market_data_subscriptions(session_id, state)
-            self._sessions.discard(session_id)
+            self._sessions.discard(session_id, state)
             return pb2.RunStrategyResponse()
 
         # 写 strategy_start 组合快照。启动快照写不进去时直接拒绝启动，
@@ -1197,51 +1460,117 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 session_id=session_id,
                 snapshot_time=getattr(request, "start_time_ms", None),
             )
-        except Exception as e:
-            logger.warning("session %s: failed to persist strategy_start snapshot", session_id, exc_info=True)
-            error = f"failed to persist strategy_start snapshot: {e}"
-            state.transition("failed", error=error)
-            try:
-                if not acct_client.update_session(
-                    session_id=session_id,
-                    status=state.status,
-                    bars_processed=state.bars_processed,
-                    error=state.error,
-                    runtime_id=state.runtime_id,
-                ):
-                    logger.warning("session %s: failed to persist startup failure status", session_id)
-            except Exception:
-                logger.warning("session %s: failed to persist startup failure status", session_id, exc_info=True)
-            if environment == 1:
-                self._release_session_market_data_subscriptions(session_id, state)
-            self._sessions.discard(session_id)
-            context.set_code(grpc.StatusCode.UNAVAILABLE)
-            context.set_details(error)
-            return pb2.RunStrategyResponse()
-
-        # 5. 启动后台线程
-        otel_parent_context = _capture_otel_context()
-
-        def _run_session_with_context() -> None:
-            _run_in_otel_context(
-                otel_parent_context,
-                f"StrategySession/{session_id}",
-                lambda: self._run_session(
-                    session_id, state, request, wallet, environment, portfolio_id, user_id,
-                    declared_inputs, strategy_path, strategy_id, strategy_code,
-                    strategy_hot_reload=strategy_hot_reload,
-                    backtest_restore_wallet=backtest_restore_wallet,
-                ),
+        except BaseException:
+            logger.warning("STRATEGY_START_SNAPSHOT_FAILED session=%s", session_id)
+            return self._abort_persisted_startup(
+                session_id=session_id,
+                state=state,
+                environment=environment,
+                context=context,
+                error="failed to persist strategy_start snapshot",
+                status_code=grpc.StatusCode.UNAVAILABLE,
+                detail="failed to persist strategy_start snapshot",
             )
 
-        t = threading.Thread(
-            target=_run_session_with_context,
-            daemon=True,
-        )
-        t.start()
-        self._sessions.set_thread(session_id, t)
+        try:
+            user_strategy.activate_order_event_cursor()
+        except BaseException:
+            return self._abort_persisted_startup(
+                session_id=session_id,
+                state=state,
+                environment=environment,
+                context=context,
+                error="strategy activation failed",
+                status_code=grpc.StatusCode.FAILED_PRECONDITION,
+                detail="strategy activation failed",
+            )
+
+        with callbacks_lock:
+            callbacks_armed = True
+
+        # 5. 启动后台线程
+        def _abort_session_thread_start(detail: str) -> pb2.RunStrategyResponse:
+            return self._abort_persisted_startup(
+                session_id=session_id,
+                state=state,
+                environment=environment,
+                context=context,
+                error=detail,
+                status_code=grpc.StatusCode.INTERNAL,
+                detail=detail,
+            )
+
+        try:
+            otel_parent_context = _capture_otel_context()
+        except BaseException:
+            return _abort_session_thread_start("session thread initialization failed")
+
+        def _run_session_with_context() -> None:
+            self._run_session(
+                session_id, state, request, wallet, environment, portfolio_id, user_id,
+                declared_inputs, engine, user_strategy, strategy_id,
+                backtest_restore_wallet=backtest_restore_wallet,
+                otel_parent_context=otel_parent_context,
+            )
+
+        try:
+            t = _create_session_thread(_run_session_with_context)
+        except BaseException:
+            return _abort_session_thread_start("session thread initialization failed")
+        try:
+            thread_registered = self._sessions.set_thread(session_id, state, t)
+        except BaseException:
+            thread_registered = False
+        if not thread_registered:
+            return _abort_session_thread_start("session thread registration failed")
+        try:
+            t.start()
+        except BaseException:
+            return _abort_session_thread_start("session thread start failed")
 
         return pb2.RunStrategyResponse(session_id=session_id)
+
+    def _abort_persisted_startup(
+        self,
+        *,
+        session_id: str,
+        state: SessionState,
+        environment: int,
+        context: Any,
+        error: str,
+        status_code: grpc.StatusCode,
+        detail: str,
+    ) -> pb2.RunStrategyResponse:
+        state.force_failed(error)
+        terminal_confirmed = False
+        try:
+            terminal_result = self._persist_session_status(
+                session_id,
+                state,
+                fallback_patch=True,
+                force_core_update=True,
+            )
+            terminal_confirmed = terminal_result is True
+        except BaseException:
+            logger.error("STRATEGY_STARTUP_TERMINAL_PERSIST_FAILED session=%s", session_id)
+
+        release_confirmed = True
+        if environment == 1:
+            try:
+                release_result = self._release_session_market_data_subscriptions(
+                    session_id,
+                    state,
+                )
+                release_confirmed = release_result is True
+            except BaseException:
+                release_confirmed = False
+                logger.error("STRATEGY_STARTUP_SUBSCRIPTION_RELEASE_FAILED session=%s", session_id)
+
+        if terminal_confirmed and release_confirmed:
+            self._sessions.discard(session_id, state)
+        context.set_code(status_code)
+        context.set_details(detail)
+        return pb2.RunStrategyResponse()
 
     def _run_session(
         self,
@@ -1253,81 +1582,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         portfolio_id: int,
         user_id: int,
         declared_inputs: list[StrategyInput],
-        strategy_path: str,
+        engine: StrategyEngine,
+        user_strategy: Any,
         strategy_id: int,
-        strategy_code: str | None,
-        strategy_hot_reload: bool = False,
         backtest_restore_wallet: Any | None = None,
+        otel_parent_context: Any | None = None,
     ) -> None:
-        user_strategy: Any | None = None
-        try:
-            order_client = self._order_client()
-            acct_client = self._portfolio_client()
-            engine = StrategyEngine()
-
-            def _persist_runtime_error(message: str) -> None:
-                if not state.record_runtime_error(message):
-                    return
-                self._persist_session_status(session_id, state)
-
-            def _clear_runtime_error() -> None:
-                if not state.clear_runtime_error(USER_STRATEGY_ON_MARKET_DATA_ERROR_PREFIX):
-                    return
-                self._persist_session_status(session_id, state)
-
-            user_strategy = engine.create_strategy(
-                user_id=f"user:{user_id}:session:{session_id}",
-                strategy_path=strategy_path,
-                wallet=wallet,
-                order_client=order_client,
-                portfolio_id=portfolio_id,
-                strategy_id=strategy_id,
-                session_id=session_id,
-                strategy_code=strategy_code,
-                notifier=StrategyNotifier(self._notification_client),
-                hot_reload=strategy_hot_reload,
-                on_user_code_error=_persist_runtime_error if strategy_hot_reload else None,
-                on_user_code_recovered=_clear_runtime_error if strategy_hot_reload else None,
-            )
-
-            # 注册 on_order 回调：同步钱包到 core-service（带 session_id 审计追溯）
-
-            def _on_order_sync() -> None:
-                _sync_strategy_snapshot(
-                    acct_client,
-                    portfolio_id=portfolio_id,
-                    user_id=user_id,
-                    environment=environment,
-                    wallet=wallet,
-                    snapshot_reason=SNAPSHOT_REASON_EVENT,
-                    strategy_id=strategy_id,
-                    session_id=session_id,
-                    snapshot_time=getattr(user_strategy, "last_market_time", None),
-                )
-
-            user_strategy.on_order_callback = _on_order_sync
-            state.configure_stop_runtime(wallet=wallet, order_client=order_client)
-
-            # Phase C PeriodicSample hybrid trigger — only for demo sessions.
-            # Backtest has no external oracle and live remains fail-closed here.
-            if environment == 1:
-                self._install_periodic_sample_trigger(
-                    engine=engine,
-                    portfolio_id=portfolio_id,
-                    user_id=user_id,
-                    strategy_id=strategy_id,
-                    session_id=session_id,
-                    wallet=wallet,
-                    portfolio_client=acct_client,
-                    every_n_bars=DEFAULT_PERIODIC_SAMPLE_EVERY_BARS,
-                    max_idle_seconds=float(DEFAULT_PERIODIC_SAMPLE_MAX_IDLE_SECONDS),
-                )
-            self._install_max_loss_close_guard(
-                engine=engine,
-                session_id=session_id,
-                state=state,
-                wallet=wallet,
-            )
+        def _run_business() -> None:
+            self._portfolio_client()
+            engine_fatal_check = getattr(engine, "raise_if_user_code_fatal", None)
+            if callable(engine_fatal_check):
+                engine_fatal_check()
 
             if environment == 0:
                 self._run_backtest(session_id, state, engine, request, declared_inputs)
@@ -1336,42 +1601,109 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             else:
                 raise ValueError(f"unsupported portfolio environment: {environment}")
 
-        except Exception as e:
-            logger.exception("session %s failed", session_id)
-            state.transition("failed", error=str(e))
+            if callable(engine_fatal_check):
+                engine_fatal_check()
 
-        # session 结束（finished/stopped/failed）：写 strategy_end 快照 + 更新 DB
-        finally:
-            lease_stop_event = state.lease_stop_event
-            if lease_stop_event is not None:
-                lease_stop_event.set()
-            self._release_stream_leases(session_id, state)
-            self._release_session_market_data_subscriptions(session_id, state)
-            finalization_errors: list[str] = []
+        primary_user_fatal: StrategyUserCodeFatalError | None = None
+        finalization_fatal = False
+        try:
             try:
-                acct_client = self._portfolio_client()
                 try:
-                    _sync_strategy_snapshot(
-                        acct_client,
-                        portfolio_id=portfolio_id,
-                        user_id=user_id,
-                        environment=environment,
-                        wallet=wallet,
-                        snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
-                        strategy_id=strategy_id,
-                        session_id=session_id,
-                        snapshot_time=(
-                            (getattr(user_strategy, "last_market_time", None) if user_strategy is not None else None)
-                            or getattr(request, "end_time_ms", None)
-                        ),
+                    _run_in_otel_context(
+                        otel_parent_context,
+                        f"StrategySession/{session_id}",
+                        _run_business,
                     )
+                except StrategyUserCodeFatalError as fatal:
+                    primary_user_fatal = fatal
                 except Exception as e:
-                    logger.warning("session %s: failed to persist strategy_end snapshot", session_id, exc_info=True)
-                    finalization_errors.append(f"failed to persist strategy_end snapshot: {e}")
-                if environment == 0 and backtest_restore_wallet is not None:
+                    logger.error(
+                        "STRATEGY_SESSION_ERROR session=%s portfolio_id=%s strategy_id=%s",
+                        session_id,
+                        portfolio_id,
+                        strategy_id,
+                    )
+                    state.transition("failed", error=str(e))
+            finally:
+                # Ordinary finalization is inside the outer fatal boundary. A
+                # non-Exception BaseException cannot escape the worker thread.
+                finalization_errors: list[str] = []
+                lease_stop_event = state.lease_stop_event
+                if lease_stop_event is not None:
                     try:
-                        # 回测过程中的 wallet 写入只服务本 session 审计；结束后必须
-                        # 恢复启动前账户状态，避免下一次回测继承本次 PnL/仓位。
+                        lease_stop_event.set()
+                    except Exception as e:
+                        logger.warning(
+                            "STRATEGY_SESSION_LEASE_STOP_FAILED session=%s",
+                            session_id,
+                        )
+                        finalization_errors.append(f"failed to stop lease runtime: {e}")
+                    except BaseException:
+                        finalization_fatal = True
+                try:
+                    self._release_stream_leases(session_id, state)
+                except Exception as e:
+                    logger.warning(
+                        "STRATEGY_SESSION_STREAM_LEASE_RELEASE_FAILED session=%s",
+                        session_id,
+                    )
+                    finalization_errors.append(f"failed to release stream leases: {e}")
+                except BaseException:
+                    finalization_fatal = True
+                try:
+                    self._release_session_market_data_subscriptions(session_id, state)
+                except Exception as e:
+                    logger.warning(
+                        "STRATEGY_SESSION_SUBSCRIPTION_RELEASE_FAILED session=%s",
+                        session_id,
+                    )
+                    finalization_errors.append(
+                        f"failed to release market-data subscriptions: {e}"
+                    )
+                except BaseException:
+                    finalization_fatal = True
+
+                acct_client = None
+                try:
+                    acct_client = self._portfolio_client()
+                except Exception as e:
+                    logger.warning(
+                        "STRATEGY_SESSION_FINALIZER_CLIENT_FAILED session=%s",
+                        session_id,
+                    )
+                    finalization_errors.append(f"failed to initialize finalizer client: {e}")
+                except BaseException:
+                    finalization_fatal = True
+                if acct_client is not None:
+                    try:
+                        _sync_strategy_snapshot(
+                            acct_client,
+                            portfolio_id=portfolio_id,
+                            user_id=user_id,
+                            environment=environment,
+                            wallet=wallet,
+                            snapshot_reason=SNAPSHOT_REASON_STRATEGY_END,
+                            strategy_id=strategy_id,
+                            session_id=session_id,
+                            snapshot_time=(
+                                getattr(user_strategy, "last_market_time", None)
+                                or getattr(request, "end_time_ms", None)
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "STRATEGY_SESSION_END_SNAPSHOT_FAILED session=%s",
+                            session_id,
+                        )
+                        finalization_errors.append(f"failed to persist strategy_end snapshot: {e}")
+                    except BaseException:
+                        finalization_fatal = True
+                if (
+                    acct_client is not None
+                    and environment == 0
+                    and backtest_restore_wallet is not None
+                ):
+                    try:
                         _sync_strategy_snapshot(
                             acct_client,
                             portfolio_id=portfolio_id,
@@ -1384,11 +1716,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         )
                     except Exception as e:
                         logger.warning(
-                            "session %s: failed to restore backtest portfolio wallet state",
+                            "STRATEGY_SESSION_BACKTEST_RESTORE_FAILED session=%s",
                             session_id,
-                            exc_info=True,
                         )
                         finalization_errors.append(f"failed to restore backtest portfolio wallet state: {e}")
+                    except BaseException:
+                        finalization_fatal = True
                 if finalization_errors:
                     with state._lock:
                         if state.status not in {"failed", "stop_failed"}:
@@ -1396,10 +1729,56 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                             state.error = "; ".join(finalization_errors)
                         elif not state.error:
                             state.error = "; ".join(finalization_errors)
-                self._persist_session_status(session_id, state, fallback_patch=True)
-                self._sessions.mark_terminal(session_id)
-            except Exception:
-                logger.warning("session %s: failed to finalize", session_id, exc_info=True)
+            if primary_user_fatal is not None:
+                raise primary_user_fatal
+            if finalization_fatal:
+                raise BaseException()
+        except StrategyUserCodeFatalError:
+            logger.error(
+                "STRATEGY_USER_CODE_FATAL session=%s portfolio_id=%s strategy_id=%s",
+                session_id,
+                portfolio_id,
+                strategy_id,
+            )
+            state.force_failed("strategy user code terminated")
+        except BaseException:
+            logger.error(
+                "STRATEGY_SESSION_FATAL session=%s portfolio_id=%s strategy_id=%s",
+                session_id,
+                portfolio_id,
+                strategy_id,
+            )
+            state.force_failed("strategy session terminated")
+
+        # This is the sole terminal persistence/registry owner for the runner.
+        # Each operation is attempted at most once even if the first one raises.
+        try:
+            self._persist_session_status(session_id, state, fallback_patch=True)
+        except BaseException:
+            if primary_user_fatal is not None:
+                logger.error(
+                    "STRATEGY_SESSION_TERMINAL_PERSIST_FAILED session=%s portfolio_id=%s strategy_id=%s",
+                    session_id,
+                    portfolio_id,
+                    strategy_id,
+                )
+            else:
+                logger.error(
+                    "STRATEGY_SESSION_FATAL session=%s portfolio_id=%s strategy_id=%s",
+                    session_id,
+                    portfolio_id,
+                    strategy_id,
+                )
+                state.force_failed("strategy session terminated")
+        try:
+            self._sessions.mark_terminal(session_id, state)
+        except BaseException:
+            logger.error(
+                "STRATEGY_SESSION_TERMINAL_MARK_FAILED session=%s portfolio_id=%s strategy_id=%s",
+                session_id,
+                portfolio_id,
+                strategy_id,
+            )
 
     @staticmethod
     def _run_portfolio_preflight(
@@ -1576,8 +1955,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 )
             except Exception:
                 logger.warning(
-                    "session %s: PeriodicSample push failed (non-fatal)",
-                    session_id, exc_info=True,
+                    "STRATEGY_PERIODIC_SAMPLE_FAILED session=%s portfolio_id=%s strategy_id=%s",
+                    session_id,
+                    portfolio_id,
+                    strategy_id,
                 )
 
         def wrapped(market_data: Any) -> None:
@@ -1672,7 +2053,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         try:
             portfolio_client = self._portfolio_client()
         except Exception:  # noqa: BLE001
-            logger.warning("strategy indicator collection disabled: portfolio client unavailable", exc_info=True)
+            logger.warning(
+                "STRATEGY_INDICATOR_CLIENT_UNAVAILABLE session=%s strategy_id=%s",
+                session_id,
+                int(getattr(state, "strategy_id", 0) or 0),
+            )
             return lambda: None
 
         user_id = int(getattr(request, "user_id", 0) or getattr(state, "user_id", 0) or 0)
@@ -1709,10 +2094,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         )
                     except Exception:  # noqa: BLE001
                         logger.warning(
-                            "strategy indicator sink failed: session=%s stream_key=%s",
+                            "STRATEGY_INDICATOR_SINK_FAILED session=%s strategy_id=%s",
                             session_id,
-                            stream_key,
-                            exc_info=True,
+                            int(getattr(state, "strategy_id", 0) or 0),
                         )
 
                 strategy.on_indicator_frame = on_frame
@@ -1725,7 +2109,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 return
             save = getattr(portfolio_client, "save_strategy_indicators", None)
             if not callable(save):
-                logger.warning("strategy indicator collection disabled: portfolio client cannot save indicators")
+                logger.warning(
+                    "STRATEGY_INDICATOR_SAVE_UNAVAILABLE session=%s strategy_id=%s",
+                    session_id,
+                    int(getattr(state, "strategy_id", 0) or 0),
+                )
                 return
             try:
                 save(
@@ -1736,11 +2124,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 )
             except Exception:  # noqa: BLE001
                 logger.warning(
-                    "strategy indicator save failed: session=%s definitions=%d chunks=%d",
+                    "STRATEGY_INDICATOR_SAVE_FAILED session=%s strategy_id=%s",
                     session_id,
-                    len(definitions or []),
-                    len(chunks or []),
-                    exc_info=True,
+                    int(getattr(state, "strategy_id", 0) or 0),
                 )
 
         for strategy in strategies:
@@ -1854,17 +2240,35 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             streams=required_streams,
         )
         flush_indicators = self._install_indicator_collection(session_id, state, engine, request)
+        fatal_check = getattr(engine, "raise_if_user_code_fatal", None)
+        primary_user_fatal: StrategyUserCodeFatalError | None = None
         try:
             for kline in data_source.iter_klines():
+                if callable(fatal_check):
+                    fatal_check()
                 if state.status != "running":
                     break
                 engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
+                if callable(fatal_check):
+                    fatal_check()
                 n += 1
                 state.bars_processed = n
                 if n % BACKTEST_PAGE_SIZE == 0:
                     self._persist_session_status(session_id, state)
+        except StrategyUserCodeFatalError as fatal:
+            primary_user_fatal = fatal
         finally:
-            flush_indicators()
+            try:
+                flush_indicators()
+            except BaseException:
+                if primary_user_fatal is None:
+                    raise
+
+        if primary_user_fatal is not None:
+            raise primary_user_fatal
+
+        if callable(fatal_check):
+            fatal_check()
 
         if state.status == "running":
             state.transition("finished", bars=n)
@@ -1938,8 +2342,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             )
 
         flush_indicators = self._install_indicator_collection(session_id, state, engine)
+        fatal_check = getattr(engine, "raise_if_user_code_fatal", None)
+        primary_user_fatal: StrategyUserCodeFatalError | None = None
         try:
             for event in live_events:
+                if callable(fatal_check):
+                    fatal_check()
                 if state.status != "running" or stop_event.is_set():
                     break
                 event_kind = str(getattr(event, "kind", "") or "").strip().lower()
@@ -1947,9 +2355,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     handler = getattr(engine, "handle_order_update", None)
                     if callable(handler):
                         handler(getattr(event, "payload", None))
+                    if callable(fatal_check):
+                        fatal_check()
                     continue
                 kline = getattr(event, "payload", event)
                 routed = engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
+                if callable(fatal_check):
+                    fatal_check()
                 if routed is False:
                     self._record_unroutable_live_kline(session_id, state, kline)
                 with state._lock:
@@ -1957,9 +2369,25 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 try:
                     self._persist_session_status(session_id, state)
                 except Exception:  # noqa: BLE001
-                    logger.warning("session %s: failed to update live progress", session_id, exc_info=True)
+                    logger.warning(
+                        "STRATEGY_LIVE_PROGRESS_PERSIST_FAILED session=%s strategy_id=%s",
+                        session_id,
+                        int(getattr(state, "strategy_id", 0) or 0),
+                    )
+        except StrategyUserCodeFatalError as fatal:
+            primary_user_fatal = fatal
         finally:
-            flush_indicators()
+            try:
+                flush_indicators()
+            except BaseException:
+                if primary_user_fatal is None:
+                    raise
+
+        if primary_user_fatal is not None:
+            raise primary_user_fatal
+
+        if callable(fatal_check):
+            fatal_check()
 
     def _renew_stream_leases_once(self, session_id: str, state: SessionState) -> bool:
         if state.environment != 1 or not state.required_streams:
@@ -2011,15 +2439,19 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             logger.warning("session %s: failed to create session market-data subscriptions", session_id)
         return bool(ok)
 
-    def _release_session_market_data_subscriptions(self, session_id: str, state: SessionState) -> None:
+    def _release_session_market_data_subscriptions(self, session_id: str, state: SessionState) -> bool:
         if state.environment != 1:
-            return
+            return True
         marketdata_client = self._marketdata_client()
         release = getattr(marketdata_client, "release_session_market_data_subscriptions", None)
         if not callable(release):
-            return
-        if not release(session_id=session_id, runtime_id=state.runtime_id):
+            return False
+        released = (
+            release(session_id=session_id, runtime_id=state.runtime_id) is True
+        )
+        if not released:
             logger.warning("session %s: failed to release session market-data subscriptions", session_id)
+        return released
 
     def _lease_heartbeat_loop(
         self,
@@ -2155,18 +2587,36 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         state: SessionState,
         *,
         fallback_patch: bool = False,
+        force_core_update: bool = False,
     ) -> bool:
-        if self._agent_managed_final_status and state.status in TERMINAL_SESSION_STATUSES:
+        if (
+            self._agent_managed_final_status
+            and state.status in TERMINAL_SESSION_STATUSES
+            and not force_core_update
+        ):
             return True
-        acct_client = self._portfolio_client()
-        ok = acct_client.update_session(
-            session_id=session_id,
-            status=state.status,
-            bars_processed=state.bars_processed,
-            error=state.error,
-            runtime_id=state.runtime_id,
-        )
-        if not ok:
+        try:
+            acct_client = self._portfolio_client()
+            ok = acct_client.update_session(
+                session_id=session_id,
+                status=state.status,
+                bars_processed=state.bars_processed,
+                error=state.error,
+                runtime_id=state.runtime_id,
+            )
+        except BaseException:
+            if fallback_patch:
+                _safe_send_session_status_patch(
+                    self._platform_proxy,
+                    session_id=session_id,
+                    status=state.status,
+                    bars_processed=state.bars_processed,
+                    error=state.error,
+                    runtime_id=state.runtime_id,
+                )
+            raise
+        confirmed = ok is True
+        if not confirmed:
             logger.warning("session %s: failed to persist status=%s", session_id, state.status)
             if fallback_patch:
                 _safe_send_session_status_patch(
@@ -2177,7 +2627,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     error=state.error,
                     runtime_id=state.runtime_id,
                 )
-        return bool(ok)
+        return confirmed
 
     @staticmethod
     def _halt_session_runtime(state: SessionState, *, finalize: bool) -> None:
@@ -2540,27 +2990,27 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 strategy_path=strategy_path,
                 strategy_code=strategy_code,
             )
-        except DebugStrategySourceError as e:
+        except DebugStrategySourceError:
+            logger.warning("BARE_STRATEGY_SOURCE_ERROR user_id=%s strategy_id=%s", user_id, strategy_id)
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"failed to materialize bare debug strategy source: {e}")
+            context.set_details("failed to materialize bare debug strategy source")
+            return pb2.PreviewRunStrategyResponse()
+        except BaseException:
+            logger.error("BARE_STRATEGY_SOURCE_INTERNAL user_id=%s strategy_id=%s", user_id, strategy_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("strategy source materialization failed")
             return pb2.PreviewRunStrategyResponse()
 
-        validation_error = _strategy_validation_error(strategy_code)
-        if validation_error:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(validation_error)
+        prepared_strategy = _prepare_gated_strategy_for_rpc(
+            strategy_path=strategy_path,
+            strategy_code=strategy_code,
+            hot_reload=_strategy_hot_reload,
+            context=context,
+            operation="PreviewRunStrategy",
+        )
+        if prepared_strategy is None:
             return pb2.PreviewRunStrategyResponse()
-
-        try:
-            declarations = extract_strategy_declarations(strategy_path, strategy_code)
-        except StrategyDeclarationError as e:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"strategy input declaration invalid: {e}")
-            return pb2.PreviewRunStrategyResponse()
-        except (ImportError, AttributeError) as e:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"strategy could not be loaded: {e}")
-            return pb2.PreviewRunStrategyResponse()
+        declarations = prepared_strategy.declarations
         try:
             effective_risk = _effective_risk_controls_from_request(
                 declarations,

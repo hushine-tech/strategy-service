@@ -6,7 +6,8 @@ from strategy_service.wallet.runtime import WalletRuntime
 
 from strategy_service.notification import StrategyNotifier
 from strategy_service.order_client import OrderClient
-from strategy_service.strategy.base import BaseStrategy
+from strategy_service.strategy.base import BaseStrategy, StrategyUserCodeFatalError
+from strategy_service.strategy_imports import PreparedStrategy, _is_sealed_prepared_strategy
 from strategy_service.types import MarketData, OrderUpdateEvent
 from strategy_service.inputs import _normalize_exchange, _normalize_market
 
@@ -27,30 +28,30 @@ class StrategyEngine:
     def create_strategy(
         self,
         user_id: str,
-        strategy_path: str,
+        prepared_strategy: PreparedStrategy,
         wallet: WalletRuntime,
         order_client: OrderClient | None = None,
         portfolio_id: int = 0,
         strategy_id: int = 0,
         session_id: str = "",
-        strategy_code: str | None = None,
         notifier: StrategyNotifier | None = None,
-        hot_reload: bool = False,
         on_user_code_error: Callable[[str], None] | None = None,
         on_user_code_recovered: Callable[[], None] | None = None,
+        on_user_code_fatal: Callable[[StrategyUserCodeFatalError], None] | None = None,
     ) -> BaseStrategy:
+        if not _is_sealed_prepared_strategy(prepared_strategy):
+            raise TypeError("StrategyEngine.create_strategy requires PreparedStrategy")
         user_strategy = BaseStrategy(
-            strategy_path,
+            prepared_strategy,
             wallet,
             order_client=order_client,
             portfolio_id=portfolio_id,
             strategy_id=strategy_id,
             session_id=session_id,
-            strategy_code=strategy_code,
             notifier=notifier,
-            hot_reload=hot_reload,
             on_user_code_error=on_user_code_error,
             on_user_code_recovered=on_user_code_recovered,
+            on_user_code_fatal=on_user_code_fatal,
         )
         self.strategies[user_id] = user_strategy
         # Register every declared (market, symbol, interval) → this strategy.
@@ -59,6 +60,7 @@ class StrategyEngine:
         return user_strategy
 
     def running_strategy(self, market_data: MarketData) -> bool:
+        self.raise_if_user_code_fatal()
         exchange = _normalize_exchange(getattr(market_data, "exchange", "binance"))
         market = _normalize_market(market_data.market)
         symbol = str(market_data.symbol).strip().upper()
@@ -68,7 +70,12 @@ class StrategyEngine:
         if strategy is None:
             return False
         strategy.running_strategy(market_data)
+        self.raise_if_user_code_fatal()
         return True
+
+    def raise_if_user_code_fatal(self) -> None:
+        for strategy in self.strategies.values():
+            strategy.raise_if_user_code_fatal()
 
     def handle_order_update(self, event: OrderUpdateEvent) -> bool:
         session_id = str(getattr(event, "session_id", "") or "").strip()

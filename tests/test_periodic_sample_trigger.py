@@ -21,6 +21,7 @@ from strategy_service.grpc_server import (
     StrategyServiceServicer,
 )
 from strategy_service.service import StrategyEngine
+from strategy_service.session import SessionState
 from tests.helpers.wallet_fixtures import make_testnet_wallet
 
 
@@ -229,18 +230,8 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
     """
     wallet = _wallet()
     servicer = _make_servicer()
-    state = SimpleNamespace(
+    state = SessionState(
         environment=0,
-        status="running",
-        bars_processed=0,
-        error="",
-        transition=lambda status, bars=None, error=None: True,
-        configure_stop_runtime=lambda **_kwargs: None,
-        # New fields added for environment=1 lease management; environment=0/1 don't use them
-        # but _run_session's finally block reads lease_stop_event / required_streams
-        # unconditionally, so the stub must have them present.
-        lease_stop_event=None,
-        required_streams=[],
     )
     request = SimpleNamespace(interval="1m", start_time_ms=1, end_time_ms=2)
     snapshot_calls: list[tuple] = []
@@ -293,9 +284,9 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
         portfolio_id=101,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
-        strategy_path="strategies.buy_once",
+        engine=FakeEngine(),
+        user_strategy=fake_user,
         strategy_id=202,
-        strategy_code=None,
     )
 
     # No PeriodicSample (reason=6) ever pushed. strategy_end (reason=3) is expected
@@ -314,15 +305,8 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
     """environment=2 remains fail-closed in Phase C and MUST NOT install PeriodicSample."""
     wallet = _wallet()
     servicer = _make_servicer()
-    state = SimpleNamespace(
+    state = SessionState(
         environment=2,
-        status="running",
-        bars_processed=0,
-        error="",
-        transition=lambda status, bars=None, error=None: True,
-        configure_stop_runtime=lambda **_kwargs: None,
-        lease_stop_event=None,
-        required_streams=[],
     )
     request = SimpleNamespace(interval="1m", start_time_ms=1, end_time_ms=2)
     snapshot_calls: list[tuple] = []
@@ -372,9 +356,9 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
         portfolio_id=101,
         user_id=17,
         declared_inputs=[StrategyInput("binance", "futures", "BTCUSDT", "1m")],
-        strategy_path="strategies.buy_once",
+        engine=FakeEngine(),
+        user_strategy=fake_user,
         strategy_id=202,
-        strategy_code=None,
     )
 
     reasons = [r for _, r in snapshot_calls]
@@ -382,7 +366,7 @@ def test_periodic_sample_never_fires_on_mode_1(monkeypatch):
     assert not captured_engine, "live environment is fail-closed and must not enter _run_live"
 
 
-def test_periodic_sample_push_failure_does_not_interrupt_strategy():
+def test_periodic_sample_push_failure_does_not_interrupt_strategy(caplog):
     """Push failure MUST be swallowed (logged as warn) and counters MUST still reset."""
     servicer = _make_servicer()
     portfolio_client = _RecordingPortfolioClient(fail=True)
@@ -397,11 +381,19 @@ def test_periodic_sample_push_failure_does_not_interrupt_strategy():
     )
 
     # Process 40 bars: two firings, both throwing — must not raise.
-    for i in range(40):
-        engine.running_strategy(_fake_md(i))
-        clock.advance(1.0)
+    with caplog.at_level("WARNING"):
+        for i in range(40):
+            engine.running_strategy(_fake_md(i))
+            clock.advance(1.0)
 
     # Original still called all 40 times (strategy not interrupted).
     assert len(original_calls) == 40
     # Push attempted twice (once per 20-bar window, counter reset on failure).
     assert len(portfolio_client.calls) == 2
+    assert [record.getMessage() for record in caplog.records] == [
+        "STRATEGY_PERIODIC_SAMPLE_FAILED session=sess-test portfolio_id=101 strategy_id=202",
+        "STRATEGY_PERIODIC_SAMPLE_FAILED session=sess-test portfolio_id=101 strategy_id=202",
+    ]
+    assert all(record.exc_info is None for record in caplog.records)
+    assert "simulated transport failure" not in caplog.text
+    assert "Traceback" not in caplog.text
