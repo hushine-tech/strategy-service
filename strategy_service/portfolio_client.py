@@ -198,6 +198,7 @@ class PortfolioClient:
         runtime_version: str = "",
         session_name: str = "",
         leverage: float = 1.0,
+        initial_status: str = "",
     ) -> bool:
         """Create a session record in core-service. Returns True on success."""
         try:
@@ -216,6 +217,7 @@ class PortfolioClient:
                 runtime_version=runtime_version,
                 session_name=session_name,
                 leverage=leverage,
+                initial_status=initial_status,
             )
             return True
         except Exception:
@@ -238,6 +240,7 @@ class PortfolioClient:
         runtime_version: str = "",
         session_name: str = "",
         leverage: float = 1.0,
+        initial_status: str = "",
     ) -> None:
         """Create a session record and raise on core-service errors."""
         if not self._stub:
@@ -255,6 +258,7 @@ class PortfolioClient:
             runtime_version=str(runtime_version or ""),
             session_name=str(session_name or ""),
             leverage=float(leverage or 1.0),
+            initial_status=str(initial_status or ""),
         )
         self._stub.SaveSession(req)
 

@@ -30,6 +30,7 @@ type WorkerManagerConfig struct {
 type WorkerStartSpec struct {
 	SessionID   string
 	Token       string
+	Generation  uint64
 	AgentAddr   string
 	DebugpyPort int
 	DebugpyWait bool
@@ -134,7 +135,8 @@ func (m *WorkerManager) prepareSessionWorker(sessionID string) (WorkerStartSpec,
 	if err != nil {
 		return WorkerStartSpec{}, err
 	}
-	if err := m.registry.ExpectWorker(sessionID, token); err != nil {
+	generation, err := m.registry.ExpectWorkerGeneration(sessionID, token)
+	if err != nil {
 		return WorkerStartSpec{}, err
 	}
 	debugpyPort := 0
@@ -144,6 +146,7 @@ func (m *WorkerManager) prepareSessionWorker(sessionID string) (WorkerStartSpec,
 	spec := WorkerStartSpec{
 		SessionID:   sessionID,
 		Token:       token,
+		Generation:  generation,
 		AgentAddr:   m.cfg.AgentAddr,
 		DebugpyPort: debugpyPort,
 		DebugpyWait: m.cfg.DebugpyWait,
@@ -703,37 +706,6 @@ func (m *WorkerManager) clearCleanupFailureForWorker(sessionID string, worker *M
 	if m.active[sessionID] == worker {
 		delete(m.cleanupFailures, sessionID)
 	}
-}
-
-func (m *WorkerManager) AliasWorkerSession(existingSessionID string, sessionID string) error {
-	existingSessionID = strings.TrimSpace(existingSessionID)
-	sessionID = strings.TrimSpace(sessionID)
-	if existingSessionID == "" || sessionID == "" {
-		return fmt.Errorf("session_id is required")
-	}
-	if err := m.registry.AliasWorkerSession(existingSessionID, sessionID); err != nil {
-		return err
-	}
-	if existingSessionID == sessionID {
-		return nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if worker := m.active[existingSessionID]; worker != nil {
-		m.active[sessionID] = worker
-		return nil
-	}
-	identity, ok := m.registry.ActiveWorker(sessionID)
-	if !ok || identity.PID <= 0 {
-		return nil
-	}
-	for _, worker := range m.active {
-		if worker != nil && worker.Cmd != nil && worker.Cmd.Process != nil && int64(worker.Cmd.Process.Pid) == identity.PID && worker.Spec.Token == identity.token {
-			m.active[sessionID] = worker
-			return nil
-		}
-	}
-	return nil
 }
 
 func (w *ManagedWorker) Wait() error {

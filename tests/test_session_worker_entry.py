@@ -1,11 +1,19 @@
 import sys
+import threading
+from types import SimpleNamespace
+
+import grpc
 
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 from strategy_service.grpc_server import StrategyServiceServicer
 from strategy_service.session import SessionState
 from strategy_service.session_worker_entry import (
+    _WorkerContext,
     _build_servicer,
     _poll_until_terminal,
+    _publish_running_session,
+    _report_worker_failure,
+    _report_start_rejection,
     _start_debugpy_if_requested,
 )
 from strategy_service.worker_agent_client import FinalStatusRejected
@@ -159,3 +167,128 @@ def test_agent_managed_servicer_defers_terminal_but_not_running_persistence():
 def test_session_worker_builds_agent_managed_final_status_servicer():
     servicer = _build_servicer(_FinalClient(), bound_user_id=6, runtime_id="rt-1")
     assert servicer._agent_managed_final_status is True
+
+
+def test_worker_context_binds_exact_running_publication_once():
+    context = _WorkerContext()
+    state = SessionState(session_id="1" * 32, status="running")
+
+    context.bind_running_publication("1" * 32, state)
+
+    assert context.take_running_publication() == ("1" * 32, state)
+    assert context.take_running_publication() is None
+
+
+def test_worker_context_retains_typed_dependency_error():
+    context = _WorkerContext()
+    detail = strategy_pb2.RuntimeDependencyError(
+        code="STRATEGY_DEPENDENCY_UNAVAILABLE",
+        module="google.cloud",
+    )
+
+    context.set_runtime_dependency_error(detail)
+
+    assert context.runtime_dependency_error == detail
+
+
+def test_publish_running_claims_enqueues_then_releases_user_loop():
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", restore_running_sessions=False,
+    )
+    session_id, state = servicer._sessions.prepare(
+        session_id="1" * 32,
+        initial_status="pending",
+    )
+    servicer._sessions.register(session_id, state)
+    startup = SimpleNamespace(
+        release=threading.Event(),
+        abort=threading.Event(),
+    )
+    state.bind_startup_result(startup)
+    assert state.mark_running_publication_ready()
+    context = _WorkerContext(start_session_id=session_id)
+    context.bind_running_publication(session_id, state)
+    client = _FinalClient()
+
+    assert _publish_running_session(servicer, client, context, session_id) is True
+
+    assert client.progress == [{"session_id": session_id, "status": "running"}]
+    assert state.publication_state() == "RELEASED"
+    assert startup.release.is_set()
+    assert not startup.abort.is_set()
+
+
+def test_publish_running_fatal_first_sends_no_running(monkeypatch):
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", restore_running_sessions=False,
+    )
+    session_id, state = servicer._sessions.prepare(
+        session_id="2" * 32,
+        initial_status="pending",
+    )
+    servicer._sessions.register(session_id, state)
+    startup = SimpleNamespace(
+        release=threading.Event(),
+        abort=threading.Event(),
+    )
+    state.bind_startup_result(startup)
+    assert state.mark_running_publication_ready()
+    assert state.latch_user_code_fatal("callback")
+    context = _WorkerContext(start_session_id=session_id)
+    context.bind_running_publication(session_id, state)
+    client = _FinalClient()
+    failures = []
+    monkeypatch.setattr(
+        servicer,
+        "_fail_running_publication",
+        lambda *args: failures.append(args) or True,
+    )
+
+    assert _publish_running_session(servicer, client, context, session_id) is False
+
+    assert client.progress == []
+    assert failures == [
+        (session_id, state, "strategy session terminated before running publication")
+    ]
+    assert not startup.release.is_set()
+
+
+def test_worker_outer_failure_report_is_fixed_and_does_not_leak_exception(caplog):
+    client = _FinalClient()
+
+    with caplog.at_level("ERROR"):
+        _report_worker_failure(client, "3" * 32)
+
+    assert client.progress == [{
+        "session_id": "3" * 32,
+        "status": "failed",
+        "error": "session worker terminated",
+    }]
+    assert [record.getMessage() for record in caplog.records] == [
+        f"SESSION_WORKER_FATAL session={'3' * 32}"
+    ]
+    assert "Traceback" not in caplog.text
+
+
+def test_start_rejection_preserves_typed_dependency_detail():
+    client = _FinalClient()
+    context = _WorkerContext(start_session_id="4" * 32)
+    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+    context.set_details("strategy dependency validation failed")
+    detail = strategy_pb2.RuntimeDependencyError(
+        code="STRATEGY_DEPENDENCY_UNAVAILABLE",
+        module="google.cloud",
+        runtime_profile="platform-python-3.13",
+        runtime_profile_version="1.0.0",
+        image_build_id="build-1",
+    )
+    context.set_runtime_dependency_error(detail)
+
+    _report_start_rejection(client, "4" * 32, context)
+
+    assert client.progress == [{
+        "session_id": "4" * 32,
+        "status": "failed",
+        "error": "strategy dependency validation failed",
+        "dependency_error": detail,
+    }]

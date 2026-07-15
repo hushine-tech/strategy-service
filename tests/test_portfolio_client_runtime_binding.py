@@ -6,6 +6,16 @@ from strategy_service.portfolio_client import PortfolioClient
 from strategy_service.gen import portfolio_service_pb2
 
 
+def test_save_session_initial_status_descriptor_is_field_15():
+    request = portfolio_service_pb2.SaveSessionRequest.DESCRIPTOR
+    field = request.fields_by_name.get("initial_status")
+
+    assert field is not None
+    assert field.number == 15
+    assert request.fields_by_name["leverage"].number == 14
+    assert request.fields_by_name["user_id"].number == 100
+
+
 def test_portfolio_client_save_session_sends_runtime_binding():
     captured: dict[str, object] = {}
 
@@ -26,6 +36,7 @@ def test_portfolio_client_save_session_sends_runtime_binding():
         runtime_source="hosted",
         runtime_name="default",
         leverage=5,
+        initial_status="pending",
     )
 
     assert ok is True
@@ -34,6 +45,7 @@ def test_portfolio_client_save_session_sends_runtime_binding():
     assert req.runtime_source == "hosted"
     assert req.runtime_name == "default"
     assert req.leverage == 5
+    assert req.initial_status == "pending"
 
 
 def test_portfolio_client_update_session_sends_runtime_guard():

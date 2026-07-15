@@ -15,6 +15,7 @@ import (
 	"time"
 
 	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
+	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -569,12 +570,22 @@ func b64URLNoPad(raw []byte) string {
 }
 
 func runtimeErrorFrame(correlationID string, code string, message string) *cpv1.RuntimeFrame {
+	return runtimeErrorFrameWithDependency(correlationID, code, message, nil)
+}
+
+func runtimeErrorFrameWithDependency(
+	correlationID string,
+	code string,
+	message string,
+	dependencyError *strategyv1.RuntimeDependencyError,
+) *cpv1.RuntimeFrame {
 	return &cpv1.RuntimeFrame{
 		CorrelationId: correlationID,
 		FrameType:     cpv1.FrameType_FRAME_TYPE_ERROR,
 		Payload: &cpv1.RuntimeFrame_Error{Error: &cpv1.StreamError{
-			Code:    code,
-			Message: message,
+			Code:            code,
+			Message:         message,
+			DependencyError: dependencyError,
 		}},
 	}
 }

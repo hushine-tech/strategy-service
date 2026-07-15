@@ -13,6 +13,11 @@ from typing import Literal
 _TERMINAL_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
 _ACTIVE_STATUSES = frozenset({"running", "stopping"})
 _SESSION_ID_RE = re.compile(r"[0-9a-f]{32}")
+_PUBLICATION_BLOCKED = "BLOCKED"
+_PUBLICATION_READY = "READY"
+_PUBLICATION_PUBLISHING = "PUBLISHING"
+_PUBLICATION_RELEASED = "RELEASED"
+_PUBLICATION_TERMINAL = "TERMINAL"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +91,17 @@ class SessionState:
     max_loss_close_triggered: bool = False
     user_code_fatal_stage: str = ""
     user_code_fatal_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    _running_publication_state: str = field(
+        default=_PUBLICATION_BLOCKED,
+        repr=False,
+        compare=False,
+    )
+    _running_publication_fatal_pending: bool = field(
+        default=False,
+        repr=False,
+        compare=False,
+    )
+    _startup_result: object | None = field(default=None, repr=False, compare=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def transition(self, new_status: str, bars: int | None = None, error: str | None = None) -> bool:
@@ -106,6 +122,7 @@ class SessionState:
         with self._lock:
             self.status = "failed"
             self.error = error
+            self._running_publication_state = _PUBLICATION_TERMINAL
 
     def is_active(self) -> bool:
         with self._lock:
@@ -219,6 +236,14 @@ class SessionState:
             if self.user_code_fatal_stage:
                 return False
             self.user_code_fatal_stage = str(stage)
+            if self._running_publication_state == _PUBLICATION_PUBLISHING:
+                self._running_publication_fatal_pending = True
+            elif self._running_publication_state in {
+                _PUBLICATION_BLOCKED,
+                _PUBLICATION_READY,
+                _PUBLICATION_RELEASED,
+            }:
+                self._running_publication_state = _PUBLICATION_TERMINAL
             stop_event = getattr(self, "_stop_event", None)
             lease_stop_event = self.lease_stop_event
             self.user_code_fatal_event.set()
@@ -227,6 +252,73 @@ class SessionState:
         if lease_stop_event is not None:
             lease_stop_event.set()
         return True
+
+    def publication_state(self) -> str:
+        with self._lock:
+            return self._running_publication_state
+
+    def has_user_code_fatal(self) -> bool:
+        with self._lock:
+            return bool(self.user_code_fatal_stage)
+
+    def bind_startup_result(self, startup_result: object) -> None:
+        with self._lock:
+            if self._startup_result is not None and self._startup_result is not startup_result:
+                raise RuntimeError("session startup result is already bound")
+            self._startup_result = startup_result
+
+    def startup_result(self) -> object | None:
+        with self._lock:
+            return self._startup_result
+
+    def mark_running_publication_ready(self) -> bool:
+        """Atomically expose local running only when no fatal owner has won."""
+        with self._lock:
+            if (
+                self.status != "pending"
+                or self.user_code_fatal_stage
+                or self._running_publication_state != _PUBLICATION_BLOCKED
+            ):
+                return False
+            self.status = "running"
+            self._running_publication_state = _PUBLICATION_READY
+            return True
+
+    def claim_running_publication(self) -> bool:
+        with self._lock:
+            if (
+                self.status != "running"
+                or self.user_code_fatal_stage
+                or self._running_publication_state != _PUBLICATION_READY
+            ):
+                return False
+            self._running_publication_state = _PUBLICATION_PUBLISHING
+            return True
+
+    def complete_running_publication_submission(
+        self,
+        release_event: threading.Event | None = None,
+    ) -> bool:
+        """Finish the ordered running enqueue; True means user work may release."""
+        with self._lock:
+            if self._running_publication_state != _PUBLICATION_PUBLISHING:
+                return False
+            if self._running_publication_fatal_pending or self.user_code_fatal_stage:
+                self._running_publication_state = _PUBLICATION_TERMINAL
+                return False
+            self._running_publication_state = _PUBLICATION_RELEASED
+            if release_event is not None:
+                release_event.set()
+            return True
+
+    def fail_running_publication(self, error: str) -> bool:
+        with self._lock:
+            if self._running_publication_state == _PUBLICATION_RELEASED:
+                return False
+            self._running_publication_state = _PUBLICATION_TERMINAL
+            self.status = "failed"
+            self.error = str(error or "strategy session startup failed")
+            return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +349,7 @@ class SessionManager:
         self,
         *,
         session_id: str | None = None,
+        initial_status: Literal["pending", "running"] = "running",
         environment: int = 0,
         user_id: int = 0,
         portfolio_id: int = 0,
@@ -264,11 +357,14 @@ class SessionManager:
         runtime_source: str = "",
         runtime_name: str = "",
     ) -> tuple[str, SessionState]:
+        if type(initial_status) is not str or initial_status not in {"pending", "running"}:
+            raise ValueError("initial_status must be pending or running")
         final_id = uuid.uuid4().hex if session_id is None else self._validate_session_id(session_id)
         token = _SessionOwnershipToken()
         state = SessionState(
             session_id=final_id,
             _ownership_token=token,
+            status=initial_status,
             environment=environment,
             user_id=user_id,
             portfolio_id=portfolio_id,
@@ -376,6 +472,17 @@ class SessionManager:
                 return False
             s.thread = thread
             return True
+
+    def claim_running_publication(
+        self,
+        session_id: str,
+        expected_state: SessionState,
+    ) -> bool:
+        with self._lock:
+            state = self._sessions.get(session_id)
+            if state is not expected_state:
+                return False
+            return state.claim_running_publication()
 
 
     def mark_terminal(self, session_id: str, expected_state: SessionState) -> bool:

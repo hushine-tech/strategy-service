@@ -280,6 +280,7 @@ class ProxyPortfolioClient:
         runtime_version: str = "",
         session_name: str = "",
         leverage: float = 1.0,
+        initial_status: str = "",
     ) -> bool:
         try:
             self.require_save_session(
@@ -297,6 +298,7 @@ class ProxyPortfolioClient:
                 runtime_version=runtime_version,
                 session_name=session_name,
                 leverage=leverage,
+                initial_status=initial_status,
             )
             return True
         except Exception:
@@ -319,6 +321,7 @@ class ProxyPortfolioClient:
         runtime_version: str = "",
         session_name: str = "",
         leverage: float = 1.0,
+        initial_status: str = "",
     ) -> None:
         from strategy_service.gen import portfolio_service_pb2
 
@@ -337,6 +340,7 @@ class ProxyPortfolioClient:
             runtime_version=str(runtime_version or ""),
             session_name=str(session_name or ""),
             leverage=float(leverage or 1.0),
+            initial_status=str(initial_status or ""),
         )
         self._proxy.invoke(PORTFOLIO_SAVE_SESSION, req, portfolio_service_pb2.SaveSessionResponse)
 

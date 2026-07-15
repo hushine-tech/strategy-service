@@ -12,6 +12,8 @@ import (
 	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
 	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -40,8 +42,17 @@ type WorkerSender interface {
 	SendToWorker(sessionID string, frame *rwv1.AgentFrame) error
 }
 
-type WorkerSessionBinder interface {
-	AliasWorkerSession(existingSessionID string, sessionID string) error
+type RuntimeRequestError struct {
+	Code            string
+	Message         string
+	DependencyError *strategyv1.RuntimeDependencyError
+}
+
+func (e *RuntimeRequestError) Error() string {
+	if e == nil || strings.TrimSpace(e.Message) == "" {
+		return "runtime worker request failed"
+	}
+	return e.Message
 }
 
 type AgentConfig struct {
@@ -66,6 +77,8 @@ type Agent struct {
 	cfg AgentConfig
 
 	mu                sync.Mutex
+	nextGeneration    uint64
+	generations       map[string]*workerGeneration
 	pending           map[string]*pendingSessionStart
 	ready             map[string]chan struct{}
 	workerCallReply   map[string]chan *rwv1.PlatformCallResult
@@ -74,9 +87,147 @@ type Agent struct {
 	indicatorSync     *IndicatorSyncManager
 }
 
+type workerGeneration struct {
+	sessionID  string
+	generation uint64
+
+	mu                 sync.Mutex
+	closing            bool
+	inFlight           int
+	drained            chan struct{}
+	drainOnce          sync.Once
+	durablePossible    bool
+	runningAccepted    bool
+	connected          bool
+	terminalAck        bool
+	explicitStopAck    bool
+	explicitStopStatus string
+	cleanupRunning     bool
+	cleanupDone        chan struct{}
+	cleanupErr         error
+	authGeneration     uint64
+}
+
+func newWorkerGeneration(sessionID string, generation uint64) *workerGeneration {
+	return &workerGeneration{
+		sessionID: sessionID, generation: generation, drained: make(chan struct{}),
+	}
+}
+
+func (g *workerGeneration) admit(method string) bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing {
+		return false
+	}
+	if strings.TrimSpace(method) == "portfolio.SaveSession" {
+		g.durablePossible = true
+	}
+	g.inFlight++
+	return true
+}
+
+func (g *workerGeneration) completePlatformCall() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	if g.inFlight > 0 {
+		g.inFlight--
+	}
+	if g.closing && g.inFlight == 0 {
+		g.drainOnce.Do(func() { close(g.drained) })
+	}
+	g.mu.Unlock()
+}
+
+func (g *workerGeneration) beginCleanup() (bool, <-chan struct{}) {
+	if g == nil {
+		done := make(chan struct{})
+		close(done)
+		return false, done
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.closing = true
+	if g.inFlight == 0 {
+		g.drainOnce.Do(func() { close(g.drained) })
+	}
+	if g.cleanupRunning {
+		return false, g.cleanupDone
+	}
+	g.cleanupRunning = true
+	g.cleanupErr = nil
+	g.cleanupDone = make(chan struct{})
+	return true, g.cleanupDone
+}
+
+func (g *workerGeneration) finishCleanup(err error) {
+	g.mu.Lock()
+	g.cleanupErr = err
+	g.cleanupRunning = false
+	done := g.cleanupDone
+	g.cleanupDone = nil
+	g.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
+}
+
+func (g *workerGeneration) cleanupResult() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cleanupErr
+}
+
+func (g *workerGeneration) bindAuthenticatedGeneration(generation uint64) bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if generation == 0 {
+		return false
+	}
+	if g.authGeneration == 0 {
+		g.authGeneration = generation
+		return true
+	}
+	return generation == g.authGeneration
+}
+
+func (g *workerGeneration) acceptRunning() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing || g.terminalAck || g.explicitStopAck {
+		return false
+	}
+	g.runningAccepted = true
+	return true
+}
+
+func (g *workerGeneration) markConnected() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing {
+		return false
+	}
+	g.connected = true
+	return true
+}
+
 type pendingSessionStart struct {
 	started chan string
-	failed  chan string
+	failed  chan *RuntimeRequestError
 	start   *rwv1.StartSession
 }
 
@@ -89,6 +240,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 	}
 	agent := &Agent{
 		cfg:               cfg,
+		generations:       map[string]*workerGeneration{},
 		pending:           map[string]*pendingSessionStart{},
 		ready:             map[string]chan struct{}{},
 		workerCallReply:   map[string]chan *rwv1.PlatformCallResult{},
@@ -137,7 +289,7 @@ func (a *Agent) HandleRuntimeRequest(ctx context.Context, frame *cpv1.RuntimeFra
 	switch strings.TrimSpace(req.GetMethod()) {
 	case "RunStrategy":
 		return a.handleRunStrategy(ctx, frame, req)
-	case "PreviewRunStrategy":
+	case "PreviewRunStrategy", "ValidateStrategySource":
 		return a.handleOneShotRuntimeUnary(ctx, frame, req)
 	case "GetStrategyStatus", "StopStrategy":
 		return a.handleSessionRuntimeUnary(ctx, frame, req)
@@ -158,43 +310,51 @@ func (a *Agent) handleRunStrategy(
 	if a.cfg.WorkerStarter == nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", "worker starter is not configured")
 	}
-	pendingID := "pending-" + mustRandomToken()[:16]
+	sessionID, generation := a.reserveWorkerGeneration()
 	runtimeID := strings.TrimSpace(runReq.GetRuntimeId())
 	if runtimeID == "" {
 		runtimeID = strings.TrimSpace(a.cfg.RuntimeID)
 	}
 	start := &rwv1.StartSession{
-		SessionId:          pendingID,
+		SessionId:          sessionID,
 		UserId:             runReq.GetUserId(),
 		RuntimeId:          runtimeID,
 		RunStrategyRequest: req.GetRequest(),
 	}
 	pending := &pendingSessionStart{
 		started: make(chan string, 1),
-		failed:  make(chan string, 1),
+		failed:  make(chan *RuntimeRequestError, 1),
 		start:   start,
 	}
 	a.mu.Lock()
-	a.pending[pendingID] = pending
+	a.pending[sessionID] = pending
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
-		delete(a.pending, pendingID)
+		delete(a.pending, sessionID)
 		a.mu.Unlock()
 	}()
 
-	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, pendingID, a.workerEnv())
+	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, sessionID, a.workerEnv())
 	if err != nil {
+		a.forgetWorkerGeneration(sessionID, generation)
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", err.Error())
 	}
+	if worker != nil && worker.Spec.Generation > 0 && !generation.bindAuthenticatedGeneration(worker.Spec.Generation) {
+		_ = a.cleanupWorkerGeneration(sessionID, generation, "worker generation identity mismatch")
+		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", "worker generation identity mismatch")
+	}
+	a.watchWorkerGeneration(sessionID, generation, worker)
 
 	workerExited := worker.processExitedSignal()
 	timer := time.NewTimer(a.cfg.StartTimeout)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
+		_ = a.cleanupWorkerGeneration(sessionID, generation, "runtime request cancelled")
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Cancelled", ctx.Err().Error())
 	case <-timer.C:
+		_ = a.cleanupWorkerGeneration(sessionID, generation, "session worker start timed out")
 		return runtimeErrorFrame(frame.GetCorrelationId(), "DeadlineExceeded", "session worker did not report started")
 	case <-workerExited:
 		select {
@@ -203,22 +363,69 @@ func (a *Agent) handleRunStrategy(
 		default:
 		}
 		select {
-		case message := <-pending.failed:
-			if strings.TrimSpace(message) == "" {
-				message = "session worker failed before start"
-			}
-			return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", message)
+		case requestErr := <-pending.failed:
+			_ = a.cleanupWorkerGeneration(sessionID, generation, requestErr.Error())
+			return runtimeRequestErrorFrame(frame.GetCorrelationId(), requestErr)
 		default:
 		}
+		_ = a.cleanupWorkerGeneration(sessionID, generation, "session worker exited before reporting started")
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", managedWorkerExitError("reporting started", worker.processError()).Error())
-	case message := <-pending.failed:
-		if strings.TrimSpace(message) == "" {
-			message = "session worker failed before start"
+	case requestErr := <-pending.failed:
+		select {
+		case startedSessionID := <-pending.started:
+			return responseFrame(frame.GetCorrelationId(), &strategyv1.RunStrategyResponse{SessionId: startedSessionID})
+		default:
 		}
-		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", message)
-	case sessionID := <-pending.started:
-		return responseFrame(frame.GetCorrelationId(), &strategyv1.RunStrategyResponse{SessionId: sessionID})
+		_ = a.cleanupWorkerGeneration(sessionID, generation, requestErr.Error())
+		return runtimeRequestErrorFrame(frame.GetCorrelationId(), requestErr)
+	case startedSessionID := <-pending.started:
+		return responseFrame(frame.GetCorrelationId(), &strategyv1.RunStrategyResponse{SessionId: startedSessionID})
 	}
+}
+
+func (a *Agent) watchWorkerGeneration(
+	sessionID string,
+	generation *workerGeneration,
+	worker *ManagedWorker,
+) {
+	if worker == nil || worker.processExitedSignal() == nil {
+		return
+	}
+	go func() {
+		<-worker.processExitedSignal()
+		generation.mu.Lock()
+		connected := generation.connected
+		generation.mu.Unlock()
+		if connected {
+			return
+		}
+		_ = a.cleanupWorkerGeneration(sessionID, generation, "session worker process exited")
+	}()
+}
+
+func (a *Agent) reserveWorkerGeneration() (string, *workerGeneration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for {
+		sessionID := mustRandomToken()[:32]
+		if _, exists := a.generations[sessionID]; exists {
+			continue
+		}
+		a.nextGeneration++
+		generation := newWorkerGeneration(sessionID, a.nextGeneration)
+		a.generations[sessionID] = generation
+		return sessionID, generation
+	}
+}
+
+func (a *Agent) forgetWorkerGeneration(sessionID string, generation *workerGeneration) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.generations[sessionID] != generation {
+		return false
+	}
+	delete(a.generations, sessionID)
+	return true
 }
 
 func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) (RestartSessionResult, error) {
@@ -411,6 +618,164 @@ func (a *Agent) cleanupSessionState(sessionID string, reason string) {
 	}
 }
 
+func (a *Agent) HandleWorkerDisconnect(identity WorkerIdentity, cause error) error {
+	sessionID := strings.TrimSpace(identity.SessionID)
+	if sessionID == "" {
+		return nil
+	}
+	a.mu.Lock()
+	generation := a.generations[sessionID]
+	a.mu.Unlock()
+	if generation == nil {
+		return nil
+	}
+	if !generation.bindAuthenticatedGeneration(identity.Generation) {
+		return nil
+	}
+	generation.mu.Lock()
+	generation.connected = false
+	generation.mu.Unlock()
+	reason := "session worker disconnected"
+	if cause == nil {
+		reason = "session worker stream closed"
+	}
+	return a.cleanupWorkerGeneration(sessionID, generation, reason)
+}
+
+func (a *Agent) cleanupWorkerGeneration(
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) error {
+	owner, done := generation.beginCleanup()
+	if !owner {
+		if done != nil {
+			<-done
+		}
+		return generation.cleanupResult()
+	}
+	timeout := a.cfg.RequestTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var cleanupErr error
+	select {
+	case <-generation.drained:
+		cleanupErr = a.reconcileWorkerGeneration(ctx, sessionID, generation, reason)
+	case <-ctx.Done():
+		cleanupErr = fmt.Errorf("drain worker generation platform calls: %w", ctx.Err())
+	}
+	if cleanupErr == nil && a.cfg.WorkerStopper != nil {
+		cleanupErr = a.cfg.WorkerStopper.StopSessionWorker(ctx, sessionID, timeout)
+	}
+	if cleanupErr == nil {
+		if a.forgetWorkerGeneration(sessionID, generation) {
+			a.cleanupSessionState(sessionID, reason)
+		}
+	}
+	generation.finishCleanup(cleanupErr)
+	if cleanupErr != nil {
+		a.scheduleWorkerGenerationCleanup(sessionID, generation, reason)
+	}
+	return cleanupErr
+}
+
+func (a *Agent) scheduleWorkerGenerationCleanup(
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) {
+	delay := 250 * time.Millisecond
+	if a.cfg.RequestTimeout >= 100*time.Millisecond && a.cfg.RequestTimeout < delay {
+		delay = a.cfg.RequestTimeout
+	}
+	time.AfterFunc(delay, func() {
+		a.mu.Lock()
+		current := a.generations[sessionID]
+		a.mu.Unlock()
+		if current == generation {
+			_ = a.cleanupWorkerGeneration(sessionID, generation, reason)
+		}
+	})
+}
+
+func (a *Agent) reconcileWorkerGeneration(
+	ctx context.Context,
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) error {
+	generation.mu.Lock()
+	durablePossible := generation.durablePossible
+	terminalAcknowledged := generation.terminalAck
+	explicitStopAcknowledged := generation.explicitStopAck
+	explicitStopStatus := generation.explicitStopStatus
+	generation.mu.Unlock()
+	if terminalAcknowledged || !durablePossible {
+		return nil
+	}
+	if a.cfg.PlatformInvoker == nil {
+		return fmt.Errorf("platform invoker is not configured")
+	}
+	var response portfoliov1.GetSessionResponse
+	err := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
+		SessionId: sessionID, UserId: a.cfg.UserID,
+	}, &response)
+	if err != nil {
+		if isExplicitPlatformNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	session := response.GetSession()
+	if session == nil {
+		return fmt.Errorf("reconciliation response is missing session")
+	}
+	if strings.TrimSpace(session.GetSessionId()) != sessionID {
+		return fmt.Errorf("reconciliation returned mismatched session_id")
+	}
+	if runtimeID := strings.TrimSpace(session.GetRuntimeId()); runtimeID != "" && runtimeID != strings.TrimSpace(a.cfg.RuntimeID) {
+		return fmt.Errorf("reconciliation returned mismatched runtime_id")
+	}
+	if a.cfg.UserID > 0 && session.GetUserId() > 0 && session.GetUserId() != a.cfg.UserID {
+		return fmt.Errorf("reconciliation returned mismatched user_id")
+	}
+	statusValue := strings.TrimSpace(strings.ToLower(session.GetStatus()))
+	switch statusValue {
+	case "finished", "stopped", "failed", "stop_failed", "recoverable":
+		return nil
+	case "pending", "running", "stopping":
+		message := strings.TrimSpace(reason)
+		if message == "" {
+			message = "session worker disconnected"
+		}
+		targetStatus := "failed"
+		if explicitStopAcknowledged && statusValue != "pending" {
+			targetStatus = strings.TrimSpace(strings.ToLower(explicitStopStatus))
+			if targetStatus == "" {
+				targetStatus = "stopped"
+			}
+			message = ""
+		}
+		return a.updateSession(ctx, sessionID, targetStatus, int64(session.GetBarsProcessed()), message)
+	default:
+		return fmt.Errorf("cannot reconcile session %s from status %q", sessionID, session.GetStatus())
+	}
+}
+
+func isExplicitPlatformNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if grpcstatus.Code(err) == codes.NotFound {
+		return true
+	}
+	code, _, found := strings.Cut(strings.TrimSpace(err.Error()), ":")
+	return found && strings.EqualFold(strings.TrimSpace(code), "NotFound")
+}
+
 func (a *Agent) handleOneShotRuntimeUnary(
 	ctx context.Context,
 	frame *cpv1.RuntimeFrame,
@@ -437,25 +802,61 @@ func (a *Agent) handleOneShotRuntimeUnary(
 	if err != nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", err.Error())
 	}
+	cleanupRequired := true
+	defer func() {
+		if cleanupRequired {
+			a.cleanupOneShotWorker(pendingID, a.timeoutForFrame(frame))
+		}
+	}()
 	if err := a.waitWorkerReady(ctx, ready, worker, a.timeoutForFrame(frame)); err != nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
 	}
 	resp, err := a.invokeWorkerUnary(ctx, pendingID, req.GetMethod(), req.GetRequest(), a.timeoutForFrame(frame))
 	if err != nil {
-		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+		return runtimeRequestErrorFrame(frame.GetCorrelationId(), err)
 	}
-	var previewResp strategyv1.PreviewRunStrategyResponse
-	if err := resp.UnmarshalTo(&previewResp); err != nil {
-		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid PreviewRunStrategy response payload")
-	}
-	if previewResp.GetOk() {
-		if waiter, ok := a.cfg.WorkerStarter.(WorkerExitWaiter); ok {
-			if err := waiter.WaitSessionWorker(ctx, pendingID, a.timeoutForFrame(frame)); err != nil {
-				return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
-			}
+	switch strings.TrimSpace(req.GetMethod()) {
+	case "PreviewRunStrategy":
+		var previewResp strategyv1.PreviewRunStrategyResponse
+		if err := resp.UnmarshalTo(&previewResp); err != nil {
+			return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid PreviewRunStrategy response payload")
+		}
+	case "ValidateStrategySource":
+		var validateResp strategyv1.ValidateStrategySourceResponse
+		if err := resp.UnmarshalTo(&validateResp); err != nil {
+			return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid ValidateStrategySource response payload")
 		}
 	}
+	if waiter, ok := a.cfg.WorkerStarter.(WorkerExitWaiter); ok {
+		if err := waiter.WaitSessionWorker(ctx, pendingID, a.timeoutForFrame(frame)); err != nil {
+			return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+		}
+		a.cleanupSessionState(pendingID, "one-shot worker completed")
+	} else {
+		a.cleanupOneShotWorker(pendingID, a.timeoutForFrame(frame))
+	}
+	cleanupRequired = false
 	return responseAnyFrame(frame.GetCorrelationId(), resp)
+}
+
+func (a *Agent) cleanupOneShotWorker(sessionID string, timeout time.Duration) {
+	if timeout <= 0 || timeout > a.cfg.RequestTimeout {
+		timeout = a.cfg.RequestTimeout
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if a.cfg.WorkerStopper != nil {
+		_ = a.cfg.WorkerStopper.StopSessionWorker(ctx, sessionID, timeout)
+	}
+	if waiter, ok := a.cfg.WorkerStarter.(WorkerExitWaiter); ok {
+		_ = waiter.WaitSessionWorker(ctx, sessionID, timeout)
+	} else if waiter, ok := a.cfg.WorkerStopper.(WorkerExitWaiter); ok {
+		_ = waiter.WaitSessionWorker(ctx, sessionID, timeout)
+	}
+	a.cleanupSessionState(sessionID, "one-shot worker completed")
 }
 
 func (a *Agent) handleSessionRuntimeUnary(
@@ -467,9 +868,24 @@ func (a *Agent) handleSessionRuntimeUnary(
 	if err != nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "InvalidArgument", err.Error())
 	}
+	a.mu.Lock()
+	generation := a.generations[sessionID]
+	a.mu.Unlock()
+	controlCallAdmitted := false
+	if generation != nil {
+		if !generation.admit("runtime." + strings.TrimSpace(req.GetMethod())) {
+			return runtimeErrorFrame(frame.GetCorrelationId(), "Unavailable", "worker generation is closing")
+		}
+		controlCallAdmitted = true
+		defer func() {
+			if controlCallAdmitted {
+				generation.completePlatformCall()
+			}
+		}()
+	}
 	resp, err := a.invokeWorkerUnary(ctx, sessionID, req.GetMethod(), req.GetRequest(), a.timeoutForFrame(frame))
 	if err != nil {
-		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+		return runtimeRequestErrorFrame(frame.GetCorrelationId(), err)
 	}
 	if strings.TrimSpace(req.GetMethod()) == "StopStrategy" {
 		var stopResp strategyv1.StopStrategyResponse
@@ -477,12 +893,35 @@ func (a *Agent) handleSessionRuntimeUnary(
 			return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid StopStrategy response payload")
 		}
 		if stopResp.GetStopped() {
+			var stopReq strategyv1.StopStrategyRequest
+			explicitStopStatus := "stopped"
+			if err := req.GetRequest().UnmarshalTo(&stopReq); err == nil &&
+				stopReq.GetStopAction() == strategyv1.StopAction_STOP_ACTION_FINISH {
+				// FINISH is only durable after the Agent flushes indicators while
+				// acknowledging FinalStatus. A worker lost in the response-to-final
+				// gap must remain recoverable instead of claiming a complete finish.
+				explicitStopStatus = "recoverable"
+			}
+			if generation != nil {
+				generation.mu.Lock()
+				generation.explicitStopAck = true
+				generation.explicitStopStatus = explicitStopStatus
+				generation.mu.Unlock()
+			}
+			if controlCallAdmitted {
+				generation.completePlatformCall()
+				controlCallAdmitted = false
+			}
 			if waiter, ok := a.cfg.WorkerStopper.(WorkerExitWaiter); ok {
 				if err := waiter.WaitSessionWorker(ctx, sessionID, a.timeoutForFrame(frame)); err != nil {
 					return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
 				}
 			}
 		}
+	}
+	if controlCallAdmitted {
+		generation.completePlatformCall()
+		controlCallAdmitted = false
 	}
 	return responseAnyFrame(frame.GetCorrelationId(), resp)
 }
@@ -496,6 +935,9 @@ func (a *Agent) HandleWorkerFrame(
 	if frame == nil {
 		return nil
 	}
+	a.mu.Lock()
+	generation := a.generations[strings.TrimSpace(workerSessionID)]
+	a.mu.Unlock()
 	switch frame.GetPayload().(type) {
 	case *rwv1.WorkerFrame_Hello:
 		a.mu.Lock()
@@ -518,35 +960,47 @@ func (a *Agent) HandleWorkerFrame(
 	case *rwv1.WorkerFrame_Progress:
 		progress := frame.GetProgress()
 		realSessionID := strings.TrimSpace(progress.GetSessionId())
+		if generation != nil && realSessionID != "" && realSessionID != strings.TrimSpace(workerSessionID) {
+			if pending := a.pendingGenerationStart(workerSessionID); pending != nil {
+				select {
+				case pending.failed <- &RuntimeRequestError{
+					Code: "FailedPrecondition", Message: "worker returned mismatched canonical session_id",
+				}:
+				default:
+				}
+				return nil
+			}
+			return fmt.Errorf("worker progress session_id does not match authenticated generation")
+		}
 		statusValue := strings.TrimSpace(strings.ToLower(progress.GetStatus()))
 		a.mu.Lock()
 		pending := a.pending[workerSessionID]
 		a.mu.Unlock()
 		if pending != nil && isSessionStartFailureStatus(statusValue) {
 			message := strings.TrimSpace(progress.GetError())
+			if message == "" {
+				message = "session worker failed before start"
+			}
 			select {
-			case pending.failed <- message:
+			case pending.failed <- &RuntimeRequestError{
+				Code: "FailedPrecondition", Message: message,
+				DependencyError: cloneDependencyError(progress.GetDependencyError()),
+			}:
 			default:
 			}
 			return nil
 		}
 		if statusValue == "running" && realSessionID != "" {
-			if realSessionID != workerSessionID {
-				a.mu.Lock()
-				sender := a.cfg.WorkerSender
-				a.mu.Unlock()
-				if binder, ok := sender.(WorkerSessionBinder); ok {
-					if err := binder.AliasWorkerSession(workerSessionID, realSessionID); err != nil {
-						return err
-					}
-				}
-				if binder, ok := a.cfg.WorkerStarter.(WorkerSessionBinder); ok {
-					if err := binder.AliasWorkerSession(workerSessionID, realSessionID); err != nil {
-						return err
-					}
-				}
-			}
 			if pending != nil {
+				if generation != nil && !generation.acceptRunning() {
+					select {
+					case pending.failed <- &RuntimeRequestError{
+						Code: "FailedPrecondition", Message: "worker generation closed before running acceptance",
+					}:
+					default:
+					}
+					return nil
+				}
 				a.rememberRunRequest(realSessionID, pending.start.GetRunStrategyRequest())
 				select {
 				case pending.started <- realSessionID:
@@ -559,7 +1013,7 @@ func (a *Agent) HandleWorkerFrame(
 		if send == nil {
 			return fmt.Errorf("worker platform call sender is not configured")
 		}
-		result := a.invokeWorkerPlatformCall(ctx, call)
+		result := a.invokeWorkerPlatformCallForGeneration(ctx, generation, call)
 		return send(&rwv1.AgentFrame{
 			Payload: &rwv1.AgentFrame_PlatformCallResult{PlatformCallResult: result},
 		})
@@ -578,11 +1032,119 @@ func (a *Agent) HandleWorkerFrame(
 			}
 		}
 	case *rwv1.WorkerFrame_IndicatorFrame:
+		if generation != nil && strings.TrimSpace(frame.GetIndicatorFrame().GetSessionId()) != strings.TrimSpace(workerSessionID) {
+			return fmt.Errorf("indicator frame session_id does not match authenticated generation")
+		}
 		return a.indicatorSync.ReceiveFrame(frame.GetIndicatorFrame())
 	case *rwv1.WorkerFrame_FinalStatus:
-		return a.handleWorkerFinalStatus(ctx, frame.GetFrameId(), frame.GetFinalStatus(), send)
+		if generation != nil && strings.TrimSpace(frame.GetFinalStatus().GetSessionId()) != strings.TrimSpace(workerSessionID) {
+			return fmt.Errorf("final status session_id does not match authenticated generation")
+		}
+		if err := a.handleWorkerFinalStatus(ctx, frame.GetFrameId(), frame.GetFinalStatus(), send); err != nil {
+			return err
+		}
+		if generation != nil {
+			generation.mu.Lock()
+			generation.terminalAck = true
+			generation.mu.Unlock()
+		}
+		return nil
+	case *rwv1.WorkerFrame_WorkerError:
+		workerErr := frame.GetWorkerError()
+		if workerErr == nil {
+			return nil
+		}
+		if generation != nil {
+			errorSessionID := strings.TrimSpace(workerErr.GetSessionId())
+			if errorSessionID != "" && errorSessionID != strings.TrimSpace(workerSessionID) {
+				return fmt.Errorf("worker error session_id does not match authenticated generation")
+			}
+		}
+		a.mu.Lock()
+		pending := a.pending[workerSessionID]
+		a.mu.Unlock()
+		if pending != nil {
+			message := strings.TrimSpace(workerErr.GetMessage())
+			if message == "" {
+				message = "session worker failed before start"
+			}
+			select {
+			case pending.failed <- &RuntimeRequestError{
+				Code: "FailedPrecondition", Message: message,
+				DependencyError: cloneDependencyError(workerErr.GetDependencyError()),
+			}:
+			default:
+			}
+		}
 	}
 	return nil
+}
+
+func (a *Agent) pendingGenerationStart(sessionID string) *pendingSessionStart {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.pending[strings.TrimSpace(sessionID)]
+}
+
+func (a *Agent) HandleAuthenticatedWorkerFrame(
+	ctx context.Context,
+	identity WorkerIdentity,
+	frame *rwv1.WorkerFrame,
+	send func(*rwv1.AgentFrame) error,
+) error {
+	sessionID := strings.TrimSpace(identity.SessionID)
+	if sessionID == "" {
+		return fmt.Errorf("authenticated worker session_id is required")
+	}
+	a.mu.Lock()
+	generation := a.generations[sessionID]
+	_, oneShot := a.ready[sessionID]
+	a.mu.Unlock()
+	if generation == nil && !oneShot {
+		return fmt.Errorf("stale worker generation: %s", sessionID)
+	}
+	if generation != nil && !generation.bindAuthenticatedGeneration(identity.Generation) {
+		return fmt.Errorf("stale worker generation: %s", sessionID)
+	}
+	if generation != nil && frame.GetHello() != nil {
+		if !generation.markConnected() {
+			return fmt.Errorf("worker generation is closing: %s", sessionID)
+		}
+	}
+	return a.HandleWorkerFrame(ctx, sessionID, frame, send)
+}
+
+func (a *Agent) invokeWorkerPlatformCallForGeneration(
+	ctx context.Context,
+	generation *workerGeneration,
+	call *rwv1.PlatformCall,
+) *rwv1.PlatformCallResult {
+	if generation == nil {
+		return a.invokeWorkerPlatformCall(ctx, call)
+	}
+	if !generation.admit(call.GetMethod()) {
+		return &rwv1.PlatformCallResult{
+			CallId: call.GetCallId(), Ok: false, Error: "worker generation is closing",
+		}
+	}
+	timeout := a.cfg.RequestTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	requestedTimeout := time.Duration(call.GetTimeoutMs()) * time.Millisecond
+	if requestedTimeout > 0 && requestedTimeout < timeout {
+		timeout = requestedTimeout
+	}
+	lifecycleCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	boundedCall := call
+	if call != nil && call.GetTimeoutMs() != timeout.Milliseconds() {
+		boundedCall, _ = proto.Clone(call).(*rwv1.PlatformCall)
+		boundedCall.TimeoutMs = timeout.Milliseconds()
+	}
+	result := a.invokeWorkerPlatformCall(lifecycleCtx, boundedCall)
+	generation.completePlatformCall()
+	return result
 }
 
 func (a *Agent) HandleRuntimeData(ctx context.Context, frame *cpv1.RuntimeFrame) error {
@@ -890,13 +1452,49 @@ func (a *Agent) invokeWorkerUnary(
 			return nil, fmt.Errorf("runtime worker returned empty response")
 		}
 		if !result.GetOk() {
-			return nil, errors.New(result.GetError())
+			message := strings.TrimSpace(result.GetError())
+			if message == "" {
+				message = "runtime worker request failed"
+			}
+			return nil, &RuntimeRequestError{
+				Code:            "FailedPrecondition",
+				Message:         message,
+				DependencyError: cloneDependencyError(result.GetDependencyError()),
+			}
 		}
 		if result.GetResponse() == nil {
 			return nil, fmt.Errorf("runtime worker response payload is empty")
 		}
 		return result.GetResponse(), nil
 	}
+}
+
+func runtimeRequestErrorFrame(correlationID string, err error) *cpv1.RuntimeFrame {
+	var requestErr *RuntimeRequestError
+	if errors.As(err, &requestErr) {
+		code := strings.TrimSpace(requestErr.Code)
+		if code == "" {
+			code = "FailedPrecondition"
+		}
+		return runtimeErrorFrameWithDependency(
+			correlationID,
+			code,
+			requestErr.Error(),
+			cloneDependencyError(requestErr.DependencyError),
+		)
+	}
+	if err == nil {
+		return runtimeErrorFrame(correlationID, "Internal", "runtime worker request failed")
+	}
+	return runtimeErrorFrame(correlationID, grpcCodeForError(err), err.Error())
+}
+
+func cloneDependencyError(detail *strategyv1.RuntimeDependencyError) *strategyv1.RuntimeDependencyError {
+	if detail == nil {
+		return nil
+	}
+	cloned, _ := proto.Clone(detail).(*strategyv1.RuntimeDependencyError)
+	return cloned
 }
 
 func (a *Agent) waitWorkerReady(ctx context.Context, ready <-chan struct{}, worker *ManagedWorker, timeout time.Duration) error {
@@ -962,7 +1560,7 @@ func runtimeRequestSessionID(req *cpv1.StrategyRequest) (string, error) {
 		if strings.TrimSpace(statusReq.GetSessionId()) == "" {
 			return "", fmt.Errorf("session_id is required")
 		}
-		return statusReq.GetSessionId(), nil
+		return strings.TrimSpace(statusReq.GetSessionId()), nil
 	case "StopStrategy":
 		var stopReq strategyv1.StopStrategyRequest
 		if err := req.GetRequest().UnmarshalTo(&stopReq); err != nil {
@@ -971,7 +1569,7 @@ func runtimeRequestSessionID(req *cpv1.StrategyRequest) (string, error) {
 		if strings.TrimSpace(stopReq.GetSessionId()) == "" {
 			return "", fmt.Errorf("session_id is required")
 		}
-		return stopReq.GetSessionId(), nil
+		return strings.TrimSpace(stopReq.GetSessionId()), nil
 	default:
 		return "", fmt.Errorf("unsupported session runtime method: %s", req.GetMethod())
 	}

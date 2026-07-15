@@ -37,6 +37,7 @@ def test_proxy_portfolio_client_sends_save_session_over_runtime_channel():
         runtime_source="self_hosted",
         runtime_name="desk",
         leverage=4,
+        initial_status="pending",
     )
 
     assert ok is True
@@ -45,6 +46,7 @@ def test_proxy_portfolio_client_sends_save_session_over_runtime_channel():
     assert req.session_id == "sess-1"
     assert req.runtime_id == "runtime-1"
     assert req.leverage == 4
+    assert req.initial_status == "pending"
 
 
 def test_proxy_portfolio_client_sends_strategy_indicators_over_runtime_channel():

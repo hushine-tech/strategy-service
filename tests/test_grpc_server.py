@@ -18,6 +18,8 @@ from strategy_service.grpc_server import StrategyServiceServicer
 from strategy_service.indicators import IndicatorDefinition, IndicatorFrame
 from strategy_service.session import SessionState, StreamBinding
 from strategy_service.strategy_imports import (
+    StrategyDependencyError,
+    StrategySourceGateResult,
     gate_strategy_source,
     prepare_strategy,
     resolve_strategy_source,
@@ -407,12 +409,121 @@ class _FakeContext:
     def __init__(self) -> None:
         self.code = None
         self.details = ""
+        self.runtime_dependency_error = None
 
     def set_code(self, code) -> None:
         self.code = code
 
     def set_details(self, details: str) -> None:
         self.details = details
+
+    def set_runtime_dependency_error(self, detail) -> None:
+        self.runtime_dependency_error = detail
+
+
+class _AsyncTestThread:
+    def __init__(self, target) -> None:
+        self._thread = threading.Thread(target=target, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def join(self, timeout=None) -> None:
+        self._thread.join(timeout=timeout)
+
+    def is_alive(self) -> bool:
+        return self._thread.is_alive()
+
+
+def test_validate_strategy_source_returns_runtime_profile_without_session():
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", bound_user_id=7, runtime_id="rt-1",
+        restore_running_sessions=False,
+    )
+    context = _FakeContext()
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+
+    response = servicer.ValidateStrategySource(
+        pb2.ValidateStrategySourceRequest(source=source, user_id=7, runtime_id="rt-1"),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is True
+    assert response.runtime_profile.contract_sha256
+    assert response.runtime_profile.profile_name
+    assert servicer._sessions.list_ids() == ()
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_code"),
+    [
+        ("", "STRATEGY_SOURCE_REQUIRED"),
+        ("class Broken(:\n    pass\n", "syntax_error"),
+    ],
+)
+def test_validate_strategy_source_reports_source_issues_without_transport_error(
+    source,
+    expected_code,
+):
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", bound_user_id=7, runtime_id="rt-1",
+        restore_running_sessions=False,
+    )
+    context = _FakeContext()
+
+    response = servicer.ValidateStrategySource(
+        pb2.ValidateStrategySourceRequest(source=source, user_id=7, runtime_id="rt-1"),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is False
+    assert [issue.code for issue in response.issues] == [expected_code]
+    assert response.runtime_profile.contract_sha256
+    assert servicer._sessions.list_ids() == ()
+
+
+def test_dependency_gate_attaches_typed_runtime_detail(monkeypatch):
+    detail = StrategyDependencyError(
+        code="STRATEGY_DEPENDENCY_UNAVAILABLE",
+        module="google.cloud",
+        runtime_profile="platform-python-3.13",
+        runtime_profile_version="1.0.0",
+        image_build_id="build-1",
+        message="dependency unavailable",
+    )
+    monkeypatch.setattr(
+        grpc_server,
+        "_resolve_and_gate_strategy_source",
+        lambda *_args, **_kwargs: StrategySourceGateResult(
+            ok=False,
+            issues=(),
+            runtime_profile=detail.runtime_profile,
+            runtime_profile_version=detail.runtime_profile_version,
+            contract_sha256="a" * 64,
+            image_build_id=detail.image_build_id,
+            dependency_error=detail,
+        ),
+    )
+    context = _FakeContext()
+
+    prepared = grpc_server._prepare_gated_strategy_for_rpc(
+        strategy_path="<db:test>",
+        strategy_code="import google.cloud",
+        hot_reload=False,
+        context=context,
+        operation="RunStrategy",
+    )
+
+    assert prepared is None
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.runtime_dependency_error.module == "google.cloud"
 
 
 def test_run_strategy_returns_not_found_when_portfolio_lookup_fails(monkeypatch):
@@ -525,6 +636,9 @@ def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
         def save_session(self, **_kwargs) -> bool:
             return True
 
+        def update_session(self, **_kwargs) -> bool:
+            return True
+
         def update_portfolio_wallet_state(self, *_args, **_kwargs):
             calls["wallet_update"] += 1
             return SimpleNamespace()
@@ -539,7 +653,7 @@ def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
             return None
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
-    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
+    monkeypatch.setattr(grpc_server, "_create_session_thread", _AsyncTestThread)
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "127.0.0.1:9092",
         market_data_policy={"preflight_enabled": False},
@@ -561,8 +675,11 @@ def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
 
     assert resp.session_id != ""
     assert context.code is None
+    state = servicer._sessions.get(resp.session_id)
+    assert state is not None
+    state.thread.join(timeout=1.0)
     assert calls["portfolio"] == 2
-    assert calls["wallet_update"] == 1
+    assert calls["wallet_update"] == 3
 
 
 def test_run_strategy_fails_start_when_backtest_wallet_sync_is_missing(monkeypatch):
@@ -607,7 +724,7 @@ def test_run_strategy_fails_start_when_backtest_wallet_sync_is_missing(monkeypat
             raise AssertionError("session thread must not start when startup wallet sync fails")
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
-    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
+    monkeypatch.setattr(grpc_server, "_create_session_thread", _AsyncTestThread)
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "127.0.0.1:9092",
         market_data_policy={"preflight_enabled": False},
@@ -661,6 +778,9 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
         def save_session(self, **_kwargs) -> bool:
             return True
 
+        def update_session(self, **_kwargs) -> bool:
+            return True
+
         def update_portfolio_wallet_state(self, *_args, **kwargs):
             wallet_calls.append(kwargs)
             return SimpleNamespace()
@@ -673,7 +793,7 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
             return None
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
-    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
+    monkeypatch.setattr(grpc_server, "_create_session_thread", _AsyncTestThread)
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "127.0.0.1:9092",
         market_data_policy={"preflight_enabled": False},
@@ -694,7 +814,14 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
 
     assert resp.session_id != ""
     assert context.code is None
-    assert len(wallet_calls) == 1
+    state = servicer._sessions.get(resp.session_id)
+    assert state is not None
+    state.thread.join(timeout=1.0)
+    assert [item["snapshot_reason"] for item in wallet_calls] == [
+        grpc_server.SNAPSHOT_REASON_STRATEGY_START,
+        grpc_server.SNAPSHOT_REASON_STRATEGY_END,
+        0,
+    ]
     req = captured["preflight"]
     assert set(req["required_routes"]) == {
         ("binance", "perpetual_futures"),
@@ -936,7 +1063,7 @@ def test_backtest_run_restores_portfolio_wallet_state_after_finish(monkeypatch):
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
     monkeypatch.setattr(grpc_server, "StrategyEngine", lambda: FakeEngine())
-    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: InlineThread(target=target, daemon=True))
+    monkeypatch.setattr(grpc_server, "_create_session_thread", _AsyncTestThread)
 
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "127.0.0.1:9092",
@@ -968,6 +1095,9 @@ def test_backtest_run_restores_portfolio_wallet_state_after_finish(monkeypatch):
 
     assert resp.session_id != ""
     assert context.code is None
+    state = servicer._sessions.get(resp.session_id)
+    assert state is not None
+    state.thread.join(timeout=1.0)
     assert [item["snapshot_reason"] for item in wallet_updates] == [
         grpc_server.SNAPSHOT_REASON_STRATEGY_START,
         grpc_server.SNAPSHOT_REASON_STRATEGY_END,
@@ -1149,6 +1279,12 @@ def test_run_strategy_rejects_empty_runtime_binding_before_persist(monkeypatch):
 
         def save_session(self, **_kwargs) -> bool:
             calls["save_session"] += 1
+            return True
+
+        def update_session(self, **_kwargs) -> bool:
+            return True
+
+        def update_session(self, **_kwargs) -> bool:
             return True
 
     class FakeMarketDataClient:
@@ -1560,6 +1696,9 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
             calls["save_session"] += 1
             return True
 
+        def update_session(self, **_kwargs) -> bool:
+            return True
+
         def update_portfolio_wallet_state(self, *args, **kwargs):
             del args, kwargs
             return SimpleNamespace()
@@ -1606,7 +1745,7 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
     _install_marketdata_client(monkeypatch, FakeMarketDataClient)
     monkeypatch.setattr(grpc_server, "_live_consumer_group", lambda strategy_id, session_id: f"cg-{strategy_id}-{session_id}")
-    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
+    monkeypatch.setattr(grpc_server, "_create_session_thread", _AsyncTestThread)
     monkeypatch.setattr(servicer, "_run_profile_preflight", capturing_preflight)
 
     resp = servicer.RunStrategy(request, context)
@@ -1675,6 +1814,9 @@ class MyStrategy:
         def save_session(self, **_kwargs) -> bool:
             return True
 
+        def update_session(self, **_kwargs) -> bool:
+            return True
+
         def update_portfolio_wallet_state(self, *args, **kwargs):
             del args, kwargs
             return SimpleNamespace()
@@ -1719,7 +1861,7 @@ class MyStrategy:
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
     _install_marketdata_client(monkeypatch, FakeMarketDataClient)
     monkeypatch.setattr(servicer, "_run_profile_preflight", fake_preflight)
-    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
+    monkeypatch.setattr(grpc_server, "_create_session_thread", _AsyncTestThread)
 
     resp = servicer.RunStrategy(request, context)
 
@@ -1780,7 +1922,7 @@ def test_run_strategy_mode2_creates_subscriptions_from_required_streams(monkeypa
     ]
 
 
-def test_subscription_baseexception_is_contained_before_save_and_released(monkeypatch):
+def test_subscription_baseexception_fails_pending_activation_and_releases(monkeypatch):
     from strategy_service.preflight import PreflightResult, RuntimeSourceProfile
 
     servicer, calls = _build_servicer_with_faked_preflight_deps(
@@ -1831,10 +1973,10 @@ def test_subscription_baseexception_is_contained_before_save_and_released(monkey
 
     assert response.session_id == ""
     assert context.code == grpc.StatusCode.FAILED_PRECONDITION
-    assert context.details == (
-        "failed to create required live delivery subscriptions for demo session"
-    )
-    assert calls["save_session"] == 0
+    assert context.details == "strategy activation failed"
+    assert calls["save_session"] == 1
+    assert calls["save_kwargs"][0]["initial_status"] == "pending"
+    assert calls["update_session"][-1]["status"] == "failed"
     assert servicer._sessions.list_ids() == ()
     assert len(released) == 1
 
@@ -4227,20 +4369,9 @@ def _build_servicer_with_faked_preflight_deps(
 
     real_thread = threading.Thread
 
-    class FakeThread:
-        def __new__(cls, target=None, args=(), daemon=None, **kwargs):
-            if getattr(target, "__name__", "") != "_run_session_with_context":
-                return real_thread(target=target, args=args, daemon=daemon, **kwargs)
-            return super().__new__(cls)
-
-        def __init__(self, target=None, args=(), daemon=None, **_kwargs) -> None:
-            calls["thread_created"] += 1
-            self.target = target
-            self.args = args
-            self.daemon = daemon
-
-        def start(self) -> None:
-            return None
+    def create_test_thread(target):
+        calls["thread_created"] += 1
+        return real_thread(target=target, daemon=True)
 
     class FakePlatformProxy:
         def __init__(self) -> None:
@@ -4263,7 +4394,7 @@ def _build_servicer_with_faked_preflight_deps(
         def iter_live_klines(self, **_kwargs):
             return iter(())
 
-    monkeypatch.setattr(grpc_server, "_create_session_thread", lambda target: FakeThread(target=target, daemon=True))
+    monkeypatch.setattr(grpc_server, "_create_session_thread", create_test_thread)
 
     servicer = StrategyServiceServicer(
         "acct:1", "order:1", {}, "kafka:9092",
@@ -4273,6 +4404,279 @@ def _build_servicer_with_faked_preflight_deps(
     )
     servicer.set_runtime_data_source(FakeRuntimeDataSource())
     return servicer, calls
+
+
+class _PublicationContext(_FakeContext):
+    def __init__(self, start_session_id: str) -> None:
+        super().__init__()
+        self.start_session_id = start_session_id
+        self.running_publication = None
+
+    def bind_running_publication(self, session_id, state) -> None:
+        assert self.running_publication is None
+        self.running_publication = (session_id, state)
+
+
+def test_run_uses_canonical_id_and_waits_behind_pending_publication(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    monkeypatch.setattr(
+        grpc_server,
+        "_create_session_thread",
+        lambda target: threading.Thread(target=target, daemon=True),
+    )
+    canonical_id = "a" * 32
+    context = _PublicationContext(canonical_id)
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=701,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+            max_loss_close_pct=0.0,
+            leverage=0.0,
+        ),
+        context,
+    )
+
+    assert context.code is None
+    assert response.session_id == canonical_id
+    assert calls["save_session"] == 1
+    assert calls["save_kwargs"][0]["session_id"] == canonical_id
+    assert calls["save_kwargs"][0]["initial_status"] == "pending"
+    assert [item["status"] for item in calls["update_session"]] == ["running"]
+    state = servicer._sessions.get(canonical_id)
+    assert state is not None
+    assert state.status == "running"
+    assert state.publication_state() == "READY"
+    assert context.running_publication == (canonical_id, state)
+    startup = state.startup_result()
+    assert startup.worker_ready.is_set()
+    assert startup.commit.is_set()
+    assert startup.activation_ready.is_set()
+    assert not startup.release.is_set()
+
+    assert servicer._sessions.claim_running_publication(canonical_id, state)
+    assert state.complete_running_publication_submission()
+    startup.release.set()
+    state.thread.join(timeout=1.0)
+    assert not state.thread.is_alive()
+
+
+def test_worker_readiness_timeout_discards_without_durable_row(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    entered = threading.Event()
+    allow_exit = threading.Event()
+
+    def blocked_runner(*_args, **_kwargs):
+        entered.set()
+        allow_exit.wait(timeout=1.0)
+
+    monkeypatch.setattr(servicer, "_run_session", blocked_runner)
+    monkeypatch.setattr(
+        grpc_server,
+        "_create_session_thread",
+        lambda target: threading.Thread(target=target, daemon=True),
+    )
+    servicer._session_start_timeout_seconds = 0.02
+    canonical_id = "b" * 32
+    context = _PublicationContext(canonical_id)
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=702,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+            max_loss_close_pct=0.0,
+            leverage=0.0,
+        ),
+        context,
+    )
+    allow_exit.set()
+
+    assert entered.is_set()
+    assert response.session_id == ""
+    assert context.code == grpc.StatusCode.DEADLINE_EXCEEDED
+    assert context.details == "strategy worker readiness timed out"
+    assert calls["save_session"] == 0
+    assert calls["update_session"] == []
+    assert servicer._sessions.get(canonical_id) is None
+
+
+def test_activation_failure_keeps_durable_session_non_running(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    monkeypatch.setattr(
+        grpc_server,
+        "_create_session_thread",
+        lambda target: threading.Thread(target=target, daemon=True),
+    )
+    monkeypatch.setattr(
+        strategy_base.BaseStrategy,
+        "activate_order_event_cursor",
+        lambda _self: (_ for _ in ()).throw(RuntimeError("cursor failed")),
+    )
+    canonical_id = "c" * 32
+    context = _PublicationContext(canonical_id)
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=703,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+            max_loss_close_pct=0.0,
+            leverage=0.0,
+        ),
+        context,
+    )
+
+    assert response.session_id == ""
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert calls["save_kwargs"][0]["initial_status"] == "pending"
+    assert [item["status"] for item in calls["update_session"]] == ["failed"]
+    state = servicer._sessions.get(canonical_id)
+    assert state is None or state.status == "failed"
+
+
+def test_late_activation_after_timeout_releases_new_subscription(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=1,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    monkeypatch.setattr(
+        servicer,
+        "_run_profile_preflight",
+        lambda **_kwargs: grpc_server.PreflightResult(
+            profile=grpc_server.RuntimeSourceProfile.DEMO,
+            required_streams=[
+                StreamBinding(
+                    stream_id=1,
+                    exchange="binance",
+                    market="perpetual_futures",
+                    kind="kline",
+                    symbol="BTCUSDT",
+                    interval="1m",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        strategy_base.BaseStrategy,
+        "activate_order_event_cursor",
+        lambda _self: None,
+    )
+    create_started = threading.Event()
+    allow_create = threading.Event()
+    events: list[str] = []
+
+    def create_subscription(**_kwargs):
+        events.append("create:start")
+        create_started.set()
+        allow_create.wait(timeout=1.0)
+        events.append("create:end")
+        return True
+
+    def release_subscription(**_kwargs):
+        events.append("release")
+        return True
+
+    monkeypatch.setattr(
+        servicer._platform_proxy.marketdata,
+        "create_session_market_data_subscriptions",
+        create_subscription,
+    )
+    monkeypatch.setattr(
+        servicer._platform_proxy.marketdata,
+        "release_session_market_data_subscriptions",
+        release_subscription,
+    )
+    threads: list[threading.Thread] = []
+
+    def create_thread(target):
+        thread = threading.Thread(target=target, daemon=True)
+        threads.append(thread)
+        return thread
+
+    monkeypatch.setattr(grpc_server, "_create_session_thread", create_thread)
+    servicer._session_start_timeout_seconds = 0.02
+    context = _PublicationContext("d" * 32)
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=704,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+            max_loss_close_pct=0.0,
+            leverage=0.0,
+        ),
+        context,
+    )
+
+    assert create_started.is_set()
+    assert response.session_id == ""
+    assert context.code == grpc.StatusCode.DEADLINE_EXCEEDED
+    assert context.details == "strategy activation timed out"
+    allow_create.set()
+    for thread in threads:
+        thread.join(timeout=1.0)
+        assert not thread.is_alive()
+    assert events[-2:] == ["create:end", "release"]
+    assert calls["update_session"][-1]["status"] == "failed"
 
 
 @pytest.mark.parametrize("method_name", ["RunStrategy", "PreviewRunStrategy"])
@@ -4687,7 +5091,7 @@ def test_strategy_source_gate_cursor_failure_updates_failed_without_thread(monke
     assert context.code == grpc.StatusCode.FAILED_PRECONDITION
     assert context.details == "strategy activation failed"
     assert calls["save_session"] == 1
-    assert calls["thread_created"] == 0
+    assert calls["thread_created"] == 1
     assert calls["update_session"][-1]["status"] == "failed"
     assert servicer._sessions.list_ids() == ()
 
@@ -4752,7 +5156,7 @@ def test_cursor_startup_failure_retains_owner_when_terminal_update_is_unconfirme
     assert retained is not None
     assert retained.status == "failed"
     assert retained.error == "strategy activation failed"
-    assert calls["thread_created"] == 0
+    assert calls["thread_created"] == 1
 
 
 @pytest.mark.parametrize(
@@ -4850,6 +5254,11 @@ def test_post_save_startup_failure_matrix_retains_unconfirmed_owner(
     assert response.session_id == ""
     assert context.code == expected_code
     assert context.details == expected_detail
+    if failure_seam in {"thread_registration", "thread_start"}:
+        assert calls["save_kwargs"] == []
+        assert calls["update_session"] == []
+        assert servicer._sessions.list_ids() == ()
+        return
     session_id = calls["save_kwargs"][0]["session_id"]
     state = servicer._sessions.get(session_id)
     assert state is not None
@@ -5203,7 +5612,8 @@ def test_session_thread_registration_failure_never_starts_or_leaks_session(monke
     assert context.code == grpc.StatusCode.INTERNAL
     assert context.details == "session thread registration failed"
     assert thread_calls == {"created": 1, "started": 0}
-    assert calls["update_session"][-1]["status"] == "failed"
+    assert calls["save_session"] == 0
+    assert calls["update_session"] == []
     assert servicer._sessions.list_ids() == ()
 
 
@@ -5238,7 +5648,7 @@ def test_otel_baseexception_is_owned_by_one_session_terminal_boundary(
         fn()
         raise GeneratorExit("otel-after-secret")
 
-    monkeypatch.setattr(grpc_server, "_create_session_thread", InlineThread)
+    monkeypatch.setattr(grpc_server, "_create_session_thread", _AsyncTestThread)
     monkeypatch.setattr(grpc_server, "_run_in_otel_context", fatal_instrumentation)
     context = _FakeContext()
 
@@ -5258,13 +5668,14 @@ def test_otel_baseexception_is_owned_by_one_session_terminal_boundary(
     assert context.code is None
     state = servicer._sessions.get(response.session_id)
     assert state is not None
+    state.thread.join(timeout=1.0)
     assert state.status == "failed"
     assert state.error == "strategy session terminated"
     terminal_updates = [
         item for item in calls["update_session"] if item["session_id"] == response.session_id
     ]
-    assert len(terminal_updates) == 1
-    assert terminal_updates[0]["status"] == "failed"
+    assert [item["status"] for item in terminal_updates] == ["running", "failed"]
+    assert terminal_updates[-1]["error"] == "strategy session terminated"
 
 
 @pytest.mark.parametrize(

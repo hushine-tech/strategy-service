@@ -291,3 +291,79 @@ def test_force_failed_overrides_every_prior_status_and_error(initial_status):
 
 def test_manager_has_no_id_only_restore_escape_hatch():
     assert not hasattr(SessionManager, "restore")
+
+
+def test_prepare_pending_is_registered_but_not_active():
+    manager = SessionManager()
+    session_id, state = manager.prepare(
+        session_id=_SESSION_ID,
+        initial_status="pending",
+        portfolio_id=17,
+    )
+
+    manager.register(session_id, state)
+
+    assert state.status == "pending"
+    assert state.is_active() is False
+    assert manager.find_active_session_for_portfolio(17) is None
+    assert state.publication_state() == "BLOCKED"
+
+
+@pytest.mark.parametrize("initial_status", ["", "stopping", "failed", "PENDING"])
+def test_prepare_rejects_unknown_initial_status(initial_status):
+    with pytest.raises(ValueError, match="initial_status"):
+        SessionManager().prepare(
+            session_id=_SESSION_ID,
+            initial_status=initial_status,
+        )
+
+
+def test_running_publication_requires_exact_registered_state():
+    manager = SessionManager()
+    session_id, state = manager.prepare(
+        session_id=_SESSION_ID,
+        initial_status="pending",
+    )
+    manager.register(session_id, state)
+
+    assert state.mark_running_publication_ready() is True
+    assert state.status == "running"
+    assert state.publication_state() == "READY"
+    assert manager.claim_running_publication(session_id, SessionState()) is False
+    assert manager.claim_running_publication(session_id, state) is True
+    assert state.publication_state() == "PUBLISHING"
+    assert state.complete_running_publication_submission() is True
+    assert state.publication_state() == "RELEASED"
+
+
+def test_fatal_before_publication_claim_forbids_running():
+    manager = SessionManager()
+    session_id, state = manager.prepare(
+        session_id=_SESSION_ID,
+        initial_status="pending",
+    )
+    manager.register(session_id, state)
+    assert state.mark_running_publication_ready() is True
+
+    assert state.latch_user_code_fatal("on_market_data") is True
+
+    assert state.publication_state() == "TERMINAL"
+    assert manager.claim_running_publication(session_id, state) is False
+    assert state.complete_running_publication_submission() is False
+
+
+def test_fatal_during_publication_defers_until_running_submission_finishes():
+    manager = SessionManager()
+    session_id, state = manager.prepare(
+        session_id=_SESSION_ID,
+        initial_status="pending",
+    )
+    manager.register(session_id, state)
+    assert state.mark_running_publication_ready() is True
+    assert manager.claim_running_publication(session_id, state) is True
+
+    assert state.latch_user_code_fatal("callback") is True
+
+    assert state.publication_state() == "PUBLISHING"
+    assert state.complete_running_publication_submission() is False
+    assert state.publication_state() == "TERMINAL"

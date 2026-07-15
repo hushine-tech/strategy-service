@@ -566,33 +566,6 @@ func TestCanceledUnmanagedStopEventuallyReleasesOwnership(t *testing.T) {
 	}
 }
 
-func TestStopAllDeduplicatesAliasedWorkers(t *testing.T) {
-	requirePOSIXSignals(t)
-	manager, worker, counter := startCountingWorker(t)
-	if err := manager.Registry().AdmitWorker(worker.SessionID, worker.Spec.Token, int64(worker.Cmd.Process.Pid)); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.AliasWorkerSession(worker.SessionID, "replacement-session"); err != nil {
-		t.Fatal(err)
-	}
-	stopWorker := manager.stopWorker
-	stopAttempts := 0
-	manager.stopWorker = func(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error {
-		stopAttempts++
-		return stopWorker(ctx, worker, timeout)
-	}
-
-	if err := manager.StopAll(context.Background(), 2*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	if stopAttempts != 1 {
-		t.Fatalf("stop attempts=%d want 1", stopAttempts)
-	}
-	if got := readStopCount(t, counter); got != 1 {
-		t.Fatalf("stop count=%d want 1", got)
-	}
-}
-
 func TestStopAllDoesNotDeduplicateDifferentWorkersWithReusedPID(t *testing.T) {
 	manager := NewWorkerManager(WorkerManagerConfig{})
 	process := &os.Process{Pid: 424242}
@@ -1467,40 +1440,4 @@ func readSignalCount(t *testing.T, path string) int {
 		t.Fatalf("read worker signals: %v", err)
 	}
 	return strings.Count(string(body), "SIGTERM\n")
-}
-
-func TestWorkerManagerAliasWorkerSessionMakesRealSessionStoppable(t *testing.T) {
-	cmd := exec.Command("python3", "-c", "import time; time.sleep(60)")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start long process: %v", err)
-	}
-	defer func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-	}()
-
-	m := NewWorkerManager(WorkerManagerConfig{})
-	spec, err := m.PrepareSessionWorker("pending-1")
-	if err != nil {
-		t.Fatalf("PrepareSessionWorker: %v", err)
-	}
-	if err := m.Registry().AdmitWorker("pending-1", spec.Token, int64(cmd.Process.Pid)); err != nil {
-		t.Fatalf("AdmitWorker: %v", err)
-	}
-	worker := &ManagedWorker{SessionID: "pending-1", Spec: spec, Cmd: cmd}
-	m.active["pending-1"] = worker
-
-	if err := m.AliasWorkerSession("pending-1", "sess-real"); err != nil {
-		t.Fatalf("AliasWorkerSession: %v", err)
-	}
-	if got := m.findWorker("sess-real"); got != worker {
-		t.Fatalf("findWorker(real) = %+v, want original worker", got)
-	}
-	if err := m.StopSessionWorker(context.Background(), "sess-real", time.Second); err != nil {
-		t.Fatalf("StopSessionWorker(real): %v", err)
-	}
-	if got := m.findWorker("sess-real"); got != nil {
-		t.Fatalf("real session worker still active: %+v", got)
-	}
 }

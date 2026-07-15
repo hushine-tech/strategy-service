@@ -5517,9 +5517,12 @@ type SaveSessionRequest struct {
 	RuntimeVersion string                 `protobuf:"bytes,12,opt,name=runtime_version,json=runtimeVersion,proto3" json:"runtime_version,omitempty"`
 	SessionName    string                 `protobuf:"bytes,13,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
 	Leverage       float64                `protobuf:"fixed64,14,opt,name=leverage,proto3" json:"leverage,omitempty"`
-	UserId         int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Empty preserves legacy running startup; runtime workers persist pending
+	// until their complete activation barrier succeeds.
+	InitialStatus string `protobuf:"bytes,15,opt,name=initial_status,json=initialStatus,proto3" json:"initial_status,omitempty"`
+	UserId        int64  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SaveSessionRequest) Reset() {
@@ -5648,6 +5651,13 @@ func (x *SaveSessionRequest) GetLeverage() float64 {
 		return x.Leverage
 	}
 	return 0
+}
+
+func (x *SaveSessionRequest) GetInitialStatus() string {
+	if x != nil {
+		return x.InitialStatus
+	}
+	return ""
 }
 
 func (x *SaveSessionRequest) GetUserId() int64 {
@@ -8987,7 +8997,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"error_code\x18\x15 \x01(\tR\terrorCode\x12#\n" +
 	"\rerror_message\x18\x16 \x01(\tR\ferrorMessage\x12*\n" +
 	"\x11error_detail_json\x18\x17 \x01(\tR\x0ferrorDetailJson\x12\x1a\n" +
-	"\bleverage\x18\x18 \x01(\x01R\bleverage\"\x86\x04\n" +
+	"\bleverage\x18\x18 \x01(\x01R\bleverage\"\xad\x04\n" +
 	"\x12SaveSessionRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
@@ -9006,7 +9016,8 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\fsession_type\x18\v \x01(\tR\vsessionType\x12'\n" +
 	"\x0fruntime_version\x18\f \x01(\tR\x0eruntimeVersion\x12!\n" +
 	"\fsession_name\x18\r \x01(\tR\vsessionName\x12\x1a\n" +
-	"\bleverage\x18\x0e \x01(\x01R\bleverage\x12\x17\n" +
+	"\bleverage\x18\x0e \x01(\x01R\bleverage\x12%\n" +
+	"\x0einitial_status\x18\x0f \x01(\tR\rinitialStatus\x12\x17\n" +
 	"\auser_id\x18d \x01(\x03R\x06userId\"\x15\n" +
 	"\x13SaveSessionResponse\"\xa9\x01\n" +
 	"\x14UpdateSessionRequest\x12\x1d\n" +

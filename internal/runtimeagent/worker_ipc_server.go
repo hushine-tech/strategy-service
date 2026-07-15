@@ -19,27 +19,52 @@ type WorkerFrameHandler func(
 	send func(*rwv1.AgentFrame) error,
 ) error
 
+type AuthenticatedWorkerFrameHandler func(
+	ctx context.Context,
+	identity WorkerIdentity,
+	frame *rwv1.WorkerFrame,
+	send func(*rwv1.AgentFrame) error,
+) error
+
+type WorkerDisconnectHandler func(identity WorkerIdentity, cause error)
+
 type WorkerIPCServer struct {
 	rwv1.UnimplementedRuntimeWorkerAgentServer
 
-	registry *SessionRegistry
-	handler  WorkerFrameHandler
-	mu       sync.Mutex
-	outbound map[string]chan *rwv1.AgentFrame
+	registry   *SessionRegistry
+	handler    AuthenticatedWorkerFrameHandler
+	disconnect WorkerDisconnectHandler
+	mu         sync.Mutex
+	outbound   map[string]chan *rwv1.AgentFrame
 }
 
 func NewWorkerIPCServer(registry *SessionRegistry, handler WorkerFrameHandler) *WorkerIPCServer {
+	var authenticated AuthenticatedWorkerFrameHandler
+	if handler != nil {
+		authenticated = func(ctx context.Context, identity WorkerIdentity, frame *rwv1.WorkerFrame, send func(*rwv1.AgentFrame) error) error {
+			return handler(ctx, identity.SessionID, frame, send)
+		}
+	}
+	return NewAuthenticatedWorkerIPCServer(registry, authenticated, nil)
+}
+
+func NewAuthenticatedWorkerIPCServer(
+	registry *SessionRegistry,
+	handler AuthenticatedWorkerFrameHandler,
+	disconnect WorkerDisconnectHandler,
+) *WorkerIPCServer {
 	if registry == nil {
 		registry = NewSessionRegistry()
 	}
 	return &WorkerIPCServer{
-		registry: registry,
-		handler:  handler,
-		outbound: map[string]chan *rwv1.AgentFrame{},
+		registry:   registry,
+		handler:    handler,
+		disconnect: disconnect,
+		outbound:   map[string]chan *rwv1.AgentFrame{},
 	}
 }
 
-func (s *WorkerIPCServer) Connect(stream grpc.BidiStreamingServer[rwv1.WorkerFrame, rwv1.AgentFrame]) error {
+func (s *WorkerIPCServer) Connect(stream grpc.BidiStreamingServer[rwv1.WorkerFrame, rwv1.AgentFrame]) (returnErr error) {
 	first, err := stream.Recv()
 	if err != nil {
 		return err
@@ -51,6 +76,13 @@ func (s *WorkerIPCServer) Connect(stream grpc.BidiStreamingServer[rwv1.WorkerFra
 	sessionID := strings.TrimSpace(hello.GetSessionId())
 	if err := s.registry.AdmitWorker(sessionID, hello.GetToken(), hello.GetPid()); err != nil {
 		return err
+	}
+	identity, ok := s.registry.ActiveWorker(sessionID)
+	if !ok {
+		return fmt.Errorf("authenticated worker identity is unavailable: %s", sessionID)
+	}
+	if s.disconnect != nil {
+		defer func() { s.disconnect(identity, returnErr) }()
 	}
 	outbound := make(chan *rwv1.AgentFrame, 128)
 	s.mu.Lock()
@@ -82,7 +114,7 @@ func (s *WorkerIPCServer) Connect(stream grpc.BidiStreamingServer[rwv1.WorkerFra
 	}()
 
 	if s.handler != nil {
-		if err := s.handler(stream.Context(), sessionID, first, func(frame *rwv1.AgentFrame) error {
+		if err := s.handler(stream.Context(), identity, first, func(frame *rwv1.AgentFrame) error {
 			return s.SendToWorker(sessionID, frame)
 		}); err != nil {
 			return err
@@ -105,34 +137,12 @@ func (s *WorkerIPCServer) Connect(stream grpc.BidiStreamingServer[rwv1.WorkerFra
 		if s.handler == nil {
 			continue
 		}
-		if err := s.handler(stream.Context(), sessionID, frame, func(frame *rwv1.AgentFrame) error {
+		if err := s.handler(stream.Context(), identity, frame, func(frame *rwv1.AgentFrame) error {
 			return s.SendToWorker(sessionID, frame)
 		}); err != nil {
 			return err
 		}
 	}
-}
-
-func (s *WorkerIPCServer) AliasWorkerSession(existingSessionID string, sessionID string) error {
-	existingSessionID = strings.TrimSpace(existingSessionID)
-	sessionID = strings.TrimSpace(sessionID)
-	if existingSessionID == "" || sessionID == "" {
-		return fmt.Errorf("session_id is required")
-	}
-	if existingSessionID == sessionID {
-		return nil
-	}
-	if err := s.registry.AliasWorkerSession(existingSessionID, sessionID); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	outbound := s.outbound[existingSessionID]
-	if outbound == nil {
-		return fmt.Errorf("worker is not connected: %s", existingSessionID)
-	}
-	s.outbound[sessionID] = outbound
-	return nil
 }
 
 func (s *WorkerIPCServer) SendToWorker(sessionID string, frame *rwv1.AgentFrame) error {

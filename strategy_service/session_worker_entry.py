@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 
 import grpc
@@ -14,6 +15,7 @@ from strategy_service.worker_agent_client import (
     FinalStatusRejected,
     WorkerAgentClient,
     WorkerAgentDataSource,
+    WorkerPlatformCallError,
     WorkerRuntimeChannelAdapter,
     load_worker_env,
 )
@@ -54,30 +56,99 @@ def main() -> int:
             client,
             bound_user_id=int(start.user_id or request.user_id or 0),
             runtime_id=runtime_id,
+            start_session_id=start.session_id,
         )
         client.set_agent_platform_call_handler(lambda call: _invoke_servicer_platform_call(servicer, call))
-        context = _WorkerContext()
+        context = _WorkerContext(start_session_id=start.session_id)
         response = servicer.RunStrategy(request, context)
         if context.code is not grpc.StatusCode.OK:
-            detail = context.details or context.code.name
-            client.send_progress(session_id=start.session_id, status="failed", error=detail)
-            logger.error("session start failed: %s", detail)
+            _report_start_rejection(client, start.session_id, context)
+            logger.error(
+                "SESSION_START_REJECTED session=%s code=%s",
+                start.session_id,
+                context.code.name,
+            )
             return 1
         session_id = response.session_id
         if not session_id:
             client.send_progress(session_id=start.session_id, status="failed", error="RunStrategy returned empty session_id")
             return 1
-        client.send_progress(session_id=session_id, status="running")
+        if session_id != start.session_id:
+            client.send_progress(
+                session_id=start.session_id,
+                status="failed",
+                error="RunStrategy returned mismatched canonical session_id",
+            )
+            return 1
+        if not _publish_running_session(servicer, client, context, session_id):
+            state = servicer._sessions.get(session_id)
+            error = "strategy session terminated before running publication"
+            bars = 0
+            if state is not None:
+                error = state.error or error
+                bars = state.bars_processed
+            client.send_progress(
+                session_id=session_id,
+                status="failed",
+                bars_processed=bars,
+                error=error,
+            )
+            return 1
         return _poll_until_terminal(servicer, client, session_id, int(request.user_id or start.user_id or 0), runtime_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("session worker failed")
-        try:
-            client.send_progress(session_id=env.session_id, status="failed", error=str(exc))
-        except Exception:  # noqa: BLE001
-            pass
+    except WorkerPlatformCallError as exc:
+        _report_worker_failure(
+            client,
+            env.session_id,
+            dependency_error=exc.dependency_error,
+        )
+        return 1
+    except Exception:  # noqa: BLE001
+        _report_worker_failure(client, env.session_id)
         return 1
     finally:
         client.close()
+
+
+def _report_start_rejection(
+    client: WorkerAgentClient,
+    session_id: str,
+    context: "_WorkerContext",
+) -> None:
+    detail = context.details or context.code.name
+    progress = dict(
+        session_id=str(session_id or ""),
+        status="failed",
+        error=detail,
+    )
+    if context.runtime_dependency_error is not None:
+        progress["dependency_error"] = context.runtime_dependency_error
+    client.send_progress(**progress)
+
+
+def _report_worker_failure(
+    client: WorkerAgentClient,
+    session_id: str,
+    *,
+    dependency_error=None,
+) -> None:
+    safe_session_id = str(session_id or "")
+    logger.error("SESSION_WORKER_FATAL session=%s", safe_session_id)
+    safe_error = (
+        "strategy runtime dependency validation failed"
+        if dependency_error is not None
+        else "session worker terminated"
+    )
+    try:
+        progress = dict(
+            session_id=safe_session_id,
+            status="failed",
+            error=safe_error,
+        )
+        if dependency_error is not None:
+            progress["dependency_error"] = dependency_error
+        client.send_progress(**progress)
+    except BaseException:
+        return
 
 
 def _poll_until_terminal(
@@ -123,6 +194,47 @@ def _poll_until_terminal(
         time.sleep(1.0)
 
 
+def _publish_running_session(
+    servicer: StrategyServiceServicer,
+    client: WorkerAgentClient,
+    context: "_WorkerContext",
+    session_id: str,
+) -> bool:
+    binding = context.take_running_publication()
+    if binding is None:
+        raise RuntimeError("RunStrategy did not bind running publication")
+    bound_session_id, state = binding
+    if bound_session_id != session_id or servicer._sessions.get(session_id) is not state:
+        raise RuntimeError("RunStrategy bound mismatched running publication")
+    startup = state.startup_result()
+    if startup is None or not hasattr(startup, "release") or not hasattr(startup, "abort"):
+        raise RuntimeError("RunStrategy did not bind session startup result")
+    if not servicer._sessions.claim_running_publication(session_id, state):
+        servicer._fail_running_publication(
+            session_id,
+            state,
+            "strategy session terminated before running publication",
+        )
+        return False
+    try:
+        client.send_progress(session_id=session_id, status="running")
+    except BaseException:
+        servicer._fail_running_publication(
+            session_id,
+            state,
+            "running publication submission failed",
+        )
+        raise
+    if not state.complete_running_publication_submission(startup.release):
+        servicer._fail_running_publication(
+            session_id,
+            state,
+            "strategy session terminated during running publication",
+        )
+        return False
+    return True
+
+
 def _start_debugpy_if_requested(port: int) -> None:
     if int(port or 0) <= 0:
         return
@@ -140,6 +252,7 @@ def _build_servicer(
     *,
     bound_user_id: int,
     runtime_id: str,
+    start_session_id: str = "",
 ) -> StrategyServiceServicer:
     platform_proxy = RuntimeChannelPlatformProxy(WorkerRuntimeChannelAdapter(client))
     servicer = StrategyServiceServicer(
@@ -156,6 +269,7 @@ def _build_servicer(
         platform_proxy=platform_proxy,
         notification_client=platform_proxy.notification_client(),
         agent_managed_final_status=True,
+        start_session_id=start_session_id,
     )
     data_source = WorkerAgentDataSource(client)
     servicer.set_runtime_data_source(data_source)
@@ -173,6 +287,13 @@ def _handle_agent_platform_call(
         packed = ProtoAny()
         packed.Pack(response)
         client.send_platform_call_result(call_id=call.call_id, ok=True, response=packed)
+    except WorkerPlatformCallError as exc:
+        client.send_platform_call_result(
+            call_id=call.call_id,
+            ok=False,
+            error=str(exc),
+            dependency_error=exc.dependency_error,
+        )
     except Exception as exc:  # noqa: BLE001
         client.send_platform_call_result(call_id=call.call_id, ok=False, error=str(exc))
 
@@ -186,6 +307,8 @@ def _invoke_servicer_platform_call(
     method = str(getattr(call, "method", "") or "").strip()
     if method == "PreviewRunStrategy":
         request = strategy_pb2.PreviewRunStrategyRequest()
+    elif method == "ValidateStrategySource":
+        request = strategy_pb2.ValidateStrategySourceRequest()
     elif method == "GetStrategyStatus":
         request = strategy_pb2.GetStrategyStatusRequest()
     elif method == "StopStrategy":
@@ -206,15 +329,24 @@ def _invoke_servicer_platform_call(
     context = _WorkerContext()
     handler = getattr(active_servicer, method)
     response = handler(request, context)
+    if context.runtime_dependency_error is not None:
+        raise WorkerPlatformCallError(
+            context.details or "strategy dependency validation failed",
+            context.runtime_dependency_error,
+        )
     if context.code is not grpc.StatusCode.OK:
         raise RuntimeError(context.details or context.code.name)
     return response
 
 
 class _WorkerContext:
-    def __init__(self) -> None:
+    def __init__(self, *, start_session_id: str = "") -> None:
         self.code = grpc.StatusCode.OK
         self.details = ""
+        self.start_session_id = str(start_session_id or "")
+        self.runtime_dependency_error = None
+        self._publication_lock = threading.Lock()
+        self._running_publication = None
 
     def set_code(self, code) -> None:
         self.code = code
@@ -224,6 +356,22 @@ class _WorkerContext:
 
     def set_trailing_metadata(self, metadata) -> None:
         del metadata
+
+    def set_runtime_dependency_error(self, detail) -> None:
+        self.runtime_dependency_error = detail
+
+    def bind_running_publication(self, session_id: str, state) -> None:
+        binding = (str(session_id or ""), state)
+        with self._publication_lock:
+            if self._running_publication is not None:
+                raise RuntimeError("running publication is already bound")
+            self._running_publication = binding
+
+    def take_running_publication(self):
+        with self._publication_lock:
+            binding = self._running_publication
+            self._running_publication = None
+            return binding
 
 
 if __name__ == "__main__":

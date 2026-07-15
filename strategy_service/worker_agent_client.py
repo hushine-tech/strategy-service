@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import queue
 import threading
+import time
 import uuid
 import json
 from dataclasses import dataclass
@@ -21,6 +22,12 @@ WORKER_VERSION = "0.1.0"
 
 class FinalStatusRejected(RuntimeError):
     pass
+
+
+class WorkerPlatformCallError(RuntimeError):
+    def __init__(self, message: str, dependency_error) -> None:
+        super().__init__(message)
+        self.dependency_error = dependency_error
 
 
 def _platform_timeout_seconds(timeout_seconds: float | None) -> float:
@@ -85,6 +92,7 @@ class WorkerAgentClient:
         self._channel_factory = channel_factory or grpc.insecure_channel
         self._call_id_factory = call_id_factory or (lambda: uuid.uuid4().hex)
         self._outbound: queue.Queue[worker_pb2.WorkerFrame | None] = queue.Queue()
+        self._outbound_lock = threading.Lock()
         self._incoming: queue.Queue[worker_pb2.AgentFrame] = queue.Queue()
         self._pending: dict[str, queue.Queue[worker_pb2.PlatformCallResult]] = {}
         self._pending_lock = threading.Lock()
@@ -99,24 +107,40 @@ class WorkerAgentClient:
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
-        self._outbound.put(build_worker_hello_frame(self.env))
+        self._enqueue_outbound(build_worker_hello_frame(self.env))
         self._thread = threading.Thread(target=self._run, name="worker-agent-client", daemon=True)
         self._thread.start()
 
     def close(self) -> None:
-        self._outbound.put(None)
+        with self._outbound_lock:
+            if not self._closed.is_set():
+                self._closed.set()
+                self._outbound.put(None)
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
-        self._closed.set()
+
+    def _enqueue_outbound(self, frame: worker_pb2.WorkerFrame) -> None:
+        with self._outbound_lock:
+            if self._closed.is_set():
+                raise RuntimeError("worker agent client is closed")
+            if self._error is not None:
+                raise RuntimeError("worker agent stream failed") from self._error
+            self._outbound.put(frame)
 
     def wait_for_start_session(self, *, timeout_seconds: float = 30.0) -> worker_pb2.StartSession:
-        deadline = max(0.1, float(timeout_seconds or 30.0))
+        deadline = time.monotonic() + max(0.1, float(timeout_seconds or 30.0))
         while True:
-            self._raise_if_failed()
             try:
-                frame = self._incoming.get(timeout=deadline)
-            except queue.Empty as exc:
-                raise TimeoutError("timed out waiting for StartSession") from exc
+                frame = self._incoming.get_nowait()
+            except queue.Empty:
+                self._raise_if_failed()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("timed out waiting for StartSession")
+                try:
+                    frame = self._incoming.get(timeout=min(0.05, remaining))
+                except queue.Empty:
+                    continue
             if frame.WhichOneof("payload") == "start_session":
                 return frame.start_session
 
@@ -146,7 +170,7 @@ class WorkerAgentClient:
             self._pending[call_id] = reply
         try:
             platform_timeout = _platform_timeout_seconds(timeout_seconds)
-            self._outbound.put(
+            self._enqueue_outbound(
                 worker_pb2.WorkerFrame(
                     platform_call=worker_pb2.PlatformCall(
                         call_id=call_id,
@@ -161,7 +185,10 @@ class WorkerAgentClient:
             except queue.Empty as exc:
                 raise TimeoutError(f"platform call timed out: {method}") from exc
             if not result.ok:
-                raise RuntimeError(result.error or f"platform call failed: {method}")
+                message = result.error or f"platform call failed: {method}"
+                if result.HasField("dependency_error"):
+                    raise WorkerPlatformCallError(message, result.dependency_error)
+                raise RuntimeError(message)
             response = response_type()
             if not result.response.Unpack(response):
                 raise RuntimeError(f"platform response type mismatch for {method}")
@@ -170,14 +197,23 @@ class WorkerAgentClient:
             with self._pending_lock:
                 self._pending.pop(call_id, None)
 
-    def send_progress(self, *, session_id: str, status: str, bars_processed: int = 0, error: str = "") -> None:
-        self._outbound.put(
+    def send_progress(
+        self,
+        *,
+        session_id: str,
+        status: str,
+        bars_processed: int = 0,
+        error: str = "",
+        dependency_error=None,
+    ) -> None:
+        self._enqueue_outbound(
             worker_pb2.WorkerFrame(
                 progress=worker_pb2.SessionProgress(
                     session_id=session_id,
                     status=status,
                     bars_processed=int(bars_processed),
                     error=error,
+                    dependency_error=dependency_error,
                 )
             )
         )
@@ -189,6 +225,7 @@ class WorkerAgentClient:
         status: str,
         bars_processed: int = 0,
         error: str = "",
+        dependency_error=None,
         timeout_seconds: float = 35.0,
     ) -> None:
         frame_id = self._call_id_factory()
@@ -196,7 +233,7 @@ class WorkerAgentClient:
         with self._pending_reply_lock:
             self._pending_replies[frame_id] = reply
         try:
-            self._outbound.put(
+            self._enqueue_outbound(
                 worker_pb2.WorkerFrame(
                     frame_id=frame_id,
                     final_status=worker_pb2.FinalStatus(
@@ -204,6 +241,7 @@ class WorkerAgentClient:
                         status=status,
                         bars_processed=int(bars_processed),
                         error=error,
+                        dependency_error=dependency_error,
                     ),
                 )
             )
@@ -224,15 +262,38 @@ class WorkerAgentClient:
         ok: bool,
         response: Any | None = None,
         error: str = "",
+        dependency_error=None,
     ) -> None:
         packed = response if response is not None else Any()
-        self._outbound.put(
+        self._enqueue_outbound(
             worker_pb2.WorkerFrame(
                 platform_call_result=worker_pb2.PlatformCallResult(
                     call_id=str(call_id or ""),
                     ok=bool(ok),
                     response=packed,
                     error=str(error or ""),
+                    dependency_error=dependency_error,
+                )
+            )
+        )
+
+    def send_worker_error(
+        self,
+        *,
+        session_id: str,
+        error_type: str,
+        message: str,
+        stack: str = "",
+        dependency_error=None,
+    ) -> None:
+        self._enqueue_outbound(
+            worker_pb2.WorkerFrame(
+                worker_error=worker_pb2.WorkerError(
+                    session_id=str(session_id or ""),
+                    error_type=str(error_type or ""),
+                    message=str(message or ""),
+                    stack=str(stack or ""),
+                    dependency_error=dependency_error,
                 )
             )
         )
@@ -294,14 +355,18 @@ class WorkerAgentClient:
                 msg.values.add(indicator_key=key, has_value=False)
                 continue
             msg.values.add(indicator_key=key, value=float(raw_value), has_value=True)
-        self._outbound.put(worker_pb2.WorkerFrame(indicator_frame=msg))
+        self._enqueue_outbound(worker_pb2.WorkerFrame(indicator_frame=msg))
 
     def next_agent_frame(self, *, timeout_seconds: float = 1.0) -> worker_pb2.AgentFrame | None:
-        self._raise_if_failed()
         try:
-            return self._incoming.get(timeout=max(0.01, float(timeout_seconds)))
+            return self._incoming.get_nowait()
         except queue.Empty:
-            return None
+            self._raise_if_failed()
+            try:
+                return self._incoming.get(timeout=max(0.01, float(timeout_seconds)))
+            except queue.Empty:
+                self._raise_if_failed()
+                return None
 
     def _run(self) -> None:
         channel = None
@@ -313,8 +378,11 @@ class WorkerAgentClient:
             for frame in stub.Connect(self._outbound_frames()):
                 self._handle_agent_frame(frame)
         except BaseException as exc:  # noqa: BLE001
-            self._error = exc
+            with self._outbound_lock:
+                self._error = exc
         finally:
+            with self._outbound_lock:
+                self._closed.set()
             close = getattr(channel, "close", None)
             if callable(close):
                 close()
@@ -354,8 +422,13 @@ class WorkerAgentClient:
         self._incoming.put(frame)
 
     def _raise_if_failed(self) -> None:
-        if self._error is not None:
-            raise RuntimeError(f"worker agent stream failed: {self._error}") from self._error
+        with self._outbound_lock:
+            error = self._error
+            closed = self._closed.is_set()
+        if error is not None:
+            raise RuntimeError("worker agent stream failed") from error
+        if closed:
+            raise RuntimeError("worker agent client is closed")
 
     def _dispatch_agent_platform_call(
         self,
@@ -374,6 +447,13 @@ class WorkerAgentClient:
             else:
                 raise TypeError(f"unsupported platform call response type: {type(response)!r}")
             self.send_platform_call_result(call_id=call.call_id, ok=True, response=packed)
+        except WorkerPlatformCallError as exc:
+            self.send_platform_call_result(
+                call_id=call.call_id,
+                ok=False,
+                error=str(exc),
+                dependency_error=exc.dependency_error,
+            )
         except Exception as exc:  # noqa: BLE001
             self.send_platform_call_result(call_id=call.call_id, ok=False, error=str(exc))
 

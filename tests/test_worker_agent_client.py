@@ -6,6 +6,7 @@ from google.protobuf.any_pb2 import Any
 
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 from strategy_service.gen import runtime_worker_pb2 as worker_pb2
+from strategy_service import worker_agent_client as worker_agent_client_module
 from strategy_service.worker_agent_client import (
     FinalStatusRejected,
     WorkerAgentClient,
@@ -13,6 +14,93 @@ from strategy_service.worker_agent_client import (
     build_worker_hello_frame,
     load_worker_env,
 )
+
+WorkerPlatformCallError = getattr(
+    worker_agent_client_module,
+    "WorkerPlatformCallError",
+    type("MissingWorkerPlatformCallError", (RuntimeError,), {}),
+)
+
+
+def _dependency_error():
+    return strategy_pb2.RuntimeDependencyError(
+        code="STRATEGY_DEPENDENCY_UNAVAILABLE",
+        module="google.cloud",
+        runtime_profile="platform-python-3.13",
+        runtime_profile_version="1.0.0",
+        image_build_id="build-1",
+        message="dependency unavailable",
+    )
+
+
+def test_progress_and_worker_error_carry_typed_dependency_detail():
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=_FakeWorkerStub([]),
+    )
+    detail = _dependency_error()
+
+    client.send_progress(
+        session_id="sess-1",
+        status="failed",
+        error="dependency unavailable",
+        dependency_error=detail,
+    )
+    client.send_worker_error(
+        session_id="sess-1",
+        error_type="dependency",
+        message="dependency unavailable",
+        dependency_error=detail,
+    )
+
+    progress = client._outbound.get_nowait().progress
+    worker_error = client._outbound.get_nowait().worker_error
+    assert progress.dependency_error == detail
+    assert worker_error.dependency_error == detail
+
+
+def test_closed_client_rejects_running_before_enqueue():
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=_FakeWorkerStub([]),
+    )
+    client.close()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        client.send_progress(session_id="sess-1", status="running")
+
+    assert client._outbound.get_nowait() is None
+    assert client._outbound.empty()
+
+
+def test_platform_call_dependency_failure_is_typed():
+    stub = _FakeWorkerStub([
+        worker_pb2.AgentFrame(
+            platform_call_result=worker_pb2.PlatformCallResult(
+                call_id="call-1",
+                ok=False,
+                error="dependency unavailable",
+                dependency_error=_dependency_error(),
+            )
+        )
+    ])
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=stub,
+        call_id_factory=lambda: "call-1",
+    )
+    client.start()
+
+    with pytest.raises(WorkerPlatformCallError) as captured:
+        client.invoke_platform_unary(
+            "ValidateStrategySource",
+            strategy_pb2.ValidateStrategySourceRequest(source="import google.cloud"),
+            strategy_pb2.ValidateStrategySourceResponse,
+            timeout_seconds=1.0,
+        )
+
+    client.close()
+    assert captured.value.dependency_error.module == "google.cloud"
 
 
 class _FinalAckStub:
@@ -100,14 +188,14 @@ def test_send_final_status_raises_when_agent_returns_error():
     client.close()
 
 
-def test_send_final_status_times_out_without_ack():
+def test_send_final_status_rejects_when_stream_is_already_closed():
     client = WorkerAgentClient(
         WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
         stub=_FakeWorkerStub([]),
         call_id_factory=lambda: "final-1",
     )
     client.start()
-    with pytest.raises(TimeoutError, match="final status ack"):
+    with pytest.raises(RuntimeError, match="closed"):
         client.send_final_status(session_id="sess-1", status="finished", timeout_seconds=0.01)
     client.close()
 

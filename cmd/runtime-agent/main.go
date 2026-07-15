@@ -163,7 +163,13 @@ func runAgent(
 		WorkerStopper:   workerManager,
 		PlatformInvoker: runtimeClient,
 	})
-	workerServer := runtimeagent.NewWorkerIPCServer(workerManager.Registry(), agent.HandleWorkerFrame)
+	workerServer := runtimeagent.NewAuthenticatedWorkerIPCServer(
+		workerManager.Registry(),
+		agent.HandleAuthenticatedWorkerFrame,
+		func(identity runtimeagent.WorkerIdentity, cause error) {
+			_ = agent.HandleWorkerDisconnect(identity, cause)
+		},
+	)
 	agent.SetWorkerSender(workerServer)
 
 	if controlAddr := strings.TrimSpace(os.Getenv("RUNTIME_AGENT_CONTROL_ADDR")); controlAddr != "" && !strings.EqualFold(controlAddr, "off") && controlAddr != "0" {
