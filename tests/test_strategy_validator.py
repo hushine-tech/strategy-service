@@ -2,6 +2,7 @@ import subprocess
 
 import pytest
 
+import hushine_strategy.import_validation as import_validation
 from hushine_strategy.runtime_dependencies import load_runtime_dependency_profile
 from strategy_service.strategy_validator import (
     StrategyValidationIssue,
@@ -19,6 +20,68 @@ class MyStrategy:
 """
 
 
+REFLECTIVE_BUILTINS_BYPASSES = [
+    (
+        "import requests\n"
+        'getattr(requests, "__builtins__")["__import__"]("kafka")'
+    ),
+    (
+        "import requests\n"
+        'builtins_container = getattr(requests, "__builtins__")\n'
+        'loader = builtins_container["__import__"]\n'
+        'loader("kafka")'
+    ),
+    (
+        "import requests\n"
+        'getattr(requests, "__dict__").get("__builtins__").get('
+        '"__import__")("kafka")'
+    ),
+    (
+        "import requests\n"
+        'module_dict = getattr(requests, "__dict__")\n'
+        'builtins_container = module_dict.get("__builtins__")\n'
+        'loader = builtins_container.get("__import__")\n'
+        'loader("kafka")'
+    ),
+]
+NESTED_ASSIGNMENT_BYPASSES = [
+    '((loader,),) = ((__import__,),)\nloader("kafka")',
+    '(safe, (loader,)) = (len, (__import__,))\nloader("kafka")',
+    '([loader],) = [(__import__,)]\nloader("kafka")',
+    '(loader, safe) = (__import__,)\nloader("kafka")',
+]
+HANDLE_ACQUISITION_BYPASSES = [
+    'def run(loader=__import__): return loader("kafka")',
+    'def run(*, loader=__import__): return loader("kafka")',
+    'run = lambda loader=__import__: loader("kafka")',
+    '(lambda loader: loader("kafka"))(__import__)',
+    '[loader("kafka") for loader in [__import__]]',
+    'for loader in [__import__]: loader("kafka")',
+]
+SAFE_HANDLE_USES = [
+    "def run(loader=len): return loader([1])",
+    "def run(*, loader=len): return loader([1])",
+    "run = lambda loader=len: loader([1])",
+    "(lambda loader: loader([1]))(len)",
+    "[loader([1]) for loader in [len]]",
+    "for loader in [len]: loader([1])",
+]
+
+
+def _reverse_forbidden_alias_chain(assignment_count: int) -> str:
+    lines = [
+        f"alias_{index} = alias_{index + 1}"
+        for index in range(assignment_count - 1)
+    ]
+    lines.extend(
+        [
+            f"alias_{assignment_count - 1} = __import__",
+            'alias_0("kafka")',
+        ]
+    )
+    return "\n".join(lines)
+
+
 DYNAMIC_LOADING_CASES = [
     ('import importlib; importlib.import_module("kafka")', "forbidden_import"),
     ('from importlib import import_module as load; load("psycopg2")', "forbidden_import"),
@@ -28,6 +91,15 @@ DYNAMIC_LOADING_CASES = [
     ('getattr(__builtins__, "__import__")("kafka")', "forbidden_builtin_access"),
     ('vars(__builtins__)["__import__"]("kafka")', "forbidden_builtin_access"),
     ('globals()["__builtins__"]["__import__"]("kafka")', "forbidden_builtin_access"),
+] + [
+    (source, "forbidden_builtin_access")
+    for source in REFLECTIVE_BUILTINS_BYPASSES
+] + [
+    (source, "forbidden_call")
+    for source in NESTED_ASSIGNMENT_BYPASSES
+] + [
+    (source, "forbidden_call")
+    for source in HANDLE_ACQUISITION_BYPASSES
 ]
 
 
@@ -315,6 +387,81 @@ def test_validator_imported_builtins_containers_cannot_bypass_safety(source):
     assert "forbidden_builtin_access" in codes
     assert "forbidden_call" in codes
     assert "UNSUPPORTED_STRATEGY_DEPENDENCY" not in codes
+
+
+@pytest.mark.parametrize("source", REFLECTIVE_BUILTINS_BYPASSES)
+def test_validator_reflective_builtins_containers_cannot_bypass_safety(source):
+    result = _validate_prefix(source)
+    assert {"forbidden_builtin_access", "forbidden_call"} <= {
+        issue.code for issue in result.issues
+    }
+    assert all(
+        issue.code != "UNSUPPORTED_STRATEGY_DEPENDENCY"
+        for issue in result.issues
+    )
+
+
+@pytest.mark.parametrize("source", NESTED_ASSIGNMENT_BYPASSES)
+def test_validator_nested_assignment_forbidden_leaf_cannot_bypass_safety(source):
+    result = _validate_prefix(source)
+    assert any(
+        issue.code == "forbidden_call" and issue.symbol == "loader"
+        for issue in result.issues
+    )
+    assert all(
+        issue.code != "UNSUPPORTED_STRATEGY_DEPENDENCY"
+        for issue in result.issues
+    )
+
+
+def test_hosted_normal_nested_assignment_remains_valid():
+    result = _validate_prefix("((safe,),) = ((len,),)\nsafe([1])")
+    assert result.ok is True
+    assert result.issues == []
+
+
+@pytest.mark.parametrize("source", HANDLE_ACQUISITION_BYPASSES)
+def test_hosted_closed_callable_handle_acquisition_is_forbidden(source):
+    result = _validate_prefix(source)
+    assert any(issue.code == "forbidden_call" for issue in result.issues)
+    assert all(
+        issue.code != "UNSUPPORTED_STRATEGY_DEPENDENCY"
+        for issue in result.issues
+    )
+
+
+@pytest.mark.parametrize("source", SAFE_HANDLE_USES)
+def test_hosted_safe_defaults_and_arguments_remain_valid(source):
+    result = _validate_prefix(source)
+    assert result.ok is True
+    assert result.issues == []
+
+
+def test_hosted_reverse_alias_chain_uses_near_linear_origin_evaluations(
+    monkeypatch,
+):
+    assignment_count = 2_000
+    source = _reverse_forbidden_alias_chain(assignment_count)
+    original_forbidden_origin = import_validation._forbidden_origin
+    evaluation_count = 0
+
+    def counting_forbidden_origin(*args, **kwargs):
+        nonlocal evaluation_count
+        evaluation_count += 1
+        return original_forbidden_origin(*args, **kwargs)
+
+    monkeypatch.setattr(
+        import_validation,
+        "_forbidden_origin",
+        counting_forbidden_origin,
+    )
+    result = _validate_prefix(source)
+
+    assert any(
+        issue.code == "forbidden_call" and issue.symbol == "alias_0"
+        for issue in result.issues
+    )
+    assert evaluation_count <= 12 * assignment_count + 100
 
 
 def test_validator_preserves_same_line_platform_symbols():
