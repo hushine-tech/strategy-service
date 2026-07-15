@@ -4,18 +4,27 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "cryptography>=44.0.0",
-    "grpcio>=1.80.0",
     "grpcio-tools>=1.80.0",
-    "hushine-strategy-library @ git+ssh://git@github.com/hushine-tech/strategy-library.git@main",
+    "hushine-strategy-library>=0.1.0",
     "kafka-python>=2.0.0",
     "opentelemetry-api>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
-    "pandas>=1.5.0",
-    "protobuf>=4.25.0",
     "psycopg2-binary>=2.9.9",
-    "requests>=2.28.0",
+    # BEGIN GENERATED RUNTIME DEPENDENCY PROJECTION
+    "PyYAML",
+    "grpcio",
+    "numpy",
+    "pandas",
+    "protobuf",
+    "pydantic",
+    "python-dateutil",
+    "requests",
+    # END GENERATED RUNTIME DEPENDENCY PROJECTION
 ]
+
+[tool.uv.sources]
+hushine-strategy-library = { path = "../strategy-library" }
 
 [project.scripts]
 hushine-session-worker = "strategy_service.session_worker_entry:main"

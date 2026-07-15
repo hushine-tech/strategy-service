@@ -7,7 +7,16 @@ DEV_NO_PROXY_HOSTS ?= 127.0.0.1,localhost,::1,192.168.88.10
 DEV_NO_PROXY := env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY NO_PROXY=$(DEV_NO_PROXY_HOSTS),$${NO_PROXY} no_proxy=$(DEV_NO_PROXY_HOSTS),$${no_proxy}
 VERSION?=dev
 
-.PHONY: build build-release dev start stop clean test test-scripts
+.PHONY: build build-release dependency-contract dev start stop clean test test-scripts
+
+dependency-contract:
+	uv sync --python 3.13 --frozen --extra dev
+	PYTHONPATH=../strategy-library uv run --frozen \
+		python ../strategy-library/scripts/check_runtime_dependency_contract.py \
+		--service-project pyproject.toml --service-lock uv.lock \
+		--installed-python strategy-service=.venv/bin/python \
+		--installed-python-version strategy-service=3.13 \
+		--json
 
 test:
 	PYTHONPATH=$(PYTHONPATH_VAL) $(UV) run --extra dev pytest tests/ -q
