@@ -104,7 +104,7 @@ func canonicalRuntimeStartupFailurePayload(request *cpv1.ReportRuntimeStartupFai
 		"source":                             request.GetSource(),
 	}
 	body, _ := json.Marshal(value)
-	return body
+	return append([]byte("runtime-startup-failure-v1\n"), body...)
 }
 
 func ReportRuntimeStartupFailure(

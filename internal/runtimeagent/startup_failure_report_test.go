@@ -1,6 +1,7 @@
 package runtimeagent
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -38,6 +39,9 @@ func TestRuntimeStartupFailureSignatureCoversEverySafeFact(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("BuildRuntimeStartupFailureRequest: %v", err)
+	}
+	if payload := canonicalRuntimeStartupFailurePayload(request); !bytes.HasPrefix(payload, []byte("runtime-startup-failure-v1\n{")) {
+		t.Fatalf("startup failure signature payload is not domain separated: %q", payload)
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(request.GetSignature())
 	if err != nil {
