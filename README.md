@@ -21,20 +21,54 @@ Run tests:
 uv run --extra dev pytest -q
 ```
 
-## Executor Runtime Image
+## Executor Runtime Images
 
-The runtime Dockerfile builds one executor image:
+Development builds may use dirty source explicitly:
 
 ```bash
-./scripts/build_strategy_runtime.sh
+./scripts/build_strategy_runtime.sh --all --allow-dirty dev
 ```
 
-The script tags:
+Release acceptance always builds two final images from a sealed, Git-derived
+context and refuses dirty `strategy-service`, `strategy-library`, or
+`golang-lib` worktrees:
+
+```bash
+./scripts/build_strategy_runtime.sh --all --no-cache --verify contract
+```
+
+The normal target tags:
 
 - `hushine/strategy-runtime:executor-<version>`
 - `hushine/strategy-runtime:executor`
 - `hushine/strategy-runtime:dev`
 - `hushine/strategy-runtime:<version>` for existing control-panel configs
+
+The coverage target is
+`hushine/strategy-runtime:executor-coverage-<version>`. Normal and coverage
+images must carry identical dependency profile/version/digest and source
+commits, but distinct target-derived image build IDs. `coverage` is installed
+only in the coverage target and remains forbidden as a user strategy import.
+
+Verify and smoke each final image with all five identity arguments:
+
+```bash
+scripts/smoke_strategy_runtime.sh \
+  --image hushine/strategy-runtime:executor-contract \
+  --coverage false \
+  --profile platform-python-3.13 \
+  --version 1.0.0 \
+  --digest 8457b3c35618558fc8bfc74d4135b7eb52e00c33a8c9a49d202830f3fd5b62c5
+scripts/smoke_strategy_runtime.sh \
+  --image hushine/strategy-runtime:executor-coverage-contract \
+  --coverage true \
+  --profile platform-python-3.13 \
+  --version 1.0.0 \
+  --digest 8457b3c35618558fc8bfc74d4135b7eb52e00c33a8c9a49d202830f3fd5b62c5
+```
+
+The digest above belongs to schema-1 profile `1.0.0`; use checker output after
+any future profile-version change rather than copying the old value.
 
 Self-hosted executor example:
 
@@ -103,6 +137,52 @@ explicitly allow source-mode fallback, set `RUNTIME_AGENT_ALLOW_GO_RUN=1`.
 - If demo/live market data becomes stale while a strategy is blocked or under a
   breakpoint, stale bars are dropped by lag time and the runtime reports
   `DATA_BACKPRESSURE`. Repeated drops mark the session failed via status patch.
+
+## Dependency Profile Startup and Strategy Validation
+
+`hushine_strategy/runtime_dependencies.toml` is owned by strategy-library.
+The generated dependency block in this repository's `pyproject.toml` and the
+direct distributions in `uv.lock` are projections of that manifest; do not add
+public Runtime packages in the Dockerfile.
+
+Before opening RuntimeChannel, runtime-agent reads the image's sealed profile
+facts and launches the installed worker Python with `-I` to probe the full
+dependency closure. Failure exits before HELLO and before any worker starts.
+Hosted startup exposes one bounded JSON line for the provisioner;
+Self-hosted startup can send a signed, credential-bound failure-only report.
+Success signs the exact profile into HELLO and again into RESUME. The agent
+never downgrades to a partial profile.
+
+Worker source validation runs in this order: syntax and declared strategy
+surface, Hosted platform import policy, dynamic import safety, static public
+dependency policy, then an isolated installed-module probe/import. The stable
+errors are:
+
+- `UNSUPPORTED_STRATEGY_DEPENDENCY`
+- `STRATEGY_DEPENDENCY_UNAVAILABLE`
+- `STRATEGY_IMPORT_FAILED`
+- `RUNTIME_DEPENDENCY_PROFILE_INVALID`
+- `RUNTIME_DEPENDENCY_PROFILE_MISMATCH`
+
+`ValidateStrategySource` is a side-effect-free RuntimeChannel method. It does
+not create a Strategy, Runtime, worker session, or trading Session. Preview,
+Run, and download-and-run repeat the same preflight before execution.
+
+The AGENTS-required source suite remains:
+
+```bash
+PYTHONPATH=.:../strategy-library uv run --frozen --extra dev pytest tests/ -q
+```
+
+That is a source-development regression, not image closure. Installed proof
+must remove inherited source paths:
+
+```bash
+env -u PYTHONPATH -u PYTHONHOME -u VIRTUAL_ENV \
+  .venv/bin/python -I \
+  -m hushine_strategy.runtime_dependencies verify-installed \
+  --python-constraint 3.13 --json
+```
 
 ## Local Strategy Debugging
 
