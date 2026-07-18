@@ -343,6 +343,7 @@ def test_proxy_order_client_reads_lifecycle_events_over_runtime_channel():
         session_id="sess-1",
         after_event_id=10,
         limit=50,
+        timeout_seconds=0.25,
     )
 
     method, req = runtime.calls[-1]
@@ -355,6 +356,7 @@ def test_proxy_order_client_reads_lifecycle_events_over_runtime_channel():
     assert events[0].exchange == "binance"
     assert events[0].market == "spot"
     assert events[0].fill.qty == pytest.approx(0.01)
+    assert runtime.timeouts[-1] == pytest.approx(0.25)
 
 
 def test_proxy_order_lifecycle_read_fails_closed_when_runtime_channel_is_unavailable():
@@ -552,6 +554,7 @@ def test_runtime_channel_log_handler_skips_proxy_internals():
 class _FakeRuntimeChannel:
     def __init__(self) -> None:
         self.calls = []
+        self.timeouts = []
         self.errors = {}
         self.responses = {
             PORTFOLIO_SAVE_SESSION: portfolio_service_pb2.SaveSessionResponse(),
@@ -560,7 +563,7 @@ class _FakeRuntimeChannel:
         }
 
     def invoke_platform_unary(self, method, request, response_type, *, timeout_seconds=30.0):
-        del timeout_seconds
+        self.timeouts.append(timeout_seconds)
         self.calls.append((method, request))
         if method in self.errors:
             raise self.errors[method]

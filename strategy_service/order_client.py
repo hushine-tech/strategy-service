@@ -291,6 +291,7 @@ class OrderClient:
         session_id: str,
         after_event_id: int = 0,
         limit: int = 100,
+        timeout_seconds: float | None = None,
     ) -> list[OrderUpdateEvent]:
         """Read normalized order lifecycle events after a session cursor."""
         normalized_session_id = str(session_id or "").strip()
@@ -300,11 +301,18 @@ class OrderClient:
             raise RuntimeError("order lifecycle client is not configured")
         from strategy_service.gen import order_service_pb2
 
-        resp = self._stub.ListOrderLifecycleEvents(order_service_pb2.ListOrderLifecycleEventsRequest(
+        request = order_service_pb2.ListOrderLifecycleEventsRequest(
             session_id=normalized_session_id,
             after_event_id=int(after_event_id),
             limit=int(limit),
-        ))
+        )
+        if timeout_seconds is None:
+            resp = self._stub.ListOrderLifecycleEvents(request)
+        else:
+            timeout = float(timeout_seconds)
+            if timeout <= 0:
+                raise TimeoutError("order lifecycle deadline has expired")
+            resp = self._stub.ListOrderLifecycleEvents(request, timeout=timeout)
         return [self._order_update_event_from_proto(item) for item in resp.events]
 
     @classmethod

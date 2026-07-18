@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import types
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -4435,8 +4436,15 @@ def test_stop_only_waits_for_accepted_order_without_trading_or_mutating_wallet(m
             return True
 
     class FakeOrderClient:
-        def list_order_lifecycle_events(self, *, session_id, after_event_id=0, limit=100):
-            del session_id, limit
+        def list_order_lifecycle_events(
+            self,
+            *,
+            session_id,
+            after_event_id=0,
+            limit=100,
+            timeout_seconds=None,
+        ):
+            del session_id, limit, timeout_seconds
             lifecycle_calls.append(after_event_id)
             status = "NEW" if len(lifecycle_calls) == 1 else "FILLED"
             return [SimpleNamespace(
@@ -4506,8 +4514,14 @@ def test_stop_only_exhausts_lifecycle_pages_before_declaring_no_pending_orders(m
 
     class FakeOrderClient:
         @staticmethod
-        def list_order_lifecycle_events(*, session_id, after_event_id=0, limit=100):
-            del session_id
+        def list_order_lifecycle_events(
+            *,
+            session_id,
+            after_event_id=0,
+            limit=100,
+            timeout_seconds=None,
+        ):
+            del session_id, timeout_seconds
             lifecycle_calls.append(after_event_id)
             assert limit == 500
             if after_event_id == 0:
@@ -4580,6 +4594,144 @@ def test_stop_only_exhausts_lifecycle_pages_before_declaring_no_pending_orders(m
     assert response.status == "stopped"
     assert response.code == "STOPPED"
     assert lifecycle_calls == [0, 500, 501]
+
+
+def test_stop_only_propagates_remaining_deadline_to_lifecycle_reader(monkeypatch):
+    observed_timeouts: list[float] = []
+
+    class DeadlineOrderClient:
+        @staticmethod
+        def list_order_lifecycle_events(*, timeout_seconds, **_kwargs):
+            observed_timeouts.append(timeout_seconds)
+            raise TimeoutError("simulated lifecycle deadline")
+
+    monkeypatch.setattr(grpc_server, "DEFAULT_STOP_ONLY_TIMEOUT_SECONDS", 0.05)
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    session_id, state = servicer._sessions.create(
+        environment=1,
+        user_id=17,
+        portfolio_id=70701,
+    )
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "spot", "BTCUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+    )
+    state.configure_stop_runtime(
+        wallet=_spot_stop_wallet(environment=1, portfolio_id=70701, venue_id=2201),
+        order_client=DeadlineOrderClient(),
+    )
+
+    with pytest.raises(TimeoutError, match="simulated lifecycle deadline"):
+        servicer._wait_for_accepted_orders(session_id, state)
+
+    assert len(observed_timeouts) == 1
+    assert 0 < observed_timeouts[0] <= 0.05
+
+
+def test_stop_only_hard_deadline_releases_session_from_blocking_lifecycle_reader(monkeypatch):
+    release_reader = threading.Event()
+    observed_timeouts: list[float] = []
+
+    class BlockingOrderClient:
+        @staticmethod
+        def list_order_lifecycle_events(*, timeout_seconds, **_kwargs):
+            observed_timeouts.append(timeout_seconds)
+            release_reader.wait(timeout=0.2)
+            return []
+
+    class FakePortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            return True
+
+    monkeypatch.setattr(grpc_server, "DEFAULT_STOP_ONLY_TIMEOUT_SECONDS", 0.01)
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+        agent_managed_final_status=True,
+    )
+    servicer.set_platform_proxy(SimpleNamespace(
+        portfolio_client=lambda: FakePortfolioClient(),
+    ))
+    session_id, state = servicer._sessions.create(
+        environment=1,
+        user_id=17,
+        portfolio_id=707011,
+    )
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "spot", "BTCUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+    )
+    state.configure_stop_runtime(
+        wallet=_spot_stop_wallet(environment=1, portfolio_id=707011, venue_id=22011),
+        order_client=BlockingOrderClient(),
+    )
+
+    started_at = time.monotonic()
+    try:
+        response = servicer.StopStrategy(pb2.StopStrategyRequest(
+            session_id=session_id,
+            user_id=17,
+            stop_action=pb2.STOP_ACTION_STOP_ONLY,
+        ), _FakeContext())
+    finally:
+        release_reader.set()
+
+    assert time.monotonic() - started_at < 0.1
+    assert len(observed_timeouts) == 1
+    assert response.stopped is False
+    assert response.status == "stop_failed"
+    assert response.code == "STOP_LIFECYCLE_UNAVAILABLE"
+    assert state.status == "stop_failed"
+
+
+def test_stop_only_fails_closed_when_full_lifecycle_page_does_not_advance(monkeypatch):
+    lifecycle_calls: list[int] = []
+    page = [SimpleNamespace(
+        event_id=event_id,
+        order_status="FILLED",
+        order_id=f"historical-{event_id}",
+        exchange_order_id=f"historical-exchange-{event_id}",
+        exchange="binance",
+        market="spot",
+        symbol="BTCUSDT",
+    ) for event_id in range(1, 501)]
+
+    class StalePageOrderClient:
+        @staticmethod
+        def list_order_lifecycle_events(*, after_event_id, **_kwargs):
+            lifecycle_calls.append(after_event_id)
+            return page
+
+    monkeypatch.setattr(grpc_server, "DEFAULT_STOP_ONLY_TIMEOUT_SECONDS", 1.0)
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    session_id, state = servicer._sessions.create(
+        environment=1,
+        user_id=17,
+        portfolio_id=70702,
+    )
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "spot", "BTCUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+    )
+    state.configure_stop_runtime(
+        wallet=_spot_stop_wallet(environment=1, portfolio_id=70702, venue_id=2202),
+        order_client=StalePageOrderClient(),
+    )
+
+    with pytest.raises(RuntimeError, match="pagination did not advance"):
+        servicer._wait_for_accepted_orders(session_id, state)
+
+    assert lifecycle_calls == [0, 500]
 
 
 def test_stop_only_waits_for_inflight_strategy_decision_before_lifecycle_scan(monkeypatch):

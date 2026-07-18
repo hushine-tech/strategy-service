@@ -878,21 +878,34 @@ class ProxyOrderClient(OrderClient):
         session_id: str,
         after_event_id: int = 0,
         limit: int = 100,
+        timeout_seconds: float | None = None,
     ):
         from strategy_service.gen import order_service_pb2
 
         normalized_session_id = str(session_id or "").strip()
         if not normalized_session_id:
             raise ValueError("session_id is required")
-        response = self._proxy.invoke(
-            ORDER_LIST_LIFECYCLE_EVENTS,
-            order_service_pb2.ListOrderLifecycleEventsRequest(
-                session_id=normalized_session_id,
-                after_event_id=int(after_event_id),
-                limit=int(limit),
-            ),
-            order_service_pb2.ListOrderLifecycleEventsResponse,
+        request = order_service_pb2.ListOrderLifecycleEventsRequest(
+            session_id=normalized_session_id,
+            after_event_id=int(after_event_id),
+            limit=int(limit),
         )
+        if timeout_seconds is None:
+            response = self._proxy.invoke(
+                ORDER_LIST_LIFECYCLE_EVENTS,
+                request,
+                order_service_pb2.ListOrderLifecycleEventsResponse,
+            )
+        else:
+            timeout = float(timeout_seconds)
+            if timeout <= 0:
+                raise TimeoutError("order lifecycle deadline has expired")
+            response = self._proxy.invoke(
+                ORDER_LIST_LIFECYCLE_EVENTS,
+                request,
+                order_service_pb2.ListOrderLifecycleEventsResponse,
+                timeout_seconds=timeout,
+            )
         return [self._order_update_event_from_proto(item) for item in response.events]
 
     def _resolve_unknown_attempt(

@@ -3340,6 +3340,45 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             operation_id=operation_id,
         )
 
+    @staticmethod
+    def _read_order_lifecycle_page(
+        reader: Callable[..., Any],
+        *,
+        session_id: str,
+        after_event_id: int,
+        limit: int,
+        timeout_seconds: float,
+    ) -> list[Any]:
+        """Apply a hard caller deadline even if a transport ignores its timeout."""
+        completed = threading.Event()
+        outcome: dict[str, Any] = {}
+
+        def _read() -> None:
+            try:
+                outcome["events"] = reader(
+                    session_id=session_id,
+                    after_event_id=after_event_id,
+                    limit=limit,
+                    timeout_seconds=timeout_seconds,
+                ) or []
+            except BaseException as exc:  # noqa: BLE001
+                outcome["error"] = exc
+            finally:
+                completed.set()
+
+        thread = threading.Thread(
+            target=_read,
+            name=f"stop-lifecycle-read-{session_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        if not completed.wait(timeout=max(0.0, float(timeout_seconds))):
+            raise TimeoutError("order lifecycle read timed out")
+        error = outcome.get("error")
+        if error is not None:
+            raise error
+        return list(outcome.get("events") or [])
+
     def _wait_for_accepted_orders(
         self,
         session_id: str,
@@ -3354,12 +3393,19 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         cursor = 0
         deadline = time.monotonic() + max(0.0, float(DEFAULT_STOP_ONLY_TIMEOUT_SECONDS))
         while True:
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                if pending:
+                    return pending
+                raise TimeoutError("order lifecycle scan deadline has expired")
             page_cursor = cursor
-            events = reader(
+            events = self._read_order_lifecycle_page(
+                reader,
                 session_id=session_id,
                 after_event_id=cursor,
                 limit=page_limit,
-            ) or []
+                timeout_seconds=remaining_seconds,
+            )
             for event in events:
                 event_id = int(getattr(event, "event_id", 0) or 0)
                 if event_id > 0 and event_id <= cursor:
@@ -3417,9 +3463,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 continue
             if not pending:
                 return {}
-            if time.monotonic() >= deadline:
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
                 return pending
-            time.sleep(max(0.0, float(DEFAULT_STOP_ONLY_POLL_SECONDS)))
+            time.sleep(min(
+                remaining_seconds,
+                max(0.0, float(DEFAULT_STOP_ONLY_POLL_SECONDS)),
+            ))
 
     @staticmethod
     def _pending_wallet_orders(

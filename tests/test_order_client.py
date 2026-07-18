@@ -18,6 +18,7 @@ class _Stub:
         self.last_resolve_request: order_service_pb2.ResolveOrderAttemptRequest | None = None
         self.lifecycle_response: order_service_pb2.ListOrderLifecycleEventsResponse | None = None
         self.last_lifecycle_request: order_service_pb2.ListOrderLifecycleEventsRequest | None = None
+        self.last_lifecycle_timeout: float | None = None
         self.close_response: order_service_pb2.CloseSpotTargetsResponse | None = None
         self.last_close_request: order_service_pb2.CloseSpotTargetsRequest | None = None
 
@@ -33,8 +34,14 @@ class _Stub:
             raise RuntimeError("resolve response not configured")
         return self.resolve_response
 
-    def ListOrderLifecycleEvents(self, request: order_service_pb2.ListOrderLifecycleEventsRequest):
+    def ListOrderLifecycleEvents(
+        self,
+        request: order_service_pb2.ListOrderLifecycleEventsRequest,
+        *,
+        timeout: float | None = None,
+    ):
         self.last_lifecycle_request = request
+        self.last_lifecycle_timeout = timeout
         if self.lifecycle_response is None:
             return order_service_pb2.ListOrderLifecycleEventsResponse()
         return self.lifecycle_response
@@ -694,6 +701,19 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
     order_response = OrderClient.order_response_from_update(event)
     assert order_response is not None
     assert order_response.qty == pytest.approx(0.1)
+
+
+def test_list_order_lifecycle_events_forwards_the_call_deadline():
+    client = OrderClient("")
+    stub = _Stub(order_service_pb2.PlaceOrderResponse())
+    client._stub = stub
+
+    client.list_order_lifecycle_events(
+        session_id="session-1",
+        timeout_seconds=0.25,
+    )
+
+    assert stub.last_lifecycle_timeout == pytest.approx(0.25)
 
 
 def test_list_order_lifecycle_events_fails_closed_without_a_configured_stub():
