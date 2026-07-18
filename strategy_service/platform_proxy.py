@@ -46,6 +46,7 @@ PORTFOLIO_UPDATE_SESSION = "portfolio.UpdateSession"
 ORDER_PLACE = "order.PlaceOrder"
 ORDER_RESOLVE_ATTEMPT = "order.ResolveOrderAttempt"
 ORDER_CLOSE_SPOT_TARGETS = "order.CloseSpotTargets"
+ORDER_LIST_LIFECYCLE_EVENTS = "order.ListOrderLifecycleEvents"
 MARKETDATA_GET_STATUS = "marketdata.GetMarketDataStreamStatus"
 MARKETDATA_FETCH_KLINES = "marketdata.FetchKlines"
 MARKETDATA_FETCH_BACKTEST_PAGE = "marketdata.FetchBacktestPage"
@@ -870,6 +871,29 @@ class ProxyOrderClient(OrderClient):
             ),
             order_service_pb2.CloseSpotTargetsResponse,
         )
+
+    def list_order_lifecycle_events(
+        self,
+        *,
+        session_id: str,
+        after_event_id: int = 0,
+        limit: int = 100,
+    ):
+        from strategy_service.gen import order_service_pb2
+
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            raise ValueError("session_id is required")
+        response = self._proxy.invoke(
+            ORDER_LIST_LIFECYCLE_EVENTS,
+            order_service_pb2.ListOrderLifecycleEventsRequest(
+                session_id=normalized_session_id,
+                after_event_id=int(after_event_id),
+                limit=int(limit),
+            ),
+            order_service_pb2.ListOrderLifecycleEventsResponse,
+        )
+        return [self._order_update_event_from_proto(item) for item in response.events]
 
     def _resolve_unknown_attempt(
         self,

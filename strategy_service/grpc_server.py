@@ -100,6 +100,7 @@ DEFAULT_LEASE_HEARTBEAT_SECONDS = 30
 DEFAULT_LEASE_TTL_SECONDS = 90
 DEFAULT_FRESHNESS_GRACE_SECONDS = 30
 DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS = 30
+DEFAULT_STOP_DECISION_DRAIN_TIMEOUT_SECONDS = 30
 DEFAULT_STOP_ONLY_TIMEOUT_SECONDS = 30
 DEFAULT_STOP_ONLY_POLL_SECONDS = 0.05
 DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
@@ -2495,23 +2496,55 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         )
         if not started:
             return
-        self._persist_session_status(session_id, state)
+        try:
+            self._persist_session_status(session_id, state)
+        except BaseException:  # noqa: BLE001
+            self._claimed_stop_failure_response(
+                session_id,
+                state,
+                code="MAX_LOSS_STATUS_PERSIST_FAILED",
+                error=f"{reason}; max_loss_close_failed:status_persist_unavailable",
+                operation_id=operation_id,
+            )
+            return
         self._halt_session_runtime(state, finalize=False)
 
-        close_result = self._stop_and_close_portfolio(
-            session_id,
-            state,
-            operation_id,
-        )
+        try:
+            close_result = self._stop_and_close_portfolio(
+                session_id,
+                state,
+                operation_id,
+            )
+        except BaseException:  # noqa: BLE001
+            self._claimed_stop_failure_response(
+                session_id,
+                state,
+                code="MAX_LOSS_CLOSE_FAILED",
+                error=f"{reason}; max_loss_close_failed:execution_unavailable",
+                operation_id=operation_id,
+            )
+            return
         state.reconciliation_run_id = close_result.reconciliation_run_id
         if close_result.ok:
             state.transition("stopped", error=reason)
         else:
-            state.transition(
-                "stop_failed",
+            self._claimed_stop_failure_response(
+                session_id,
+                state,
+                code=close_result.code,
                 error=f"{reason}; {close_result.message or close_result.code}",
+                target_results=close_result.target_results,
+                reconciliation_run_id=close_result.reconciliation_run_id,
+                operation_id=close_result.operation_id or operation_id,
             )
-        self._persist_session_status(session_id, state)
+            return
+        try:
+            self._persist_session_status(session_id, state)
+        except BaseException:  # noqa: BLE001
+            logger.warning(
+                "STRATEGY_MAX_LOSS_TERMINAL_STATUS_PERSIST_FAILED session=%s",
+                session_id,
+            )
         self._halt_session_runtime(state, finalize=True)
 
     def _install_indicator_collection(
@@ -2725,9 +2758,15 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             for kline in data_source.iter_klines():
                 if callable(fatal_check):
                     fatal_check()
-                if state.status != "running":
+                if not state.try_enter_strategy_decision():
                     break
-                engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
+                try:
+                    engine.running_strategy(_adapt_kline(
+                        kline,
+                        _canonical_market_for_kline(kline, canonical_by_stream),
+                    ))
+                finally:
+                    state.leave_strategy_decision()
                 if callable(fatal_check):
                     fatal_check()
                 n += 1
@@ -2827,18 +2866,24 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             for event in live_events:
                 if callable(fatal_check):
                     fatal_check()
-                if state.status != "running" or stop_event.is_set():
+                if stop_event.is_set() or not state.try_enter_strategy_decision():
                     break
-                event_kind = str(getattr(event, "kind", "") or "").strip().lower()
-                if event_kind == "order_update":
-                    handler = getattr(engine, "handle_order_update", None)
-                    if callable(handler):
-                        handler(getattr(event, "payload", None))
-                    if callable(fatal_check):
-                        fatal_check()
-                    continue
-                kline = getattr(event, "payload", event)
-                routed = engine.running_strategy(_adapt_kline(kline, _canonical_market_for_kline(kline, canonical_by_stream)))
+                try:
+                    event_kind = str(getattr(event, "kind", "") or "").strip().lower()
+                    if event_kind == "order_update":
+                        handler = getattr(engine, "handle_order_update", None)
+                        if callable(handler):
+                            handler(getattr(event, "payload", None))
+                        if callable(fatal_check):
+                            fatal_check()
+                        continue
+                    kline = getattr(event, "payload", event)
+                    routed = engine.running_strategy(_adapt_kline(
+                        kline,
+                        _canonical_market_for_kline(kline, canonical_by_stream),
+                    ))
+                finally:
+                    state.leave_strategy_decision()
                 if callable(fatal_check):
                     fatal_check()
                 if routed is False:
@@ -3042,8 +3087,25 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     status=state.status,
                     code="STOP_IN_PROGRESS",
                 )
-            self._persist_session_status(request.session_id, state)
+            try:
+                self._persist_session_status(request.session_id, state)
+            except BaseException:  # noqa: BLE001
+                return self._claimed_stop_failure_response(
+                    request.session_id,
+                    state,
+                    code="STOP_STATUS_PERSIST_FAILED",
+                    error="stop_failed:status_persist_unavailable",
+                )
             self._halt_session_runtime(state, finalize=False)
+            if not state.wait_for_strategy_decisions(
+                timeout_seconds=DEFAULT_STOP_DECISION_DRAIN_TIMEOUT_SECONDS,
+            ):
+                return self._claimed_stop_failure_response(
+                    request.session_id,
+                    state,
+                    code="STOP_DECISION_DRAIN_TIMEOUT",
+                    error="stop_failed:strategy_decision_drain_timeout",
+                )
             state.transition("finished")
             self._persist_session_status(request.session_id, state)
             self._halt_session_runtime(state, finalize=True)
@@ -3056,34 +3118,58 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     status=state.status,
                     code="STOP_IN_PROGRESS",
                 )
-            self._persist_session_status(request.session_id, state)
+            try:
+                self._persist_session_status(request.session_id, state)
+            except BaseException:  # noqa: BLE001
+                return self._claimed_stop_failure_response(
+                    request.session_id,
+                    state,
+                    code="STOP_STATUS_PERSIST_FAILED",
+                    error="stop_only_failed:status_persist_unavailable",
+                )
             self._halt_session_runtime(state, finalize=False)
-            pending = self._wait_for_accepted_orders(request.session_id, state)
+            if not state.wait_for_strategy_decisions(
+                timeout_seconds=DEFAULT_STOP_DECISION_DRAIN_TIMEOUT_SECONDS,
+            ):
+                return self._claimed_stop_failure_response(
+                    request.session_id,
+                    state,
+                    code="STOP_DECISION_DRAIN_TIMEOUT",
+                    error="stop_only_failed:strategy_decision_drain_timeout",
+                )
+            try:
+                pending = self._wait_for_accepted_orders(request.session_id, state)
+            except BaseException:  # noqa: BLE001
+                return self._claimed_stop_failure_response(
+                    request.session_id,
+                    state,
+                    code="STOP_LIFECYCLE_UNAVAILABLE",
+                    error="stop_only_failed:lifecycle_unavailable",
+                )
             if pending:
                 message = "stop_only_failed:pending_orders_timeout"
-                state.transition("stop_failed", error=message)
-                self._persist_session_status(request.session_id, state)
-                self._halt_session_runtime(state, finalize=True)
-                return pb2.StopStrategyResponse(
-                    stopped=False,
-                    status="stop_failed",
+                target_results = [
+                    pb2.StopTargetResult(
+                        exchange=_stop_exchange_code(item["exchange"]),
+                        market=_stop_market_code(item["market"]),
+                        symbol=item["symbol"],
+                        status="pending",
+                        code="ORDER_PENDING",
+                        message=f"order_id={item['identity']}",
+                    )
+                    for item in sorted(
+                        pending.values(),
+                        key=lambda value: (
+                            value["exchange"], value["market"], value["symbol"], value["identity"]
+                        ),
+                    )
+                ]
+                return self._claimed_stop_failure_response(
+                    request.session_id,
+                    state,
                     code="STOP_PENDING_ORDERS_TIMEOUT",
-                    target_results=[
-                        pb2.StopTargetResult(
-                            exchange=_stop_exchange_code(item["exchange"]),
-                            market=_stop_market_code(item["market"]),
-                            symbol=item["symbol"],
-                            status="pending",
-                            code="ORDER_PENDING",
-                            message=f"order_id={item['identity']}",
-                        )
-                        for item in sorted(
-                            pending.values(),
-                            key=lambda value: (
-                                value["exchange"], value["market"], value["symbol"], value["identity"]
-                            ),
-                        )
-                    ],
+                    error=message,
+                    target_results=target_results,
                 )
             state.transition("stopped")
             self._persist_session_status(request.session_id, state)
@@ -3109,19 +3195,45 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 code="STOP_IN_PROGRESS",
                 operation_id=operation_id or requested_operation_id,
             )
-        self._persist_session_status(request.session_id, state)
+        try:
+            self._persist_session_status(request.session_id, state)
+        except BaseException:  # noqa: BLE001
+            return self._claimed_stop_failure_response(
+                request.session_id,
+                state,
+                code="STOP_STATUS_PERSIST_FAILED",
+                error="stop_and_close_failed:status_persist_unavailable",
+                operation_id=operation_id,
+            )
         self._halt_session_runtime(state, finalize=False)
+        if not state.wait_for_strategy_decisions(
+            timeout_seconds=DEFAULT_STOP_DECISION_DRAIN_TIMEOUT_SECONDS,
+        ):
+            return self._claimed_stop_failure_response(
+                request.session_id,
+                state,
+                code="STOP_DECISION_DRAIN_TIMEOUT",
+                error="stop_and_close_failed:strategy_decision_drain_timeout",
+                operation_id=operation_id,
+            )
 
-        result = self._stop_and_close_portfolio(request.session_id, state, operation_id)
+        try:
+            result = self._stop_and_close_portfolio(request.session_id, state, operation_id)
+        except BaseException:  # noqa: BLE001
+            return self._claimed_stop_failure_response(
+                request.session_id,
+                state,
+                code="STOP_EXECUTION_FAILED",
+                error="stop_and_close_failed:execution_unavailable",
+                operation_id=operation_id,
+            )
         state.reconciliation_run_id = result.reconciliation_run_id
         if not result.ok:
-            state.transition("stop_failed", error=result.message or result.code)
-            self._persist_session_status(request.session_id, state)
-            self._halt_session_runtime(state, finalize=True)
-            return pb2.StopStrategyResponse(
-                stopped=False,
-                status="stop_failed",
+            return self._claimed_stop_failure_response(
+                request.session_id,
+                state,
                 code=result.code,
+                error=result.message or result.code,
                 target_results=result.target_results,
                 reconciliation_run_id=result.reconciliation_run_id,
                 operation_id=result.operation_id or operation_id,
@@ -3196,6 +3308,38 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if stop_event is not None:
                 stop_event.set()
 
+    def _claimed_stop_failure_response(
+        self,
+        session_id: str,
+        state: SessionState,
+        *,
+        code: str,
+        error: str,
+        target_results: list[Any] | None = None,
+        reconciliation_run_id: str = "",
+        operation_id: str = "",
+    ):
+        state.transition("stop_failed", error=error)
+        if reconciliation_run_id:
+            state.reconciliation_run_id = reconciliation_run_id
+        try:
+            self._persist_session_status(session_id, state)
+        except BaseException:  # noqa: BLE001
+            logger.warning(
+                "STRATEGY_STOP_FAILURE_STATUS_PERSIST_FAILED session=%s code=%s",
+                session_id,
+                code,
+            )
+        self._halt_session_runtime(state, finalize=True)
+        return pb2.StopStrategyResponse(
+            stopped=False,
+            status="stop_failed",
+            code=code,
+            target_results=list(target_results or []),
+            reconciliation_run_id=reconciliation_run_id,
+            operation_id=operation_id,
+        )
+
     def _wait_for_accepted_orders(
         self,
         session_id: str,
@@ -3204,7 +3348,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         pending = self._pending_wallet_orders(state)
         reader = getattr(state.order_client, "list_order_lifecycle_events", None)
         if not callable(reader):
-            return pending
+            raise RuntimeError("order lifecycle reader is unavailable")
 
         cursor = 0
         deadline = time.monotonic() + max(0.0, float(DEFAULT_STOP_ONLY_TIMEOUT_SECONDS))
@@ -3507,7 +3651,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             result_target_error = self._validate_spot_close_result_targets(
                 spot_targets,
                 close_response.results,
-                wallet,
             )
             if result_target_error:
                 return _StopExecution(
@@ -3586,10 +3729,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     reconciliation_run_id=reconciliation_run_id,
                     operation_id=operation_id,
                 )
-            wallet.wallets.update({
-                route: candidate_wallet.wallets[route]
-                for route in applied_routes
-            })
             if state.environment == 0:
                 try:
                     _sync_strategy_snapshot(
@@ -3597,7 +3736,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         portfolio_id=state.portfolio_id,
                         user_id=state.user_id,
                         environment=state.environment,
-                        wallet=wallet,
+                        wallet=candidate_wallet,
                         snapshot_reason=SNAPSHOT_REASON_EVENT,
                         strategy_id=state.strategy_id,
                         session_id=session_id,
@@ -3612,6 +3751,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         reconciliation_run_id=reconciliation_run_id,
                         operation_id=operation_id,
                     )
+            wallet.wallets.update({
+                route: candidate_wallet.wallets[route]
+                for route in applied_routes
+            })
 
         flat, flat_reason = self._portfolio_is_flat(wallet, state)
         if not flat:
@@ -3679,7 +3822,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     def _validate_spot_close_result_targets(
         requested_targets: list[dict[str, Any]],
         results: Any,
-        wallet: PortfolioWalletRuntime,
     ) -> str:
         requested = {
             (
@@ -3713,17 +3855,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             status = str(getattr(result, "status", "") or "").strip().lower()
             if status not in {"terminal", "already_closed"}:
                 return "core Spot close returned a nonterminal target result"
-            route_wallet = wallet.wallets.get((key[0], key[1], key[2]))
-            metadata = None
-            if route_wallet is not None:
-                metadata = getattr(route_wallet.spot, "symbol_metadata", {}).get(
-                    (key[2], key[0], key[1], key[3])
-                )
-            if metadata is None:
-                return "Spot symbol metadata is unavailable for the core close result"
             base_asset = str(getattr(result, "base_asset", "") or "").strip().upper()
-            if base_asset != str(getattr(metadata, "base_asset", "") or "").strip().upper():
-                return "core Spot close result base asset does not match symbol metadata"
+            if not base_asset:
+                return "core Spot close returned a result without base_asset"
             returned.add(key)
         if returned != requested:
             return "core Spot close result targets do not match the requested targets"
@@ -3748,7 +3882,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 return False, "stop_and_close_failed:missing_core_spot_final_route"
             asset = getattr(route_wallet.spot, "assets", {}).get(base_asset)
             if asset is None:
-                continue
+                return False, f"stop_and_close_failed:missing_core_spot_final_asset:{base_asset}"
             free = Decimal(str(getattr(asset, "free", 0) or 0))
             locked = Decimal(str(getattr(asset, "locked", 0) or 0))
             if free != 0 or locked != 0:

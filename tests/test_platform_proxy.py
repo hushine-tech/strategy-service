@@ -18,6 +18,7 @@ from strategy_service.platform_proxy import (
     MARKETDATA_GET_STATUS,
     ORDER_PLACE,
     ORDER_CLOSE_SPOT_TARGETS,
+    ORDER_LIST_LIFECYCLE_EVENTS,
     RuntimeChannelLogHandler,
     RuntimeChannelPlatformProxy,
 )
@@ -309,6 +310,60 @@ def test_proxy_order_client_closes_spot_targets_over_runtime_channel():
     assert req.user_id == 3
     assert req.operation_id == "stop-1"
     assert req.targets[0].symbol == "BTCUSDT"
+
+
+def test_proxy_order_client_reads_lifecycle_events_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ORDER_LIST_LIFECYCLE_EVENTS] = (
+        order_service_pb2.ListOrderLifecycleEventsResponse(events=[
+            order_service_pb2.OrderLifecycleEventEntry(
+                event_id=11,
+                session_id="sess-1",
+                portfolio_id=7,
+                venue_id=10,
+                exchange=1,
+                market=1,
+                side="BUY",
+                event_type="fill",
+                order_status="FILLED",
+                order_id="order-1",
+                fill_delta=order_service_pb2.FillDeltaEntry(
+                    symbol="BTCUSDT",
+                    qty=0.01,
+                    fill_price=50_000,
+                    fee=0.5,
+                    fee_asset="USDT",
+                ),
+            ),
+        ])
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    events = proxy.order_client().list_order_lifecycle_events(
+        session_id="sess-1",
+        after_event_id=10,
+        limit=50,
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == ORDER_LIST_LIFECYCLE_EVENTS
+    assert req.session_id == "sess-1"
+    assert req.after_event_id == 10
+    assert req.limit == 50
+    assert len(events) == 1
+    assert events[0].event_id == 11
+    assert events[0].exchange == "binance"
+    assert events[0].market == "spot"
+    assert events[0].fill.qty == pytest.approx(0.01)
+
+
+def test_proxy_order_lifecycle_read_fails_closed_when_runtime_channel_is_unavailable():
+    runtime = _FakeRuntimeChannel()
+    runtime.errors[ORDER_LIST_LIFECYCLE_EVENTS] = RuntimeError("unavailable")
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        proxy.order_client().list_order_lifecycle_events(session_id="sess-1")
 
 
 def test_proxy_marketdata_client_uses_runtime_channel():

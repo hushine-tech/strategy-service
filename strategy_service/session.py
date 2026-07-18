@@ -106,6 +106,12 @@ class SessionState:
     )
     _startup_result: object | None = field(default=None, repr=False, compare=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _decision_condition: threading.Condition = field(init=False, repr=False, compare=False)
+    _strategy_decision_admission_open: bool = field(default=True, init=False, repr=False, compare=False)
+    _strategy_decisions_inflight: int = field(default=0, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._decision_condition = threading.Condition(self._lock)
 
     def transition(self, new_status: str, bars: int | None = None, error: str | None = None) -> bool:
         """Atomically transition status. Returns True if transition succeeded.
@@ -204,15 +210,44 @@ class SessionState:
     ) -> tuple[bool, str]:
         """Claim the single stop execution slot for this Session generation."""
         normalized_operation_id = str(operation_id or "").strip()
-        with self._lock:
+        with self._decision_condition:
             if self.status in _TERMINAL_STATUSES or self.status == "stopping":
                 return False, self.stop_operation_id
+            self._strategy_decision_admission_open = False
             self.status = "stopping"
             if error is not None:
                 self.error = error
             if normalized_operation_id and not self.stop_operation_id:
                 self.stop_operation_id = normalized_operation_id
             return True, self.stop_operation_id
+
+    def try_enter_strategy_decision(self) -> bool:
+        """Enter one strategy callback only while the Session still admits decisions."""
+        with self._decision_condition:
+            if self.status != "running" or not self._strategy_decision_admission_open:
+                return False
+            self._strategy_decisions_inflight += 1
+            return True
+
+    def leave_strategy_decision(self) -> None:
+        with self._decision_condition:
+            if self._strategy_decisions_inflight <= 0:
+                raise RuntimeError("strategy decision admission underflow")
+            self._strategy_decisions_inflight -= 1
+            if self._strategy_decisions_inflight == 0:
+                self._decision_condition.notify_all()
+
+    def wait_for_strategy_decisions(self, *, timeout_seconds: float) -> bool:
+        """Wait until callbacks admitted before stop have returned."""
+        timeout = max(0.0, float(timeout_seconds))
+        deadline = time.monotonic() + timeout
+        with self._decision_condition:
+            while self._strategy_decisions_inflight > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._decision_condition.wait(timeout=remaining)
+            return True
 
     def configure_risk_runtime(
         self,

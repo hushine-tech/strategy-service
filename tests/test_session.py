@@ -289,6 +289,22 @@ def test_force_failed_overrides_every_prior_status_and_error(initial_status):
     assert state.error == "fixed fatal detail"
 
 
+def test_begin_stopping_atomically_closes_strategy_decision_admission():
+    state = SessionState(status="running")
+
+    assert state.try_enter_strategy_decision() is True
+    started, _operation_id = state.begin_stopping(operation_id="stop-1")
+
+    assert started is True
+    assert state.status == "stopping"
+    assert state.try_enter_strategy_decision() is False
+    assert state.wait_for_strategy_decisions(timeout_seconds=0) is False
+
+    state.leave_strategy_decision()
+
+    assert state.wait_for_strategy_decisions(timeout_seconds=0) is True
+
+
 def test_manager_has_no_id_only_restore_escape_hatch():
     assert not hasattr(SessionManager, "restore")
 

@@ -3496,6 +3496,9 @@ def test_stop_strategy_stop_only_persists_state_and_halts_runtime():
     servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092")
     servicer.set_platform_proxy(FakePlatformProxy())
     session_id, state = servicer._sessions.create(environment=1, user_id=17, portfolio_id=404)
+    state.configure_stop_runtime(order_client=SimpleNamespace(
+        list_order_lifecycle_events=lambda **_kwargs: [],
+    ))
     stop_event = threading.Event()
     state._stop_event = stop_event  # type: ignore[attr-defined]
     state.lease_stop_event = threading.Event()
@@ -3545,6 +3548,9 @@ def test_stop_strategy_persists_runtime_guard(monkeypatch):
         portfolio_id=404,
         runtime_id="rt-owned",
     )
+    state.configure_stop_runtime(order_client=SimpleNamespace(
+        list_order_lifecycle_events=lambda **_kwargs: [],
+    ))
     context = _FakeContext()
 
     resp = servicer.StopStrategy(
@@ -4029,6 +4035,69 @@ def test_max_loss_guard_stops_and_closes_target_position(monkeypatch):
     assert abs(route_wallet.futures.positions[("ETHUSDT", 0)].position_qty) <= 1e-12
 
 
+def test_max_loss_close_exception_transitions_to_stop_failed(monkeypatch):
+    route_wallet = make_backtest_wallet(
+        wallet_balance=1000.0,
+        futures_positions=[{
+            "symbol": "ETHUSDT",
+            "position_qty": 1.0,
+            "entry_price": 2300.0,
+            "mark_price": 1900.0,
+            "margin_mode": "cross",
+        }],
+    )
+    wallet = PortfolioWalletRuntime(
+        portfolio_id=5251,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+
+    class FakePortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            return True
+
+        @staticmethod
+        def update_portfolio_wallet_state(**_kwargs):
+            return SimpleNamespace()
+
+    class FailingOrderClient:
+        @staticmethod
+        def place_order(*_args, **_kwargs):
+            raise RuntimeError("exchange transport unavailable")
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+        agent_managed_final_status=True,
+    )
+    servicer.set_platform_proxy(SimpleNamespace(
+        portfolio_client=lambda: FakePortfolioClient(),
+    ))
+    session_id, state = servicer._sessions.create(
+        environment=0,
+        user_id=17,
+        portfolio_id=5251,
+    )
+    state.strategy_id = 6261
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "perpetual_futures", "ETHUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="strategy",
+        initial_margin_balance=1000.0,
+    )
+    state.configure_stop_runtime(wallet=wallet, order_client=FailingOrderClient())
+
+    servicer._maybe_trigger_max_loss_close(
+        session_id=session_id,
+        state=state,
+        wallet=wallet,
+    )
+
+    assert state.status == "stop_failed"
+    assert state.current_stop_operation_id()
+
+
 def test_max_loss_guard_ignores_unowned_position_drawdown(monkeypatch):
     route_wallet = make_backtest_wallet(
         wallet_balance=1000.0,
@@ -4222,7 +4291,34 @@ def _spot_stop_wallet(*, environment: int, portfolio_id: int, venue_id: int):
     )
 
 
-def test_spot_close_result_base_asset_must_match_symbol_metadata():
+def test_spot_close_result_uses_core_authority_when_worker_metadata_is_missing():
+    wallet = _spot_stop_wallet(environment=0, portfolio_id=706, venue_id=21)
+    wallet.wallets[("binance", "spot", 21)].spot.symbol_metadata.clear()
+    results = [order_service_pb2.SpotCloseTargetResult(
+        target=order_service_pb2.SpotCloseTarget(
+            venue_id=21,
+            exchange=1,
+            market=1,
+            symbol="BTCUSDT",
+        ),
+        base_asset="BTC",
+        status="terminal",
+    )]
+
+    reason = StrategyServiceServicer._validate_spot_close_result_targets(
+        [{
+            "venue_id": 21,
+            "exchange": "binance",
+            "market": "spot",
+            "symbol": "BTCUSDT",
+        }],
+        results,
+    )
+
+    assert reason == ""
+
+
+def test_spot_close_final_snapshot_must_explicitly_include_core_result_asset():
     wallet = _spot_stop_wallet(environment=0, portfolio_id=706, venue_id=21)
     results = [order_service_pb2.SpotCloseTargetResult(
         target=order_service_pb2.SpotCloseTarget(
@@ -4235,18 +4331,10 @@ def test_spot_close_result_base_asset_must_match_symbol_metadata():
         status="terminal",
     )]
 
-    reason = StrategyServiceServicer._validate_spot_close_result_targets(
-        [{
-            "venue_id": 21,
-            "exchange": "binance",
-            "market": "spot",
-            "symbol": "BTCUSDT",
-        }],
-        results,
-        wallet,
-    )
+    flat, reason = StrategyServiceServicer._spot_close_results_are_flat(wallet, results)
 
-    assert reason == "core Spot close result base asset does not match symbol metadata"
+    assert flat is False
+    assert reason == "stop_and_close_failed:missing_core_spot_final_asset:ETH"
 
 
 def test_stop_operation_id_is_stable_across_worker_reconstruction():
@@ -4401,6 +4489,254 @@ def test_stop_only_waits_for_accepted_order_without_trading_or_mutating_wallet(m
     assert lifecycle_calls == [0, 1]
     assert handled_statuses == ["NEW", "FILLED"]
     assert wallet.wallets[("binance", "spot", 22)].spot.assets["BTC"].free == original_btc
+
+
+def test_stop_only_waits_for_inflight_strategy_decision_before_lifecycle_scan(monkeypatch):
+    from market_data.models import MarketKline
+    from strategy_service.inputs import StrategyInput
+
+    callback_entered = threading.Event()
+    release_callback = threading.Event()
+    lifecycle_read = threading.Event()
+
+    class OneBarMarketDataClient:
+        @staticmethod
+        def fetch_backtest_page(**_kwargs):
+            return SimpleNamespace(
+                klines=[MarketKline(
+                    symbol="BTCUSDT",
+                    interval="1m",
+                    open_time=1,
+                    close_time=2,
+                    open=1.0,
+                    high=2.0,
+                    low=0.5,
+                    close=1.5,
+                    volume=10.0,
+                    timestamp=2,
+                    market="spot",
+                )],
+                next_cursor_time_ms=1,
+                has_more=False,
+            )
+
+    class BlockingEngine:
+        strategies = {}
+
+        @staticmethod
+        def running_strategy(_market_data):
+            callback_entered.set()
+            assert release_callback.wait(timeout=2)
+            return True
+
+    class FakePortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            return True
+
+    class FakeOrderClient:
+        @staticmethod
+        def list_order_lifecycle_events(**_kwargs):
+            lifecycle_read.set()
+            return []
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+        agent_managed_final_status=True,
+    )
+    servicer.set_platform_proxy(SimpleNamespace(
+        portfolio_client=lambda: FakePortfolioClient(),
+    ))
+    monkeypatch.setattr(servicer, "_marketdata_client", lambda: OneBarMarketDataClient())
+    monkeypatch.setattr(servicer, "_install_indicator_collection", lambda *_args, **_kwargs: lambda: None)
+    session_id, state = servicer._sessions.create(
+        environment=0,
+        user_id=17,
+        portfolio_id=7071,
+    )
+    state.configure_stop_runtime(
+        wallet=_spot_stop_wallet(environment=0, portfolio_id=7071, venue_id=221),
+        order_client=FakeOrderClient(),
+    )
+
+    run_thread = threading.Thread(target=servicer._run_backtest_via_platform_proxy, kwargs={
+        "session_id": session_id,
+        "state": state,
+        "engine": BlockingEngine(),
+        "request": SimpleNamespace(start_time_ms=1, end_time_ms=2, user_id=17),
+        "declared_inputs": [StrategyInput("binance", "spot", "BTCUSDT", "1m")],
+    })
+    run_thread.start()
+    assert callback_entered.wait(timeout=1)
+
+    result: dict[str, object] = {}
+    stop_thread = threading.Thread(target=lambda: result.setdefault(
+        "response",
+        servicer.StopStrategy(pb2.StopStrategyRequest(
+            session_id=session_id,
+            user_id=17,
+            stop_action=pb2.STOP_ACTION_STOP_ONLY,
+        ), _FakeContext()),
+    ))
+    stop_thread.start()
+
+    assert lifecycle_read.wait(timeout=0.05) is False
+    assert stop_thread.is_alive()
+
+    release_callback.set()
+    run_thread.join(timeout=2)
+    stop_thread.join(timeout=2)
+
+    assert not run_thread.is_alive()
+    assert not stop_thread.is_alive()
+    assert lifecycle_read.is_set()
+    response = result["response"]
+    assert response.stopped is True
+    assert response.status == "stopped"
+
+
+def test_stop_only_fails_closed_when_lifecycle_reader_is_unavailable():
+    class FakePortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            return True
+
+    class FailingOrderClient:
+        @staticmethod
+        def list_order_lifecycle_events(**_kwargs):
+            raise RuntimeError("lifecycle transport unavailable")
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+        agent_managed_final_status=True,
+    )
+    servicer.set_platform_proxy(SimpleNamespace(
+        portfolio_client=lambda: FakePortfolioClient(),
+    ))
+    session_id, state = servicer._sessions.create(
+        environment=1,
+        user_id=17,
+        portfolio_id=7072,
+    )
+    state.configure_stop_runtime(
+        wallet=_spot_stop_wallet(environment=1, portfolio_id=7072, venue_id=222),
+        order_client=FailingOrderClient(),
+    )
+
+    response = servicer.StopStrategy(pb2.StopStrategyRequest(
+        session_id=session_id,
+        user_id=17,
+        stop_action=pb2.STOP_ACTION_STOP_ONLY,
+    ), _FakeContext())
+
+    assert response.stopped is False
+    assert response.status == "stop_failed"
+    assert response.code == "STOP_LIFECYCLE_UNAVAILABLE"
+    assert state.status == "stop_failed"
+
+
+def test_stop_status_persist_exception_does_not_strand_session_in_stopping():
+    class FailingPortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            raise RuntimeError("portfolio transport unavailable")
+
+    class FakeOrderClient:
+        @staticmethod
+        def list_order_lifecycle_events(**_kwargs):
+            raise AssertionError("lifecycle scan must not run after status persistence fails")
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+        agent_managed_final_status=True,
+    )
+    servicer.set_platform_proxy(SimpleNamespace(
+        portfolio_client=lambda: FailingPortfolioClient(),
+    ))
+    session_id, state = servicer._sessions.create(
+        environment=1,
+        user_id=17,
+        portfolio_id=7073,
+    )
+    state.configure_stop_runtime(
+        wallet=_spot_stop_wallet(environment=1, portfolio_id=7073, venue_id=223),
+        order_client=FakeOrderClient(),
+    )
+
+    response = servicer.StopStrategy(pb2.StopStrategyRequest(
+        session_id=session_id,
+        user_id=17,
+        stop_action=pb2.STOP_ACTION_STOP_ONLY,
+    ), _FakeContext())
+
+    assert response.stopped is False
+    assert response.status == "stop_failed"
+    assert response.code == "STOP_STATUS_PERSIST_FAILED"
+    assert state.status == "stop_failed"
+
+
+def test_futures_close_exception_does_not_strand_session_in_stopping():
+    route_wallet = make_backtest_wallet(futures_positions=[{
+        "symbol": "ETHUSDT",
+        "position_qty": 0.02,
+        "entry_price": 2300.0,
+        "mark_price": 2310.0,
+        "margin_mode": "cross",
+    }])
+    wallet = PortfolioWalletRuntime(
+        portfolio_id=7074,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 224): route_wallet},
+    )
+
+    class FakePortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            return True
+
+        @staticmethod
+        def update_portfolio_wallet_state(**_kwargs):
+            return SimpleNamespace()
+
+    class FailingOrderClient:
+        @staticmethod
+        def place_order(*_args, **_kwargs):
+            raise RuntimeError("exchange transport unavailable")
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+        agent_managed_final_status=True,
+    )
+    servicer.set_platform_proxy(SimpleNamespace(
+        portfolio_client=lambda: FakePortfolioClient(),
+    ))
+    session_id, state = servicer._sessions.create(
+        environment=0,
+        user_id=17,
+        portfolio_id=7074,
+    )
+    state.strategy_id = 8084
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "perpetual_futures", "ETHUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+    )
+    state.configure_stop_runtime(wallet=wallet, order_client=FailingOrderClient())
+
+    response = servicer.StopStrategy(pb2.StopStrategyRequest(
+        session_id=session_id,
+        user_id=17,
+        stop_action=pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS,
+    ), _FakeContext())
+
+    assert response.stopped is False
+    assert response.status == "stop_failed"
+    assert response.code == "STOP_EXECUTION_FAILED"
+    assert state.status == "stop_failed"
 
 
 def test_stop_only_timeout_reports_pending_order_without_trading(monkeypatch):
@@ -4686,6 +5022,71 @@ def test_backtest_spot_stop_syncs_before_core_close_and_applies_final_snapshot(m
     final_spot = wallet.wallets[("binance", "spot", 24)].spot
     assert final_spot.assets["BTC"].free == grpc_server.Decimal("0")
     assert final_spot.assets["USDT"].free == grpc_server.Decimal("1510.00000000")
+
+
+def test_backtest_spot_final_sync_failure_keeps_local_wallet_at_last_persisted_state():
+    wallet = _spot_stop_wallet(environment=0, portfolio_id=7090, venue_id=240)
+    sync_calls = 0
+
+    class FakePortfolioClient:
+        @staticmethod
+        def update_portfolio_wallet_state(**_kwargs):
+            nonlocal sync_calls
+            sync_calls += 1
+            if sync_calls == 2:
+                raise RuntimeError("final wallet persistence unavailable")
+            return SimpleNamespace()
+
+    class FakeOrderClient:
+        @staticmethod
+        def close_spot_targets(**kwargs):
+            return order_service_pb2.CloseSpotTargetsResponse(
+                status="stopped",
+                operation_id=kwargs["operation_id"],
+                results=[order_service_pb2.SpotCloseTargetResult(
+                    target=order_service_pb2.SpotCloseTarget(
+                        venue_id=240, exchange=1, market=1, symbol="BTCUSDT",
+                    ),
+                    base_asset="BTC",
+                    status="terminal",
+                )],
+                final_snapshots=[_spot_close_final_snapshot(
+                    venue_id=240,
+                    environment=0,
+                    btc_free="0",
+                    usdt_free="1510.00000000",
+                )],
+            )
+
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+        agent_managed_final_status=True,
+    )
+    servicer.set_platform_proxy(SimpleNamespace(
+        portfolio_client=lambda: FakePortfolioClient(),
+    ))
+    state = SessionState(
+        environment=0,
+        user_id=17,
+        portfolio_id=7090,
+        strategy_id=8100,
+    )
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "spot", "BTCUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+    )
+    state.configure_stop_runtime(wallet=wallet, order_client=FakeOrderClient())
+
+    result = servicer._stop_and_close_portfolio("session-1", state, "operation-1")
+
+    assert result.ok is False
+    assert result.code == "SPOT_CLOSE_FINAL_WALLET_SYNC_FAILED"
+    assert sync_calls == 2
+    spot = wallet.wallets[("binance", "spot", 240)].spot
+    assert spot.assets["BTC"].free == grpc_server.Decimal("0.01")
+    assert spot.assets["USDT"].free == grpc_server.Decimal("1000.0")
 
 
 def test_spot_stop_rejects_success_response_for_a_different_target(monkeypatch):

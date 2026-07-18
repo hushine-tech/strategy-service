@@ -696,6 +696,13 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
     assert order_response.qty == pytest.approx(0.1)
 
 
+def test_list_order_lifecycle_events_fails_closed_without_a_configured_stub():
+    client = OrderClient("")
+
+    with pytest.raises(RuntimeError, match="not configured"):
+        client.list_order_lifecycle_events(session_id="session-1")
+
+
 def test_order_response_from_update_uses_lifecycle_order_state():
     client = OrderClient("")
     stub = _Stub(order_service_pb2.PlaceOrderResponse())

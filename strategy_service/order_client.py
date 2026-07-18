@@ -293,19 +293,18 @@ class OrderClient:
         limit: int = 100,
     ) -> list[OrderUpdateEvent]:
         """Read normalized order lifecycle events after a session cursor."""
-        if not self._stub or not str(session_id or "").strip():
-            return []
-        try:
-            from strategy_service.gen import order_service_pb2
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            raise ValueError("session_id is required")
+        if not self._stub:
+            raise RuntimeError("order lifecycle client is not configured")
+        from strategy_service.gen import order_service_pb2
 
-            resp = self._stub.ListOrderLifecycleEvents(order_service_pb2.ListOrderLifecycleEventsRequest(
-                session_id=str(session_id).strip(),
-                after_event_id=int(after_event_id),
-                limit=int(limit),
-            ))
-        except Exception:
-            logger.warning("OrderClient.list_order_lifecycle_events failed for session=%s", session_id, exc_info=True)
-            return []
+        resp = self._stub.ListOrderLifecycleEvents(order_service_pb2.ListOrderLifecycleEventsRequest(
+            session_id=normalized_session_id,
+            after_event_id=int(after_event_id),
+            limit=int(limit),
+        ))
         return [self._order_update_event_from_proto(item) for item in resp.events]
 
     @classmethod
