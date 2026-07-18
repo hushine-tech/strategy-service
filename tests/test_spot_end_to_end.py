@@ -106,6 +106,43 @@ def test_spot_buy_applies_actual_fill_and_bnb_commission_once_across_replays():
     assert len(wallet.applied_trade_ids) == 1
 
 
+def test_spot_duplicate_fill_can_advance_terminal_order_state_without_double_debit():
+    wallet = SpotWallet.from_assets({"USDT": ("1500", "0"), "BNB": ("1", "0")})
+    metadata = spot_metadata()
+    order_key = (10, "binance", "spot", "BTCUSDT", "42")
+    wallet.apply_order_update(
+        OrderResponse(
+            symbol="BTCUSDT",
+            side="BUY",
+            qty=0.0,
+            fill_price=0.0,
+            status="NEW",
+            order_id="hushine-order-1",
+            venue_id=10,
+            exchange="binance",
+            market="spot",
+            exchange_order_id="42",
+            orig_qty_decimal="0.02",
+            executed_qty_decimal="0",
+            remaining_qty_decimal="0.02",
+            price_decimal="50000",
+            cumulative_quote_qty_decimal="0",
+        ),
+        metadata,
+    )
+    partial = fill_update(status="PARTIALLY_FILLED")
+
+    assert wallet.apply_order_update(partial, metadata) is True
+    assert wallet.apply_order_update(fill_update(status="CANCELED"), metadata) is False
+
+    assert wallet.assets["BTC"].free == Decimal("0.01")
+    assert wallet.assets["USDT"].free == Decimal("1000")
+    assert wallet.assets["USDT"].locked == Decimal("0")
+    assert wallet.assets["BNB"].free == Decimal("0.999")
+    assert wallet.order_states[order_key].status == "CANCELED"
+    assert order_key not in wallet.open_orders
+
+
 def test_spot_distinct_trade_ids_on_one_order_apply_independently():
     wallet = SpotWallet.from_assets({"USDT": ("1500", "0"), "BNB": ("1", "0")})
     metadata = spot_metadata()

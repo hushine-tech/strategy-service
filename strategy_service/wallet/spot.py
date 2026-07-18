@@ -640,6 +640,7 @@ class SpotWallet:
 
         trade_id = str(getattr(update, "exchange_trade_id", "") or "").strip()
         trade_key = (*route, order_identity, trade_id)
+        fill_applied = False
         if fill_qty > ZERO:
             if trade_id == "":
                 self.recovery_pending_orders.add(order_key)
@@ -650,12 +651,14 @@ class SpotWallet:
                     or cumulative_quote > previous_state.cumulative_quote_qty
                 ):
                     self.recovery_pending_orders.add(order_key)
-                return False
-            qty_delta = cumulative_qty - previous_state.executed_qty
-            quote_delta = cumulative_quote - previous_state.cumulative_quote_qty
-            if qty_delta != fill_qty or quote_delta != fill_quote:
-                self.recovery_pending_orders.add(order_key)
-                return False
+                    return False
+            else:
+                qty_delta = cumulative_qty - previous_state.executed_qty
+                quote_delta = cumulative_quote - previous_state.cumulative_quote_qty
+                if qty_delta != fill_qty or quote_delta != fill_quote:
+                    self.recovery_pending_orders.add(order_key)
+                    return False
+                fill_applied = True
 
         orig_qty = _exact_field(update, "orig_qty_decimal", "orig_qty")
         remaining_qty = _exact_field(update, "remaining_qty_decimal", "remaining_qty")
@@ -681,7 +684,7 @@ class SpotWallet:
             locked_base=existing.locked_base if existing is not None else ZERO,
         )
 
-        if fill_qty > ZERO:
+        if fill_applied:
             self._apply_fill(
                 metadata=facts,
                 side=side,
@@ -705,7 +708,7 @@ class SpotWallet:
             self.open_orders.pop(order_key, None)
         else:
             self.open_orders[order_key] = order
-        return fill_qty > ZERO
+        return fill_applied
 
     def _legacy_metadata(self, symbol: str, update: Any) -> SpotSymbolMetadata:
         normalized = norm_symbol(symbol)
