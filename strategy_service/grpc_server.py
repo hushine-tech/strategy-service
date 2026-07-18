@@ -3350,10 +3350,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if not callable(reader):
             raise RuntimeError("order lifecycle reader is unavailable")
 
+        page_limit = 500
         cursor = 0
         deadline = time.monotonic() + max(0.0, float(DEFAULT_STOP_ONLY_TIMEOUT_SECONDS))
         while True:
-            events = reader(session_id=session_id, after_event_id=cursor, limit=500) or []
+            page_cursor = cursor
+            events = reader(
+                session_id=session_id,
+                after_event_id=cursor,
+                limit=page_limit,
+            ) or []
             for event in events:
                 event_id = int(getattr(event, "event_id", 0) or 0)
                 if event_id > 0 and event_id <= cursor:
@@ -3365,9 +3371,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 symbol = str(getattr(event, "symbol", "") or "").strip().upper()
                 if not _target_is_allowed(state, exchange, market, symbol):
                     continue
-                handler = state.order_update_handler
-                if callable(handler):
-                    handler(event)
                 aliases = {
                     str(value or "").strip()
                     for value in (
@@ -3402,6 +3405,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         "symbol": symbol,
                         "identity": identity,
                     }
+            # A full page is not a lifecycle high-water mark. Drain subsequent
+            # pages before deciding that there are no accepted active orders.
+            # This scan deliberately stays read-only: applying events here could
+            # invoke user on_order_update code after stop admission has closed.
+            if len(events) >= page_limit:
+                if cursor <= page_cursor:
+                    raise RuntimeError("order lifecycle pagination did not advance")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("order lifecycle pagination timed out")
+                continue
             if not pending:
                 return {}
             if time.monotonic() >= deadline:

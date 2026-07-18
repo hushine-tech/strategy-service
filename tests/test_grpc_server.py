@@ -4426,6 +4426,10 @@ def test_stop_only_waits_for_accepted_order_without_trading_or_mutating_wallet(m
     lifecycle_calls: list[int] = []
     handled_statuses: list[str] = []
 
+    def user_order_update_handler(event):
+        handled_statuses.append(event.order_status)
+        raise AssertionError("STOP_ONLY lifecycle scans must not invoke user callbacks")
+
     class FakePortfolioClient:
         def update_session(self, **_kwargs):
             return True
@@ -4474,7 +4478,7 @@ def test_stop_only_waits_for_accepted_order_without_trading_or_mutating_wallet(m
     state.configure_stop_runtime(
         wallet=wallet,
         order_client=FakeOrderClient(),
-        order_update_handler=lambda event: handled_statuses.append(event.order_status),
+        order_update_handler=user_order_update_handler,
     )
 
     response = servicer.StopStrategy(pb2.StopStrategyRequest(
@@ -4487,8 +4491,95 @@ def test_stop_only_waits_for_accepted_order_without_trading_or_mutating_wallet(m
     assert response.status == "stopped"
     assert response.code == "STOPPED"
     assert lifecycle_calls == [0, 1]
-    assert handled_statuses == ["NEW", "FILLED"]
+    assert handled_statuses == []
     assert wallet.wallets[("binance", "spot", 22)].spot.assets["BTC"].free == original_btc
+
+
+def test_stop_only_exhausts_lifecycle_pages_before_declaring_no_pending_orders(monkeypatch):
+    wallet = _spot_stop_wallet(environment=1, portfolio_id=7070, venue_id=220)
+    lifecycle_calls: list[int] = []
+
+    class FakePortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            return True
+
+    class FakeOrderClient:
+        @staticmethod
+        def list_order_lifecycle_events(*, session_id, after_event_id=0, limit=100):
+            del session_id
+            lifecycle_calls.append(after_event_id)
+            assert limit == 500
+            if after_event_id == 0:
+                return [SimpleNamespace(
+                    event_id=event_id,
+                    order_status="FILLED",
+                    order_id=f"historical-{event_id}",
+                    exchange_order_id=f"historical-exchange-{event_id}",
+                    attempt_id=f"historical-attempt-{event_id}",
+                    intent_id=f"historical-intent-{event_id}",
+                    exchange="binance",
+                    market="spot",
+                    symbol="BTCUSDT",
+                ) for event_id in range(1, 501)]
+            if after_event_id == 500:
+                return [SimpleNamespace(
+                    event_id=501,
+                    order_status="NEW",
+                    order_id="accepted-order-501",
+                    exchange_order_id="exchange-order-501",
+                    attempt_id="attempt-501",
+                    intent_id="intent-501",
+                    exchange="binance",
+                    market="spot",
+                    symbol="BTCUSDT",
+                )]
+            if after_event_id == 501:
+                return [SimpleNamespace(
+                    event_id=502,
+                    order_status="FILLED",
+                    order_id="accepted-order-501",
+                    exchange_order_id="exchange-order-501",
+                    attempt_id="attempt-501",
+                    intent_id="intent-501",
+                    exchange="binance",
+                    market="spot",
+                    symbol="BTCUSDT",
+                )]
+            return []
+
+    monkeypatch.setattr(grpc_server, "DEFAULT_STOP_ONLY_POLL_SECONDS", 0.0)
+    servicer = StrategyServiceServicer(
+        "acct:1", "order:1", {}, "127.0.0.1:9092",
+        restore_running_sessions=False,
+        agent_managed_final_status=True,
+    )
+    servicer.set_platform_proxy(SimpleNamespace(
+        portfolio_client=lambda: FakePortfolioClient(),
+    ))
+    session_id, state = servicer._sessions.create(
+        environment=1,
+        user_id=17,
+        portfolio_id=7070,
+    )
+    state.strategy_id = 8080
+    state.configure_risk_runtime(
+        order_target_keys={("binance", "spot", "BTCUSDT")},
+        max_loss_close_pct=0.30,
+        max_loss_close_source="platform_default",
+    )
+    state.configure_stop_runtime(wallet=wallet, order_client=FakeOrderClient())
+
+    response = servicer.StopStrategy(pb2.StopStrategyRequest(
+        session_id=session_id,
+        user_id=17,
+        stop_action=pb2.STOP_ACTION_STOP_ONLY,
+    ), _FakeContext())
+
+    assert response.stopped is True
+    assert response.status == "stopped"
+    assert response.code == "STOPPED"
+    assert lifecycle_calls == [0, 500, 501]
 
 
 def test_stop_only_waits_for_inflight_strategy_decision_before_lifecycle_scan(monkeypatch):
