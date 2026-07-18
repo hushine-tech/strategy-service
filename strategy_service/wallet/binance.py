@@ -1026,11 +1026,15 @@ class BinanceWalletRuntime:
                 locked=float(self.spot.locked),
                 assets=[
                     CanonicalSpotAssetState(
-                        symbol=symbol,
+                        symbol="",
                         qty=float(asset.qty),
                         locked=float(asset.locked),
                         avg_entry_price=float(asset.avg_entry_price),
                         price=float(asset.price) if asset.price is not None else None,
+                        asset=symbol,
+                        free=asset.free,
+                        free_decimal=str(asset.free),
+                        locked_decimal=str(asset.locked),
                     )
                     for symbol, asset in self.spot.assets.items()
                 ],

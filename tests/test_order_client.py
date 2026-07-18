@@ -379,6 +379,125 @@ def test_place_order_sends_advanced_order_contract_fields():
     assert stub.last_request.good_till_date.ToDatetime(tzinfo=timezone.utc) == good_till_date
 
 
+def test_spot_place_order_preserves_exact_request_fill_fee_and_trade_identity():
+    response = order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-spot",
+        attempt_id="attempt-spot",
+        attempt_status="ACCEPTED",
+        order=order_service_pb2.ExchangeOrderEntry(
+            order_id="order-spot",
+            exchange_order_id="42",
+            venue_id=10,
+            exchange=1,
+            market=1,
+            symbol="BTCUSDT",
+            side="BUY",
+            orig_qty=0.01,
+            executed_qty=0.01,
+            status="FILLED",
+            orig_qty_decimal="0.01000000",
+            executed_qty_decimal="0.01000000",
+            remaining_qty_decimal="0.00000000",
+            avg_price_decimal="50000.10",
+            cumulative_quote_qty_decimal="500.00100000",
+        ),
+        fill_deltas=[
+            order_service_pb2.OrderFillEntry(
+                order_id="order-spot",
+                exchange_order_id="42",
+                exchange_trade_id="0",
+                venue_id=10,
+                exchange=1,
+                market=1,
+                symbol="BTCUSDT",
+                side="BUY",
+                qty=0.01,
+                fill_price=50000.1,
+                fee=0.0002,
+                fee_asset="BNB",
+                qty_decimal="0.01000000",
+                fill_price_decimal="50000.10",
+                fee_decimal="0.00020000",
+                quote_qty_decimal="500.00100000",
+            )
+        ],
+    )
+    client = OrderClient("")
+    stub = _Stub(response)
+    client._stub = stub
+
+    feedback = client.place_order(
+        13,
+        _decision(
+            market="spot",
+            symbol="BTCUSDT",
+            qty="0.01000000",
+            order_type="LIMIT",
+            price="50000.10",
+        ),
+        50000.125,
+        portfolio_symbol="BTCUSDT",
+        market="spot",
+        intent_id="intent-spot",
+    )
+
+    assert stub.last_request is not None
+    assert stub.last_request.qty_decimal == "0.01000000"
+    assert stub.last_request.price_decimal == "50000.10"
+    assert stub.last_request.mark_price_decimal == "50000.125"
+    assert feedback.order is not None
+    assert feedback.order.venue_id == 10
+    assert feedback.order.exchange_order_id == "42"
+    assert feedback.order.executed_qty_decimal == "0.01000000"
+    assert feedback.order.cumulative_quote_qty_decimal == "500.00100000"
+    assert len(feedback.fill_events) == 1
+    fill = feedback.fill_events[0]
+    assert fill.exchange_trade_id == "0"
+    assert fill.fee_asset == "BNB"
+    assert fill.qty_decimal == "0.01000000"
+    assert fill.fill_price_decimal == "50000.10"
+    assert fill.fee_decimal == "0.00020000"
+    assert fill.quote_qty_decimal == "500.00100000"
+
+
+def test_place_order_preserves_structured_error_without_message_inference():
+    response = order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-error",
+        attempt_id="attempt-error",
+        attempt_status="FAILED",
+        error_message="opaque",
+        error=order_service_pb2.OrderErrorDetail(
+            code="SPOT_MIN_NOTIONAL",
+            message="below minimum",
+            venue_id=10,
+            exchange=1,
+            market=1,
+            symbol="BTCUSDT",
+            environment=1,
+            retryable=False,
+            source="risk_gate",
+        ),
+    )
+    client = OrderClient("")
+    stub = _Stub(response)
+    client._stub = stub
+
+    feedback = client.place_order(
+        13,
+        _decision(market="spot", symbol="BTCUSDT"),
+        50000.0,
+        portfolio_symbol="BTCUSDT",
+        market="spot",
+        intent_id="intent-error",
+    )
+
+    assert feedback.error_code == "SPOT_MIN_NOTIONAL"
+    assert feedback.error_environment == 1
+    assert feedback.error_retryable is False
+    assert feedback.error_source == "risk_gate"
+    assert feedback.error_venue_id == 10
+
+
 def test_exchange_and_market_codes_do_not_default_missing_route() -> None:
     with pytest.raises(ValueError, match="unsupported exchange"):
         OrderClient._exchange_code(None)
@@ -435,15 +554,19 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
         event_source="websocket",
         order_id="order-1",
         exchange_order_id="1001",
-        exchange_trade_id="9001",
+        exchange_trade_id="0",
         fill_delta=order_service_pb2.FillDeltaEntry(
             symbol="ETHUSDT",
             qty=0.1,
             fill_price=2500.0,
             fee=0.02,
             fee_asset="USDT",
-            exchange_trade_id="9001",
+            exchange_trade_id="0",
             exchange_order_id="1001",
+            qty_decimal="0.10000000",
+            fill_price_decimal="2500.00",
+            fee_decimal="0.02000000",
+            quote_qty_decimal="250.00000000",
         ),
         order_state=order_service_pb2.OrderStateEntry(
             symbol="ETHUSDT",
@@ -452,6 +575,11 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
             executed_qty=0.1,
             remaining_qty=0.0,
             avg_price=2500.0,
+            orig_qty_decimal="0.10000000",
+            executed_qty_decimal="0.10000000",
+            remaining_qty_decimal="0.00000000",
+            avg_price_decimal="2500.00",
+            cumulative_quote_qty_decimal="250.00000000",
         ),
     )
 
@@ -466,6 +594,15 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
     assert event.fill is not None
     assert event.fill.qty == pytest.approx(0.1)
     assert event.fill.fee == pytest.approx(0.02)
+    order_response = OrderClient.order_response_from_update(event)
+    assert order_response is not None
+    assert order_response.exchange_trade_id == "0"
+    assert order_response.exchange_order_id == "1001"
+    assert order_response.qty_decimal == "0.10000000"
+    assert order_response.fee_decimal == "0.02000000"
+    assert order_response.quote_qty_decimal == "250.00000000"
+    assert order_response.executed_qty_decimal == "0.10000000"
+    assert order_response.cumulative_quote_qty_decimal == "250.00000000"
 
 
 def test_list_order_lifecycle_events_maps_route_facts_and_fill():

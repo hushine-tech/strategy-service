@@ -215,6 +215,7 @@ class ProxyPortfolioClient:
         user_id: int = 0,
         required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+        order_target_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
         leverage: float = 0.0,
@@ -235,7 +236,11 @@ class ProxyPortfolioClient:
                     )
                     for exchange, market in sorted(required_routes or [])
                 ],
-                required_symbols=_required_symbol_protos(portfolio_service_pb2, required_symbols),
+                required_symbols=_required_symbol_protos(
+                    portfolio_service_pb2,
+                    required_symbols,
+                    order_target_symbols=order_target_symbols,
+                ),
             )
             return self._proxy.invoke(
                 PORTFOLIO_PREFLIGHT_STRATEGY_SESSION,
@@ -764,6 +769,7 @@ class ProxyOrderClient(OrderClient):
         session_id: str = "",
         intent_id: str = "",
         market_time: object | None = None,
+        spot_risk_snapshot_id: str = "",
     ) -> ExecutionFeedback:
         symbol = portfolio_symbol or decision.symbol
         intent = intent_id.strip() or uuid.uuid4().hex
@@ -792,9 +798,12 @@ class ProxyOrderClient(OrderClient):
                 intent_id=intent,
                 exchange=exchange_code,
                 position_side=position_side_code,
+                qty_decimal=str(decision.qty).strip(),
+                mark_price_decimal=str(mark_price).strip(),
             )
             if decision.price is not None:
                 kwargs["price"] = float(decision.price)
+                kwargs["price_decimal"] = str(decision.price).strip()
             order_type = str(getattr(decision, "order_type", None) or "").strip().upper()
             if not order_type:
                 order_type = "LIMIT" if decision.price is not None else "MARKET"
@@ -810,6 +819,13 @@ class ProxyOrderClient(OrderClient):
             market_time_pb = _market_time_to_proto(market_time)
             if market_time_pb is not None:
                 kwargs["market_time"] = market_time_pb
+            effective_spot_snapshot_id = str(
+                spot_risk_snapshot_id
+                or getattr(decision, "spot_risk_snapshot_id", "")
+                or ""
+            ).strip()
+            if effective_spot_snapshot_id:
+                kwargs["spot_risk_snapshot_id"] = effective_spot_snapshot_id
             resp = self._proxy.invoke(
                 ORDER_PLACE,
                 order_service_pb2.PlaceOrderRequest(**kwargs),

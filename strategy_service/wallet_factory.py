@@ -25,8 +25,12 @@ def _bootstrap_futures_equity(state: CanonicalFuturesState) -> float:
 
 
 def _estimate_spot_value(state: CanonicalSpotState) -> float:
-    total = float(state.free or 0.0) + float(state.locked or 0.0)
+    has_quote_asset = any(item.normalized_asset() == "USDT" for item in state.assets)
+    total = 0.0 if has_quote_asset else float(state.free or 0.0) + float(state.locked or 0.0)
     for asset in state.assets:
+        if asset.normalized_asset() == "USDT":
+            total += float(asset.qty or 0.0)
+            continue
         if asset.price is None:
             continue
         total += float(asset.qty or 0.0) * float(asset.price)
@@ -81,16 +85,7 @@ def portfolio_dict_to_canonical_state(portfolio: dict[str, Any]) -> CanonicalPor
     spot_state = CanonicalSpotState(
         free=float(sa.get("free", 0.0) or 0.0),
         locked=float(sa.get("locked", 0.0) or 0.0),
-        assets=[
-            CanonicalSpotAssetState(
-                symbol=norm_symbol(sym),
-                qty=float((ad or {}).get("qty", 0.0) or 0.0),
-                locked=float((ad or {}).get("locked", 0.0) or 0.0),
-                avg_entry_price=float((ad or {}).get("avg_entry_price", 0.0) or 0.0),
-                price=float((ad or {})["price"]) if (ad or {}).get("price") is not None else None,
-            )
-            for sym, ad in (sa.get("assets") or {}).items()
-        ],
+        assets=[_dict_spot_asset(asset_key, value) for asset_key, value in (sa.get("assets") or {}).items()],
     )
 
     futures_equity = _bootstrap_futures_equity(futures_state)
@@ -102,6 +97,31 @@ def portfolio_dict_to_canonical_state(portfolio: dict[str, Any]) -> CanonicalPor
         total_value=futures_equity + spot_value,
         spot_estimated_value=spot_value,
         futures_position_equity=futures_equity,
+    )
+
+
+def _dict_spot_asset(asset_key: str, value: Any) -> CanonicalSpotAssetState:
+    payload = value or {}
+    explicit_asset = norm_symbol(payload.get("asset", ""))
+    legacy_key = norm_symbol(asset_key)
+    asset = explicit_asset or legacy_key
+    if not explicit_asset and asset.endswith("USDT") and asset != "USDT":
+        asset = asset[:-4]
+    qty = float(payload.get("qty", payload.get("free", 0.0)) or 0.0)
+    locked = float(payload.get("locked", 0.0) or 0.0)
+    free = payload.get("free")
+    if free is None:
+        free = max(0.0, qty - locked)
+    return CanonicalSpotAssetState(
+        symbol="",
+        qty=qty,
+        locked=locked,
+        avg_entry_price=float(payload.get("avg_entry_price", 0.0) or 0.0),
+        price=float(payload["price"]) if payload.get("price") is not None else None,
+        asset=asset,
+        free=free,
+        free_decimal=str(payload.get("free_decimal", "") or ""),
+        locked_decimal=str(payload.get("locked_decimal", "") or ""),
     )
 
 

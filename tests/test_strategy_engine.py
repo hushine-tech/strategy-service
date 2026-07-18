@@ -2,6 +2,7 @@ import time
 import sys
 import threading
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -25,6 +26,7 @@ from strategy_service.strategy_imports import (
 from strategy_service.strategy.base import StrategyActivationError, StrategyUserCodeFatalError
 from strategy_service.strategy import base as strategy_base
 from strategy_service.wallet import SpotAsset
+from strategy_service.wallet.canonical import SpotSymbolFilter, SpotSymbolMetadata
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from tests.helpers.order_client import FilledOrderClient
 from tests.helpers.wallet_fixtures import make_backtest_wallet
@@ -171,7 +173,51 @@ def _wallet_with_futures_slot(
         initial_balance=portfolio_initial_balance,
         futures_positions=futures_positions,
     )
-    return _portfolio_wallet(wallet, ("binance", "perpetual_futures"), ("binance", "spot"))
+    routed = _portfolio_wallet(wallet, ("binance", "perpetual_futures"), ("binance", "spot"))
+    _register_spot_facts(wallet.spot, sym)
+    return routed
+
+
+def _spot_metadata(symbol: str, *, venue_id: int = 11) -> SpotSymbolMetadata:
+    normalized = symbol.strip().upper()
+    assert normalized.endswith("USDT")
+    return SpotSymbolMetadata(
+        venue_id=venue_id,
+        exchange="binance",
+        market="spot",
+        symbol=normalized,
+        status="TRADING",
+        base_asset=normalized[:-4],
+        quote_asset="USDT",
+        base_asset_precision=8,
+        quote_asset_precision=8,
+        spot_trading_allowed=True,
+        permission_sets=(("SPOT",),),
+        order_types=("LIMIT", "MARKET"),
+        filters=(
+            SpotSymbolFilter(
+                filter_type="PRICE_FILTER",
+                min_price="0.00000001",
+                max_price="1000000000",
+                tick_size="0.00000001",
+            ),
+            SpotSymbolFilter(
+                filter_type="LOT_SIZE",
+                min_qty="0.00000001",
+                max_qty="1000000000",
+                step_size="0.00000001",
+            ),
+        ),
+    )
+
+
+def _register_spot_facts(spot_wallet, symbol: str) -> None:
+    metadata = _spot_metadata(symbol)
+    spot_wallet.register_risk_facts(
+        snapshot_id=f"test-risk-{metadata.symbol}",
+        metadata=metadata,
+        reference_price_decimal="100",
+    )
 
 
 def _wallet_with_spot_slot(symbol: str = "TESTUSDT"):
@@ -180,7 +226,9 @@ def _wallet_with_spot_slot(symbol: str = "TESTUSDT"):
         margin_mode="isolated",
         spot_assets=[{"symbol": symbol.strip().upper()}],
     )
-    return _portfolio_wallet(wallet, ("binance", "perpetual_futures"), ("binance", "spot"))
+    routed = _portfolio_wallet(wallet, ("binance", "perpetual_futures"), ("binance", "spot"))
+    _register_spot_facts(wallet.spot, symbol)
+    return routed
 
 
 # Helper to build inline strategy code with INPUTS auto-inserted.
@@ -1882,7 +1930,7 @@ def test_strategy_declared_symbols_route_even_without_wallet_slot():
 def test_same_symbol_different_market_routes_correctly():
     """Strategy declaring both markets → both route to the same instance."""
     wallet = _wallet_with_futures_slot(symbol="BTCUSDT")
-    wallet.spot.assets["BTCUSDT"] = SpotAsset()
+    wallet.spot.assets["BTC"] = SpotAsset()
     svc = StrategyEngine()
     strategy_code = (
         "class MyStrategy:\n"
@@ -1911,7 +1959,8 @@ def test_user_strategy_uses_preconfigured_spot_slot():
     wallet = _wallet_with_spot_slot()
     svc = StrategyEngine()
     _create_strategy(svc, "u1", "strategies.noop", wallet)
-    assert "TESTUSDT" in wallet.spot.assets
+    assert "TEST" in wallet.spot.assets
+    assert "TESTUSDT" not in wallet.spot.assets
 
 
 def test_import_error_message():
@@ -2087,6 +2136,7 @@ def test_spot_market_buy_updates_spot_wallet_only():
     wallet = _wallet_with_spot_slot()
     wallet.spot.free = 1_000.0
     svc = StrategyEngine()
+    order_client = FilledOrderClient()
     # buy_once declares (futures, TESTUSDT, 1m); for the spot test we use an
     # inline strategy declaring the spot input.
     strategy_code = _inline(
@@ -2100,17 +2150,18 @@ def test_spot_market_buy_updates_spot_wallet_only():
         "u1",
         "<db:spot_buy>",
         wallet,
-        order_client=FilledOrderClient(),
+        order_client=order_client,
         strategy_code=strategy_code,
     )
 
     svc.running_strategy(_md(symbol="TESTUSDT", price=100.0, market="spot"))
 
-    asset = wallet.spot.assets["TESTUSDT"]
-    assert asset.qty == 0.1
-    assert asset.avg_entry_price == 100.0
+    asset = wallet.spot.assets["TEST"]
+    assert asset.qty == Decimal("0.1")
+    assert asset.avg_entry_price == Decimal("100.0")
     assert wallet.spot.free == 990.0
     assert wallet.futures.positions == {}
+    assert order_client.calls[0]["spot_risk_snapshot_id"] == "test-risk-TESTUSDT"
 
 
 def test_futures_open_precheck_uses_available_balance_not_wallet_balance():
@@ -2169,7 +2220,7 @@ def test_limit_order_passes_market_tick_as_mark_price_not_limit_price():
 
 def test_spot_sell_precheck_uses_unlocked_qty():
     wallet = _wallet_with_spot_slot()
-    wallet.spot.assets["TESTUSDT"] = SpotAsset(qty=1.0, locked=0.8, avg_entry_price=90.0, price=100.0)
+    wallet.spot.assets["TEST"] = SpotAsset(qty=1.0, locked=0.8, avg_entry_price=90.0, price=100.0)
     wallet.on_order = MagicMock(wraps=wallet.on_order)
     strategy_code = _inline(
         body=(
@@ -2184,8 +2235,8 @@ def test_spot_sell_precheck_uses_unlocked_qty():
     svc.running_strategy(_md(symbol="TESTUSDT", price=100.0, market="spot"))
 
     wallet.on_order.assert_not_called()
-    assert wallet.spot.assets["TESTUSDT"].qty == pytest.approx(1.0)
-    assert wallet.spot.assets["TESTUSDT"].locked == pytest.approx(0.8)
+    assert wallet.spot.assets["TEST"].qty == Decimal("1.0")
+    assert wallet.spot.assets["TEST"].locked == Decimal("0.8")
 
 
 def test_order_callbacks_run_after_wallet_update_in_order():
@@ -2274,7 +2325,7 @@ def test_spot_order_callbacks_run_after_wallet_update_in_order():
         "user.on_order_response",
         "sync.on_order_callback",
     ]
-    assert wallet.spot.assets["TESTUSDT"].qty == pytest.approx(0.05)
+    assert wallet.spot.assets["TEST"].qty == Decimal("0.05")
 
 
 def test_zero_qty_rejected_before_wallet():

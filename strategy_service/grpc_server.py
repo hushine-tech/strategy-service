@@ -77,7 +77,10 @@ from strategy_service.strategy_imports import (
     prepare_strategy,
     resolve_strategy_source,
 )
-from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
+from strategy_service.wallet.portfolio_adapter import (
+    attach_spot_risk_snapshots,
+    build_portfolio_wallet_from_snapshot,
+)
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 
 logger = logging.getLogger(__name__)
@@ -1403,15 +1406,18 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details("invalid canonical session_id")
             return pb2.RunStrategyResponse()
 
+        preflight_responses: list[Any] = []
         portfolio_preflight = self._run_portfolio_preflight(
             acct_client=acct_client,
             portfolio_id=portfolio_id,
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
+            order_target_symbols=set(declarations.order_target_keys),
             session_id=preflight_session_id,
             strategy_id=strategy_id,
             leverage=effective_risk.leverage,
+            response_sink=preflight_responses,
         )
         if portfolio_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
@@ -1438,12 +1444,22 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 snapshot,
                 allowed_routes=required_routes,
             )
+            if preflight_responses:
+                attach_spot_risk_snapshots(
+                    wallet,
+                    getattr(preflight_responses[0], "spot_risk_snapshots", []) or [],
+                )
             backtest_restore_wallet = None
             if environment == 0:
                 backtest_restore_wallet = build_portfolio_wallet_from_snapshot(
                     snapshot,
                     allowed_routes=required_routes,
                 )
+                if preflight_responses:
+                    attach_spot_risk_snapshots(
+                        backtest_restore_wallet,
+                        getattr(preflight_responses[0], "spot_risk_snapshots", []) or [],
+                    )
         except Exception as e:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(f"failed to build wallet: {e}")
@@ -2195,9 +2211,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         user_id: int,
         required_routes: set[tuple[str, str]],
         required_symbols: set[tuple[str, str, str]],
+        order_target_symbols: set[tuple[str, str, str]] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
         leverage: float = 0.0,
+        response_sink: list[Any] | None = None,
     ) -> str | None:
         preflight = getattr(acct_client, "preflight_strategy_session", None)
         if not callable(preflight):
@@ -2207,12 +2225,15 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_id=user_id,
             required_routes=sorted(required_routes),
             required_symbols=sorted(required_symbols),
+            order_target_symbols=sorted(order_target_symbols or set()),
             session_id=str(session_id or ""),
             strategy_id=int(strategy_id),
             leverage=float(leverage or 0.0),
         )
         if resp is None:
             return "portfolio preflight unavailable: core-service did not return a result"
+        if response_sink is not None:
+            response_sink.append(resp)
         if bool(getattr(resp, "ok", False)):
             return None
         issue_messages: list[str] = []
@@ -3441,6 +3462,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
+            order_target_symbols=set(declarations.order_target_keys),
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
             leverage=effective_risk.leverage,
         )

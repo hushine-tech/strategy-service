@@ -243,6 +243,7 @@ class _PreparedOrderDecision:
     mark_price_refreshed: bool
     venue_id: int
     route_wallet: Any
+    spot_risk_snapshot_id: str = ""
 
 
 class BaseStrategy:
@@ -772,10 +773,26 @@ class BaseStrategy:
         order_resp: OrderResponse,
         *,
         venue_id: int | None = None,
-    ) -> None:
+    ) -> OrderResponse:
         symbol_type = _wallet_market(market)
         route_venue_id = self._venue_id_for_route(exchange, market) if venue_id is None else int(venue_id)
-        self.wallet.on_order(exchange, market, route_venue_id, symbol, symbol_type, order_resp)
+        normalized = replace(
+            order_resp,
+            venue_id=(
+                int(getattr(order_resp, "venue_id", 0) or 0)
+                or route_venue_id
+            ),
+            exchange=(
+                str(getattr(order_resp, "exchange", "") or "").strip()
+                or _norm_exchange(exchange)
+            ),
+            market=(
+                str(getattr(order_resp, "market", "") or "").strip()
+                or _norm_market(market)
+            ),
+        )
+        self.wallet.on_order(exchange, market, route_venue_id, symbol, symbol_type, normalized)
+        return normalized
 
     def activate_order_event_cursor(self) -> None:
         failed = False
@@ -861,7 +878,7 @@ class BaseStrategy:
                         if event_id > self._order_event_cursor:
                             self._order_event_cursor = event_id
                         return False
-                    self._apply_order_to_wallet(
+                    order_resp = self._apply_order_to_wallet(
                         event_exchange,
                         event_market,
                         order_resp.symbol,
@@ -934,11 +951,27 @@ class BaseStrategy:
         except (TypeError, ValueError):
             return 0.0
 
+    @staticmethod
+    def _order_settlement_key(order_resp: OrderResponse) -> tuple[int, str, str, str]:
+        identity = str(
+            getattr(order_resp, "exchange_order_id", "")
+            or getattr(order_resp, "order_id", "")
+            or ""
+        ).strip()
+        raw_exchange = str(getattr(order_resp, "exchange", "") or "").strip()
+        raw_market = str(getattr(order_resp, "market", "") or "").strip()
+        return (
+            int(getattr(order_resp, "venue_id", 0) or 0),
+            _norm_exchange(raw_exchange) if raw_exchange else "",
+            _norm_market(raw_market) if raw_market else "",
+            identity,
+        )
+
     def _record_order_settlement(self, order_resp: OrderResponse) -> None:
-        order_id = str(getattr(order_resp, "order_id", "") or "").strip()
-        if not order_id:
+        settlement_key = self._order_settlement_key(order_resp)
+        if not settlement_key[3]:
             return
-        current = self._sync_settled_order_quantities.get(order_id, 0.0)
+        current = self._sync_settled_order_quantities.get(settlement_key, 0.0)
         cumulative = self._order_cumulative_executed_qty(order_resp)
         if cumulative is None:
             delta = self._order_delta_qty(order_resp)
@@ -946,7 +979,7 @@ class BaseStrategy:
                 return
             cumulative = current + delta
         if cumulative > current:
-            self._sync_settled_order_quantities[order_id] = cumulative
+            self._sync_settled_order_quantities[settlement_key] = cumulative
 
     @staticmethod
     def _route_wallet_has_open_order(route_wallet: Any, order_id: str) -> bool:
@@ -959,8 +992,14 @@ class BaseStrategy:
         ]
         for wallet_part in candidates:
             open_orders = getattr(wallet_part, "open_orders", None)
-            if isinstance(open_orders, dict) and order_id in open_orders:
-                return True
+            if isinstance(open_orders, dict):
+                if order_id in open_orders:
+                    return True
+                if any(
+                    isinstance(key, tuple) and key and str(key[-1]) == order_id
+                    for key in open_orders
+                ):
+                    return True
         return False
 
     def _adjust_lifecycle_order_response(
@@ -968,15 +1007,20 @@ class BaseStrategy:
         order_resp: OrderResponse,
         route_wallet: Any,
     ) -> OrderResponse | None:
-        order_id = str(getattr(order_resp, "order_id", "") or "").strip()
+        order_id = str(
+            getattr(order_resp, "exchange_order_id", "")
+            or getattr(order_resp, "order_id", "")
+            or ""
+        ).strip()
+        settlement_key = self._order_settlement_key(order_resp)
         cumulative = self._order_cumulative_executed_qty(order_resp)
         if not order_id or cumulative is None:
             return order_resp
-        settled = self._sync_settled_order_quantities.get(order_id)
+        settled = self._sync_settled_order_quantities.get(settlement_key)
         if settled is None:
             return order_resp
         if cumulative <= settled:
-            self._sync_settled_order_quantities[order_id] = max(settled, cumulative)
+            self._sync_settled_order_quantities[settlement_key] = max(settled, cumulative)
             return None
         if self._route_wallet_has_open_order(route_wallet, order_id):
             return order_resp
@@ -989,7 +1033,7 @@ class BaseStrategy:
             executed_qty=delta,
             remaining_qty=max(0.0, float(getattr(order_resp, "remaining_qty", 0.0) or 0.0)),
         )
-        self._sync_settled_order_quantities[order_id] = cumulative
+        self._sync_settled_order_quantities[settlement_key] = cumulative
         return adjusted
 
     @staticmethod
@@ -1226,6 +1270,7 @@ class BaseStrategy:
             mark_price_refreshed=(sig_exchange, sig_market, sig_sym) == trigger_key,
             venue_id=venue_id,
             route_wallet=route_wallet,
+            spot_risk_snapshot_id="",
         )
 
     def _resolve_mark_price(
@@ -1288,7 +1333,7 @@ class BaseStrategy:
                 pos = matched[0][1]
         if pos is None and sig_market == "spot":
             sw = getattr(route_wallet, "spot", None)
-            pos = sw.assets.get(sig_sym) if sw is not None else None
+            pos = sw.asset_for_symbol(sig_sym) if sw is not None else None
         leverage = float(getattr(pos, "leverage", 1.0)) if pos else 1.0
         qty = float(item.qty)
         side_upper = item.side
@@ -1297,7 +1342,7 @@ class BaseStrategy:
         if sig_market == "spot" and hasattr(route_wallet, "spot"):
             sw = getattr(route_wallet, "spot", None)
             if side_upper == OrderSide.SELL:
-                asset = sw.assets.get(sig_sym) if sw is not None else None
+                asset = sw.asset_for_symbol(sig_sym) if sw is not None else None
                 available_qty = (
                     float(getattr(asset, "qty", 0.0)) - float(getattr(asset, "locked", 0.0))
                     if asset else 0.0
@@ -1340,6 +1385,22 @@ class BaseStrategy:
                     )
                     return
 
+        spot_risk_snapshot_id = item.spot_risk_snapshot_id
+        if sig_market == "spot":
+            spot_wallet = getattr(route_wallet, "spot", None)
+            reviewer = getattr(spot_wallet, "review_order", None)
+            if callable(reviewer):
+                spot_risk_snapshot_id = reviewer(
+                    symbol=sig_sym,
+                    side=side_upper,
+                    order_type=item.order_type,
+                    qty_decimal=str(signal.qty).strip(),
+                    price_decimal=(
+                        str(signal.price).strip() if signal.price is not None else None
+                    ),
+                    reduce_only=bool(getattr(signal, "reduce_only", False)),
+                )
+
         if not item.mark_price_refreshed:
             self.wallet.on_market_data(
                 sig_exchange,
@@ -1357,6 +1418,7 @@ class BaseStrategy:
             session_id=self._session_id,
             intent_id=intent_id,
             market_time=item.market_time,
+            spot_risk_snapshot_id=spot_risk_snapshot_id,
         ))
         has_settleable_fill = bool(feedback.fill_events) or (
             int(getattr(feedback, "fill_count", 0) or 0) > 0
@@ -1400,13 +1462,31 @@ class BaseStrategy:
 
         if feedback.fill_events:
             for fill_event in feedback.fill_events:
-                self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, fill_event, venue_id=item.venue_id)
+                fill_event = self._apply_order_to_wallet(
+                    sig_exchange,
+                    sig_market,
+                    sig_sym,
+                    fill_event,
+                    venue_id=item.venue_id,
+                )
                 self._record_order_settlement(fill_event)
         elif has_settleable_fill:
-            self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order, venue_id=item.venue_id)
-            self._record_order_settlement(feedback.order)
+            settled_order = self._apply_order_to_wallet(
+                sig_exchange,
+                sig_market,
+                sig_sym,
+                feedback.order,
+                venue_id=item.venue_id,
+            )
+            self._record_order_settlement(settled_order)
         elif terminal_without_fill:
-            self._apply_order_to_wallet(sig_exchange, sig_market, sig_sym, feedback.order, venue_id=item.venue_id)
+            self._apply_order_to_wallet(
+                sig_exchange,
+                sig_market,
+                sig_sym,
+                feedback.order,
+                venue_id=item.venue_id,
+            )
         else:
             self._notify_order_response(feedback)
             self.raise_if_user_code_fatal()

@@ -33,6 +33,7 @@ const (
 	PortfolioService_ReleaseVenue_FullMethodName                    = "/portfolio.v1.PortfolioService/ReleaseVenue"
 	PortfolioService_ArchiveVenue_FullMethodName                    = "/portfolio.v1.PortfolioService/ArchiveVenue"
 	PortfolioService_PreflightStrategySession_FullMethodName        = "/portfolio.v1.PortfolioService/PreflightStrategySession"
+	PortfolioService_GetProductCapabilities_FullMethodName          = "/portfolio.v1.PortfolioService/GetProductCapabilities"
 	PortfolioService_GetPortfolioSnapshot_FullMethodName            = "/portfolio.v1.PortfolioService/GetPortfolioSnapshot"
 	PortfolioService_UpdatePortfolioSnapshot_FullMethodName         = "/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot"
 	PortfolioService_UpdatePortfolioWalletState_FullMethodName      = "/portfolio.v1.PortfolioService/UpdatePortfolioWalletState"
@@ -95,6 +96,7 @@ type PortfolioServiceClient interface {
 	ReleaseVenue(ctx context.Context, in *ReleaseVenueRequest, opts ...grpc.CallOption) (*ReleaseVenueResponse, error)
 	ArchiveVenue(ctx context.Context, in *ArchiveVenueRequest, opts ...grpc.CallOption) (*ArchiveVenueResponse, error)
 	PreflightStrategySession(ctx context.Context, in *PreflightStrategySessionRequest, opts ...grpc.CallOption) (*PreflightStrategySessionResponse, error)
+	GetProductCapabilities(ctx context.Context, in *GetProductCapabilitiesRequest, opts ...grpc.CallOption) (*GetProductCapabilitiesResponse, error)
 	// Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
 	// through the exchange capability registry and returns portfolio-level summary
 	// plus per-venue balances/positions.
@@ -309,6 +311,16 @@ func (c *portfolioServiceClient) PreflightStrategySession(ctx context.Context, i
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PreflightStrategySessionResponse)
 	err := c.cc.Invoke(ctx, PortfolioService_PreflightStrategySession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *portfolioServiceClient) GetProductCapabilities(ctx context.Context, in *GetProductCapabilitiesRequest, opts ...grpc.CallOption) (*GetProductCapabilitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetProductCapabilitiesResponse)
+	err := c.cc.Invoke(ctx, PortfolioService_GetProductCapabilities_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -663,6 +675,7 @@ type PortfolioServiceServer interface {
 	ReleaseVenue(context.Context, *ReleaseVenueRequest) (*ReleaseVenueResponse, error)
 	ArchiveVenue(context.Context, *ArchiveVenueRequest) (*ArchiveVenueResponse, error)
 	PreflightStrategySession(context.Context, *PreflightStrategySessionRequest) (*PreflightStrategySessionResponse, error)
+	GetProductCapabilities(context.Context, *GetProductCapabilitiesRequest) (*GetProductCapabilitiesResponse, error)
 	// Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
 	// through the exchange capability registry and returns portfolio-level summary
 	// plus per-venue balances/positions.
@@ -784,6 +797,9 @@ func (UnimplementedPortfolioServiceServer) ArchiveVenue(context.Context, *Archiv
 }
 func (UnimplementedPortfolioServiceServer) PreflightStrategySession(context.Context, *PreflightStrategySessionRequest) (*PreflightStrategySessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PreflightStrategySession not implemented")
+}
+func (UnimplementedPortfolioServiceServer) GetProductCapabilities(context.Context, *GetProductCapabilitiesRequest) (*GetProductCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetProductCapabilities not implemented")
 }
 func (UnimplementedPortfolioServiceServer) GetPortfolioSnapshot(context.Context, *GetPortfolioSnapshotRequest) (*GetPortfolioSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPortfolioSnapshot not implemented")
@@ -1150,6 +1166,24 @@ func _PortfolioService_PreflightStrategySession_Handler(srv interface{}, ctx con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PortfolioServiceServer).PreflightStrategySession(ctx, req.(*PreflightStrategySessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PortfolioService_GetProductCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetProductCapabilitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PortfolioServiceServer).GetProductCapabilities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PortfolioService_GetProductCapabilities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PortfolioServiceServer).GetProductCapabilities(ctx, req.(*GetProductCapabilitiesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1792,6 +1826,10 @@ var PortfolioService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PreflightStrategySession",
 			Handler:    _PortfolioService_PreflightStrategySession_Handler,
+		},
+		{
+			MethodName: "GetProductCapabilities",
+			Handler:    _PortfolioService_GetProductCapabilities_Handler,
 		},
 		{
 			MethodName: "GetPortfolioSnapshot",

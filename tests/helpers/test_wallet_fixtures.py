@@ -8,6 +8,7 @@ red, every downstream test that uses the helper is suspect.
 
 from __future__ import annotations
 
+from decimal import Decimal
 import pytest
 
 from strategy_service.wallet import BinanceWalletRuntime
@@ -96,10 +97,11 @@ def test_helper_spot_assets_hydrated():
             {"symbol": "BTCUSDT", "qty": 0.01, "avg_entry_price": 40_000.0, "price": 45_000.0},
         ],
     )
-    assert "BTCUSDT" in wallet.spot.assets
-    asset = wallet.spot.assets["BTCUSDT"]
-    assert asset.qty == pytest.approx(0.01)
-    assert asset.avg_entry_price == pytest.approx(40_000.0)
+    assert "BTC" in wallet.spot.assets
+    assert "BTCUSDT" not in wallet.spot.assets
+    asset = wallet.spot.assets["BTC"]
+    assert asset.qty == Decimal("0.01")
+    assert asset.avg_entry_price == Decimal("40000.0")
 
 
 def test_helper_backtest_isolated_uses_position_seeds_for_wallet_balance():

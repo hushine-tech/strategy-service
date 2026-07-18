@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 
@@ -122,9 +123,18 @@ class CanonicalSpotAssetState:
     locked: float = 0.0
     avg_entry_price: float = 0.0
     price: float | None = None
+    # Binance account semantics. ``symbol``/``qty`` remain additive-read
+    # compatibility for snapshots written before asset-code fields existed.
+    asset: str = ""
+    free: Decimal | str | float | int | None = None
+    free_decimal: str = ""
+    locked_decimal: str = ""
 
     def normalized_symbol(self) -> str:
         return norm_symbol(self.symbol)
+
+    def normalized_asset(self) -> str:
+        return norm_symbol(self.asset or self.symbol)
 
 
 @dataclass(slots=True)
@@ -132,6 +142,66 @@ class CanonicalSpotState:
     free: float = 0.0
     locked: float = 0.0
     assets: list[CanonicalSpotAssetState] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class SpotSymbolFilter:
+    filter_type: str
+    min_price: str = ""
+    max_price: str = ""
+    tick_size: str = ""
+    min_qty: str = ""
+    max_qty: str = ""
+    step_size: str = ""
+    min_notional: str = ""
+    max_notional: str = ""
+    apply_to_market: bool = False
+    apply_min_to_market: bool = False
+    apply_max_to_market: bool = False
+    avg_price_mins: int = 0
+    limit: int = 0
+    multiplier_up: str = ""
+    multiplier_down: str = ""
+    bid_multiplier_up: str = ""
+    bid_multiplier_down: str = ""
+    ask_multiplier_up: str = ""
+    ask_multiplier_down: str = ""
+    raw_json: str = ""
+    max_position: str = ""
+    max_num_orders: int = 0
+    max_num_algo_orders: int = 0
+    max_num_iceberg_orders: int = 0
+    max_num_order_amends: int = 0
+    max_num_order_lists: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SpotSymbolMetadata:
+    """Immutable Binance Spot symbol facts for one exact Venue route."""
+
+    venue_id: int
+    exchange: str
+    market: str
+    symbol: str
+    status: str
+    base_asset: str
+    quote_asset: str
+    base_asset_precision: int
+    quote_asset_precision: int
+    spot_trading_allowed: bool
+    permission_sets: tuple[tuple[str, ...], ...] = ()
+    order_types: tuple[str, ...] = ()
+    filters: tuple[SpotSymbolFilter, ...] = ()
+    snapshot_time_ms: int = 0
+
+    @property
+    def route_key(self) -> tuple[int, str, str, str]:
+        return (
+            int(self.venue_id),
+            str(self.exchange).strip().lower(),
+            str(self.market).strip().lower(),
+            norm_symbol(self.symbol),
+        )
 
 
 @dataclass(slots=True)

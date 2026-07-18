@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 import logging
 import uuid
 
@@ -126,6 +127,7 @@ class OrderClient:
         session_id: str = "",
         intent_id: str = "",
         market_time: object | None = None,
+        spot_risk_snapshot_id: str = "",
     ) -> ExecutionFeedback:
         """Place an order via order.v1."""
         symbol = portfolio_symbol or decision.symbol
@@ -159,9 +161,12 @@ class OrderClient:
                 intent_id=intent,
                 exchange=exchange_code,
                 position_side=position_side_code,
+                qty_decimal=str(decision.qty).strip(),
+                mark_price_decimal=str(mark_price).strip(),
             )
             if decision.price is not None:
                 kwargs["price"] = float(decision.price)
+                kwargs["price_decimal"] = str(decision.price).strip()
             order_type = str(getattr(decision, "order_type", None) or "").strip().upper()
             if not order_type:
                 order_type = "LIMIT" if decision.price is not None else "MARKET"
@@ -177,6 +182,13 @@ class OrderClient:
             market_time_pb = _market_time_to_proto(market_time)
             if market_time_pb is not None:
                 kwargs["market_time"] = market_time_pb
+            effective_spot_snapshot_id = str(
+                spot_risk_snapshot_id
+                or getattr(decision, "spot_risk_snapshot_id", "")
+                or ""
+            ).strip()
+            if effective_spot_snapshot_id:
+                kwargs["spot_risk_snapshot_id"] = effective_spot_snapshot_id
 
             req = order_service_pb2.PlaceOrderRequest(**kwargs)
             resp = self._stub.PlaceOrder(req)
@@ -293,6 +305,33 @@ class OrderClient:
             executed_qty=executed_qty,
             remaining_qty=remaining_qty,
             price=float(getattr(event, "avg_price", 0.0) or 0.0),
+            venue_id=int(getattr(event, "venue_id", 0) or 0),
+            exchange=str(getattr(event, "exchange", "") or ""),
+            market=str(getattr(event, "market", "") or ""),
+            exchange_order_id=str(
+                getattr(event.fill, "exchange_order_id", "")
+                or getattr(event, "exchange_order_id", "")
+                or ""
+            ),
+            exchange_trade_id=str(
+                getattr(event.fill, "exchange_trade_id", "")
+                or getattr(event, "exchange_trade_id", "")
+                or ""
+            ),
+            fee_asset=str(getattr(event.fill, "fee_asset", "") or ""),
+            qty_decimal=str(getattr(event.fill, "qty_decimal", "") or event.fill.qty or "0"),
+            fill_price_decimal=str(
+                getattr(event.fill, "fill_price_decimal", "")
+                or event.fill.fill_price
+                or "0"
+            ),
+            fee_decimal=str(getattr(event.fill, "fee_decimal", "") or event.fill.fee or "0"),
+            quote_qty_decimal=str(getattr(event.fill, "quote_qty_decimal", "") or ""),
+            orig_qty_decimal=str(getattr(event, "orig_qty_decimal", "") or orig_qty or "0"),
+            executed_qty_decimal=str(getattr(event, "executed_qty_decimal", "") or executed_qty or "0"),
+            remaining_qty_decimal=str(getattr(event, "remaining_qty_decimal", "") or remaining_qty or "0"),
+            price_decimal=str(getattr(event, "price_decimal", "") or ""),
+            cumulative_quote_qty_decimal=str(getattr(event, "cumulative_quote_qty_decimal", "") or ""),
         )
 
     @staticmethod
@@ -313,8 +352,12 @@ class OrderClient:
                 exchange_trade_id=str(item.fill_delta.exchange_trade_id or ""),
                 exchange_order_id=str(item.fill_delta.exchange_order_id or ""),
             )
+            object.__setattr__(fill, "qty_decimal", str(getattr(item.fill_delta, "qty_decimal", "") or ""))
+            object.__setattr__(fill, "fill_price_decimal", str(getattr(item.fill_delta, "fill_price_decimal", "") or ""))
+            object.__setattr__(fill, "fee_decimal", str(getattr(item.fill_delta, "fee_decimal", "") or ""))
+            object.__setattr__(fill, "quote_qty_decimal", str(getattr(item.fill_delta, "quote_qty_decimal", "") or ""))
         order_state = item.order_state if item.HasField("order_state") else None
-        return OrderUpdateEvent(
+        event = OrderUpdateEvent(
             event_id=int(item.event_id),
             session_id=str(item.session_id or ""),
             portfolio_id=int(item.portfolio_id),
@@ -338,6 +381,12 @@ class OrderClient:
             remaining_qty=float(getattr(order_state, "remaining_qty", 0.0) or 0.0),
             avg_price=float(getattr(order_state, "avg_price", 0.0) or 0.0),
         )
+        object.__setattr__(event, "orig_qty_decimal", str(getattr(order_state, "orig_qty_decimal", "") or ""))
+        object.__setattr__(event, "executed_qty_decimal", str(getattr(order_state, "executed_qty_decimal", "") or ""))
+        object.__setattr__(event, "remaining_qty_decimal", str(getattr(order_state, "remaining_qty_decimal", "") or ""))
+        object.__setattr__(event, "price_decimal", str(getattr(order_state, "price_decimal", "") or ""))
+        object.__setattr__(event, "cumulative_quote_qty_decimal", str(getattr(order_state, "cumulative_quote_qty_decimal", "") or ""))
+        return event
 
     def _resolve_unknown_attempt(
         self,
@@ -381,6 +430,7 @@ class OrderClient:
             )
 
     def _feedback_from_response(self, resp, *, decision: OrderDecision, market: str, symbol: str) -> ExecutionFeedback:
+        error_fields = self._structured_error_fields(resp)
         order_event = None
         if resp.HasField("order"):
             fill_events = self._build_fill_events(
@@ -409,6 +459,25 @@ class OrderClient:
                 executed_qty=float(resp.order.executed_qty or 0.0),
                 remaining_qty=float(resp.order.remaining_qty or 0.0),
                 price=float(resp.order.price or 0.0),
+                venue_id=int(getattr(resp.order, "venue_id", 0) or 0),
+                exchange=EXCHANGE_NAMES.get(int(getattr(resp.order, "exchange", 0) or 0), ""),
+                market=MARKET_NAMES.get(int(getattr(resp.order, "market", 0) or 0), market),
+                exchange_order_id=str(getattr(resp.order, "exchange_order_id", "") or ""),
+                fee_asset=(
+                    fill_events[0].fee_asset
+                    if fill_events and len({item.fee_asset for item in fill_events}) == 1
+                    else ""
+                ),
+                qty_decimal=str(sum((Decimal(item.qty_decimal or "0") for item in fill_events), Decimal("0"))),
+                fill_price_decimal=(fill_events[-1].fill_price_decimal if fill_events else str(getattr(resp.order, "avg_price_decimal", "") or "")),
+                fee_decimal=str(sum((Decimal(item.fee_decimal or "0") for item in fill_events), Decimal("0"))),
+                quote_qty_decimal=str(sum((Decimal(item.quote_qty_decimal or "0") for item in fill_events), Decimal("0"))),
+                orig_qty_decimal=str(getattr(resp.order, "orig_qty_decimal", "") or resp.order.orig_qty or "0"),
+                executed_qty_decimal=str(getattr(resp.order, "executed_qty_decimal", "") or resp.order.executed_qty or "0"),
+                remaining_qty_decimal=str(getattr(resp.order, "remaining_qty_decimal", "") or resp.order.remaining_qty or "0"),
+                price_decimal=str(getattr(resp.order, "price_decimal", "") or resp.order.price or ""),
+                cumulative_quote_qty_decimal=str(getattr(resp.order, "cumulative_quote_qty_decimal", "") or ""),
+                environment=int(getattr(resp.order, "environment", 0) or 0),
             )
             return ExecutionFeedback(
                 intent_id=resp.intent_id,
@@ -419,6 +488,7 @@ class OrderClient:
                 fill_count=fill_count,
                 delta_qty=wallet_qty,
                 fill_events=fill_events,
+                **error_fields,
             )
 
         return ExecutionFeedback(
@@ -429,7 +499,30 @@ class OrderClient:
             order=None,
             fill_count=0,
             delta_qty=0.0,
+            **error_fields,
         )
+
+    @staticmethod
+    def _structured_error_fields(resp) -> dict[str, object]:
+        has_field = getattr(resp, "HasField", None)
+        if not callable(has_field):
+            return {}
+        try:
+            if not resp.HasField("error"):
+                return {}
+        except ValueError:
+            return {}
+        detail = resp.error
+        return {
+            "error_code": str(getattr(detail, "code", "") or ""),
+            "error_environment": int(getattr(detail, "environment", 0) or 0),
+            "error_retryable": bool(getattr(detail, "retryable", False)),
+            "error_source": str(getattr(detail, "source", "") or ""),
+            "error_venue_id": int(getattr(detail, "venue_id", 0) or 0),
+            "error_exchange": int(getattr(detail, "exchange", 0) or 0),
+            "error_market": int(getattr(detail, "market", 0) or 0),
+            "error_symbol": str(getattr(detail, "symbol", "") or ""),
+        }
 
     @classmethod
     def _build_fill_events(
@@ -443,6 +536,7 @@ class OrderClient:
     ) -> list[OrderResponse]:
         side = str(getattr(order, "side", "") or fallback_side or "").strip()
         orig_qty = abs(float(getattr(order, "orig_qty", 0.0) or 0.0))
+        orig_qty_decimal = str(getattr(order, "orig_qty_decimal", "") or orig_qty or "0")
         final_status = str(getattr(order, "status", "") or "").strip().upper()
         order_id = str(getattr(order, "order_id", "") or "")
         price = float(getattr(order, "price", 0.0) or 0.0)
@@ -455,13 +549,29 @@ class OrderClient:
             return []
 
         events: list[OrderResponse] = []
-        cumulative_executed = 0.0
+        cumulative_executed = Decimal("0")
+        cumulative_quote = Decimal("0")
         for index, fill in enumerate(raw_fills):
-            raw_qty = abs(float(getattr(fill, "qty", 0.0) or 0.0))
-            if raw_qty <= 0.0:
+            qty_decimal = str(getattr(fill, "qty_decimal", "") or getattr(fill, "qty", 0.0) or "0")
+            raw_qty_decimal = abs(Decimal(qty_decimal))
+            raw_qty = float(raw_qty_decimal)
+            if raw_qty_decimal <= 0:
                 continue
-            cumulative_executed += raw_qty
-            remaining_qty = max(0.0, orig_qty - cumulative_executed) if orig_qty > 0.0 else 0.0
+            fill_price_decimal = str(
+                getattr(fill, "fill_price_decimal", "")
+                or getattr(fill, "fill_price", 0.0)
+                or "0"
+            )
+            quote_qty_decimal = str(getattr(fill, "quote_qty_decimal", "") or "")
+            if quote_qty_decimal:
+                raw_quote = Decimal(quote_qty_decimal)
+            else:
+                raw_quote = raw_qty_decimal * Decimal(fill_price_decimal)
+                quote_qty_decimal = str(raw_quote)
+            cumulative_executed += raw_qty_decimal
+            cumulative_quote += raw_quote
+            remaining_exact = max(Decimal("0"), Decimal(orig_qty_decimal) - cumulative_executed)
+            remaining_qty = float(remaining_exact)
             status = final_status
             if index < len(fill_deltas) - 1 and final_status == "FILLED":
                 status = "PARTIALLY_FILLED"
@@ -475,8 +585,24 @@ class OrderClient:
                 fee=float(getattr(fill, "fee", 0.0) or 0.0),
                 order_id=order_id,
                 orig_qty=orig_qty,
-                executed_qty=cumulative_executed,
+                executed_qty=float(cumulative_executed),
                 remaining_qty=remaining_qty,
                 price=price,
+                venue_id=int(getattr(fill, "venue_id", 0) or getattr(order, "venue_id", 0) or 0),
+                exchange=EXCHANGE_NAMES.get(int(getattr(fill, "exchange", 0) or getattr(order, "exchange", 0) or 0), ""),
+                market=MARKET_NAMES.get(int(getattr(fill, "market", 0) or getattr(order, "market", 0) or 0), market),
+                exchange_order_id=str(getattr(fill, "exchange_order_id", "") or getattr(order, "exchange_order_id", "") or ""),
+                exchange_trade_id=str(getattr(fill, "exchange_trade_id", "") or ""),
+                fee_asset=str(getattr(fill, "fee_asset", "") or ""),
+                qty_decimal=str(raw_qty_decimal),
+                fill_price_decimal=fill_price_decimal,
+                fee_decimal=str(getattr(fill, "fee_decimal", "") or getattr(fill, "fee", 0.0) or "0"),
+                quote_qty_decimal=quote_qty_decimal,
+                orig_qty_decimal=orig_qty_decimal,
+                executed_qty_decimal=str(cumulative_executed),
+                remaining_qty_decimal=str(remaining_exact),
+                price_decimal=str(getattr(order, "price_decimal", "") or getattr(order, "price", 0.0) or ""),
+                cumulative_quote_qty_decimal=str(cumulative_quote),
+                environment=int(getattr(fill, "environment", 0) or getattr(order, "environment", 0) or 0),
             ))
         return events

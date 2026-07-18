@@ -28,6 +28,7 @@ from strategy_service.strategy_imports import (
     resolve_strategy_source,
 )
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from strategy_service.wallet.canonical import SpotSymbolMetadata
 from tests.helpers.order_client import FilledOrderClient
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
@@ -69,7 +70,24 @@ def _portfolio_wallet(default_wallet, *routes: tuple[str, str]) -> PortfolioWall
 
 
 def _empty_wallet() -> PortfolioWalletRuntime:
-    return _portfolio_wallet(make_backtest_wallet(margin_mode="isolated"))
+    wallet = make_backtest_wallet(margin_mode="isolated")
+    wallet.spot.register_metadata(
+        SpotSymbolMetadata(
+            venue_id=1002,
+            exchange="binance",
+            market="spot",
+            symbol="BTCUSDT",
+            status="TRADING",
+            base_asset="BTC",
+            quote_asset="USDT",
+            base_asset_precision=8,
+            quote_asset_precision=8,
+            spot_trading_allowed=True,
+            permission_sets=(("SPOT",),),
+            order_types=("LIMIT", "MARKET"),
+        )
+    )
+    return _portfolio_wallet(wallet)
 
 
 def _md(

@@ -1,0 +1,1600 @@
+{
+  "schema_version": "spot_filter_contract_v1",
+  "cases": [
+    {
+      "name": "limit_accept",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": ""
+    },
+    {
+      "name": "market_accept",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "qty_decimal": "0.00020000"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": ""
+    },
+    {
+      "name": "limit_price_tick_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.005"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_PRICE_FILTER"
+    },
+    {
+      "name": "limit_quantity_step_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.000205",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_LOT_SIZE"
+    },
+    {
+      "name": "market_lot_size_precedence_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "qty_decimal": "0.00020000"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            },
+            {
+              "filter_type": "MARKET_LOT_SIZE",
+              "min_qty": "0.001",
+              "max_qty": "100",
+              "step_size": "0.001"
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_MARKET_LOT_SIZE"
+    },
+    {
+      "name": "market_lot_size_zero_bounds_fallback_accept",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "qty_decimal": "0.00020000"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            },
+            {
+              "filter_type": "MARKET_LOT_SIZE",
+              "min_qty": "0",
+              "max_qty": "0",
+              "step_size": "0"
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": ""
+    },
+    {
+      "name": "market_min_notional_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "qty_decimal": "0.00001"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_MIN_NOTIONAL"
+    },
+    {
+      "name": "market_min_notional_flag_disabled_accept",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "qty_decimal": "0.00001"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": ""
+    },
+    {
+      "name": "limit_max_notional_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            },
+            {
+              "filter_type": "NOTIONAL",
+              "min_notional": "0",
+              "max_notional": "9.99"
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_NOTIONAL"
+    },
+    {
+      "name": "percent_price_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "60000"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            },
+            {
+              "filter_type": "PERCENT_PRICE",
+              "multiplier_up": "1.01",
+              "multiplier_down": "0.99"
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_PERCENT_PRICE"
+    },
+    {
+      "name": "percent_price_by_side_buy_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "60000"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            },
+            {
+              "filter_type": "PERCENT_PRICE_BY_SIDE",
+              "bid_multiplier_up": "1.01",
+              "bid_multiplier_down": "0.99",
+              "ask_multiplier_up": "2.00",
+              "ask_multiplier_down": "0.50"
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_PERCENT_PRICE_BY_SIDE"
+    },
+    {
+      "name": "max_position_includes_locked_and_open_buys",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.2",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "0.4",
+          "locked_decimal": "0.1"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            },
+            {
+              "filter_type": "MAX_POSITION",
+              "max_position": "0.99"
+            }
+          ]
+        },
+        "reference_price_decimal": "50000",
+        "open_orders": [
+          {
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "orig_qty_decimal": "0.4",
+            "executed_qty_decimal": "0.1"
+          }
+        ]
+      },
+      "expected_code": "SPOT_MAX_POSITION"
+    },
+    {
+      "name": "base_max_asset_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.3",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "asset_filters": [
+          {
+            "filter_type": "MAX_ASSET",
+            "asset": "BTC",
+            "limit": "0.2"
+          }
+        ],
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_MAX_ASSET"
+    },
+    {
+      "name": "quote_max_asset_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "asset_filters": [
+          {
+            "filter_type": "MAX_ASSET",
+            "asset": "USDT",
+            "limit": "9.99"
+          }
+        ],
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_MAX_ASSET"
+    },
+    {
+      "name": "symbol_order_count_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "symbol_filters": [
+          {
+            "filter_type": "MAX_NUM_ORDERS",
+            "max_num_orders": 1
+          }
+        ],
+        "reference_price_decimal": "50000",
+        "open_orders": [
+          {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "orig_qty_decimal": "1",
+            "executed_qty_decimal": "0"
+          }
+        ]
+      },
+      "expected_code": "SPOT_MAX_NUM_ORDERS"
+    },
+    {
+      "name": "exchange_order_count_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "exchange_filters": [
+          {
+            "filter_type": "EXCHANGE_MAX_NUM_ORDERS",
+            "max_num_orders": 1
+          }
+        ],
+        "reference_price_decimal": "50000",
+        "open_orders": [
+          {
+            "symbol": "ETHUSDT",
+            "side": "SELL",
+            "orig_qty_decimal": "1",
+            "executed_qty_decimal": "0"
+          }
+        ]
+      },
+      "expected_code": "SPOT_MAX_NUM_ORDERS"
+    },
+    {
+      "name": "unknown_applicable_filter_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            },
+            {
+              "filter_type": "FUTURE_MAGIC_FILTER",
+              "raw_json": "{}"
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_FILTER_UNSUPPORTED:FUTURE_MAGIC_FILTER"
+    },
+    {
+      "name": "zero_price_bounds_and_tick_disabled_accept",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.005"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0",
+              "max_price": "0",
+              "tick_size": "0"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": ""
+    },
+    {
+      "name": "insufficient_quote_balance_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "USDT",
+          "available_decimal": "9.99",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "INSUFFICIENT_QUOTE_BALANCE"
+    },
+    {
+      "name": "metadata_base_asset_required_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "SELL",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.00020000",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTCUSDT",
+          "available_decimal": "999",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "INSUFFICIENT_UNLOCKED_QTY"
+    },
+    {
+      "name": "numeric_38_18_max_accept",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "99999999999999999999.999999999999999999",
+        "price_decimal": "1.000000000000000000"
+      },
+      "balances": [
+        {
+          "asset": "USDT",
+          "available_decimal": "99999999999999999999.999999999999999999",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 18,
+          "quote_asset_precision": 18,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0",
+              "max_price": "0",
+              "tick_size": "0.000000000000000001"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0",
+              "max_qty": "0",
+              "step_size": "0.000000000000000001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "0",
+              "apply_to_market": true
+            }
+          ]
+        },
+        "reference_price_decimal": "1"
+      },
+      "expected_code": ""
+    },
+    {
+      "name": "numeric_38_18_integer_overflow_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "100000000000000000000.000000000000000000",
+        "price_decimal": "1.000000000000000000"
+      },
+      "balances": [
+        {
+          "asset": "USDT",
+          "available_decimal": "99999999999999999999.999999999999999999",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 18,
+          "quote_asset_precision": 18,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0",
+              "max_price": "0",
+              "tick_size": "0.000000000000000001"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0",
+              "max_qty": "0",
+              "step_size": "0.000000000000000001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "0",
+              "apply_to_market": true
+            }
+          ]
+        },
+        "reference_price_decimal": "1"
+      },
+      "expected_code": "ORDER_DECIMAL_OUT_OF_RANGE"
+    },
+    {
+      "name": "numeric_38_18_scale_overflow_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.0000000000000000001",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "ORDER_DECIMAL_OUT_OF_RANGE"
+    },
+    {
+      "name": "base_asset_precision_reject",
+      "request": {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "qty_decimal": "0.000000001",
+        "price_decimal": "50000.00"
+      },
+      "balances": [
+        {
+          "asset": "BTC",
+          "available_decimal": "1",
+          "locked_decimal": "0"
+        },
+        {
+          "asset": "USDT",
+          "available_decimal": "100000",
+          "locked_decimal": "0"
+        }
+      ],
+      "facts": {
+        "metadata": {
+          "symbol": "BTCUSDT",
+          "status": "TRADING",
+          "base_asset": "BTC",
+          "quote_asset": "USDT",
+          "base_asset_precision": 8,
+          "quote_asset_precision": 8,
+          "spot_trading_allowed": true,
+          "permission_sets": [
+            [
+              "SPOT"
+            ]
+          ],
+          "order_types": [
+            "LIMIT",
+            "MARKET"
+          ],
+          "filters": [
+            {
+              "filter_type": "PRICE_FILTER",
+              "min_price": "0.01",
+              "max_price": "1000000",
+              "tick_size": "0.01"
+            },
+            {
+              "filter_type": "LOT_SIZE",
+              "min_qty": "0.00001",
+              "max_qty": "9000",
+              "step_size": "0.00001"
+            },
+            {
+              "filter_type": "MIN_NOTIONAL",
+              "min_notional": "5",
+              "apply_to_market": true,
+              "avg_price_mins": 5
+            }
+          ]
+        },
+        "reference_price_decimal": "50000"
+      },
+      "expected_code": "SPOT_ASSET_PRECISION"
+    }
+  ]
+}

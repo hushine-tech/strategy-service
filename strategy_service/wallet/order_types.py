@@ -27,6 +27,25 @@ class OrderResponse:
     executed_qty: float = 0.0
     remaining_qty: float = 0.0
     price: float = 0.0
+    venue_id: int = 0
+    exchange: str = ""
+    market: str = ""
+    exchange_order_id: str = ""
+    exchange_trade_id: str = ""
+    fee_asset: str = ""
+    qty_decimal: str = ""
+    fill_price_decimal: str = ""
+    fee_decimal: str = ""
+    quote_qty_decimal: str = ""
+    orig_qty_decimal: str = ""
+    executed_qty_decimal: str = ""
+    remaining_qty_decimal: str = ""
+    price_decimal: str = ""
+    cumulative_quote_qty_decimal: str = ""
+    environment: int = 0
+    retryable: bool = False
+    source: str = ""
+    error_code: str = ""
 
 
 @dataclass
@@ -47,6 +66,14 @@ class ExecutionFeedback:
     fill_count: int = 0
     delta_qty: float = 0.0
     fill_events: list[OrderResponse] = field(default_factory=list)
+    error_code: str = ""
+    error_environment: int = 0
+    error_retryable: bool = False
+    error_source: str = ""
+    error_venue_id: int = 0
+    error_exchange: int = 0
+    error_market: int = 0
+    error_symbol: str = ""
 
     @property
     def status(self) -> str:

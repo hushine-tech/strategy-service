@@ -162,11 +162,18 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
             locked=float(sw.locked),
             assets=[
                 CanonicalSpotAssetState(
-                    symbol=asset.symbol,
+                    symbol=str(getattr(asset, "symbol", "") or ""),
                     qty=float(asset.qty),
                     locked=float(asset.locked),
                     avg_entry_price=float(asset.avg_entry_price),
                     price=float(asset.price) if asset.HasField("price") else None,
+                    asset=str(getattr(asset, "asset", "") or ""),
+                    free=(
+                        str(getattr(asset, "free_decimal", "") or "")
+                        or float(getattr(asset, "free", 0.0) or 0.0)
+                    ) if str(getattr(asset, "asset", "") or "") else None,
+                    free_decimal=str(getattr(asset, "free_decimal", "") or ""),
+                    locked_decimal=str(getattr(asset, "locked_decimal", "") or ""),
                 )
                 for asset in sw.assets
             ],

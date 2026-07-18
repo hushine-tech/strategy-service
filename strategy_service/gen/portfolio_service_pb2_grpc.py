@@ -105,6 +105,11 @@ class PortfolioServiceStub:
                 request_serializer=portfolio__service__pb2.PreflightStrategySessionRequest.SerializeToString,
                 response_deserializer=portfolio__service__pb2.PreflightStrategySessionResponse.FromString,
                 _registered_method=True)
+        self.GetProductCapabilities = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/GetProductCapabilities',
+                request_serializer=portfolio__service__pb2.GetProductCapabilitiesRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.GetProductCapabilitiesResponse.FromString,
+                _registered_method=True)
         self.GetPortfolioSnapshot = channel.unary_unary(
                 '/portfolio.v1.PortfolioService/GetPortfolioSnapshot',
                 request_serializer=portfolio__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
@@ -358,6 +363,12 @@ class PortfolioServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def PreflightStrategySession(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetProductCapabilities(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -673,6 +684,11 @@ def add_PortfolioServiceServicer_to_server(servicer, server):
                     servicer.PreflightStrategySession,
                     request_deserializer=portfolio__service__pb2.PreflightStrategySessionRequest.FromString,
                     response_serializer=portfolio__service__pb2.PreflightStrategySessionResponse.SerializeToString,
+            ),
+            'GetProductCapabilities': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetProductCapabilities,
+                    request_deserializer=portfolio__service__pb2.GetProductCapabilitiesRequest.FromString,
+                    response_serializer=portfolio__service__pb2.GetProductCapabilitiesResponse.SerializeToString,
             ),
             'GetPortfolioSnapshot': grpc.unary_unary_rpc_method_handler(
                     servicer.GetPortfolioSnapshot,
@@ -1214,6 +1230,33 @@ class PortfolioService:
             '/portfolio.v1.PortfolioService/PreflightStrategySession',
             portfolio__service__pb2.PreflightStrategySessionRequest.SerializeToString,
             portfolio__service__pb2.PreflightStrategySessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetProductCapabilities(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/GetProductCapabilities',
+            portfolio__service__pb2.GetProductCapabilitiesRequest.SerializeToString,
+            portfolio__service__pb2.GetProductCapabilitiesResponse.FromString,
             options,
             channel_credentials,
             insecure,

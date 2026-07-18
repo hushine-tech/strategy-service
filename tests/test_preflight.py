@@ -11,7 +11,9 @@ from types import SimpleNamespace
 
 from google.protobuf.timestamp_pb2 import Timestamp
 
+from strategy_service.gen import portfolio_service_pb2
 from strategy_service.inputs import StrategyInput
+from strategy_service.portfolio_client import _required_symbol_protos
 from strategy_service.preflight import (
     SUPPORTED_PROFILES,
     PreflightFailureKind,
@@ -21,6 +23,35 @@ from strategy_service.preflight import (
     live_stream_preflight,
     resolve_profile,
 )
+
+
+def test_required_symbol_descriptor_field_numbers():
+    """The worker must consume the additive Task 5 preflight contract verbatim."""
+    fields = portfolio_service_pb2.RequiredSymbol.DESCRIPTOR.fields_by_name
+
+    assert fields["exchange"].number == 1
+    assert fields["market"].number == 2
+    assert fields["symbol"].number == 3
+    assert fields["order_target"].number == 4
+    assert fields["required_order_types"].number == 5
+
+
+def test_required_symbols_mark_order_targets_and_market_limit_capabilities():
+    inputs_and_targets = {
+        ("binance", "spot", "BTCUSDT"),
+        ("binance", "spot", "ETHUSDT"),
+    }
+    items = _required_symbol_protos(
+        portfolio_service_pb2,
+        inputs_and_targets,
+        order_target_symbols={("binance", "spot", "ETHUSDT")},
+    )
+    by_symbol = {item.symbol: item for item in items}
+
+    assert by_symbol["BTCUSDT"].order_target is False
+    assert list(by_symbol["BTCUSDT"].required_order_types) == []
+    assert by_symbol["ETHUSDT"].order_target is True
+    assert list(by_symbol["ETHUSDT"].required_order_types) == ["MARKET", "LIMIT"]
 
 
 # ── Profile resolver ───────────────────────────────────────────────────────

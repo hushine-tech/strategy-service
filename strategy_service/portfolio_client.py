@@ -134,6 +134,7 @@ class PortfolioClient:
         user_id: int = 0,
         required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+        order_target_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
         leverage: float = 0.0,
@@ -157,7 +158,11 @@ class PortfolioClient:
                     )
                     for exchange, market in sorted(required_routes or [])
                 ],
-                required_symbols=_required_symbol_protos(portfolio_service_pb2, required_symbols),
+                required_symbols=_required_symbol_protos(
+                    portfolio_service_pb2,
+                    required_symbols,
+                    order_target_symbols=order_target_symbols,
+                ),
             )
             return self._stub.PreflightStrategySession(req)
         except Exception:
@@ -385,12 +390,35 @@ def _market_enum(market: str) -> int:
     return _MARKET_ENUMS[key]
 
 
-def _required_symbol_protos(portfolio_service_pb2, required_symbols):
+def _required_symbol_protos(
+    portfolio_service_pb2,
+    required_symbols,
+    *,
+    order_target_symbols=None,
+):
+    target_keys = {
+        (str(exchange).strip().lower(), str(market).strip().lower(), str(symbol).strip().upper())
+        for exchange, market, symbol in (order_target_symbols or [])
+    }
     return [
         portfolio_service_pb2.RequiredSymbol(
             exchange=_exchange_enum(exchange),
             market=_market_enum(market),
             symbol=str(symbol or "").strip().upper(),
+            order_target=(
+                str(exchange).strip().lower(),
+                str(market).strip().lower(),
+                str(symbol or "").strip().upper(),
+            ) in target_keys,
+            required_order_types=(
+                ["MARKET", "LIMIT"]
+                if (
+                    str(exchange).strip().lower(),
+                    str(market).strip().lower(),
+                    str(symbol or "").strip().upper(),
+                ) in target_keys
+                else []
+            ),
         )
         for exchange, market, symbol in sorted(required_symbols or [])
     ]
@@ -547,20 +575,24 @@ def _serialize_spot_wallet(sw: Any):
     from strategy_service.gen import portfolio_service_pb2
 
     assets = []
-    for symbol, asset in sw.assets.items():
+    for asset_code, asset in sw.assets.items():
         kwargs: dict = dict(
-            symbol=symbol,
-            qty=asset.qty,
-            locked=asset.locked,
-            avg_entry_price=asset.avg_entry_price,
+            symbol=asset_code,
+            qty=float(asset.qty),
+            locked=float(asset.locked),
+            avg_entry_price=float(asset.avg_entry_price),
+            asset=asset_code,
+            free=float(asset.free),
+            free_decimal=str(asset.free),
+            locked_decimal=str(asset.locked),
         )
         if asset.price is not None:
-            kwargs["price"] = asset.price
+            kwargs["price"] = float(asset.price)
         assets.append(portfolio_service_pb2.SpotAsset(**kwargs))
 
     return portfolio_service_pb2.SpotWallet(
-        free=sw.free,
-        locked=sw.locked,
+        free=float(sw.free),
+        locked=float(sw.locked),
         assets=assets,
     )
 
@@ -574,7 +606,7 @@ def _compute_total_value(
         total += _get_margin_balance(fw)
     if sw:
         try:
-            total += sw.get_estimated_value()
+            total += float(sw.get_estimated_value())
         except ValueError:
-            total += sw.free + sw.locked
+            total += float(sw.free + sw.locked)
     return total

@@ -21,6 +21,7 @@ class FilledOrderClient:
         session_id: str = "",
         intent_id: str = "",
         market_time=None,
+        spot_risk_snapshot_id: str = "",
     ) -> ExecutionFeedback:
         self.calls.append({
             "portfolio_id": portfolio_id,
@@ -32,6 +33,7 @@ class FilledOrderClient:
             "session_id": session_id,
             "intent_id": intent_id,
             "market_time": market_time,
+            "spot_risk_snapshot_id": spot_risk_snapshot_id,
         })
         symbol = str(portfolio_symbol or decision.symbol).strip().upper()
         route_market = str(market or getattr(decision, "market", "") or "").strip().lower()

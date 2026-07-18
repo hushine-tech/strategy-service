@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 
 import pytest
 
@@ -1531,8 +1532,8 @@ def test_binance_parity_wallet_spot_lock_lifecycle_tracks_buy_and_sell_orders():
     wallet.on_order("ETHUSDT", "spot", PartialBuy())
     assert wallet.spot.free == pytest.approx(901.0)
     assert wallet.spot.locked == pytest.approx(60.0)
-    assert wallet.spot.assets["ETHUSDT"].qty == pytest.approx(0.4)
-    assert wallet.spot.assets["ETHUSDT"].avg_entry_price == pytest.approx(95.0)
+    assert wallet.spot.assets["ETH"].qty == Decimal("0.4")
+    assert wallet.spot.assets["ETH"].avg_entry_price == Decimal("95.0")
 
     class CancelBuy:
         order_id = "buy-1"
@@ -1556,7 +1557,7 @@ def test_binance_parity_wallet_spot_lock_lifecycle_tracks_buy_and_sell_orders():
         price = 100.0
 
     wallet.on_order("BTCUSDT", "spot", NewSell())
-    assert wallet.spot.assets["BTCUSDT"].locked == pytest.approx(0.5)
+    assert wallet.spot.assets["BTC"].locked == Decimal("0.5")
 
     class PartialSell:
         order_id = "sell-1"
@@ -1570,8 +1571,8 @@ def test_binance_parity_wallet_spot_lock_lifecycle_tracks_buy_and_sell_orders():
         fill_price = 100.0
 
     wallet.on_order("BTCUSDT", "spot", PartialSell())
-    assert wallet.spot.assets["BTCUSDT"].qty == pytest.approx(0.8)
-    assert wallet.spot.assets["BTCUSDT"].locked == pytest.approx(0.3)
+    assert wallet.spot.assets["BTC"].qty == Decimal("0.8")
+    assert wallet.spot.assets["BTC"].locked == Decimal("0.3")
     assert wallet.spot.free == pytest.approx(981.0)
 
     class ExpireSell:
@@ -1584,7 +1585,7 @@ def test_binance_parity_wallet_spot_lock_lifecycle_tracks_buy_and_sell_orders():
         price = 100.0
 
     wallet.on_order("BTCUSDT", "spot", ExpireSell())
-    assert wallet.spot.assets["BTCUSDT"].locked == pytest.approx(0.0)
+    assert wallet.spot.assets["BTC"].locked == Decimal("0")
 
 
 def test_binance_parity_wallet_spot_lifecycle_requires_order_id():

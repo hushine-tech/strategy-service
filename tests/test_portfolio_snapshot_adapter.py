@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
 from strategy_service.gen import portfolio_service_pb2
 from strategy_service.wallet.binance import BinanceWalletRuntime
-from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
+from strategy_service.wallet.portfolio_adapter import (
+    attach_spot_risk_snapshots,
+    build_portfolio_wallet_from_snapshot,
+)
 
 
 EXCHANGE_BINANCE = 1
@@ -119,6 +123,7 @@ def _venue(
     balances=None,
     positions=None,
     wallet=None,
+    spot_symbols=None,
 ):
     if isinstance(exchange, str) or isinstance(market, str):
         return SimpleNamespace(
@@ -131,6 +136,7 @@ def _venue(
             balances=list(balances or []),
             positions=list(positions or []),
             wallet=wallet,
+            spot_symbols=list(spot_symbols or []),
         )
 
     venue = portfolio_service_pb2.VenueSnapshot(
@@ -142,6 +148,7 @@ def _venue(
         available_balance=available_balance,
         balances=list(balances or []),
         positions=list(positions or []),
+        spot_symbols=list(spot_symbols or []),
     )
     if wallet is not None:
         venue.wallet.CopyFrom(wallet)
@@ -209,10 +216,88 @@ def test_build_portfolio_wallet_from_spot_and_futures_venues():
     assert spot is not futures
     assert spot.spot.free == pytest.approx(90.0)
     assert spot.spot.locked == pytest.approx(10.0)
-    assert spot.spot.assets["BTC"].qty == pytest.approx(0.5)
-    assert spot.spot.assets["BTC"].locked == pytest.approx(0.1)
+    assert spot.spot.assets["BTC"].qty == Decimal("0.5")
+    assert spot.spot.assets["BTC"].locked == Decimal("0.1")
     assert futures.get_wallet_balance() == pytest.approx(1000.0)
     assert futures.futures.oracle_available_balance == pytest.approx(800.0)
+
+
+def test_spot_snapshot_loads_asset_codes_metadata_and_preflight_risk_facts():
+    metadata = portfolio_service_pb2.SpotSymbolMetadata(
+        symbol="BTCUSDT",
+        status="TRADING",
+        base_asset="BTC",
+        quote_asset="USDT",
+        base_asset_precision=8,
+        quote_asset_precision=8,
+        spot_trading_allowed=True,
+        permission_sets=[portfolio_service_pb2.SpotSymbolPermissionSet(alternatives=["SPOT"])],
+        order_types=["LIMIT", "MARKET"],
+        filters=[
+            portfolio_service_pb2.SpotSymbolFilter(
+                filter_type="LOT_SIZE",
+                min_qty="0.00001",
+                max_qty="1000",
+                step_size="0.00001",
+            )
+        ],
+    )
+    snapshot = _snapshot(
+        _venue(
+            venue_id=10,
+            market=MARKET_SPOT,
+            spot_symbols=[metadata],
+            wallet=_spot_wallet(
+                free=0,
+                locked=0,
+                assets=[
+                    portfolio_service_pb2.SpotAsset(
+                        asset="USDT",
+                        free=1000,
+                        free_decimal="1000.00000000",
+                        locked_decimal="0.00000000",
+                    ),
+                    portfolio_service_pb2.SpotAsset(
+                        asset="BTC",
+                        free=0,
+                        free_decimal="0.00000000",
+                        locked_decimal="0.00000000",
+                    ),
+                ],
+            ),
+        )
+    )
+
+    routed = build_portfolio_wallet_from_snapshot(snapshot, {("binance", "spot")})
+    spot = routed.get("binance", "spot").spot
+    assert set(spot.assets) == {"USDT", "BTC"}
+    assert spot.assets["USDT"].free == Decimal("1000.00000000")
+    spot.on_market_data("BTCUSDT", Decimal("50000"))
+    assert "BTCUSDT" not in spot.assets
+    assert spot.assets["BTC"].price == Decimal("50000")
+
+    attach_spot_risk_snapshots(
+        routed,
+        [
+            portfolio_service_pb2.SpotRiskFactSnapshot(
+                snapshot_id="risk-1",
+                venue_id=10,
+                exchange=EXCHANGE_BINANCE,
+                environment=0,
+                market=MARKET_SPOT,
+                symbol="BTCUSDT",
+                metadata=metadata,
+                reference_price_decimal="50000",
+            )
+        ],
+    )
+    assert spot.review_order(
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="MARKET",
+        qty_decimal="0.00020",
+        price_decimal=None,
+    ) == "risk-1"
 
 
 def test_unrequested_venue_snapshot_is_ignored_before_wallet_validation():
