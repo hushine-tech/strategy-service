@@ -1544,14 +1544,15 @@ func (x *WalletSnapshot) GetWallet() *anypb.Any {
 }
 
 type FinalStatus struct {
-	state           protoimpl.MessageState             `protogen:"open.v1"`
-	SessionId       string                             `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Status          string                             `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	BarsProcessed   int64                              `protobuf:"varint,3,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
-	Error           string                             `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	DependencyError *strategyv1.RuntimeDependencyError `protobuf:"bytes,5,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state               protoimpl.MessageState             `protogen:"open.v1"`
+	SessionId           string                             `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Status              string                             `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	BarsProcessed       int64                              `protobuf:"varint,3,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
+	Error               string                             `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	DependencyError     *strategyv1.RuntimeDependencyError `protobuf:"bytes,5,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
+	ReconciliationRunId string                             `protobuf:"bytes,6,opt,name=reconciliation_run_id,json=reconciliationRunId,proto3" json:"reconciliation_run_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *FinalStatus) Reset() {
@@ -1617,6 +1618,13 @@ func (x *FinalStatus) GetDependencyError() *strategyv1.RuntimeDependencyError {
 		return x.DependencyError
 	}
 	return nil
+}
+
+func (x *FinalStatus) GetReconciliationRunId() string {
+	if x != nil {
+		return x.ReconciliationRunId
+	}
+	return ""
 }
 
 type WorkerError struct {
@@ -1953,14 +1961,15 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12'\n" +
 	"\x0fsnapshot_reason\x18\x02 \x01(\tR\x0esnapshotReason\x12,\n" +
-	"\x06wallet\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\x06wallet\"\xd1\x01\n" +
+	"\x06wallet\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\x06wallet\"\x85\x02\n" +
 	"\vFinalStatus\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12%\n" +
 	"\x0ebars_processed\x18\x03 \x01(\x03R\rbarsProcessed\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12N\n" +
-	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\xcb\x01\n" +
+	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\x122\n" +
+	"\x15reconciliation_run_id\x18\x06 \x01(\tR\x13reconciliationRunId\"\xcb\x01\n" +
 	"\vWorkerError\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +

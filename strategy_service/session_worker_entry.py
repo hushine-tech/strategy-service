@@ -174,13 +174,21 @@ def _poll_until_terminal(
             return 1
         if status.status in _TERMINAL_STATUSES:
             try:
-                client.send_final_status(
+                final_kwargs = dict(
                     session_id=session_id,
                     status=status.status,
                     bars_processed=status.bars_processed,
                     error=status.error,
                     timeout_seconds=35.0,
                 )
+                sessions = getattr(servicer, "_sessions", None)
+                state = sessions.get(session_id) if sessions is not None else None
+                reconciliation_run_id = str(
+                    getattr(state, "reconciliation_run_id", "") or ""
+                ).strip()
+                if reconciliation_run_id:
+                    final_kwargs["reconciliation_run_id"] = reconciliation_run_id
+                client.send_final_status(**final_kwargs)
             except (FinalStatusRejected, TimeoutError) as exc:
                 logger.error("final session status was not acknowledged: %s", exc)
                 return 1

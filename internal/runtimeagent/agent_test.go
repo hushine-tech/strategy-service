@@ -1597,6 +1597,47 @@ func TestAgentFinalStatusFlushFailurePersistsRecoverableAndReturnsErrorAck(t *te
 	}
 }
 
+func TestAgentSpotStoppedFlushFailurePersistsRecoverableAndReturnsErrorAck(t *testing.T) {
+	invoker := &agentFinalPlatform{saveErr: errors.New("database unavailable")}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", PlatformInvoker: invoker,
+		IndicatorFinalizeTimeout: 10 * time.Millisecond,
+		IndicatorRetryInitial:    time.Millisecond, IndicatorRetryMax: 2 * time.Millisecond,
+	})
+	bufferAgentIndicator(t, agent, "sess-spot-stop")
+	var ack *rwv1.AgentFrame
+	err := agent.HandleWorkerFrame(context.Background(), "sess-spot-stop", &rwv1.WorkerFrame{
+		FrameId: "final-spot-stop",
+		Payload: &rwv1.WorkerFrame_FinalStatus{FinalStatus: &rwv1.FinalStatus{
+			SessionId: "sess-spot-stop", Status: "stopped", BarsProcessed: 17,
+			ReconciliationRunId: "recon-123",
+		}},
+	}, func(frame *rwv1.AgentFrame) error { ack = frame; return nil })
+	if err != nil {
+		t.Fatalf("HandleWorkerFrame final: %v", err)
+	}
+	_, updates := invoker.snapshot()
+	if len(updates) != 1 || updates[0].GetStatus() != "recoverable" {
+		t.Fatalf("updates = %+v", updates)
+	}
+	if ack == nil || ack.GetReplyTo() != "final-spot-stop" || ack.GetError().GetCode() != "INDICATOR_FINALIZATION_FAILED" {
+		t.Fatalf("ack = %+v", ack)
+	}
+}
+
+func TestTerminalRequestFromFinalStatusPreservesReconciliationRunID(t *testing.T) {
+	request, err := terminalRequestFromFinalStatus(&rwv1.FinalStatus{
+		SessionId: "sess-1", Status: "stop_failed", BarsProcessed: 17,
+		Error: "Spot close requires reconciliation", ReconciliationRunId: "recon-123",
+	})
+	if err != nil {
+		t.Fatalf("terminalRequestFromFinalStatus: %v", err)
+	}
+	if request.ReconciliationRunID != "recon-123" || request.Status != "stop_failed" {
+		t.Fatalf("request = %+v", request)
+	}
+}
+
 func TestAgentFinalStatusPreservesFailedStatus(t *testing.T) {
 	invoker := &agentFinalPlatform{}
 	agent := NewAgent(AgentConfig{RuntimeID: "rt-1", PlatformInvoker: invoker})

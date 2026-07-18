@@ -45,6 +45,7 @@ PORTFOLIO_SAVE_STRATEGY_INDICATORS = "portfolio.SaveStrategyIndicators"
 PORTFOLIO_UPDATE_SESSION = "portfolio.UpdateSession"
 ORDER_PLACE = "order.PlaceOrder"
 ORDER_RESOLVE_ATTEMPT = "order.ResolveOrderAttempt"
+ORDER_CLOSE_SPOT_TARGETS = "order.CloseSpotTargets"
 MARKETDATA_GET_STATUS = "marketdata.GetMarketDataStreamStatus"
 MARKETDATA_FETCH_KLINES = "marketdata.FetchKlines"
 MARKETDATA_FETCH_BACKTEST_PAGE = "marketdata.FetchBacktestPage"
@@ -842,6 +843,33 @@ class ProxyOrderClient(OrderClient):
                 market=effective_market,
                 symbol=symbol,
             )
+
+    def close_spot_targets(
+        self,
+        *,
+        user_id: int,
+        portfolio_id: int,
+        strategy_id: int,
+        session_id: str,
+        operation_id: str,
+        targets,
+    ):
+        from strategy_service.gen import order_service_pb2
+        from strategy_service.order_client import _spot_close_target_proto
+
+        request_targets = [_spot_close_target_proto(self, order_service_pb2, target) for target in targets]
+        return self._proxy.invoke(
+            ORDER_CLOSE_SPOT_TARGETS,
+            order_service_pb2.CloseSpotTargetsRequest(
+                user_id=int(user_id),
+                portfolio_id=int(portfolio_id),
+                strategy_id=int(strategy_id),
+                session_id=str(session_id or "").strip(),
+                operation_id=str(operation_id or "").strip(),
+                targets=request_targets,
+            ),
+            order_service_pb2.CloseSpotTargetsResponse,
+        )
 
     def _resolve_unknown_attempt(
         self,

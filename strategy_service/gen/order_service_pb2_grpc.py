@@ -69,6 +69,11 @@ class OrderServiceStub:
                 request_serializer=order__service__pb2.ListOrderLifecycleEventsRequest.SerializeToString,
                 response_deserializer=order__service__pb2.ListOrderLifecycleEventsResponse.FromString,
                 _registered_method=True)
+        self.CloseSpotTargets = channel.unary_unary(
+                '/order.v1.OrderService/CloseSpotTargets',
+                request_serializer=order__service__pb2.CloseSpotTargetsRequest.SerializeToString,
+                response_deserializer=order__service__pb2.CloseSpotTargetsResponse.FromString,
+                _registered_method=True)
 
 
 class OrderServiceServicer:
@@ -125,6 +130,14 @@ class OrderServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CloseSpotTargets(self, request, context):
+        """Atomically plans and closes the complete free balance of declared Binance
+        Spot USDT targets for one active strategy Session.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_OrderServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -162,6 +175,11 @@ def add_OrderServiceServicer_to_server(servicer, server):
                     servicer.ListOrderLifecycleEvents,
                     request_deserializer=order__service__pb2.ListOrderLifecycleEventsRequest.FromString,
                     response_serializer=order__service__pb2.ListOrderLifecycleEventsResponse.SerializeToString,
+            ),
+            'CloseSpotTargets': grpc.unary_unary_rpc_method_handler(
+                    servicer.CloseSpotTargets,
+                    request_deserializer=order__service__pb2.CloseSpotTargetsRequest.FromString,
+                    response_serializer=order__service__pb2.CloseSpotTargetsResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -353,6 +371,33 @@ class OrderService:
             '/order.v1.OrderService/ListOrderLifecycleEvents',
             order__service__pb2.ListOrderLifecycleEventsRequest.SerializeToString,
             order__service__pb2.ListOrderLifecycleEventsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CloseSpotTargets(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/order.v1.OrderService/CloseSpotTargets',
+            order__service__pb2.CloseSpotTargetsRequest.SerializeToString,
+            order__service__pb2.CloseSpotTargetsResponse.FromString,
             options,
             channel_credentials,
             insecure,

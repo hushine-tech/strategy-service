@@ -109,6 +109,16 @@ func TestRuntimeDependencyChannelProto(t *testing.T) {
 	})
 	assertTask7MessageField(t, validateResponse, "runtime_profile", 3, "strategy.v1.RuntimeDependencyProfile")
 	assertTask7Method(t, strategyFile, "StrategyService", "ValidateStrategySource", "strategy.v1.ValidateStrategySourceRequest", "strategy.v1.ValidateStrategySourceResponse")
+	stopRequest := requireTask7Message(t, strategyFile, "StopStrategyRequest")
+	assertTask7Fields(t, stopRequest, map[protoreflect.Name]protoreflect.FieldNumber{
+		"session_id": 1, "stop_action": 3, "operation_id": 4,
+		"user_id": 100, "runtime_id": 101,
+	})
+	stopResponse := requireTask7Message(t, strategyFile, "StopStrategyResponse")
+	assertTask7Fields(t, stopResponse, map[protoreflect.Name]protoreflect.FieldNumber{
+		"stopped": 1, "status": 2, "code": 3, "target_results": 4,
+		"reconciliation_run_id": 5, "operation_id": 6,
+	})
 
 	profileValue := dynamicpb.NewMessage(profile)
 	profileName := profile.Fields().ByName("profile_name")

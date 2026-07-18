@@ -17,6 +17,7 @@ from strategy_service.platform_proxy import (
     MARKETDATA_FETCH_KLINES,
     MARKETDATA_GET_STATUS,
     ORDER_PLACE,
+    ORDER_CLOSE_SPOT_TARGETS,
     RuntimeChannelLogHandler,
     RuntimeChannelPlatformProxy,
 )
@@ -284,6 +285,30 @@ def test_proxy_order_client_places_order_without_direct_stub():
     assert req.good_till_date.ToDatetime(tzinfo=timezone.utc) == datetime(2030, 1, 1, tzinfo=timezone.utc)
     assert feedback.attempt_status == "ACCEPTED"
     assert feedback.order.order_id == "order-1"
+
+
+def test_proxy_order_client_closes_spot_targets_over_runtime_channel():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ORDER_CLOSE_SPOT_TARGETS] = order_service_pb2.CloseSpotTargetsResponse(
+        status="stopped", operation_id="stop-1"
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    response = proxy.order_client().close_spot_targets(
+        user_id=3,
+        portfolio_id=7,
+        strategy_id=9,
+        session_id="sess-1",
+        operation_id="stop-1",
+        targets=[SimpleNamespace(venue_id=10, exchange="binance", market="spot", symbol="btcusdt")],
+    )
+
+    method, req = runtime.calls[-1]
+    assert method == ORDER_CLOSE_SPOT_TARGETS
+    assert response.status == "stopped"
+    assert req.user_id == 3
+    assert req.operation_id == "stop-1"
+    assert req.targets[0].symbol == "BTCUSDT"
 
 
 def test_proxy_marketdata_client_uses_runtime_channel():

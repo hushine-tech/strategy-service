@@ -20,10 +20,16 @@ from strategy_service.worker_agent_client import FinalStatusRejected
 
 
 class _TerminalServicer:
-    def __init__(self, status: str, bars: int, error: str = ""):
+    def __init__(self, status: str, bars: int, error: str = "", reconciliation_run_id: str = ""):
         self.status = status
         self.bars = bars
         self.error = error
+        self.reconciliation_run_id = reconciliation_run_id
+        self._sessions = SimpleNamespace(
+            get=lambda _session_id: SimpleNamespace(
+                reconciliation_run_id=self.reconciliation_run_id,
+            )
+        )
 
     def GetStrategyStatus(self, request, context):
         del request, context
@@ -126,6 +132,25 @@ def test_poll_until_terminal_preserves_failed_terminal_status():
     ) == 1
     assert client.final[0]["status"] == "failed"
     assert client.final[0]["error"] == "strategy error"
+
+
+def test_poll_until_terminal_forwards_stop_reconciliation_identity():
+    client = _FinalClient()
+
+    assert _poll_until_terminal(
+        _TerminalServicer(
+            "stop_failed",
+            17,
+            "Spot close requires reconciliation",
+            reconciliation_run_id="recon-123",
+        ),
+        client,
+        "sess-1",
+        6,
+        "rt-1",
+    ) == 1
+
+    assert client.final[0]["reconciliation_run_id"] == "recon-123"
 
 
 class _StatusPortfolioClient:

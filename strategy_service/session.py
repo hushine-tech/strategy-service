@@ -8,7 +8,7 @@ import uuid
 import weakref
 from dataclasses import FrozenInstanceError, dataclass, field
 import re
-from typing import Literal
+from typing import Callable, Literal
 
 _TERMINAL_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
 _ACTIVE_STATUSES = frozenset({"running", "stopping"})
@@ -82,7 +82,10 @@ class SessionState:
     last_unroutable_reason: str = ""
     wallet: object | None = None
     order_client: object | None = None
+    order_update_handler: Callable[[object], object] | None = None
     order_target_keys: set[tuple[str, str, str]] = field(default_factory=set)
+    reconciliation_run_id: str = ""
+    stop_operation_id: str = ""
     max_loss_close_pct: float = 0.30
     max_loss_close_source: str = "platform_default"
     leverage: float = 1.0
@@ -173,10 +176,43 @@ class SessionState:
         *,
         wallet: object | None = None,
         order_client: object | None = None,
+        order_update_handler: Callable[[object], object] | None = None,
     ) -> None:
         with self._lock:
             self.wallet = wallet
             self.order_client = order_client
+            self.order_update_handler = order_update_handler
+
+    def remember_stop_operation_id(self, operation_id: str) -> str:
+        """Keep one durable close identity for every retry of this Session stop."""
+        normalized = str(operation_id or "").strip()
+        with self._lock:
+            if self.stop_operation_id:
+                return self.stop_operation_id
+            self.stop_operation_id = normalized
+            return self.stop_operation_id
+
+    def current_stop_operation_id(self) -> str:
+        with self._lock:
+            return self.stop_operation_id
+
+    def begin_stopping(
+        self,
+        *,
+        error: str | None = None,
+        operation_id: str = "",
+    ) -> tuple[bool, str]:
+        """Claim the single stop execution slot for this Session generation."""
+        normalized_operation_id = str(operation_id or "").strip()
+        with self._lock:
+            if self.status in _TERMINAL_STATUSES or self.status == "stopping":
+                return False, self.stop_operation_id
+            self.status = "stopping"
+            if error is not None:
+                self.error = error
+            if normalized_operation_id and not self.stop_operation_id:
+                self.stop_operation_id = normalized_operation_id
+            return True, self.stop_operation_id
 
     def configure_risk_runtime(
         self,

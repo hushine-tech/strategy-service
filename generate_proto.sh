@@ -79,6 +79,7 @@ ORDER_PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"
   "$ORDER_PROTO_SRC/order_service.proto"
 
 sed_in_place 's/^import order_service_pb2/from . import order_service_pb2/' "$OUT_DIR/order_service_pb2_grpc.py"
+sed_in_place 's/^import portfolio_service_pb2/from . import portfolio_service_pb2/' "$OUT_DIR/order_service_pb2.py"
 
 # --- control-panel-service proto (Python stubs only) ---
 # Phase D1: strategy-runtime registers itself + heartbeats with control-plane.

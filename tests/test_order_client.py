@@ -18,6 +18,8 @@ class _Stub:
         self.last_resolve_request: order_service_pb2.ResolveOrderAttemptRequest | None = None
         self.lifecycle_response: order_service_pb2.ListOrderLifecycleEventsResponse | None = None
         self.last_lifecycle_request: order_service_pb2.ListOrderLifecycleEventsRequest | None = None
+        self.close_response: order_service_pb2.CloseSpotTargetsResponse | None = None
+        self.last_close_request: order_service_pb2.CloseSpotTargetsRequest | None = None
 
     def PlaceOrder(self, request: order_service_pb2.PlaceOrderRequest):
         if self.raise_on_place is not None:
@@ -36,6 +38,44 @@ class _Stub:
         if self.lifecycle_response is None:
             return order_service_pb2.ListOrderLifecycleEventsResponse()
         return self.lifecycle_response
+
+    def CloseSpotTargets(self, request: order_service_pb2.CloseSpotTargetsRequest):
+        self.last_close_request = request
+        if self.close_response is None:
+            raise RuntimeError("close response not configured")
+        return self.close_response
+
+
+def test_close_spot_targets_preserves_operation_and_canonical_routes():
+    client = OrderClient("")
+    stub = _Stub(order_service_pb2.PlaceOrderResponse())
+    stub.close_response = order_service_pb2.CloseSpotTargetsResponse(
+        status="stopped", operation_id="stop-1"
+    )
+    client._stub = stub
+
+    response = client.close_spot_targets(
+        user_id=7,
+        portfolio_id=8,
+        strategy_id=9,
+        session_id="session-1",
+        operation_id="stop-1",
+        targets=[
+            {
+                "venue_id": 10,
+                "exchange": "binance",
+                "market": "spot",
+                "symbol": "btcusdt",
+            }
+        ],
+    )
+
+    assert response.status == "stopped"
+    assert stub.last_close_request is not None
+    assert stub.last_close_request.operation_id == "stop-1"
+    assert stub.last_close_request.targets[0].symbol == "BTCUSDT"
+    assert stub.last_close_request.targets[0].exchange == 1
+    assert stub.last_close_request.targets[0].market == 1
 
 
 def _decision(

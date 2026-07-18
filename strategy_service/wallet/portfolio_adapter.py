@@ -239,6 +239,33 @@ def build_portfolio_wallet_from_snapshot(
     )
 
 
+def apply_venue_wallet_snapshot(
+    runtime: PortfolioWalletRuntime,
+    venue: Any,
+    *,
+    expected_environment: int,
+) -> tuple[str, str, int]:
+    """Replace one existing route with a core-authoritative Venue snapshot."""
+    if not isinstance(runtime, PortfolioWalletRuntime):
+        raise ValueError("portfolio wallet runtime is required")
+    exchange, market = _venue_route(venue)
+    venue_id = _venue_id(venue)
+    key = (exchange, market, venue_id)
+    if key not in runtime.wallets:
+        raise ValueError(
+            f"authoritative snapshot route is not in the Session wallet: "
+            f"{exchange}/{market} venue {venue_id}"
+        )
+    environment = int(getattr(venue, "environment", 0) or 0)
+    if environment != int(expected_environment):
+        raise ValueError(
+            f"authoritative snapshot environment mismatch: got {environment}, "
+            f"want {int(expected_environment)}"
+        )
+    runtime.wallets[key] = _build_binance_wallet_from_venue_snapshot(venue, market=market)
+    return key
+
+
 def attach_spot_risk_snapshots(
     runtime: PortfolioWalletRuntime,
     snapshots: Any,

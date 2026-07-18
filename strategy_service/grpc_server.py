@@ -78,6 +78,7 @@ from strategy_service.strategy_imports import (
     resolve_strategy_source,
 )
 from strategy_service.wallet.portfolio_adapter import (
+    apply_venue_wallet_snapshot,
     attach_spot_risk_snapshots,
     build_portfolio_wallet_from_snapshot,
 )
@@ -99,9 +100,13 @@ DEFAULT_LEASE_HEARTBEAT_SECONDS = 30
 DEFAULT_LEASE_TTL_SECONDS = 90
 DEFAULT_FRESHNESS_GRACE_SECONDS = 30
 DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS = 30
+DEFAULT_STOP_ONLY_TIMEOUT_SECONDS = 30
+DEFAULT_STOP_ONLY_POLL_SECONDS = 0.05
 DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
 DEFAULT_SESSION_LEVERAGE = 1.0
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
+_STOP_OPERATION_NAMESPACE = uuid.UUID("842eb725-3fcb-5d55-9f0e-b02a0af07878")
+_STOP_ORDER_TERMINAL_STATUSES = frozenset({"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"})
 
 
 def _strategy_validation_error(code: str | None) -> str:
@@ -393,6 +398,39 @@ class _StopOrder:
     mark_price: float
 
 
+@dataclass
+class _StopExecution:
+    ok: bool
+    status: str
+    code: str = ""
+    message: str = ""
+    target_results: list[Any] = field(default_factory=list)
+    reconciliation_run_id: str = ""
+    operation_id: str = ""
+
+
+def _stop_operation_id(session_id: str, stop_action: int, supplied: str = "") -> str:
+    explicit = str(supplied or "").strip()
+    if explicit:
+        return explicit
+    identity = f"{str(session_id or '').strip()}|{int(stop_action)}"
+    return str(uuid.uuid5(_STOP_OPERATION_NAMESPACE, identity))
+
+
+def _stop_exchange_code(exchange: Any) -> int:
+    normalized = _normalize_exchange(exchange)
+    return {"binance": 1, "okx": 2}.get(normalized, 0)
+
+
+def _stop_market_code(market: Any) -> int:
+    normalized = _normalize_market(market)
+    return {
+        "spot": 1,
+        "perpetual_futures": 2,
+        "delivery_futures": 3,
+    }.get(normalized, 0)
+
+
 @dataclass(frozen=True)
 class _EffectiveRiskControls:
     max_loss_close_pct: float
@@ -510,15 +548,6 @@ def _target_is_allowed(state: SessionState, exchange: Any, market: Any, symbol: 
     except StrategyDeclarationError:
         return False
     return key in set(state.order_target_keys or set())
-
-
-def _spot_asset_target_is_allowed(state: SessionState, exchange: Any, market: Any, asset_symbol: Any) -> bool:
-    sym = str(asset_symbol or "").strip().upper()
-    if not sym:
-        return False
-    return _target_is_allowed(state, exchange, market, sym) or _target_is_allowed(
-        state, exchange, market, f"{sym}USDT"
-    )
 
 
 def _futures_stop_metadata(futures_wallet: Any, symbol: str) -> Any | None:
@@ -1602,7 +1631,11 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 snapshot_time=getattr(user_strategy, "last_market_time", None),
             )
 
-        state.configure_stop_runtime(wallet=wallet, order_client=order_client)
+        state.configure_stop_runtime(
+            wallet=wallet,
+            order_client=order_client,
+            order_update_handler=getattr(engine, "handle_order_update", None),
+        )
         if environment == 1:
             state.configure_live_runtime(
                 portfolio_id=portfolio_id,
@@ -2125,6 +2158,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     acct_client is not None
                     and environment == 0
                     and backtest_restore_wallet is not None
+                    and not state.current_stop_operation_id()
                 ):
                     try:
                         _sync_strategy_snapshot(
@@ -2450,16 +2484,33 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             f"current_margin_balance={current:.8f}"
         )
         logger.warning("session %s: %s", session_id, reason)
-        if not state.transition("stopping", error=reason):
+        requested_operation_id = _stop_operation_id(
+            session_id,
+            pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS,
+            "",
+        )
+        started, operation_id = state.begin_stopping(
+            error=reason,
+            operation_id=requested_operation_id,
+        )
+        if not started:
             return
         self._persist_session_status(session_id, state)
         self._halt_session_runtime(state, finalize=False)
 
-        ok, close_reason = self._stop_and_close_portfolio(session_id, state)
-        if ok:
+        close_result = self._stop_and_close_portfolio(
+            session_id,
+            state,
+            operation_id,
+        )
+        state.reconciliation_run_id = close_result.reconciliation_run_id
+        if close_result.ok:
             state.transition("stopped", error=reason)
         else:
-            state.transition("stop_failed", error=f"{reason}; {close_reason}")
+            state.transition(
+                "stop_failed",
+                error=f"{reason}; {close_result.message or close_result.code}",
+            )
         self._persist_session_status(session_id, state)
         self._halt_session_runtime(state, finalize=True)
 
@@ -2965,49 +3016,128 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
         action = _resolve_stop_action(request)
         if action == pb2.STOP_ACTION_CANCEL:
-            return pb2.StopStrategyResponse(stopped=False)
+            return pb2.StopStrategyResponse(stopped=False, status=state.status, code="STOP_CANCELLED")
         if state.is_terminal():
+            operation_id = ""
+            if action == pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS:
+                operation_id = state.remember_stop_operation_id(_stop_operation_id(
+                    request.session_id,
+                    action,
+                    str(getattr(request, "operation_id", "") or ""),
+                ))
             self._persist_session_status(request.session_id, state)
             self._halt_session_runtime(state, finalize=True)
-            return pb2.StopStrategyResponse(stopped=True)
+            return pb2.StopStrategyResponse(
+                stopped=state.status in {"completed", "finished", "stopped"},
+                status=state.status,
+                code="ALREADY_TERMINAL",
+                reconciliation_run_id=state.reconciliation_run_id,
+                operation_id=operation_id,
+            )
         if action == pb2.STOP_ACTION_FINISH:
-            if not state.transition("stopping"):
-                return pb2.StopStrategyResponse(stopped=False)
+            started, _operation_id = state.begin_stopping()
+            if not started:
+                return pb2.StopStrategyResponse(
+                    stopped=False,
+                    status=state.status,
+                    code="STOP_IN_PROGRESS",
+                )
             self._persist_session_status(request.session_id, state)
             self._halt_session_runtime(state, finalize=False)
             state.transition("finished")
             self._persist_session_status(request.session_id, state)
             self._halt_session_runtime(state, finalize=True)
-            return pb2.StopStrategyResponse(stopped=True)
+            return pb2.StopStrategyResponse(stopped=True, status="finished", code="FINISHED")
         if action == pb2.STOP_ACTION_STOP_ONLY:
-            if not state.transition("stopped"):
-                return pb2.StopStrategyResponse(stopped=False)
+            started, _operation_id = state.begin_stopping()
+            if not started:
+                return pb2.StopStrategyResponse(
+                    stopped=False,
+                    status=state.status,
+                    code="STOP_IN_PROGRESS",
+                )
+            self._persist_session_status(request.session_id, state)
+            self._halt_session_runtime(state, finalize=False)
+            pending = self._wait_for_accepted_orders(request.session_id, state)
+            if pending:
+                message = "stop_only_failed:pending_orders_timeout"
+                state.transition("stop_failed", error=message)
+                self._persist_session_status(request.session_id, state)
+                self._halt_session_runtime(state, finalize=True)
+                return pb2.StopStrategyResponse(
+                    stopped=False,
+                    status="stop_failed",
+                    code="STOP_PENDING_ORDERS_TIMEOUT",
+                    target_results=[
+                        pb2.StopTargetResult(
+                            exchange=_stop_exchange_code(item["exchange"]),
+                            market=_stop_market_code(item["market"]),
+                            symbol=item["symbol"],
+                            status="pending",
+                            code="ORDER_PENDING",
+                            message=f"order_id={item['identity']}",
+                        )
+                        for item in sorted(
+                            pending.values(),
+                            key=lambda value: (
+                                value["exchange"], value["market"], value["symbol"], value["identity"]
+                            ),
+                        )
+                    ],
+                )
+            state.transition("stopped")
             self._persist_session_status(request.session_id, state)
             self._halt_session_runtime(state, finalize=True)
-            return pb2.StopStrategyResponse(stopped=True)
+            return pb2.StopStrategyResponse(stopped=True, status="stopped", code="STOPPED")
         if action != pb2.STOP_ACTION_STOP_AND_CLOSE_POSITIONS:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(f"unsupported stop action: {action}")
             return pb2.StopStrategyResponse(stopped=False)
 
-        if not state.transition("stopping"):
-            return pb2.StopStrategyResponse(stopped=False)
+        requested_operation_id = _stop_operation_id(
+            request.session_id,
+            action,
+            str(getattr(request, "operation_id", "") or ""),
+        )
+        started, operation_id = state.begin_stopping(
+            operation_id=requested_operation_id,
+        )
+        if not started:
+            return pb2.StopStrategyResponse(
+                stopped=False,
+                status=state.status,
+                code="STOP_IN_PROGRESS",
+                operation_id=operation_id or requested_operation_id,
+            )
         self._persist_session_status(request.session_id, state)
         self._halt_session_runtime(state, finalize=False)
 
-        ok, reason = self._stop_and_close_portfolio(request.session_id, state)
-        if not ok:
-            state.transition("stop_failed", error=reason)
+        result = self._stop_and_close_portfolio(request.session_id, state, operation_id)
+        state.reconciliation_run_id = result.reconciliation_run_id
+        if not result.ok:
+            state.transition("stop_failed", error=result.message or result.code)
             self._persist_session_status(request.session_id, state)
             self._halt_session_runtime(state, finalize=True)
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(reason)
-            return pb2.StopStrategyResponse(stopped=False)
+            return pb2.StopStrategyResponse(
+                stopped=False,
+                status="stop_failed",
+                code=result.code,
+                target_results=result.target_results,
+                reconciliation_run_id=result.reconciliation_run_id,
+                operation_id=result.operation_id or operation_id,
+            )
 
         state.transition("stopped")
         self._persist_session_status(request.session_id, state)
         self._halt_session_runtime(state, finalize=True)
-        return pb2.StopStrategyResponse(stopped=True)
+        return pb2.StopStrategyResponse(
+            stopped=True,
+            status="stopped",
+            code=result.code or "STOPPED",
+            target_results=result.target_results,
+            reconciliation_run_id=result.reconciliation_run_id,
+            operation_id=result.operation_id or operation_id,
+        )
 
     def _persist_session_status(
         self,
@@ -3066,23 +3196,183 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if stop_event is not None:
                 stop_event.set()
 
-    def _stop_and_close_portfolio(self, session_id: str, state: SessionState) -> tuple[bool, str]:
+    def _wait_for_accepted_orders(
+        self,
+        session_id: str,
+        state: SessionState,
+    ) -> dict[tuple[str, str, str, str], dict[str, str]]:
+        pending = self._pending_wallet_orders(state)
+        reader = getattr(state.order_client, "list_order_lifecycle_events", None)
+        if not callable(reader):
+            return pending
+
+        cursor = 0
+        deadline = time.monotonic() + max(0.0, float(DEFAULT_STOP_ONLY_TIMEOUT_SECONDS))
+        while True:
+            events = reader(session_id=session_id, after_event_id=cursor, limit=500) or []
+            for event in events:
+                event_id = int(getattr(event, "event_id", 0) or 0)
+                if event_id > 0 and event_id <= cursor:
+                    continue
+                if event_id > cursor:
+                    cursor = event_id
+                exchange = _normalize_exchange(getattr(event, "exchange", ""))
+                market = _normalize_market(getattr(event, "market", ""))
+                symbol = str(getattr(event, "symbol", "") or "").strip().upper()
+                if not _target_is_allowed(state, exchange, market, symbol):
+                    continue
+                handler = state.order_update_handler
+                if callable(handler):
+                    handler(event)
+                aliases = {
+                    str(value or "").strip()
+                    for value in (
+                        getattr(event, "intent_id", ""),
+                        getattr(event, "attempt_id", ""),
+                        getattr(event, "order_id", ""),
+                        getattr(event, "exchange_order_id", ""),
+                    )
+                    if str(value or "").strip()
+                }
+                identity = str(
+                    getattr(event, "intent_id", "")
+                    or getattr(event, "attempt_id", "")
+                    or getattr(event, "order_id", "")
+                    or getattr(event, "exchange_order_id", "")
+                    or f"event:{event_id}"
+                ).strip()
+                matching_keys = [
+                    key
+                    for key in pending
+                    if key[:3] == (exchange, market, symbol)
+                    and key[3] in aliases
+                ]
+                status = str(getattr(event, "order_status", "") or "").strip().upper()
+                if status in _STOP_ORDER_TERMINAL_STATUSES:
+                    for key in matching_keys:
+                        pending.pop(key, None)
+                elif not matching_keys:
+                    pending[(exchange, market, symbol, identity)] = {
+                        "exchange": exchange,
+                        "market": market,
+                        "symbol": symbol,
+                        "identity": identity,
+                    }
+            if not pending:
+                return {}
+            if time.monotonic() >= deadline:
+                return pending
+            time.sleep(max(0.0, float(DEFAULT_STOP_ONLY_POLL_SECONDS)))
+
+    @staticmethod
+    def _pending_wallet_orders(
+        state: SessionState,
+    ) -> dict[tuple[str, str, str, str], dict[str, str]]:
+        wallet = state.wallet
+        if not isinstance(wallet, PortfolioWalletRuntime):
+            return {}
+        pending: dict[tuple[str, str, str, str], dict[str, str]] = {}
+        for (exchange, market, _venue_id), route_wallet in wallet.wallets.items():
+            market_wallet = (
+                getattr(route_wallet, "spot", None)
+                if market == "spot"
+                else getattr(route_wallet, "futures", None)
+            )
+            for item in (getattr(market_wallet, "open_orders", {}) or {}).values():
+                symbol = str(getattr(item, "symbol", "") or "").strip().upper()
+                if not _target_is_allowed(state, exchange, market, symbol):
+                    continue
+                status = str(getattr(item, "status", "") or "").strip().upper()
+                if status in _STOP_ORDER_TERMINAL_STATUSES:
+                    continue
+                identity = str(
+                    getattr(item, "exchange_order_id", "")
+                    or getattr(item, "order_identity", "")
+                    or getattr(item, "order_id", "")
+                ).strip() or f"wallet:{exchange}:{market}:{symbol}"
+                key = (exchange, market, symbol, identity)
+                pending[key] = {
+                    "exchange": exchange,
+                    "market": market,
+                    "symbol": symbol,
+                    "identity": identity,
+                }
+        return pending
+
+    def _stop_and_close_portfolio(
+        self,
+        session_id: str,
+        state: SessionState,
+        operation_id: str,
+    ) -> _StopExecution:
         wallet = state.wallet
         order_client = state.order_client
         if wallet is None or order_client is None:
-            return False, "stop_and_close_failed:runtime_not_available"
+            return _StopExecution(
+                False,
+                "stop_failed",
+                "STOP_RUNTIME_UNAVAILABLE",
+                "stop_and_close_failed:runtime_not_available",
+                operation_id=operation_id,
+            )
 
         started_at = time.monotonic()
         orders, reason = self._build_stop_and_close_orders(wallet, state)
         if reason:
-            return False, reason
+            return _StopExecution(
+                False,
+                "stop_failed",
+                "FUTURES_CLOSE_PREPLAN_FAILED",
+                reason,
+                operation_id=operation_id,
+            )
+
+        # Validate the complete mixed-route stop locally before the first
+        # Futures side effect. Core still owns the atomic Spot preplan/send,
+        # but a guarded or malformed Spot route must not partially close an
+        # otherwise valid Futures route first.
+        spot_targets, target_error = self._declared_spot_close_targets(wallet, state)
+        if target_error:
+            return _StopExecution(
+                False,
+                "stop_failed",
+                "SPOT_CLOSE_ROUTE_MISMATCH",
+                target_error,
+                operation_id=operation_id,
+            )
+        if spot_targets and state.environment == 2:
+            return _StopExecution(
+                False,
+                "stop_failed",
+                "SPOT_LIVE_ROLLOUT_GUARD",
+                "Live Spot close is rollout-guarded",
+                operation_id=operation_id,
+            )
+        close_spot_targets = getattr(order_client, "close_spot_targets", None)
+        if spot_targets and not callable(close_spot_targets):
+            return _StopExecution(
+                False,
+                "stop_failed",
+                "SPOT_CLOSE_UNAVAILABLE",
+                "stop_and_close_failed:core_spot_close_unavailable",
+                operation_id=operation_id,
+            )
 
         acct_client = self._portfolio_client()
+        target_results: list[Any] = []
         for index, order in enumerate(orders, start=1):
             if time.monotonic() - started_at > DEFAULT_STOP_AND_CLOSE_TIMEOUT_SECONDS:
-                return False, (
+                message = (
                     "stop_and_close_failed:timeout:"
                     f"processed={index-1}:total={len(orders)}"
+                )
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "FUTURES_CLOSE_TIMEOUT",
+                    message,
+                    target_results=target_results,
+                    operation_id=operation_id,
                 )
             decision = self._build_stop_order_decision(order)
             order_resp = order_client.place_order(
@@ -3095,10 +3385,26 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 session_id=session_id,
             )
             if str(getattr(order_resp, "status", "")).upper() != "FILLED":
-                return False, (
+                message = (
                     "stop_and_close_failed:order_rejected:"
                     f"{order.market}:{order.symbol}:{getattr(order_resp, 'status', '')}:"
                     f"{getattr(order_resp, 'error_message', '')}"
+                )
+                target_results.append(pb2.StopTargetResult(
+                    exchange=_stop_exchange_code(order.exchange),
+                    market=_stop_market_code(order.market),
+                    symbol=order.symbol,
+                    status="failed",
+                    code="FUTURES_CLOSE_ORDER_REJECTED",
+                    message=message,
+                ))
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "FUTURES_CLOSE_ORDER_REJECTED",
+                    message,
+                    target_results=target_results,
+                    operation_id=operation_id,
                 )
             wallet.on_order(
                 order.exchange,
@@ -3118,10 +3424,335 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 strategy_id=state.strategy_id,
                 session_id=session_id,
             )
+            target_results.append(pb2.StopTargetResult(
+                exchange=_stop_exchange_code(order.exchange),
+                market=_stop_market_code(order.market),
+                symbol=order.symbol,
+                status="terminal",
+            ))
+
+        if spot_targets and state.environment == 0:
+            try:
+                _sync_strategy_snapshot(
+                    acct_client,
+                    portfolio_id=state.portfolio_id,
+                    user_id=state.user_id,
+                    environment=state.environment,
+                    wallet=wallet,
+                    snapshot_reason=SNAPSHOT_REASON_EVENT,
+                    strategy_id=state.strategy_id,
+                    session_id=session_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "SPOT_CLOSE_WALLET_SYNC_FAILED",
+                    f"stop_and_close_failed:wallet_sync:{exc}",
+                    target_results=target_results,
+                    operation_id=operation_id,
+                )
+
+        if spot_targets:
+            try:
+                close_response = close_spot_targets(
+                    user_id=state.user_id,
+                    portfolio_id=state.portfolio_id,
+                    strategy_id=state.strategy_id,
+                    session_id=session_id,
+                    operation_id=operation_id,
+                    targets=spot_targets,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "SPOT_CLOSE_UNAVAILABLE",
+                    f"stop_and_close_failed:core_spot_close:{exc}",
+                    target_results=target_results,
+                    operation_id=operation_id,
+                )
+
+            response_operation_id = str(
+                getattr(close_response, "operation_id", "") or ""
+            ).strip()
+            if response_operation_id != operation_id:
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "SPOT_CLOSE_OPERATION_MISMATCH",
+                    "core Spot close returned a different operation_id",
+                    target_results=target_results,
+                    reconciliation_run_id=str(
+                        getattr(close_response, "reconciliation_run_id", "") or ""
+                    ).strip(),
+                    operation_id=operation_id,
+                )
+            spot_results = [self._stop_target_result_from_core(item) for item in close_response.results]
+            target_results.extend(spot_results)
+            reconciliation_run_id = str(
+                getattr(close_response, "reconciliation_run_id", "") or ""
+            ).strip()
+            if str(getattr(close_response, "status", "") or "").strip().lower() != "stopped":
+                code = str(getattr(close_response, "code", "") or "").strip() or "SPOT_CLOSE_FAILED"
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    code,
+                    f"stop_and_close_failed:{code}",
+                    target_results=target_results,
+                    reconciliation_run_id=reconciliation_run_id,
+                    operation_id=operation_id,
+                )
+            result_target_error = self._validate_spot_close_result_targets(
+                spot_targets,
+                close_response.results,
+                wallet,
+            )
+            if result_target_error:
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "SPOT_CLOSE_RESULT_MISMATCH",
+                    result_target_error,
+                    target_results=target_results,
+                    reconciliation_run_id=reconciliation_run_id,
+                    operation_id=operation_id,
+                )
+            snapshots = list(getattr(close_response, "final_snapshots", []) or [])
+            if not snapshots:
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "SPOT_CLOSE_FINAL_SNAPSHOT_MISSING",
+                    "core Spot close succeeded without an authoritative final snapshot",
+                    target_results=target_results,
+                    reconciliation_run_id=reconciliation_run_id,
+                    operation_id=operation_id,
+                )
+            candidate_wallet = PortfolioWalletRuntime(
+                portfolio_id=wallet.portfolio_id,
+                allowed_routes=set(wallet.allowed_routes),
+                wallets=dict(wallet.wallets),
+            )
+            applied_routes: set[tuple[str, str, int]] = set()
+            try:
+                for snapshot in snapshots:
+                    route = apply_venue_wallet_snapshot(
+                        candidate_wallet,
+                        snapshot,
+                        expected_environment=state.environment,
+                    )
+                    if route in applied_routes:
+                        raise ValueError(
+                            "authoritative Spot final snapshot contains a duplicate route"
+                        )
+                    applied_routes.add(route)
+            except (TypeError, ValueError) as exc:
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "SPOT_CLOSE_FINAL_SNAPSHOT_INVALID",
+                    f"authoritative Spot final snapshot is invalid: {exc}",
+                    target_results=target_results,
+                    reconciliation_run_id=reconciliation_run_id,
+                    operation_id=operation_id,
+                )
+            requested_routes = {
+                (item["exchange"], item["market"], int(item["venue_id"]))
+                for item in spot_targets
+            }
+            if requested_routes != applied_routes:
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "SPOT_CLOSE_FINAL_SNAPSHOT_MISSING",
+                    "authoritative Spot final snapshot routes do not match every requested route",
+                    target_results=target_results,
+                    reconciliation_run_id=reconciliation_run_id,
+                    operation_id=operation_id,
+                )
+            flat, flat_reason = self._spot_close_results_are_flat(
+                candidate_wallet,
+                close_response.results,
+            )
+            if not flat:
+                return _StopExecution(
+                    False,
+                    "stop_failed",
+                    "SPOT_CLOSE_RESIDUAL_BALANCE",
+                    flat_reason,
+                    target_results=target_results,
+                    reconciliation_run_id=reconciliation_run_id,
+                    operation_id=operation_id,
+                )
+            wallet.wallets.update({
+                route: candidate_wallet.wallets[route]
+                for route in applied_routes
+            })
+            if state.environment == 0:
+                try:
+                    _sync_strategy_snapshot(
+                        acct_client,
+                        portfolio_id=state.portfolio_id,
+                        user_id=state.user_id,
+                        environment=state.environment,
+                        wallet=wallet,
+                        snapshot_reason=SNAPSHOT_REASON_EVENT,
+                        strategy_id=state.strategy_id,
+                        session_id=session_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    return _StopExecution(
+                        False,
+                        "stop_failed",
+                        "SPOT_CLOSE_FINAL_WALLET_SYNC_FAILED",
+                        f"stop_and_close_failed:final_wallet_sync:{exc}",
+                        target_results=target_results,
+                        reconciliation_run_id=reconciliation_run_id,
+                        operation_id=operation_id,
+                    )
 
         flat, flat_reason = self._portfolio_is_flat(wallet, state)
         if not flat:
-            return False, flat_reason
+            return _StopExecution(
+                False,
+                "stop_failed",
+                "FUTURES_CLOSE_RESIDUAL_POSITION",
+                flat_reason,
+                target_results=target_results,
+                operation_id=operation_id,
+            )
+        return _StopExecution(
+            True,
+            "stopped",
+            "STOPPED",
+            target_results=target_results,
+            operation_id=operation_id,
+        )
+
+    @staticmethod
+    def _declared_spot_close_targets(
+        wallet: Any,
+        state: SessionState,
+    ) -> tuple[list[dict[str, Any]], str]:
+        if not isinstance(wallet, PortfolioWalletRuntime):
+            return [], "stop_and_close_failed:portfolio_wallet_required"
+        targets: list[dict[str, Any]] = []
+        for raw_exchange, raw_market, raw_symbol in sorted(state.order_target_keys or set()):
+            exchange = _normalize_exchange(raw_exchange)
+            market = _normalize_market(raw_market)
+            if market != "spot":
+                continue
+            symbol = str(raw_symbol or "").strip().upper()
+            matches = [
+                venue_id
+                for (wallet_exchange, wallet_market, venue_id) in wallet.wallets
+                if wallet_exchange == exchange and wallet_market == market
+            ]
+            if len(matches) != 1:
+                return [], (
+                    "stop_and_close_failed:spot_route_ambiguous_or_missing:"
+                    f"{exchange}:{market}:{symbol}:venues={sorted(matches)}"
+                )
+            targets.append({
+                "venue_id": int(matches[0]),
+                "exchange": exchange,
+                "market": market,
+                "symbol": symbol,
+            })
+        return targets, ""
+
+    @staticmethod
+    def _stop_target_result_from_core(item: Any):
+        target = getattr(item, "target", None)
+        return pb2.StopTargetResult(
+            exchange=int(getattr(target, "exchange", 0) or 0),
+            market=int(getattr(target, "market", 0) or 0),
+            symbol=str(getattr(target, "symbol", "") or "").strip().upper(),
+            status=str(getattr(item, "status", "") or ""),
+            code=str(getattr(item, "code", "") or ""),
+            message=str(getattr(item, "message", "") or ""),
+        )
+
+    @staticmethod
+    def _validate_spot_close_result_targets(
+        requested_targets: list[dict[str, Any]],
+        results: Any,
+        wallet: PortfolioWalletRuntime,
+    ) -> str:
+        requested = {
+            (
+                str(item.get("exchange", "") or "").strip().lower(),
+                str(item.get("market", "") or "").strip().lower(),
+                int(item.get("venue_id", 0) or 0),
+                str(item.get("symbol", "") or "").strip().upper(),
+            )
+            for item in requested_targets
+        }
+        returned: set[tuple[str, str, int, str]] = set()
+        for result in results or []:
+            target = getattr(result, "target", None)
+            key = (
+                {1: "binance", 2: "okx"}.get(
+                    int(getattr(target, "exchange", 0) or 0),
+                    "",
+                ),
+                {
+                    1: "spot",
+                    2: "perpetual_futures",
+                    3: "delivery_futures",
+                }.get(int(getattr(target, "market", 0) or 0), ""),
+                int(getattr(target, "venue_id", 0) or 0),
+                str(getattr(target, "symbol", "") or "").strip().upper(),
+            )
+            if not key[0] or key[1] != "spot" or key[2] <= 0 or not key[3]:
+                return "core Spot close returned an invalid target result"
+            if key in returned:
+                return "core Spot close returned a duplicate target result"
+            status = str(getattr(result, "status", "") or "").strip().lower()
+            if status not in {"terminal", "already_closed"}:
+                return "core Spot close returned a nonterminal target result"
+            route_wallet = wallet.wallets.get((key[0], key[1], key[2]))
+            metadata = None
+            if route_wallet is not None:
+                metadata = getattr(route_wallet.spot, "symbol_metadata", {}).get(
+                    (key[2], key[0], key[1], key[3])
+                )
+            if metadata is None:
+                return "Spot symbol metadata is unavailable for the core close result"
+            base_asset = str(getattr(result, "base_asset", "") or "").strip().upper()
+            if base_asset != str(getattr(metadata, "base_asset", "") or "").strip().upper():
+                return "core Spot close result base asset does not match symbol metadata"
+            returned.add(key)
+        if returned != requested:
+            return "core Spot close result targets do not match the requested targets"
+        return ""
+
+    @staticmethod
+    def _spot_close_results_are_flat(wallet: Any, results: Any) -> tuple[bool, str]:
+        if not isinstance(wallet, PortfolioWalletRuntime):
+            return False, "stop_and_close_failed:portfolio_wallet_required"
+        for result in results or []:
+            target = getattr(result, "target", None)
+            exchange = {1: "binance", 2: "okx"}.get(int(getattr(target, "exchange", 0) or 0), "")
+            market = {1: "spot", 2: "perpetual_futures", 3: "delivery_futures"}.get(
+                int(getattr(target, "market", 0) or 0), ""
+            )
+            venue_id = int(getattr(target, "venue_id", 0) or 0)
+            base_asset = str(getattr(result, "base_asset", "") or "").strip().upper()
+            if not exchange or market != "spot" or venue_id <= 0 or not base_asset:
+                return False, "stop_and_close_failed:invalid_core_spot_target_result"
+            route_wallet = wallet.wallets.get((exchange, market, venue_id))
+            if route_wallet is None:
+                return False, "stop_and_close_failed:missing_core_spot_final_route"
+            asset = getattr(route_wallet.spot, "assets", {}).get(base_asset)
+            if asset is None:
+                continue
+            free = Decimal(str(getattr(asset, "free", 0) or 0))
+            locked = Decimal(str(getattr(asset, "locked", 0) or 0))
+            if free != 0 or locked != 0:
+                return False, f"stop_and_close_failed:spot_not_flat:{base_asset}"
         return True, ""
 
     @staticmethod
@@ -3143,22 +3774,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return [], "stop_and_close_failed:portfolio_wallet_required"
 
         futures_open_orders = 0
-        spot_open_orders = 0
         for (exchange, market, _venue_id), route_wallet in wallet.wallets.items():
             if market in {"perpetual_futures", "delivery_futures"}:
                 for open_order in (getattr(route_wallet.futures, "open_orders", {}) or {}).values():
                     symbol = getattr(open_order, "symbol", "")
                     if _target_is_allowed(state, exchange, market, symbol):
                         futures_open_orders += 1
-            elif market == "spot":
-                for open_order in (getattr(route_wallet.spot, "open_orders", {}) or {}).values():
-                    symbol = getattr(open_order, "symbol", "")
-                    if _target_is_allowed(state, exchange, market, symbol):
-                        spot_open_orders += 1
-        if futures_open_orders or spot_open_orders:
+        if futures_open_orders:
             return [], (
                 "stop_and_close_failed:open_orders_present:"
-                f"futures={futures_open_orders}:spot={spot_open_orders}"
+                f"futures={futures_open_orders}"
             )
 
         orders: list[_StopOrder] = []
@@ -3193,31 +3818,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         qty=qty,
                         mark_price=mark_price,
                     ))
-            elif market == "spot":
-                for asset_symbol, asset in getattr(route_wallet.spot, "assets", {}).items():
-                    sym = str(asset_symbol).strip().upper()
-                    if sym == "USDT":
-                        continue
-                    if not _spot_asset_target_is_allowed(state, exchange, market, sym):
-                        continue
-                    qty = float(getattr(asset, "qty", 0.0) or 0.0) - float(getattr(asset, "locked", 0.0) or 0.0)
-                    if qty <= 1e-12:
-                        continue
-                    if state.environment != 0:
-                        return [], f"stop_and_close_failed:spot_liquidation_not_supported:{sym}"
-                    mark_price = float(getattr(asset, "price", 0.0) or getattr(asset, "avg_entry_price", 0.0) or 0.0)
-                    if mark_price <= 0.0:
-                        return [], f"stop_and_close_failed:missing_spot_mark_price:{sym}"
-                    orders.append(_StopOrder(
-                        exchange=exchange,
-                        venue_id=venue_id,
-                        symbol=f"{sym}USDT",
-                        portfolio_symbol=sym,
-                        market=market,
-                        side="SELL",
-                        qty=qty,
-                        mark_price=mark_price,
-                    ))
 
         return orders, ""
 
@@ -3237,23 +3837,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     symbol = getattr(open_order, "symbol", "")
                     if _target_is_allowed(state, exchange, market, symbol):
                         return False, "stop_and_close_failed:futures_open_orders_remaining"
-            elif market == "spot":
-                for asset_symbol, asset in getattr(route_wallet.spot, "assets", {}).items():
-                    sym = str(asset_symbol).strip().upper()
-                    if sym == "USDT":
-                        continue
-                    if not _spot_asset_target_is_allowed(state, exchange, market, sym):
-                        continue
-                    qty = float(getattr(asset, "qty", 0.0) or 0.0)
-                    locked = float(getattr(asset, "locked", 0.0) or 0.0)
-                    if qty > 1e-12 or locked > 1e-12:
-                        if state.environment == 0:
-                            return False, f"stop_and_close_failed:spot_not_flat:{sym}"
-                        return False, f"stop_and_close_failed:spot_exit_unsupported:{sym}"
-                for open_order in (getattr(route_wallet.spot, "open_orders", {}) or {}).values():
-                    symbol = getattr(open_order, "symbol", "")
-                    if _target_is_allowed(state, exchange, market, symbol):
-                        return False, "stop_and_close_failed:spot_open_orders_remaining"
         return True, ""
 
     # ── PreviewRunStrategy ───────────────────────────────────────────────────

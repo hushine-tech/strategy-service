@@ -118,12 +118,27 @@ enum StopAction {
 message StopStrategyRequest {
   string session_id = 1;
   StopAction stop_action = 3;
+  string operation_id = 4;
   int64 user_id = 100;
   string runtime_id = 101;
 }
 
 message StopStrategyResponse {
   bool stopped = 1;
+  string status = 2;
+  string code = 3;
+  repeated StopTargetResult target_results = 4;
+  string reconciliation_run_id = 5;
+  string operation_id = 6;
+}
+
+message StopTargetResult {
+  int32 exchange = 1;
+  int32 market = 2;
+  string symbol = 3;
+  string status = 4;
+  string code = 5;
+  string message = 6;
 }
 
 // ── PreviewRunStrategy ────────────────────────────────────────────────────

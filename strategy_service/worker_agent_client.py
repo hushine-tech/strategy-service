@@ -225,6 +225,7 @@ class WorkerAgentClient:
         status: str,
         bars_processed: int = 0,
         error: str = "",
+        reconciliation_run_id: str = "",
         dependency_error=None,
         timeout_seconds: float = 35.0,
     ) -> None:
@@ -242,6 +243,7 @@ class WorkerAgentClient:
                         bars_processed=int(bars_processed),
                         error=error,
                         dependency_error=dependency_error,
+                        reconciliation_run_id=str(reconciliation_run_id or "").strip(),
                     ),
                 )
             )

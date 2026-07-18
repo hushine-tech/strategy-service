@@ -1215,45 +1215,37 @@ func (a *Agent) handleWorkerFinalStatus(
 	if a.cfg.PlatformInvoker == nil {
 		return fmt.Errorf("platform invoker is not configured")
 	}
-
-	statusValue := strings.TrimSpace(strings.ToLower(status.GetStatus()))
-	if statusValue == "completed" {
-		statusValue = "finished"
-	}
-	switch statusValue {
-	case "finished", "failed", "stopped", "stop_failed", "recoverable":
-	default:
-		return fmt.Errorf("final status must be terminal, got %q", status.GetStatus())
+	request, err := terminalRequestFromFinalStatus(status)
+	if err != nil {
+		return err
 	}
 	if drainer, ok := a.cfg.WorkerStopper.(WorkerDrainer); ok {
-		drainer.MarkSessionWorkerDraining(sessionID)
+		drainer.MarkSessionWorkerDraining(request.SessionID)
 	}
-	flushCtx := ctx
-	var cancel context.CancelFunc
-	if a.cfg.IndicatorFinalizeTimeout > 0 {
-		flushCtx, cancel = context.WithTimeout(ctx, a.cfg.IndicatorFinalizeTimeout)
-		defer cancel()
-	}
-	flushErr := a.indicatorSync.FinalizeSession(flushCtx, sessionID)
-	if statusValue == "finished" && flushErr != nil {
-		message := "indicator finalization failed: " + flushErr.Error()
-		if err := a.updateSession(ctx, sessionID, "recoverable", status.GetBarsProcessed(), message); err != nil {
+	lifecycle := NewSessionLifecycle(a.indicatorSync, func(publishCtx context.Context, terminal TerminalRequest) error {
+		return a.updateSession(
+			publishCtx,
+			terminal.SessionID,
+			terminal.Status,
+			terminal.BarsProcessed,
+			terminal.Error,
+		)
+	})
+	if err := lifecycle.Complete(ctx, request); err != nil {
+		var finalizationErr *IndicatorFinalizationError
+		if !errors.As(err, &finalizationErr) {
 			return err
 		}
 		return send(&rwv1.AgentFrame{
 			ReplyTo: frameID,
 			Payload: &rwv1.AgentFrame_Error{Error: &rwv1.AgentError{
-				Code: "INDICATOR_FINALIZATION_FAILED", Message: message,
+				Code: "INDICATOR_FINALIZATION_FAILED", Message: finalizationErr.Error(),
 			}},
 		})
-	}
-	if err := a.updateSession(ctx, sessionID, statusValue, status.GetBarsProcessed(), status.GetError()); err != nil {
-		return err
 	}
 	if err := send(&rwv1.AgentFrame{ReplyTo: frameID}); err != nil {
 		return err
 	}
-	a.indicatorSync.ForgetSession(ctx, sessionID)
 	return nil
 }
 

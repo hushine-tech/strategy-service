@@ -53,6 +53,21 @@ POSITION_SIDE_NAMES = {
 }
 
 
+def _target_value(target, name: str, default=None):
+    if isinstance(target, dict):
+        return target.get(name, default)
+    return getattr(target, name, default)
+
+
+def _spot_close_target_proto(client, order_service_pb2, target):
+    return order_service_pb2.SpotCloseTarget(
+        venue_id=int(_target_value(target, "venue_id", 0) or 0),
+        exchange=client._exchange_code(_target_value(target, "exchange", "")),
+        market=client._market_code(_target_value(target, "market", "")),
+        symbol=str(_target_value(target, "symbol", "") or "").strip().upper(),
+    )
+
+
 def _market_time_to_proto(value: object | None):
     if value is None:
         return None
@@ -203,6 +218,32 @@ class OrderClient:
                 market=effective_market,
                 symbol=symbol,
             )
+
+    def close_spot_targets(
+        self,
+        *,
+        user_id: int,
+        portfolio_id: int,
+        strategy_id: int,
+        session_id: str,
+        operation_id: str,
+        targets,
+    ):
+        """Ask core-service to atomically close declared Binance Spot targets."""
+        if not self._stub:
+            raise RuntimeError("order.v1 gRPC client is not configured")
+        from strategy_service.gen import order_service_pb2
+
+        request_targets = [_spot_close_target_proto(self, order_service_pb2, target) for target in targets]
+        request = order_service_pb2.CloseSpotTargetsRequest(
+            user_id=int(user_id),
+            portfolio_id=int(portfolio_id),
+            strategy_id=int(strategy_id),
+            session_id=str(session_id or "").strip(),
+            operation_id=str(operation_id or "").strip(),
+            targets=request_targets,
+        )
+        return self._stub.CloseSpotTargets(request)
 
     @staticmethod
     def _wallet_qty(qty: float, side: str, market: str) -> float:

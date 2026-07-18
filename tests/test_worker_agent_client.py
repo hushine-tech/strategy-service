@@ -174,6 +174,29 @@ def test_send_final_status_waits_until_matching_reply_to():
     assert failure == []
 
 
+def test_send_final_status_carries_reconciliation_run_id():
+    stub = _FinalAckStub()
+    stub.allow_ack.set()
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=stub,
+        call_id_factory=lambda: "final-reconciliation",
+    )
+    client.start()
+
+    client.send_final_status(
+        session_id="sess-1",
+        status="stop_failed",
+        error="Spot close requires reconciliation",
+        reconciliation_run_id="recon-123",
+        timeout_seconds=1.0,
+    )
+
+    client.close()
+    final = next(frame.final_status for frame in stub.sent if frame.WhichOneof("payload") == "final_status")
+    assert final.reconciliation_run_id == "recon-123"
+
+
 def test_send_final_status_raises_when_agent_returns_error():
     stub = _FinalAckStub(error="indicator finalization failed: database unavailable")
     stub.allow_ack.set()
