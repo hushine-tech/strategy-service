@@ -325,6 +325,43 @@ def test_build_script_uses_sealed_context_and_target_identity(
         assert build_args[key]
 
 
+def test_build_script_passes_validated_build_only_go_proxy(tmp_path: Path):
+    proxy = "https://goproxy.cn,direct"
+    result, calls = _build(
+        tmp_path,
+        "--allow-dirty",
+        "proxy-contract",
+        extra_env={"RUNTIME_GO_PROXY": proxy},
+    )
+
+    result.check_returncode()
+    build = next(call for call in calls if call and call[0] == "build")
+    build_args = dict(
+        value.split("=", 1)
+        for value in _option_values(build, "--build-arg")
+    )
+    assert build_args["RUNTIME_GO_PROXY"] == proxy
+
+
+@pytest.mark.parametrize(
+    "proxy",
+    ["http://goproxy.example", "https://user@goproxy.example", "https://bad proxy"],
+)
+def test_build_script_rejects_unsafe_go_proxy_before_docker(
+    tmp_path: Path, proxy: str
+):
+    result, calls = _build(
+        tmp_path,
+        "--allow-dirty",
+        "proxy-contract",
+        extra_env={"RUNTIME_GO_PROXY": proxy},
+    )
+
+    assert result.returncode == 2
+    assert calls == []
+    assert "invalid RUNTIME_GO_PROXY" in result.stderr
+
+
 def test_all_builds_targets_separately_with_distinct_ids(tmp_path: Path):
     result, calls = _build(tmp_path, "--all", "--allow-dirty", "contract")
     result.check_returncode()

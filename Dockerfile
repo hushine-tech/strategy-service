@@ -6,6 +6,9 @@ FROM ghcr.io/astral-sh/uv:0.11.16@sha256:440fd6477af86a2f1b38080c539f1672cd22acb
 
 FROM golang:1.26-bookworm AS go-builder-base
 
+ARG RUNTIME_GO_PROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${RUNTIME_GO_PROXY}
+
 WORKDIR /src
 COPY golang-lib/ /src/golang-lib/
 COPY strategy-service/go.mod strategy-service/go.sum /src/strategy-service/

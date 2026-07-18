@@ -64,6 +64,12 @@ done
 [[ "${VERSION}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
     || fail_usage "VERSION is not a valid Docker tag component"
 
+RUNTIME_GO_PROXY_VALUE="${RUNTIME_GO_PROXY:-https://proxy.golang.org,direct}"
+GO_PROXY_PATTERN='^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%+/-]*)?(,(https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%+/-]*)?|direct|off))*$'
+[[ ${#RUNTIME_GO_PROXY_VALUE} -le 512 \
+    && "${RUNTIME_GO_PROXY_VALUE}" =~ ${GO_PROXY_PATTERN} ]] \
+    || fail_usage "invalid RUNTIME_GO_PROXY"
+
 for repository in "${SERVICE_DIR}" "${LIBRARY_DIR}" "${GOLANG_LIB_DIR}"; do
     [[ -d "${repository}/.git" || -f "${repository}/.git" ]] \
         || fail_usage "missing Git repository: ${repository}"
@@ -207,6 +213,7 @@ fi
 common_build_args() {
     local build_id="$1"
     printf '%s\n' \
+        "RUNTIME_GO_PROXY=${RUNTIME_GO_PROXY_VALUE}" \
         "RUNTIME_PROFILE_NAME=${PROFILE_NAME}" \
         "RUNTIME_PROFILE_VERSION=${PROFILE_VERSION}" \
         "RUNTIME_CONTRACT_SHA256=${CONTRACT_SHA256}" \

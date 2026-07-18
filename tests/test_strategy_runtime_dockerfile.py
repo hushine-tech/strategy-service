@@ -51,6 +51,19 @@ def test_strategy_runtime_image_has_only_executor_targets():
     assert "pydevd-pycharm" not in content
 
 
+def test_go_proxy_override_is_confined_to_builder_stages():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    go_builder = _dockerfile_stage(text, "go-builder-base")
+    runtime_base = _dockerfile_stage(text, "runtime-base")
+
+    assert (
+        "ARG RUNTIME_GO_PROXY=https://proxy.golang.org,direct" in go_builder
+    )
+    assert "ENV GOPROXY=${RUNTIME_GO_PROXY}" in go_builder
+    assert "RUNTIME_GO_PROXY" not in runtime_base
+    assert "GOPROXY" not in runtime_base
+
+
 def test_runtime_base_installs_both_projects_non_editably_before_closure_checks():
     text = DOCKERFILE.read_text(encoding="utf-8")
     runtime_base = _dockerfile_stage(text, "runtime-base")
