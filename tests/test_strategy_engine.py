@@ -1,3 +1,4 @@
+import json
 import time
 import sys
 import threading
@@ -8,6 +9,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from hushine_strategy.replay.spot_filters import (
+    evaluate_spot_filter_vector as evaluate_replay_spot_filter_vector,
+)
+from hushine_strategy.wallet import (
+    SpotSymbolMetadata as ReplaySpotSymbolMetadata,
+    SpotWallet as ReplaySpotWallet,
+)
 from strategy_service import (
     ExecutionFeedback,
     MarketData,
@@ -28,6 +36,10 @@ from strategy_service.strategy import base as strategy_base
 from strategy_service.wallet import SpotAsset
 from strategy_service.wallet.canonical import SpotSymbolFilter, SpotSymbolMetadata
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from strategy_service.wallet.spot import SpotWallet as HostedSpotWallet
+from strategy_service.wallet.spot_filters import (
+    evaluate_spot_filter_vector as evaluate_hosted_spot_filter_vector,
+)
 from tests.helpers.order_client import FilledOrderClient
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
@@ -218,6 +230,117 @@ def _register_spot_facts(spot_wallet, symbol: str) -> None:
         metadata=metadata,
         reference_price_decimal="100",
     )
+
+
+def test_spot_replay_parity_matches_hosted_filters_and_canonical_fill_wallet():
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "core-service"
+        / "internal"
+        / "order"
+        / "risk"
+        / "testdata"
+        / "spot_filter_contract_v1.json"
+    )
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    for case in payload["cases"]:
+        assert evaluate_hosted_spot_filter_vector(case) == case["expected_code"], case["name"]
+        assert evaluate_replay_spot_filter_vector(case) == case["expected_code"], case["name"]
+
+    metadata_fields = {
+        "venue_id": 10,
+        "exchange": "binance",
+        "market": "spot",
+        "symbol": "BTCUSDT",
+        "status": "TRADING",
+        "base_asset": "BTC",
+        "quote_asset": "USDT",
+        "base_asset_precision": 8,
+        "quote_asset_precision": 8,
+        "spot_trading_allowed": True,
+        "permission_sets": (("SPOT",),),
+        "order_types": ("LIMIT", "MARKET"),
+    }
+    hosted_metadata = SpotSymbolMetadata(**metadata_fields)
+    replay_metadata = ReplaySpotSymbolMetadata(**metadata_fields)
+    hosted = HostedSpotWallet.from_assets({"USDT": ("1000", "0"), "BNB": ("1", "0")})
+    replay = ReplaySpotWallet.from_assets({"USDT": ("1000", "0"), "BNB": ("1", "0")})
+
+    def fill(
+        *,
+        side: str,
+        order_id: str,
+        trade_id: str,
+        price: str,
+        quote_qty: str,
+        fee: str,
+        fee_asset: str,
+    ) -> OrderResponse:
+        return OrderResponse(
+            symbol="BTCUSDT",
+            side=side,
+            qty=0.01,
+            fill_price=float(price),
+            status="FILLED",
+            fee=float(fee),
+            order_id=order_id,
+            venue_id=10,
+            exchange="binance",
+            market="spot",
+            exchange_order_id=order_id,
+            exchange_trade_id=trade_id,
+            fee_asset=fee_asset,
+            qty_decimal="0.01",
+            fill_price_decimal=price,
+            quote_qty_decimal=quote_qty,
+            fee_decimal=fee,
+            orig_qty_decimal="0.01",
+            executed_qty_decimal="0.01",
+            remaining_qty_decimal="0",
+            price_decimal=price,
+            cumulative_quote_qty_decimal=quote_qty,
+        )
+
+    buy = fill(
+        side="BUY",
+        order_id="buy-1",
+        trade_id="trade-buy",
+        price="50000",
+        quote_qty="500",
+        fee="0.001",
+        fee_asset="BNB",
+    )
+    sell = fill(
+        side="SELL",
+        order_id="sell-1",
+        trade_id="trade-sell",
+        price="51000",
+        quote_qty="510",
+        fee="0.51",
+        fee_asset="USDT",
+    )
+    for update in (buy, buy, buy, sell):
+        hosted.apply_order_update(update, hosted_metadata)
+        replay.apply_order_update(update, replay_metadata)
+
+    def canonical_wallet(wallet) -> str:
+        return json.dumps(
+            {
+                asset: {
+                    "free": str(balance.free),
+                    "locked": str(balance.locked),
+                    "avg_entry_price": str(balance.avg_entry_price),
+                }
+                for asset, balance in sorted(wallet.assets.items())
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    assert canonical_wallet(hosted) == canonical_wallet(replay)
+    assert hosted.assets["BTC"].free == Decimal("0")
+    assert hosted.assets["USDT"].free == Decimal("1009.49")
+    assert hosted.assets["BNB"].free == Decimal("0.999")
 
 
 def _wallet_with_spot_slot(symbol: str = "TESTUSDT"):
