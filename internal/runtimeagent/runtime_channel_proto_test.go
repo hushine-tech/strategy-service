@@ -101,13 +101,25 @@ func TestRuntimeDependencyChannelProto(t *testing.T) {
 	})
 	validateRequest := requireTask7Message(t, strategyFile, "ValidateStrategySourceRequest")
 	assertTask7Fields(t, validateRequest, map[protoreflect.Name]protoreflect.FieldNumber{
-		"source": 1, "user_id": 100, "runtime_id": 101,
+		"source": 1, "user_id": 100, "runtime_id": 101, "include_declarations": 102,
 	})
+	if validateRequest.Fields().ByName("include_declarations").Kind() != protoreflect.BoolKind {
+		t.Fatal("ValidateStrategySourceRequest.include_declarations must be bool")
+	}
 	validateResponse := requireTask7Message(t, strategyFile, "ValidateStrategySourceResponse")
 	assertTask7Fields(t, validateResponse, map[protoreflect.Name]protoreflect.FieldNumber{
 		"ok": 1, "issues": 2, "runtime_profile": 3,
+		"declared_inputs": 4, "declared_order_targets": 5,
 	})
 	assertTask7MessageField(t, validateResponse, "runtime_profile", 3, "strategy.v1.RuntimeDependencyProfile")
+	assertTask7MessageField(t, validateResponse, "declared_inputs", 4, "strategy.v1.StrategyInputDeclaration")
+	assertTask7MessageField(t, validateResponse, "declared_order_targets", 5, "strategy.v1.StrategyOrderTargetBinding")
+	if validateResponse.Fields().ByName("declared_inputs").Cardinality() != protoreflect.Repeated {
+		t.Fatal("ValidateStrategySourceResponse.declared_inputs must be repeated")
+	}
+	if validateResponse.Fields().ByName("declared_order_targets").Cardinality() != protoreflect.Repeated {
+		t.Fatal("ValidateStrategySourceResponse.declared_order_targets must be repeated")
+	}
 	assertTask7Method(t, strategyFile, "StrategyService", "ValidateStrategySource", "strategy.v1.ValidateStrategySourceRequest", "strategy.v1.ValidateStrategySourceResponse")
 	stopRequest := requireTask7Message(t, strategyFile, "StopStrategyRequest")
 	assertTask7Fields(t, stopRequest, map[protoreflect.Name]protoreflect.FieldNumber{

@@ -2138,8 +2138,11 @@ type PreflightStrategySessionRequest struct {
 	SessionId       string                 `protobuf:"bytes,5,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	StrategyId      int64                  `protobuf:"varint,6,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
 	Leverage        float64                `protobuf:"fixed64,7,opt,name=leverage,proto3" json:"leverage,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Requests side-effect-free immutable facts for an offline debug package.
+	// Spot admission uses offline_spot_usdt instead of Session start capability.
+	DebugPackage  bool `protobuf:"varint,8,opt,name=debug_package,json=debugPackage,proto3" json:"debug_package,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PreflightStrategySessionRequest) Reset() {
@@ -2219,6 +2222,13 @@ func (x *PreflightStrategySessionRequest) GetLeverage() float64 {
 		return x.Leverage
 	}
 	return 0
+}
+
+func (x *PreflightStrategySessionRequest) GetDebugPackage() bool {
+	if x != nil {
+		return x.DebugPackage
+	}
+	return false
 }
 
 type PreflightStrategySessionResponse struct {
@@ -9730,7 +9740,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x06symbol\x18\x05 \x01(\tR\x06symbol\x12\x19\n" +
 	"\bvenue_id\x18\x06 \x01(\x03R\avenueId\x12\x1f\n" +
 	"\vfilter_type\x18\a \x01(\tR\n" +
-	"filterType\"\xc8\x02\n" +
+	"filterType\"\xed\x02\n" +
 	"\x1fPreflightStrategySessionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12!\n" +
 	"\fportfolio_id\x18\x02 \x01(\x03R\vportfolioId\x12D\n" +
@@ -9740,7 +9750,8 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"session_id\x18\x05 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vstrategy_id\x18\x06 \x01(\x03R\n" +
 	"strategyId\x12\x1a\n" +
-	"\bleverage\x18\a \x01(\x01R\bleverage\"\xff\x01\n" +
+	"\bleverage\x18\a \x01(\x01R\bleverage\x12#\n" +
+	"\rdebug_package\x18\b \x01(\bR\fdebugPackage\"\xff\x01\n" +
 	" PreflightStrategySessionResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x124\n" +
 	"\x06issues\x18\x02 \x03(\v2\x1c.portfolio.v1.PreflightIssueR\x06issues\x12A\n" +

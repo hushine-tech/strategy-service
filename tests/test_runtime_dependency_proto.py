@@ -111,18 +111,52 @@ def test_shared_dependency_messages_and_validate_rpc_are_exact():
     )
     _assert_field_numbers(
         _message(strategy_pb2, "ValidateStrategySourceRequest"),
-        {"source": 1, "user_id": 100, "runtime_id": 101},
+        {
+            "source": 1,
+            "user_id": 100,
+            "runtime_id": 101,
+            "include_declarations": 102,
+        },
+    )
+    _assert_field_numbers(
+        _message(strategy_pb2, "StrategyInputDeclaration"),
+        {
+            "stream_id": 1,
+            "exchange": 2,
+            "market": 3,
+            "kind": 4,
+            "symbol": 5,
+            "interval": 6,
+        },
     )
     response = _message(strategy_pb2, "ValidateStrategySourceResponse")
     _assert_field_numbers(
         response,
-        {"ok": 1, "issues": 2, "runtime_profile": 3},
+        {
+            "ok": 1,
+            "issues": 2,
+            "runtime_profile": 3,
+            "declared_inputs": 4,
+            "declared_order_targets": 5,
+        },
     )
     _assert_message_field(
         response,
         name="runtime_profile",
         number=3,
         message_type="strategy.v1.RuntimeDependencyProfile",
+    )
+    _assert_message_field(
+        response,
+        name="declared_inputs",
+        number=4,
+        message_type="strategy.v1.StrategyInputDeclaration",
+    )
+    _assert_message_field(
+        response,
+        name="declared_order_targets",
+        number=5,
+        message_type="strategy.v1.StrategyOrderTargetBinding",
     )
     _assert_method(
         strategy_pb2,
@@ -135,9 +169,13 @@ def test_shared_dependency_messages_and_validate_rpc_are_exact():
 
 def test_validate_source_rpc_exists():
     request = strategy_pb2.ValidateStrategySourceRequest(
-        source="import numpy", user_id=7, runtime_id="rt-1"
+        source="import numpy",
+        user_id=7,
+        runtime_id="rt-1",
+        include_declarations=True,
     )
     assert request.runtime_id == "rt-1"
+    assert request.include_declarations is True
 
 
 def test_worker_dependency_fields_and_indicator_evolution_are_exact():

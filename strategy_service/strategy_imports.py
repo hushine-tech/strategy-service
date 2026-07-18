@@ -563,7 +563,7 @@ def _freeze_declaration_values(
     order_targets: object,
     risk_controls: object,
 ) -> tuple[
-    tuple[tuple[str, str, str, str], ...],
+    tuple[tuple[str, str, str, str, str, str], ...],
     tuple[tuple[str, str, str], ...],
     float | None,
 ]:
@@ -573,11 +573,18 @@ def _freeze_declaration_values(
         input_values = tuple.__iter__(inputs)
     else:
         raise ValueError("invalid strategy inputs")
-    frozen_inputs: list[tuple[str, str, str, str]] = []
+    frozen_inputs: list[tuple[str, str, str, str, str, str]] = []
     for item in input_values:
         if type(item) is not StrategyInput:
             raise ValueError("invalid strategy input")
-        fields = (item.exchange, item.market, item.symbol, item.interval)
+        fields = (
+            item.exchange,
+            item.market,
+            item.symbol,
+            item.interval,
+            item.stream_id,
+            item.kind,
+        )
         if any(type(field) is not str for field in fields):
             raise ValueError("invalid strategy input")
         frozen_inputs.append(fields)
@@ -606,7 +613,7 @@ def _freeze_declaration_values(
 
 
 def _thaw_declaration_values(
-    inputs: tuple[tuple[str, str, str, str], ...],
+    inputs: tuple[tuple[str, str, str, str, str, str], ...],
     order_targets: tuple[tuple[str, str, str], ...],
     risk_value: float | None,
 ) -> StrategyDeclarations:
@@ -951,7 +958,7 @@ class _PreparedIssuance:
     gated_snapshot: _ResolvedSnapshot
     visible_gated_snapshot: _ResolvedSnapshot
     instance: object
-    inputs: tuple[tuple[str, str, str, str], ...]
+    inputs: tuple[tuple[str, str, str, str, str, str], ...]
     order_targets: tuple[tuple[str, str, str], ...]
     risk_value: float | None
     visible_inputs: tuple[StrategyInput, ...]

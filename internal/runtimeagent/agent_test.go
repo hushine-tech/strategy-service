@@ -165,6 +165,94 @@ func TestValidateDependencyFailureIsTypedAndOneShotWorkerIsRemoved(t *testing.T)
 	}
 }
 
+func TestValidateDeclarationsRoundTripThroughOneShotWorkerAndCleanup(t *testing.T) {
+	starter := &fakeWorkerStarter{}
+	stopper := &fakeWorkerStopper{}
+	sender := &fakeWorkerSender{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", WorkerStarter: starter, WorkerStopper: stopper,
+		WorkerSender: sender, StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+	starter.onStart = func(sessionID string) {
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{SessionId: sessionID}},
+			}, nil)
+		}()
+	}
+	sender.onSend = func(sessionID string, frame *rwv1.AgentFrame) {
+		call := frame.GetPlatformCall()
+		var request strategyv1.ValidateStrategySourceRequest
+		if call == nil || call.GetMethod() != "ValidateStrategySource" || call.GetRequest() == nil {
+			t.Errorf("worker call = %+v", call)
+			return
+		}
+		if err := call.GetRequest().UnmarshalTo(&request); err != nil {
+			t.Errorf("unpack validate request: %v", err)
+			return
+		}
+		if !request.GetIncludeDeclarations() || request.GetRuntimeId() != "rt-1" || request.GetUserId() != 6 {
+			t.Errorf("validate request = %+v", &request)
+			return
+		}
+		go func() {
+			response, err := anypb.New(&strategyv1.ValidateStrategySourceResponse{
+				Ok: true,
+				DeclaredInputs: []*strategyv1.StrategyInputDeclaration{{
+					StreamId: "spot-btc", Exchange: "binance", Market: "spot",
+					Kind: "kline", Symbol: "BTCUSDT", Interval: "1m",
+				}},
+				DeclaredOrderTargets: []*strategyv1.StrategyOrderTargetBinding{{
+					Exchange: "binance", Market: "spot", Symbol: "BTCUSDT",
+				}},
+			})
+			if err != nil {
+				t.Errorf("pack validate response: %v", err)
+				return
+			}
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_PlatformCallResult{PlatformCallResult: &rwv1.PlatformCallResult{
+					CallId: call.GetCallId(), Ok: true, Response: response,
+				}},
+			}, nil)
+		}()
+	}
+	request, err := anypb.New(&strategyv1.ValidateStrategySourceRequest{
+		Source: "class MyStrategy: pass", UserId: 6, RuntimeId: "rt-1",
+		IncludeDeclarations: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+		CorrelationId: "corr-validate-declarations",
+		Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+			Method: "ValidateStrategySource", Request: request,
+		}},
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
+		t.Fatalf("frame = %+v", frame)
+	}
+	var response strategyv1.ValidateStrategySourceResponse
+	if err := frame.GetResponse().GetResponse().UnmarshalTo(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.GetDeclaredInputs()) != 1 || response.GetDeclaredInputs()[0].GetStreamId() != "spot-btc" {
+		t.Fatalf("declared inputs = %+v", response.GetDeclaredInputs())
+	}
+	if len(response.GetDeclaredOrderTargets()) != 1 || response.GetDeclaredOrderTargets()[0].GetSymbol() != "BTCUSDT" {
+		t.Fatalf("declared targets = %+v", response.GetDeclaredOrderTargets())
+	}
+	if stopper.sessionID != starter.startedSessionID {
+		t.Fatalf("stopped session = %q, want %q", stopper.sessionID, starter.startedSessionID)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.ready) != 0 || len(agent.workerCallReply) != 0 || len(agent.workerCallSession) != 0 {
+		t.Fatalf("one-shot state leaked: ready=%d replies=%d sessions=%d", len(agent.ready), len(agent.workerCallReply), len(agent.workerCallSession))
+	}
+}
+
 func TestGenerationCleanupDrainsAdmittedSaveBeforeFailedReconciliation(t *testing.T) {
 	const sessionID = "11111111111111111111111111111111"
 	platform := &admissionCleanupPlatform{

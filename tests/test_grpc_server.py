@@ -462,6 +462,82 @@ def test_validate_strategy_source_returns_runtime_profile_without_session():
     assert servicer._sessions.list_ids() == ()
 
 
+def test_validate_strategy_source_returns_runtime_prepared_declarations_without_session():
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", bound_user_id=7, runtime_id="rt-1",
+        restore_running_sessions=False,
+    )
+    context = _FakeContext()
+    source = '''
+class MyStrategy:
+    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = []
+    def __init__(self):
+        type(self).INPUTS = [
+            {"stream_id": "btc-kline", "exchange": "binance", "market": "spot", "kind": "kline", "symbol": "BTCUSDT", "interval": "1m"},
+            {"stream_id": "btc-mark", "exchange": "binance", "market": "spot", "kind": "mark_price", "symbol": "BTCUSDT", "interval": "1m"},
+        ]
+        type(self).ORDER_TARGETS = [
+            {"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"},
+        ]
+    def on_market_data(self, data, wallet):
+        return None
+'''
+
+    response = servicer.ValidateStrategySource(
+        pb2.ValidateStrategySourceRequest(
+            source=source,
+            user_id=7,
+            runtime_id="rt-1",
+            include_declarations=True,
+        ),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is True
+    assert [
+        (item.stream_id, item.exchange, item.market, item.kind, item.symbol, item.interval)
+        for item in response.declared_inputs
+    ] == [
+        ("btc-kline", "binance", "spot", "kline", "BTCUSDT", "1m"),
+        ("btc-mark", "binance", "spot", "mark_price", "BTCUSDT", "1m"),
+    ]
+    assert [
+        (item.exchange, item.market, item.symbol)
+        for item in response.declared_order_targets
+    ] == [("binance", "spot", "BTCUSDT")]
+    assert servicer._sessions.list_ids() == ()
+
+
+def test_validate_strategy_source_does_not_execute_source_without_declaration_opt_in():
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", bound_user_id=7, runtime_id="rt-1",
+        restore_running_sessions=False,
+    )
+    context = _FakeContext()
+    source = '''
+class MyStrategy:
+    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]
+    ORDER_TARGETS = []
+    def __init__(self):
+        raise RuntimeError("must not execute")
+    def on_market_data(self, data, wallet):
+        return None
+'''
+
+    response = servicer.ValidateStrategySource(
+        pb2.ValidateStrategySourceRequest(source=source, user_id=7, runtime_id="rt-1"),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is True
+    assert list(response.declared_inputs) == []
+    assert list(response.declared_order_targets) == []
+    assert servicer._sessions.list_ids() == ()
+
+
 @pytest.mark.parametrize(
     ("source", "expected_code"),
     [

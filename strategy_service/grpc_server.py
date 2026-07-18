@@ -1314,10 +1314,65 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         module=gate.dependency_error.module,
                     )
                 )
+        declared_inputs = []
+        declared_order_targets = []
+        ok = bool(gate.ok)
+        if ok and bool(getattr(request, "include_declarations", False)):
+            if gate.gated_source is None:
+                logger.error(
+                    "STRATEGY_SOURCE_GATE_INTERNAL operation=ValidateStrategySource missing_gated_source=true"
+                )
+                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_details("strategy source gate failed")
+                return pb2.ValidateStrategySourceResponse(
+                    runtime_profile=_runtime_dependency_profile_proto()
+                )
+            try:
+                prepared = prepare_strategy(gate.gated_source)
+                declarations = prepared.declarations
+            except StrategySourceLoadError:
+                ok = False
+                issues.append(
+                    pb2.StrategyValidationIssueProto(
+                        code="STRATEGY_DECLARATION_INVALID",
+                        message="strategy declarations could not be resolved",
+                    )
+                )
+            except BaseException:
+                logger.error(
+                    "STRATEGY_SOURCE_LOAD_INTERNAL operation=ValidateStrategySource"
+                )
+                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_details("strategy source gate failed")
+                return pb2.ValidateStrategySourceResponse(
+                    runtime_profile=_runtime_dependency_profile_proto()
+                )
+            else:
+                declared_inputs = [
+                    pb2.StrategyInputDeclaration(
+                        stream_id=item.stream_id,
+                        exchange=item.exchange,
+                        market=item.market,
+                        kind=item.kind,
+                        symbol=item.symbol,
+                        interval=item.interval,
+                    )
+                    for item in declarations.inputs
+                ]
+                declared_order_targets = [
+                    pb2.StrategyOrderTargetBinding(
+                        exchange=item.exchange,
+                        market=item.market,
+                        symbol=item.symbol,
+                    )
+                    for item in declarations.order_targets
+                ]
         return pb2.ValidateStrategySourceResponse(
-            ok=bool(gate.ok),
+            ok=ok,
             issues=issues,
             runtime_profile=_runtime_dependency_profile_proto(),
+            declared_inputs=declared_inputs,
+            declared_order_targets=declared_order_targets,
         )
 
     def RunStrategy(self, request, context):

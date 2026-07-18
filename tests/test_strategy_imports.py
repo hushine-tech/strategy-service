@@ -613,6 +613,30 @@ def test_prepared_declaration_objects_are_fresh_from_primitive_authority(
     }
 
 
+def test_prepared_declarations_preserve_full_stream_identity(monkeypatch):
+    source = '''
+class MyStrategy:
+    INPUTS = [
+        {"stream_id": "btc-kline", "exchange": "binance", "market": "perpetual_futures", "kind": "kline", "symbol": "BTCUSDT", "interval": "1m"},
+        {"stream_id": "btc-mark", "exchange": "binance", "market": "perpetual_futures", "kind": "mark_price", "symbol": "BTCUSDT", "interval": "1m"},
+    ]
+    ORDER_TARGETS = []
+    def on_market_data(self, data, wallet):
+        return None
+'''
+    _, gated = _gate_source_code(monkeypatch, source)
+
+    prepared = prepare_strategy(gated)
+
+    assert [
+        (item.stream_id, item.exchange, item.market, item.kind, item.symbol, item.interval)
+        for item in prepared.declarations.inputs
+    ] == [
+        ("btc-kline", "binance", "perpetual_futures", "kline", "BTCUSDT", "1m"),
+        ("btc-mark", "binance", "perpetual_futures", "mark_price", "BTCUSDT", "1m"),
+    ]
+
+
 def test_gated_capability_rejects_direct_constructor(monkeypatch):
     monkeypatch.setattr(sys, "_hushine_strategy_import_execs", 0, raising=False)
     resolved, _ = _gate_valid_source(monkeypatch)

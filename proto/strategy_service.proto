@@ -64,12 +64,26 @@ message ValidateStrategySourceRequest {
   string source = 1;
   int64 user_id = 100;
   string runtime_id = 101;
+  // Opt-in because resolving declarations executes the strategy module and
+  // constructs MyStrategy inside the selected runtime's one-shot worker.
+  bool include_declarations = 102;
+}
+
+message StrategyInputDeclaration {
+  string stream_id = 1;
+  string exchange = 2;
+  string market = 3;
+  string kind = 4;
+  string symbol = 5;
+  string interval = 6;
 }
 
 message ValidateStrategySourceResponse {
   bool ok = 1;
   repeated StrategyValidationIssueProto issues = 2;
   RuntimeDependencyProfile runtime_profile = 3;
+  repeated StrategyInputDeclaration declared_inputs = 4;
+  repeated StrategyOrderTargetBinding declared_order_targets = 5;
 }
 
 message RunStrategyRequest {

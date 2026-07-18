@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x16strategy_service.proto\x12\x0bstrategy.v1\"\x88\x02\n\x18RuntimeDependencyProfile\x12\x16\n\x0eschema_version\x18\x01 \x01(\r\x12\x14\n\x0cprofile_name\x18\x02 \x01(\t\x12\x17\n\x0fprofile_version\x18\x03 \x01(\t\x12\x17\n\x0f\x63ontract_sha256\x18\x04 \x01(\t\x12\x15\n\rhosted_python\x18\x05 \x01(\t\x12\x1b\n\x13public_import_roots\x18\x06 \x03(\t\x12\x1f\n\x17strategy_service_commit\x18\x07 \x01(\t\x12\x1f\n\x17strategy_library_commit\x18\x08 \x01(\t\x12\x16\n\x0eimage_build_id\x18\t \x01(\t\"\x99\x01\n\x16RuntimeDependencyError\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0e\n\x06module\x18\x02 \x01(\t\x12\x17\n\x0fruntime_profile\x18\x03 \x01(\t\x12\x1f\n\x17runtime_profile_version\x18\x04 \x01(\t\x12\x16\n\x0eimage_build_id\x18\x05 \x01(\t\x12\x0f\n\x07message\x18\x06 \x01(\t\"k\n\x1cStrategyValidationIssueProto\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x0e\n\x06module\x18\x03 \x01(\t\x12\x0c\n\x04line\x18\x04 \x01(\x05\x12\x0e\n\x06symbol\x18\x05 \x01(\t\"T\n\x1dValidateStrategySourceRequest\x12\x0e\n\x06source\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\"\xa7\x01\n\x1eValidateStrategySourceResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x39\n\x06issues\x18\x02 \x03(\x0b\x32).strategy.v1.StrategyValidationIssueProto\x12>\n\x0fruntime_profile\x18\x03 \x01(\x0b\x32%.strategy.v1.RuntimeDependencyProfile\"\xf3\x01\n\x12RunStrategyRequest\x12\x14\n\x0cportfolio_id\x18\x01 \x01(\x03\x12\x15\n\rstrategy_path\x18\x02 \x01(\t\x12\x10\n\x08interval\x18\x05 \x01(\t\x12\x15\n\rstart_time_ms\x18\x06 \x01(\x03\x12\x13\n\x0b\x65nd_time_ms\x18\x07 \x01(\x03\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\x12\x1a\n\x12max_loss_close_pct\x18\x66 \x01(\x01\x12\x10\n\x08leverage\x18g \x01(\x01J\x04\x08\x03\x10\x04J\x04\x08\x04\x10\x05R\x06symbolR\x0bsymbol_type\")\n\x13RunStrategyResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\"S\n\x18GetStrategyStatusRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\"R\n\x19GetStrategyStatusResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x16\n\x0e\x62\x61rs_processed\x18\x02 \x01(\x05\x12\r\n\x05\x65rror\x18\x03 \x01(\t\"\x92\x01\n\x13StopStrategyRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12,\n\x0bstop_action\x18\x03 \x01(\x0e\x32\x17.strategy.v1.StopAction\x12\x14\n\x0coperation_id\x18\x04 \x01(\t\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\"\xb1\x01\n\x14StopStrategyResponse\x12\x0f\n\x07stopped\x18\x01 \x01(\x08\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0c\n\x04\x63ode\x18\x03 \x01(\t\x12\x35\n\x0etarget_results\x18\x04 \x03(\x0b\x32\x1d.strategy.v1.StopTargetResult\x12\x1d\n\x15reconciliation_run_id\x18\x05 \x01(\t\x12\x14\n\x0coperation_id\x18\x06 \x01(\t\"s\n\x10StopTargetResult\x12\x10\n\x08\x65xchange\x18\x01 \x01(\x05\x12\x0e\n\x06market\x18\x02 \x01(\x05\x12\x0e\n\x06symbol\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x0c\n\x04\x63ode\x18\x05 \x01(\t\x12\x0f\n\x07message\x18\x06 \x01(\t\"\xc7\x01\n\x19PreviewRunStrategyRequest\x12\x14\n\x0cportfolio_id\x18\x01 \x01(\x03\x12\x15\n\rstrategy_path\x18\x02 \x01(\t\x12\x15\n\rstart_time_ms\x18\x06 \x01(\x03\x12\x13\n\x0b\x65nd_time_ms\x18\x07 \x01(\x03\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\x12\x1a\n\x12max_loss_close_pct\x18\x66 \x01(\x01\x12\x10\n\x08leverage\x18g \x01(\x01\"E\n\x11PreflightInputKey\x12\x0e\n\x06market\x18\x01 \x01(\t\x12\x0e\n\x06symbol\x18\x02 \x01(\t\x12\x10\n\x08interval\x18\x03 \x01(\t\"h\n\x15PreflightFailureProto\x12\x0c\n\x04kind\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x31\n\tinput_key\x18\x03 \x01(\x0b\x32\x1e.strategy.v1.PreflightInputKey\"\xac\x03\n\x1aPreviewRunStrategyResponse\x12\x0f\n\x07profile\x18\x01 \x01(\t\x12\x11\n\tsupported\x18\x02 \x01(\x08\x12\n\n\x02ok\x18\x03 \x01(\x08\x12\x34\n\x08\x66\x61ilures\x18\x04 \x03(\x0b\x32\".strategy.v1.PreflightFailureProto\x12\x38\n\x10required_streams\x18\x05 \x03(\x0b\x32\x1e.strategy.v1.LiveStreamBinding\x12\x37\n\x0f\x64\x65\x63lared_inputs\x18\x06 \x03(\x0b\x32\x1e.strategy.v1.LiveStreamBinding\x12G\n\x16\x64\x65\x63lared_order_targets\x18\x07 \x03(\x0b\x32\'.strategy.v1.StrategyOrderTargetBinding\x12:\n\x0frequired_routes\x18\x08 \x03(\x0b\x32!.strategy.v1.StrategyRouteBinding\x12\x30\n\rrisk_controls\x18\t \x01(\x0b\x32\x19.strategy.v1.RiskControls\"t\n\x0cRiskControls\x12\x1a\n\x12max_loss_close_pct\x18\x01 \x01(\x01\x12\x1d\n\x15max_loss_close_source\x18\x02 \x01(\t\x12\x10\n\x08leverage\x18\x03 \x01(\x01\x12\x17\n\x0fleverage_source\x18\x04 \x01(\t\"N\n\x1aStrategyOrderTargetBinding\x12\x10\n\x08\x65xchange\x18\x01 \x01(\t\x12\x0e\n\x06market\x18\x02 \x01(\t\x12\x0e\n\x06symbol\x18\x03 \x01(\t\"8\n\x14StrategyRouteBinding\x12\x10\n\x08\x65xchange\x18\x01 \x01(\t\x12\x0e\n\x06market\x18\x02 \x01(\t\"x\n\x11LiveStreamBinding\x12\x11\n\tstream_id\x18\x01 \x01(\x03\x12\x10\n\x08\x65xchange\x18\x02 \x01(\t\x12\x0e\n\x06market\x18\x03 \x01(\t\x12\x0c\n\x04kind\x18\x04 \x01(\t\x12\x0e\n\x06symbol\x18\x05 \x01(\t\x12\x10\n\x08interval\x18\x06 \x01(\t*\x9e\x01\n\nStopAction\x12\x1b\n\x17STOP_ACTION_UNSPECIFIED\x10\x00\x12\x16\n\x12STOP_ACTION_CANCEL\x10\x01\x12\x19\n\x15STOP_ACTION_STOP_ONLY\x10\x02\x12(\n$STOP_ACTION_STOP_AND_CLOSE_POSITIONS\x10\x03\x12\x16\n\x12STOP_ACTION_FINISH\x10\x04\x32\xf6\x03\n\x0fStrategyService\x12P\n\x0bRunStrategy\x12\x1f.strategy.v1.RunStrategyRequest\x1a .strategy.v1.RunStrategyResponse\x12\x65\n\x12PreviewRunStrategy\x12&.strategy.v1.PreviewRunStrategyRequest\x1a\'.strategy.v1.PreviewRunStrategyResponse\x12q\n\x16ValidateStrategySource\x12*.strategy.v1.ValidateStrategySourceRequest\x1a+.strategy.v1.ValidateStrategySourceResponse\x12\x62\n\x11GetStrategyStatus\x12%.strategy.v1.GetStrategyStatusRequest\x1a&.strategy.v1.GetStrategyStatusResponse\x12S\n\x0cStopStrategy\x12 .strategy.v1.StopStrategyRequest\x1a!.strategy.v1.StopStrategyResponseBDZBgithub.com/hushine-tech/strategy-service/gen/strategyv1;strategyv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x16strategy_service.proto\x12\x0bstrategy.v1\"\x88\x02\n\x18RuntimeDependencyProfile\x12\x16\n\x0eschema_version\x18\x01 \x01(\r\x12\x14\n\x0cprofile_name\x18\x02 \x01(\t\x12\x17\n\x0fprofile_version\x18\x03 \x01(\t\x12\x17\n\x0f\x63ontract_sha256\x18\x04 \x01(\t\x12\x15\n\rhosted_python\x18\x05 \x01(\t\x12\x1b\n\x13public_import_roots\x18\x06 \x03(\t\x12\x1f\n\x17strategy_service_commit\x18\x07 \x01(\t\x12\x1f\n\x17strategy_library_commit\x18\x08 \x01(\t\x12\x16\n\x0eimage_build_id\x18\t \x01(\t\"\x99\x01\n\x16RuntimeDependencyError\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0e\n\x06module\x18\x02 \x01(\t\x12\x17\n\x0fruntime_profile\x18\x03 \x01(\t\x12\x1f\n\x17runtime_profile_version\x18\x04 \x01(\t\x12\x16\n\x0eimage_build_id\x18\x05 \x01(\t\x12\x0f\n\x07message\x18\x06 \x01(\t\"k\n\x1cStrategyValidationIssueProto\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x0e\n\x06module\x18\x03 \x01(\t\x12\x0c\n\x04line\x18\x04 \x01(\x05\x12\x0e\n\x06symbol\x18\x05 \x01(\t\"r\n\x1dValidateStrategySourceRequest\x12\x0e\n\x06source\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\x12\x1c\n\x14include_declarations\x18\x66 \x01(\x08\"\x7f\n\x18StrategyInputDeclaration\x12\x11\n\tstream_id\x18\x01 \x01(\t\x12\x10\n\x08\x65xchange\x18\x02 \x01(\t\x12\x0e\n\x06market\x18\x03 \x01(\t\x12\x0c\n\x04kind\x18\x04 \x01(\t\x12\x0e\n\x06symbol\x18\x05 \x01(\t\x12\x10\n\x08interval\x18\x06 \x01(\t\"\xb0\x02\n\x1eValidateStrategySourceResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x39\n\x06issues\x18\x02 \x03(\x0b\x32).strategy.v1.StrategyValidationIssueProto\x12>\n\x0fruntime_profile\x18\x03 \x01(\x0b\x32%.strategy.v1.RuntimeDependencyProfile\x12>\n\x0f\x64\x65\x63lared_inputs\x18\x04 \x03(\x0b\x32%.strategy.v1.StrategyInputDeclaration\x12G\n\x16\x64\x65\x63lared_order_targets\x18\x05 \x03(\x0b\x32\'.strategy.v1.StrategyOrderTargetBinding\"\xf3\x01\n\x12RunStrategyRequest\x12\x14\n\x0cportfolio_id\x18\x01 \x01(\x03\x12\x15\n\rstrategy_path\x18\x02 \x01(\t\x12\x10\n\x08interval\x18\x05 \x01(\t\x12\x15\n\rstart_time_ms\x18\x06 \x01(\x03\x12\x13\n\x0b\x65nd_time_ms\x18\x07 \x01(\x03\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\x12\x1a\n\x12max_loss_close_pct\x18\x66 \x01(\x01\x12\x10\n\x08leverage\x18g \x01(\x01J\x04\x08\x03\x10\x04J\x04\x08\x04\x10\x05R\x06symbolR\x0bsymbol_type\")\n\x13RunStrategyResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\"S\n\x18GetStrategyStatusRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\"R\n\x19GetStrategyStatusResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x16\n\x0e\x62\x61rs_processed\x18\x02 \x01(\x05\x12\r\n\x05\x65rror\x18\x03 \x01(\t\"\x92\x01\n\x13StopStrategyRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12,\n\x0bstop_action\x18\x03 \x01(\x0e\x32\x17.strategy.v1.StopAction\x12\x14\n\x0coperation_id\x18\x04 \x01(\t\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\"\xb1\x01\n\x14StopStrategyResponse\x12\x0f\n\x07stopped\x18\x01 \x01(\x08\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0c\n\x04\x63ode\x18\x03 \x01(\t\x12\x35\n\x0etarget_results\x18\x04 \x03(\x0b\x32\x1d.strategy.v1.StopTargetResult\x12\x1d\n\x15reconciliation_run_id\x18\x05 \x01(\t\x12\x14\n\x0coperation_id\x18\x06 \x01(\t\"s\n\x10StopTargetResult\x12\x10\n\x08\x65xchange\x18\x01 \x01(\x05\x12\x0e\n\x06market\x18\x02 \x01(\x05\x12\x0e\n\x06symbol\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12\x0c\n\x04\x63ode\x18\x05 \x01(\t\x12\x0f\n\x07message\x18\x06 \x01(\t\"\xc7\x01\n\x19PreviewRunStrategyRequest\x12\x14\n\x0cportfolio_id\x18\x01 \x01(\x03\x12\x15\n\rstrategy_path\x18\x02 \x01(\t\x12\x15\n\rstart_time_ms\x18\x06 \x01(\x03\x12\x13\n\x0b\x65nd_time_ms\x18\x07 \x01(\x03\x12\x0f\n\x07user_id\x18\x64 \x01(\x03\x12\x12\n\nruntime_id\x18\x65 \x01(\t\x12\x1a\n\x12max_loss_close_pct\x18\x66 \x01(\x01\x12\x10\n\x08leverage\x18g \x01(\x01\"E\n\x11PreflightInputKey\x12\x0e\n\x06market\x18\x01 \x01(\t\x12\x0e\n\x06symbol\x18\x02 \x01(\t\x12\x10\n\x08interval\x18\x03 \x01(\t\"h\n\x15PreflightFailureProto\x12\x0c\n\x04kind\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x31\n\tinput_key\x18\x03 \x01(\x0b\x32\x1e.strategy.v1.PreflightInputKey\"\xac\x03\n\x1aPreviewRunStrategyResponse\x12\x0f\n\x07profile\x18\x01 \x01(\t\x12\x11\n\tsupported\x18\x02 \x01(\x08\x12\n\n\x02ok\x18\x03 \x01(\x08\x12\x34\n\x08\x66\x61ilures\x18\x04 \x03(\x0b\x32\".strategy.v1.PreflightFailureProto\x12\x38\n\x10required_streams\x18\x05 \x03(\x0b\x32\x1e.strategy.v1.LiveStreamBinding\x12\x37\n\x0f\x64\x65\x63lared_inputs\x18\x06 \x03(\x0b\x32\x1e.strategy.v1.LiveStreamBinding\x12G\n\x16\x64\x65\x63lared_order_targets\x18\x07 \x03(\x0b\x32\'.strategy.v1.StrategyOrderTargetBinding\x12:\n\x0frequired_routes\x18\x08 \x03(\x0b\x32!.strategy.v1.StrategyRouteBinding\x12\x30\n\rrisk_controls\x18\t \x01(\x0b\x32\x19.strategy.v1.RiskControls\"t\n\x0cRiskControls\x12\x1a\n\x12max_loss_close_pct\x18\x01 \x01(\x01\x12\x1d\n\x15max_loss_close_source\x18\x02 \x01(\t\x12\x10\n\x08leverage\x18\x03 \x01(\x01\x12\x17\n\x0fleverage_source\x18\x04 \x01(\t\"N\n\x1aStrategyOrderTargetBinding\x12\x10\n\x08\x65xchange\x18\x01 \x01(\t\x12\x0e\n\x06market\x18\x02 \x01(\t\x12\x0e\n\x06symbol\x18\x03 \x01(\t\"8\n\x14StrategyRouteBinding\x12\x10\n\x08\x65xchange\x18\x01 \x01(\t\x12\x0e\n\x06market\x18\x02 \x01(\t\"x\n\x11LiveStreamBinding\x12\x11\n\tstream_id\x18\x01 \x01(\x03\x12\x10\n\x08\x65xchange\x18\x02 \x01(\t\x12\x0e\n\x06market\x18\x03 \x01(\t\x12\x0c\n\x04kind\x18\x04 \x01(\t\x12\x0e\n\x06symbol\x18\x05 \x01(\t\x12\x10\n\x08interval\x18\x06 \x01(\t*\x9e\x01\n\nStopAction\x12\x1b\n\x17STOP_ACTION_UNSPECIFIED\x10\x00\x12\x16\n\x12STOP_ACTION_CANCEL\x10\x01\x12\x19\n\x15STOP_ACTION_STOP_ONLY\x10\x02\x12(\n$STOP_ACTION_STOP_AND_CLOSE_POSITIONS\x10\x03\x12\x16\n\x12STOP_ACTION_FINISH\x10\x04\x32\xf6\x03\n\x0fStrategyService\x12P\n\x0bRunStrategy\x12\x1f.strategy.v1.RunStrategyRequest\x1a .strategy.v1.RunStrategyResponse\x12\x65\n\x12PreviewRunStrategy\x12&.strategy.v1.PreviewRunStrategyRequest\x1a\'.strategy.v1.PreviewRunStrategyResponse\x12q\n\x16ValidateStrategySource\x12*.strategy.v1.ValidateStrategySourceRequest\x1a+.strategy.v1.ValidateStrategySourceResponse\x12\x62\n\x11GetStrategyStatus\x12%.strategy.v1.GetStrategyStatusRequest\x1a&.strategy.v1.GetStrategyStatusResponse\x12S\n\x0cStopStrategy\x12 .strategy.v1.StopStrategyRequest\x1a!.strategy.v1.StopStrategyResponseBDZBgithub.com/hushine-tech/strategy-service/gen/strategyv1;strategyv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,8 +32,8 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'strategy_service_pb2', _glo
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZBgithub.com/hushine-tech/strategy-service/gen/strategyv1;strategyv1'
-  _globals['_STOPACTION']._serialized_start=2920
-  _globals['_STOPACTION']._serialized_end=3078
+  _globals['_STOPACTION']._serialized_start=3216
+  _globals['_STOPACTION']._serialized_end=3374
   _globals['_RUNTIMEDEPENDENCYPROFILE']._serialized_start=40
   _globals['_RUNTIMEDEPENDENCYPROFILE']._serialized_end=304
   _globals['_RUNTIMEDEPENDENCYERROR']._serialized_start=307
@@ -41,39 +41,41 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_STRATEGYVALIDATIONISSUEPROTO']._serialized_start=462
   _globals['_STRATEGYVALIDATIONISSUEPROTO']._serialized_end=569
   _globals['_VALIDATESTRATEGYSOURCEREQUEST']._serialized_start=571
-  _globals['_VALIDATESTRATEGYSOURCEREQUEST']._serialized_end=655
-  _globals['_VALIDATESTRATEGYSOURCERESPONSE']._serialized_start=658
-  _globals['_VALIDATESTRATEGYSOURCERESPONSE']._serialized_end=825
-  _globals['_RUNSTRATEGYREQUEST']._serialized_start=828
-  _globals['_RUNSTRATEGYREQUEST']._serialized_end=1071
-  _globals['_RUNSTRATEGYRESPONSE']._serialized_start=1073
-  _globals['_RUNSTRATEGYRESPONSE']._serialized_end=1114
-  _globals['_GETSTRATEGYSTATUSREQUEST']._serialized_start=1116
-  _globals['_GETSTRATEGYSTATUSREQUEST']._serialized_end=1199
-  _globals['_GETSTRATEGYSTATUSRESPONSE']._serialized_start=1201
-  _globals['_GETSTRATEGYSTATUSRESPONSE']._serialized_end=1283
-  _globals['_STOPSTRATEGYREQUEST']._serialized_start=1286
-  _globals['_STOPSTRATEGYREQUEST']._serialized_end=1432
-  _globals['_STOPSTRATEGYRESPONSE']._serialized_start=1435
-  _globals['_STOPSTRATEGYRESPONSE']._serialized_end=1612
-  _globals['_STOPTARGETRESULT']._serialized_start=1614
-  _globals['_STOPTARGETRESULT']._serialized_end=1729
-  _globals['_PREVIEWRUNSTRATEGYREQUEST']._serialized_start=1732
-  _globals['_PREVIEWRUNSTRATEGYREQUEST']._serialized_end=1931
-  _globals['_PREFLIGHTINPUTKEY']._serialized_start=1933
-  _globals['_PREFLIGHTINPUTKEY']._serialized_end=2002
-  _globals['_PREFLIGHTFAILUREPROTO']._serialized_start=2004
-  _globals['_PREFLIGHTFAILUREPROTO']._serialized_end=2108
-  _globals['_PREVIEWRUNSTRATEGYRESPONSE']._serialized_start=2111
-  _globals['_PREVIEWRUNSTRATEGYRESPONSE']._serialized_end=2539
-  _globals['_RISKCONTROLS']._serialized_start=2541
-  _globals['_RISKCONTROLS']._serialized_end=2657
-  _globals['_STRATEGYORDERTARGETBINDING']._serialized_start=2659
-  _globals['_STRATEGYORDERTARGETBINDING']._serialized_end=2737
-  _globals['_STRATEGYROUTEBINDING']._serialized_start=2739
-  _globals['_STRATEGYROUTEBINDING']._serialized_end=2795
-  _globals['_LIVESTREAMBINDING']._serialized_start=2797
-  _globals['_LIVESTREAMBINDING']._serialized_end=2917
-  _globals['_STRATEGYSERVICE']._serialized_start=3081
-  _globals['_STRATEGYSERVICE']._serialized_end=3583
+  _globals['_VALIDATESTRATEGYSOURCEREQUEST']._serialized_end=685
+  _globals['_STRATEGYINPUTDECLARATION']._serialized_start=687
+  _globals['_STRATEGYINPUTDECLARATION']._serialized_end=814
+  _globals['_VALIDATESTRATEGYSOURCERESPONSE']._serialized_start=817
+  _globals['_VALIDATESTRATEGYSOURCERESPONSE']._serialized_end=1121
+  _globals['_RUNSTRATEGYREQUEST']._serialized_start=1124
+  _globals['_RUNSTRATEGYREQUEST']._serialized_end=1367
+  _globals['_RUNSTRATEGYRESPONSE']._serialized_start=1369
+  _globals['_RUNSTRATEGYRESPONSE']._serialized_end=1410
+  _globals['_GETSTRATEGYSTATUSREQUEST']._serialized_start=1412
+  _globals['_GETSTRATEGYSTATUSREQUEST']._serialized_end=1495
+  _globals['_GETSTRATEGYSTATUSRESPONSE']._serialized_start=1497
+  _globals['_GETSTRATEGYSTATUSRESPONSE']._serialized_end=1579
+  _globals['_STOPSTRATEGYREQUEST']._serialized_start=1582
+  _globals['_STOPSTRATEGYREQUEST']._serialized_end=1728
+  _globals['_STOPSTRATEGYRESPONSE']._serialized_start=1731
+  _globals['_STOPSTRATEGYRESPONSE']._serialized_end=1908
+  _globals['_STOPTARGETRESULT']._serialized_start=1910
+  _globals['_STOPTARGETRESULT']._serialized_end=2025
+  _globals['_PREVIEWRUNSTRATEGYREQUEST']._serialized_start=2028
+  _globals['_PREVIEWRUNSTRATEGYREQUEST']._serialized_end=2227
+  _globals['_PREFLIGHTINPUTKEY']._serialized_start=2229
+  _globals['_PREFLIGHTINPUTKEY']._serialized_end=2298
+  _globals['_PREFLIGHTFAILUREPROTO']._serialized_start=2300
+  _globals['_PREFLIGHTFAILUREPROTO']._serialized_end=2404
+  _globals['_PREVIEWRUNSTRATEGYRESPONSE']._serialized_start=2407
+  _globals['_PREVIEWRUNSTRATEGYRESPONSE']._serialized_end=2835
+  _globals['_RISKCONTROLS']._serialized_start=2837
+  _globals['_RISKCONTROLS']._serialized_end=2953
+  _globals['_STRATEGYORDERTARGETBINDING']._serialized_start=2955
+  _globals['_STRATEGYORDERTARGETBINDING']._serialized_end=3033
+  _globals['_STRATEGYROUTEBINDING']._serialized_start=3035
+  _globals['_STRATEGYROUTEBINDING']._serialized_end=3091
+  _globals['_LIVESTREAMBINDING']._serialized_start=3093
+  _globals['_LIVESTREAMBINDING']._serialized_end=3213
+  _globals['_STRATEGYSERVICE']._serialized_start=3377
+  _globals['_STRATEGYSERVICE']._serialized_end=3879
 # @@protoc_insertion_point(module_scope)
