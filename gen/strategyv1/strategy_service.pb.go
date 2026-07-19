@@ -1274,6 +1274,15 @@ type PreflightFailureProto struct {
 	// Populated when the failure is attributable to a specific declared input;
 	// absent (empty message) for profile-level failures.
 	InputKey      *PreflightInputKey `protobuf:"bytes,3,opt,name=input_key,json=inputKey,proto3" json:"input_key,omitempty"`
+	Code          string             `protobuf:"bytes,4,opt,name=code,proto3" json:"code,omitempty"`
+	Exchange      int32              `protobuf:"varint,5,opt,name=exchange,proto3" json:"exchange,omitempty"`
+	Market        int32              `protobuf:"varint,6,opt,name=market,proto3" json:"market,omitempty"`
+	Symbol        string             `protobuf:"bytes,7,opt,name=symbol,proto3" json:"symbol,omitempty"`
+	VenueId       int64              `protobuf:"varint,8,opt,name=venue_id,json=venueId,proto3" json:"venue_id,omitempty"`
+	FilterType    string             `protobuf:"bytes,9,opt,name=filter_type,json=filterType,proto3" json:"filter_type,omitempty"`
+	Environment   int32              `protobuf:"varint,10,opt,name=environment,proto3" json:"environment,omitempty"`
+	Retryable     bool               `protobuf:"varint,11,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	Source        string             `protobuf:"bytes,12,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1327,6 +1336,69 @@ func (x *PreflightFailureProto) GetInputKey() *PreflightInputKey {
 		return x.InputKey
 	}
 	return nil
+}
+
+func (x *PreflightFailureProto) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+func (x *PreflightFailureProto) GetExchange() int32 {
+	if x != nil {
+		return x.Exchange
+	}
+	return 0
+}
+
+func (x *PreflightFailureProto) GetMarket() int32 {
+	if x != nil {
+		return x.Market
+	}
+	return 0
+}
+
+func (x *PreflightFailureProto) GetSymbol() string {
+	if x != nil {
+		return x.Symbol
+	}
+	return ""
+}
+
+func (x *PreflightFailureProto) GetVenueId() int64 {
+	if x != nil {
+		return x.VenueId
+	}
+	return 0
+}
+
+func (x *PreflightFailureProto) GetFilterType() string {
+	if x != nil {
+		return x.FilterType
+	}
+	return ""
+}
+
+func (x *PreflightFailureProto) GetEnvironment() int32 {
+	if x != nil {
+		return x.Environment
+	}
+	return 0
+}
+
+func (x *PreflightFailureProto) GetRetryable() bool {
+	if x != nil {
+		return x.Retryable
+	}
+	return false
+}
+
+func (x *PreflightFailureProto) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
 }
 
 type PreviewRunStrategyResponse struct {
@@ -1820,11 +1892,22 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x11PreflightInputKey\x12\x16\n" +
 	"\x06market\x18\x01 \x01(\tR\x06market\x12\x16\n" +
 	"\x06symbol\x18\x02 \x01(\tR\x06symbol\x12\x1a\n" +
-	"\binterval\x18\x03 \x01(\tR\binterval\"\x80\x01\n" +
+	"\binterval\x18\x03 \x01(\tR\binterval\"\xf4\x02\n" +
 	"\x15PreflightFailureProto\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12;\n" +
-	"\tinput_key\x18\x03 \x01(\v2\x1e.strategy.v1.PreflightInputKeyR\binputKey\"\xa3\x04\n" +
+	"\tinput_key\x18\x03 \x01(\v2\x1e.strategy.v1.PreflightInputKeyR\binputKey\x12\x12\n" +
+	"\x04code\x18\x04 \x01(\tR\x04code\x12\x1a\n" +
+	"\bexchange\x18\x05 \x01(\x05R\bexchange\x12\x16\n" +
+	"\x06market\x18\x06 \x01(\x05R\x06market\x12\x16\n" +
+	"\x06symbol\x18\a \x01(\tR\x06symbol\x12\x19\n" +
+	"\bvenue_id\x18\b \x01(\x03R\avenueId\x12\x1f\n" +
+	"\vfilter_type\x18\t \x01(\tR\n" +
+	"filterType\x12 \n" +
+	"\venvironment\x18\n" +
+	" \x01(\x05R\venvironment\x12\x1c\n" +
+	"\tretryable\x18\v \x01(\bR\tretryable\x12\x16\n" +
+	"\x06source\x18\f \x01(\tR\x06source\"\xa3\x04\n" +
 	"\x1aPreviewRunStrategyResponse\x12\x18\n" +
 	"\aprofile\x18\x01 \x01(\tR\aprofile\x12\x1c\n" +
 	"\tsupported\x18\x02 \x01(\bR\tsupported\x12\x0e\n" +

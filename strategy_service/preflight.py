@@ -91,6 +91,7 @@ class PreflightFailureKind(Enum):
     INVALID_REQUEST = "invalid_request"  # backtest missing time range etc.
     HISTORICAL_DATA = "historical_data"  # backtest: no usable rows in requested range
     STREAM = "stream"                 # demo/live: stream missing / not running / stale / delivery off
+    PORTFOLIO = "portfolio"           # core-owned route / capability / risk preflight
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,15 @@ class PreflightFailure:
     kind: PreflightFailureKind
     reason: str
     input_key: tuple[str, str, str] | None = None
+    code: str = ""
+    exchange: int = 0
+    market: int = 0
+    symbol: str = ""
+    venue_id: int = 0
+    filter_type: str = ""
+    environment: int = 0
+    retryable: bool = False
+    source: str = ""
 
     def format(self) -> str:
         """One-line human-readable rendering, safe to put in an RPC details string."""

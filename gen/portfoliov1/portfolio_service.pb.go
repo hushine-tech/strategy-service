@@ -2046,6 +2046,9 @@ type PreflightIssue struct {
 	Symbol        string                 `protobuf:"bytes,5,opt,name=symbol,proto3" json:"symbol,omitempty"`
 	VenueId       int64                  `protobuf:"varint,6,opt,name=venue_id,json=venueId,proto3" json:"venue_id,omitempty"`
 	FilterType    string                 `protobuf:"bytes,7,opt,name=filter_type,json=filterType,proto3" json:"filter_type,omitempty"`
+	Environment   int32                  `protobuf:"varint,8,opt,name=environment,proto3" json:"environment,omitempty"`
+	Retryable     bool                   `protobuf:"varint,9,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	Source        string                 `protobuf:"bytes,10,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2125,6 +2128,27 @@ func (x *PreflightIssue) GetVenueId() int64 {
 func (x *PreflightIssue) GetFilterType() string {
 	if x != nil {
 		return x.FilterType
+	}
+	return ""
+}
+
+func (x *PreflightIssue) GetEnvironment() int32 {
+	if x != nil {
+		return x.Environment
+	}
+	return 0
+}
+
+func (x *PreflightIssue) GetRetryable() bool {
+	if x != nil {
+		return x.Retryable
+	}
+	return false
+}
+
+func (x *PreflightIssue) GetSource() string {
+	if x != nil {
+		return x.Source
 	}
 	return ""
 }
@@ -9731,7 +9755,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x06market\x18\x02 \x01(\x05R\x06market\x12\x16\n" +
 	"\x06symbol\x18\x03 \x01(\tR\x06symbol\x12!\n" +
 	"\forder_target\x18\x04 \x01(\bR\vorderTarget\x120\n" +
-	"\x14required_order_types\x18\x05 \x03(\tR\x12requiredOrderTypes\"\xc6\x01\n" +
+	"\x14required_order_types\x18\x05 \x03(\tR\x12requiredOrderTypes\"\x9e\x02\n" +
 	"\x0ePreflightIssue\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1a\n" +
@@ -9740,7 +9764,11 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x06symbol\x18\x05 \x01(\tR\x06symbol\x12\x19\n" +
 	"\bvenue_id\x18\x06 \x01(\x03R\avenueId\x12\x1f\n" +
 	"\vfilter_type\x18\a \x01(\tR\n" +
-	"filterType\"\xed\x02\n" +
+	"filterType\x12 \n" +
+	"\venvironment\x18\b \x01(\x05R\venvironment\x12\x1c\n" +
+	"\tretryable\x18\t \x01(\bR\tretryable\x12\x16\n" +
+	"\x06source\x18\n" +
+	" \x01(\tR\x06source\"\xed\x02\n" +
 	"\x1fPreflightStrategySessionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12!\n" +
 	"\fportfolio_id\x18\x02 \x01(\x03R\vportfolioId\x12D\n" +

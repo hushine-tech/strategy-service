@@ -6087,6 +6087,67 @@ def test_record_unroutable_live_kline_updates_session_state(caplog):
 # ``openspec/changes/runtime-source-profile-preflight/specs/runtime-source-profile-preflight/spec.md``.
 
 
+def test_portfolio_preflight_preserves_structured_issue_facts():
+    class FakePortfolioClient:
+        @staticmethod
+        def preflight_strategy_session(**_kwargs):
+            return SimpleNamespace(
+                ok=False,
+                issues=[SimpleNamespace(
+                    code="SPOT_MIN_NOTIONAL",
+                    message="notional below minimum",
+                    exchange=1,
+                    market=1,
+                    symbol="BTCUSDT",
+                    venue_id=77,
+                    filter_type="MIN_NOTIONAL",
+                    environment=1,
+                    retryable=False,
+                    source="preflight",
+                )],
+            )
+
+    issues = StrategyServiceServicer._run_portfolio_preflight(
+        acct_client=FakePortfolioClient(),
+        portfolio_id=9,
+        user_id=42,
+        required_routes={("binance", "spot")},
+        required_symbols={("binance", "spot", "BTCUSDT")},
+        environment=1,
+    )
+
+    assert issues is not None and len(issues) == 1
+    issue = issues[0]
+    assert issue.code == "SPOT_MIN_NOTIONAL"
+    assert issue.message == "notional below minimum"
+    assert (issue.exchange, issue.market, issue.symbol, issue.venue_id) == (1, 1, "BTCUSDT", 77)
+    assert issue.filter_type == "MIN_NOTIONAL"
+    assert issue.environment == 1
+    assert issue.retryable is False
+    assert issue.source == "preflight"
+
+
+def test_preflight_failure_proto_structured_field_numbers_are_additive():
+    fields = pb2.PreflightFailureProto.DESCRIPTOR.fields_by_name
+    assert {name: fields[name].number for name in (
+        "kind", "reason", "input_key", "code", "exchange", "market", "symbol",
+        "venue_id", "filter_type", "environment", "retryable", "source",
+    )} == {
+        "kind": 1,
+        "reason": 2,
+        "input_key": 3,
+        "code": 4,
+        "exchange": 5,
+        "market": 6,
+        "symbol": 7,
+        "venue_id": 8,
+        "filter_type": 9,
+        "environment": 10,
+        "retryable": 11,
+        "source": 12,
+    }
+
+
 def _build_servicer_with_faked_preflight_deps(
     *,
     monkeypatch,
@@ -6095,6 +6156,7 @@ def _build_servicer_with_faked_preflight_deps(
     save_session_ok: bool = True,
     record_calls: dict | None = None,
     market_data_policy: dict | None = None,
+    portfolio_preflight_response: object | None = None,
 ):
     """Shared scaffolding for RunStrategy integration tests.
 
@@ -6128,6 +6190,8 @@ def _build_servicer_with_faked_preflight_deps(
 
         def preflight_strategy_session(self, **kwargs):
             calls.setdefault("portfolio_preflight", []).append(dict(kwargs))
+            if portfolio_preflight_response is not None:
+                return portfolio_preflight_response
             return SimpleNamespace(ok=True, issues=[])
 
         def get_active_strategy(self, _portfolio_id: int):
@@ -8842,6 +8906,52 @@ def test_preview_run_strategy_portfolio_preflight_does_not_persist_session(monke
     preflight = calls["portfolio_preflight"][0]
     assert preflight.get("session_id", "") == ""
     assert preflight.get("strategy_id", 0) == 42
+
+
+def test_preview_run_strategy_preserves_structured_portfolio_preflight_failure(monkeypatch):
+    issue = SimpleNamespace(
+        code="SPOT_MIN_NOTIONAL",
+        message="notional below minimum",
+        exchange=1,
+        market=1,
+        symbol="BTCUSDT",
+        venue_id=77,
+        filter_type="MIN_NOTIONAL",
+        environment=1,
+        retryable=False,
+        source="preflight",
+    )
+    servicer, _ = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=1,
+        strategy_code=(
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            '    ORDER_TARGETS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"}]\n'
+            "    def on_market_data(self, data, wallet): return None\n"
+        ),
+        portfolio_preflight_response=SimpleNamespace(ok=False, issues=[issue]),
+    )
+
+    response = servicer.PreviewRunStrategy(SimpleNamespace(
+        portfolio_id=502,
+        user_id=17,
+        strategy_path="",
+        start_time_ms=1,
+        end_time_ms=2,
+    ), _FakeContext())
+
+    assert response.ok is False
+    assert len(response.failures) == 1
+    failure = response.failures[0]
+    assert failure.kind == "portfolio"
+    assert failure.reason == "notional below minimum"
+    assert failure.code == "SPOT_MIN_NOTIONAL"
+    assert (failure.exchange, failure.market, failure.symbol, failure.venue_id) == (1, 1, "BTCUSDT", 77)
+    assert failure.filter_type == "MIN_NOTIONAL"
+    assert failure.environment == 1
+    assert failure.retryable is False
+    assert failure.source == "preflight"
 
 
 def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):

@@ -196,6 +196,15 @@ message PreflightFailureProto {
   // Populated when the failure is attributable to a specific declared input;
   // absent (empty message) for profile-level failures.
   PreflightInputKey input_key = 3;
+  string code = 4;
+  int32 exchange = 5;
+  int32 market = 6;
+  string symbol = 7;
+  int64 venue_id = 8;
+  string filter_type = 9;
+  int32 environment = 10;
+  bool retryable = 11;
+  string source = 12;
 }
 
 message PreviewRunStrategyResponse {

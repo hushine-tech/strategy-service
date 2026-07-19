@@ -48,6 +48,8 @@ from strategy_service.inputs import (
 )
 from strategy_service.preflight import (
     SUPPORTED_PROFILES,
+    PreflightFailure,
+    PreflightFailureKind,
     PreflightResult,
     RuntimeSourceProfile,
     backtest_preflight,
@@ -438,6 +440,26 @@ class _EffectiveRiskControls:
     max_loss_close_source: str
     leverage: float
     leverage_source: str
+
+
+@dataclass(frozen=True)
+class _PortfolioPreflightIssue:
+    code: str
+    message: str
+    exchange: int = 0
+    market: int = 0
+    symbol: str = ""
+    venue_id: int = 0
+    filter_type: str = ""
+    environment: int = 0
+    retryable: bool = False
+    source: str = ""
+
+    def format(self) -> str:
+        route = f" exchange={self.exchange} market={self.market}"
+        if self.symbol:
+            route += f" symbol={self.symbol}"
+        return f"{self.code}: {self.message}{route}".strip()
 
 
 def _sync_strategy_snapshot(
@@ -1503,6 +1525,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_id=strategy_id,
             leverage=effective_risk.leverage,
             response_sink=preflight_responses,
+            environment=environment,
         )
         if portfolio_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
@@ -1510,7 +1533,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 context.set_trailing_metadata((("preflight-session-id", preflight_session_id),))
             except Exception:  # noqa: BLE001
                 logger.debug("context does not support trailing metadata for preflight failure")
-            context.set_details(f"{portfolio_preflight}; preflight_session_id={preflight_session_id}")
+            details = "portfolio preflight failed: " + "; ".join(
+                issue.format() for issue in portfolio_preflight
+            )
+            context.set_details(f"{details}; preflight_session_id={preflight_session_id}")
             return pb2.RunStrategyResponse()
 
         snapshot = _get_portfolio_snapshot(
@@ -2306,10 +2332,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         strategy_id: int = 0,
         leverage: float = 0.0,
         response_sink: list[Any] | None = None,
-    ) -> str | None:
+        environment: int = 0,
+    ) -> list[_PortfolioPreflightIssue] | None:
         preflight = getattr(acct_client, "preflight_strategy_session", None)
         if not callable(preflight):
-            return "portfolio preflight unavailable: client does not support PreflightStrategySession"
+            return [_PortfolioPreflightIssue(
+                code="PREFLIGHT_UNAVAILABLE",
+                message="portfolio preflight client does not support PreflightStrategySession",
+                environment=environment,
+                retryable=True,
+                source="strategy-service",
+            )]
         resp = preflight(
             portfolio_id=portfolio_id,
             user_id=user_id,
@@ -2321,25 +2354,39 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             leverage=float(leverage or 0.0),
         )
         if resp is None:
-            return "portfolio preflight unavailable: core-service did not return a result"
+            return [_PortfolioPreflightIssue(
+                code="PREFLIGHT_UNAVAILABLE",
+                message="core-service did not return a portfolio preflight result",
+                environment=environment,
+                retryable=True,
+                source="strategy-service",
+            )]
         if response_sink is not None:
             response_sink.append(resp)
         if bool(getattr(resp, "ok", False)):
             return None
-        issue_messages: list[str] = []
+        issues: list[_PortfolioPreflightIssue] = []
         for issue in getattr(resp, "issues", []) or []:
-            code = str(getattr(issue, "code", "") or "preflight_failed")
-            message = str(getattr(issue, "message", "") or "").strip()
-            exchange = getattr(issue, "exchange", 0)
-            market = getattr(issue, "market", 0)
-            symbol = str(getattr(issue, "symbol", "") or "").strip()
-            route = f" exchange={exchange} market={market}"
-            if symbol:
-                route = f"{route} symbol={symbol}"
-            issue_messages.append(f"{code}: {message}{route}".strip())
-        if issue_messages:
-            return "portfolio preflight failed: " + "; ".join(issue_messages)
-        return "portfolio preflight failed"
+            issues.append(_PortfolioPreflightIssue(
+                code=str(getattr(issue, "code", "") or "PREFLIGHT_FAILED"),
+                message=str(getattr(issue, "message", "") or "").strip(),
+                exchange=int(getattr(issue, "exchange", 0) or 0),
+                market=int(getattr(issue, "market", 0) or 0),
+                symbol=str(getattr(issue, "symbol", "") or "").strip(),
+                venue_id=int(getattr(issue, "venue_id", 0) or 0),
+                filter_type=str(getattr(issue, "filter_type", "") or "").strip(),
+                environment=int(getattr(issue, "environment", environment) or environment),
+                retryable=bool(getattr(issue, "retryable", False)),
+                source=str(getattr(issue, "source", "") or "preflight").strip(),
+            ))
+        if issues:
+            return issues
+        return [_PortfolioPreflightIssue(
+            code="PREFLIGHT_FAILED",
+            message="portfolio preflight failed without issue details",
+            environment=environment,
+            source="strategy-service",
+        )]
 
     def _run_profile_preflight(
         self,
@@ -4161,7 +4208,19 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             )
             failures_proto: list[pb2.PreflightFailureProto] = []
             for f in preflight_result.failures:
-                kw: dict[str, Any] = {"kind": f.kind.value, "reason": f.reason}
+                kw: dict[str, Any] = {
+                    "kind": f.kind.value,
+                    "reason": f.reason,
+                    "code": f.code,
+                    "exchange": f.exchange,
+                    "market": f.market,
+                    "symbol": f.symbol,
+                    "venue_id": f.venue_id,
+                    "filter_type": f.filter_type,
+                    "environment": f.environment,
+                    "retryable": f.retryable,
+                    "source": f.source,
+                }
                 if f.input_key is not None:
                     m, s, i = f.input_key
                     kw["input_key"] = pb2.PreflightInputKey(
@@ -4300,11 +4359,35 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             order_target_symbols=set(declarations.order_target_keys),
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
             leverage=effective_risk.leverage,
+            environment=environment,
         )
         if portfolio_preflight is not None:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(portfolio_preflight)
-            return pb2.PreviewRunStrategyResponse()
+            preflight = PreflightResult(
+                profile=profile,
+                failures=[
+                    PreflightFailure(
+                        kind=PreflightFailureKind.PORTFOLIO,
+                        reason=issue.message,
+                        code=issue.code,
+                        exchange=issue.exchange,
+                        market=issue.market,
+                        symbol=issue.symbol,
+                        venue_id=issue.venue_id,
+                        filter_type=issue.filter_type,
+                        environment=issue.environment,
+                        retryable=issue.retryable,
+                        source=issue.source,
+                    )
+                    for issue in portfolio_preflight
+                ],
+            )
+            return _shape(
+                preflight,
+                declared_inputs,
+                list(declarations.order_targets),
+                required_routes,
+                effective_risk,
+            )
 
         snapshot = _get_portfolio_snapshot(
             acct_client,
