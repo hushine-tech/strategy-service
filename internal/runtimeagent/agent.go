@@ -84,7 +84,14 @@ type Agent struct {
 	workerCallReply   map[string]chan *rwv1.PlatformCallResult
 	workerCallSession map[string]string
 	runRequests       map[string]*anypb.Any
+	restartCalls      map[string]*restartSessionCall
 	indicatorSync     *IndicatorSyncManager
+}
+
+type restartSessionCall struct {
+	done   chan struct{}
+	result RestartSessionResult
+	err    error
 }
 
 type workerGeneration struct {
@@ -246,6 +253,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 		workerCallReply:   map[string]chan *rwv1.PlatformCallResult{},
 		workerCallSession: map[string]string{},
 		runRequests:       map[string]*anypb.Any{},
+		restartCalls:      map[string]*restartSessionCall{},
 	}
 	agent.indicatorSync = NewIndicatorSyncManager(IndicatorSyncConfig{
 		PlatformInvoker: cfg.PlatformInvoker,
@@ -428,7 +436,34 @@ func (a *Agent) forgetWorkerGeneration(sessionID string, generation *workerGener
 	return true
 }
 
-func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) (RestartSessionResult, error) {
+func (a *Agent) beginSessionRestart(sessionID string) (*restartSessionCall, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if call := a.restartCalls[sessionID]; call != nil {
+		return call, false
+	}
+	call := &restartSessionCall{done: make(chan struct{})}
+	a.restartCalls[sessionID] = call
+	return call, true
+}
+
+func (a *Agent) finishSessionRestart(
+	sessionID string,
+	call *restartSessionCall,
+	result RestartSessionResult,
+	err error,
+) {
+	a.mu.Lock()
+	call.result = result
+	call.err = err
+	if err != nil && a.restartCalls[sessionID] == call {
+		delete(a.restartCalls, sessionID)
+	}
+	close(call.done)
+	a.mu.Unlock()
+}
+
+func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) (result RestartSessionResult, returnErr error) {
 	if a.cfg.PlatformInvoker == nil {
 		return RestartSessionResult{}, fmt.Errorf("platform invoker is not configured")
 	}
@@ -470,15 +505,85 @@ func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) 
 	if leverage > 0 {
 		runReq.Leverage = leverage
 	}
+
+	restartCall, restartOwner := a.beginSessionRestart(oldSessionID)
+	if !restartOwner {
+		select {
+		case <-restartCall.done:
+			return restartCall.result, restartCall.err
+		case <-ctx.Done():
+			return RestartSessionResult{}, ctx.Err()
+		}
+	}
+	defer func() {
+		a.finishSessionRestart(oldSessionID, restartCall, result, returnErr)
+	}()
+
+	a.mu.Lock()
+	restartGeneration := a.generations[oldSessionID]
+	a.mu.Unlock()
+	ownsGenerationCleanup := false
+	if restartGeneration != nil {
+		owner, done := restartGeneration.beginCleanup()
+		if !owner {
+			select {
+			case <-done:
+				if err := restartGeneration.cleanupResult(); err != nil {
+					return RestartSessionResult{}, fmt.Errorf("wait existing worker cleanup: %w", err)
+				}
+				restartGeneration = nil
+			case <-ctx.Done():
+				return RestartSessionResult{}, ctx.Err()
+			}
+		} else {
+			ownsGenerationCleanup = true
+			defer func() {
+				if ownsGenerationCleanup {
+					restartGeneration.finishCleanup(returnErr)
+				}
+			}()
+		}
+	}
 	if a.cfg.WorkerStopper != nil {
 		if err := a.cfg.WorkerStopper.StopSessionWorker(ctx, oldSessionID, 5*time.Second); err != nil {
 			return RestartSessionResult{}, err
 		}
 	}
-	a.cleanupSessionState(oldSessionID, "bare debug worker restarted locally")
-	if err := a.markSessionRecoverable(ctx, session, runtimeID); err != nil {
+	if ownsGenerationCleanup {
+		drainTimeout := a.cfg.RequestTimeout
+		if drainTimeout <= 0 {
+			drainTimeout = 30 * time.Second
+		}
+		drainCtx, cancel := context.WithTimeout(ctx, drainTimeout)
+		defer cancel()
+		select {
+		case <-restartGeneration.drained:
+		case <-drainCtx.Done():
+			reason := "bare debug worker restart drain failed: " + drainCtx.Err().Error()
+			if markErr := a.markSessionRecoverable(ctx, session, runtimeID, reason); markErr != nil {
+				return RestartSessionResult{}, fmt.Errorf("%s; mark session recoverable: %w", reason, markErr)
+			}
+			return RestartSessionResult{}, errors.New(reason)
+		}
+	}
+	if err := a.indicatorSync.FinalizeSession(ctx, oldSessionID); err != nil {
+		reason := "bare debug worker restart indicator finalization failed: " + err.Error()
+		if markErr := a.markSessionRecoverable(ctx, session, runtimeID, reason); markErr != nil {
+			return RestartSessionResult{}, fmt.Errorf("%s; mark session recoverable: %w", reason, markErr)
+		}
+		return RestartSessionResult{}, errors.New(reason)
+	}
+	if err := a.markSessionRecoverable(ctx, session, runtimeID, "bare debug worker restarted locally"); err != nil {
 		return RestartSessionResult{}, err
 	}
+	if ownsGenerationCleanup {
+		if !a.forgetWorkerGeneration(oldSessionID, restartGeneration) {
+			return RestartSessionResult{}, errors.New("bare debug worker generation changed during restart")
+		}
+		restartGeneration.finishCleanup(nil)
+		ownsGenerationCleanup = false
+	}
+	a.cleanupSessionState(oldSessionID, "bare debug worker restarted locally")
 	packed, err := anypb.New(runReq)
 	if err != nil {
 		return RestartSessionResult{}, err
@@ -552,12 +657,21 @@ func (a *Agent) resolveRestartSession(ctx context.Context, opts RestartSessionOp
 	return nil, fmt.Errorf("no running or recoverable session found for runtime %s", strings.TrimSpace(a.cfg.RuntimeID))
 }
 
-func (a *Agent) markSessionRecoverable(ctx context.Context, session *portfoliov1.StrategySessionEntry, runtimeID string) error {
+func (a *Agent) markSessionRecoverable(
+	ctx context.Context,
+	session *portfoliov1.StrategySessionEntry,
+	runtimeID string,
+	reason string,
+) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "bare debug worker restarted locally"
+	}
 	req := &portfoliov1.UpdateSessionRequest{
 		SessionId:     session.GetSessionId(),
 		Status:        "recoverable",
 		BarsProcessed: session.GetBarsProcessed(),
-		Error:         "bare debug worker restarted locally",
+		Error:         reason,
 		RuntimeId:     runtimeID,
 	}
 	var resp portfoliov1.UpdateSessionResponse
@@ -663,7 +777,11 @@ func (a *Agent) cleanupWorkerGeneration(
 	var cleanupErr error
 	select {
 	case <-generation.drained:
-		cleanupErr = a.reconcileWorkerGeneration(ctx, sessionID, generation, reason)
+		if err := a.indicatorSync.FinalizeSession(ctx, sessionID); err != nil {
+			cleanupErr = fmt.Errorf("finalize worker generation indicators: %w", err)
+		} else {
+			cleanupErr = a.reconcileWorkerGeneration(ctx, sessionID, generation, reason)
+		}
 	case <-ctx.Done():
 		cleanupErr = fmt.Errorf("drain worker generation platform calls: %w", ctx.Err())
 	}
@@ -938,6 +1056,16 @@ func (a *Agent) HandleWorkerFrame(
 	a.mu.Lock()
 	generation := a.generations[strings.TrimSpace(workerSessionID)]
 	a.mu.Unlock()
+	return a.handleWorkerFrameForGeneration(ctx, workerSessionID, generation, frame, send)
+}
+
+func (a *Agent) handleWorkerFrameForGeneration(
+	ctx context.Context,
+	workerSessionID string,
+	generation *workerGeneration,
+	frame *rwv1.WorkerFrame,
+	send func(*rwv1.AgentFrame) error,
+) error {
 	switch frame.GetPayload().(type) {
 	case *rwv1.WorkerFrame_Hello:
 		a.mu.Lock()
@@ -1035,6 +1163,12 @@ func (a *Agent) HandleWorkerFrame(
 		if generation != nil && strings.TrimSpace(frame.GetIndicatorFrame().GetSessionId()) != strings.TrimSpace(workerSessionID) {
 			return fmt.Errorf("indicator frame session_id does not match authenticated generation")
 		}
+		if generation != nil {
+			if !generation.admit("indicator") {
+				return fmt.Errorf("worker generation is closing: %s", workerSessionID)
+			}
+			defer generation.completePlatformCall()
+		}
 		return a.indicatorSync.ReceiveFrame(frame.GetIndicatorFrame())
 	case *rwv1.WorkerFrame_FinalStatus:
 		if generation != nil && strings.TrimSpace(frame.GetFinalStatus().GetSessionId()) != strings.TrimSpace(workerSessionID) {
@@ -1111,7 +1245,7 @@ func (a *Agent) HandleAuthenticatedWorkerFrame(
 			return fmt.Errorf("worker generation is closing: %s", sessionID)
 		}
 	}
-	return a.HandleWorkerFrame(ctx, sessionID, frame, send)
+	return a.handleWorkerFrameForGeneration(ctx, sessionID, generation, frame, send)
 }
 
 func (a *Agent) invokeWorkerPlatformCallForGeneration(

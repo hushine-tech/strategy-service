@@ -3552,7 +3552,7 @@ def test_run_strategy_maps_portfolio_active_session_conflict(monkeypatch):
     assert "already has an active session" in context.details
 
 
-def test_stop_strategy_stop_only_persists_state_and_halts_runtime():
+def test_futures_stop_paths_unchanged_stop_strategy_stop_only_persists_state_and_halts_runtime():
     updates: list[tuple[str, str, int, str]] = []
 
     class FakePortfolioClient:
@@ -3765,7 +3765,7 @@ def test_stop_strategy_finish_persists_finished_and_halts_runtime():
     assert updates[-1][1] == "finished"
 
 
-def test_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypatch):
+def test_futures_stop_paths_unchanged_stop_strategy_stop_and_close_backtest_futures_flattens_wallet(monkeypatch):
     route_wallet = make_backtest_wallet(
         futures_positions=[{
             "symbol": "ETHUSDT",

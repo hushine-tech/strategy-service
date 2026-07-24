@@ -368,7 +368,7 @@ def test_resolve_target_unsupported_environment_raises():
         resolve_target(9)
 
 
-def test_build_wallet_backtest_environment_uses_binance_parity_after_c2a():
+def test_futures_control_unchanged_build_wallet_backtest_environment_uses_binance_parity_after_c2a():
     """environment=0 backtest is routed to BinanceWalletRuntime."""
     wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(_wallet_proto(environment=0)))
 

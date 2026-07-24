@@ -20,7 +20,7 @@
     python scripts/seed_test_strategies.py
 
 环境变量(均有默认值):
-    PGHOST        默认 192.168.88.10
+    PGHOST        默认 127.0.0.1
     PGPORT        默认 5432
     PGDATABASE    默认 portfolio
     PGUSER        默认 postgres
@@ -48,7 +48,7 @@ import bcrypt
 import psycopg2
 
 
-HOST = os.environ.get("PGHOST", "192.168.88.10")
+HOST = os.environ.get("PGHOST", "127.0.0.1")
 PORT = int(os.environ.get("PGPORT", "5432"))
 DB = os.environ.get("PGDATABASE", "portfolio")
 USER = os.environ.get("PGUSER", "postgres")

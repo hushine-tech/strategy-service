@@ -14,9 +14,9 @@
     python scripts/seed_test_data.py
 
 环境变量（均有默认值）：
-    TIMESCALE_HOST      默认 192.168.88.10
+    TIMESCALE_HOST      默认 127.0.0.1
     TIMESCALE_PORT      默认 5432
-    TIMESCALE_DB        默认 binance
+    TIMESCALE_DB        默认 binance_2025
     TIMESCALE_USER      默认 postgres
     TIMESCALE_PASSWORD  默认 postgres
 """
@@ -31,7 +31,7 @@ import psycopg2
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 
-HOST = os.environ.get("TIMESCALE_HOST", "192.168.88.10")
+HOST = os.environ.get("TIMESCALE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TIMESCALE_PORT", "5432"))
 DB = os.environ.get("TIMESCALE_DB", "binance_2025")
 USER = os.environ.get("TIMESCALE_USER", "postgres")

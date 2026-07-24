@@ -22,7 +22,7 @@ from psycopg2.extensions import connection as PGConnection
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_ROOT = ROOT / ".hushine-runtime" / "strategies"
 
-DEFAULT_DB_HOST = os.environ.get("PGHOST", "192.168.88.10")
+DEFAULT_DB_HOST = os.environ.get("PGHOST", "127.0.0.1")
 DEFAULT_DB_PORT = int(os.environ.get("PGPORT", "5432"))
 DEFAULT_DB_NAME = os.environ.get("PGDATABASE", "portfolio")
 DEFAULT_DB_USER = os.environ.get("PGUSER", "postgres")

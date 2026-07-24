@@ -176,7 +176,7 @@ func validateTrustedCoveragePythonArgs(args []string) error {
 	}
 	if len(args) != 6 || args[0] != "-m" || args[1] != "coverage" ||
 		args[2] != "run" || args[3] != "--parallel-mode" ||
-		args[5] != "--source=strategy_service" ||
+		args[5] != "--include=*/strategy_service/*" ||
 		!strings.HasPrefix(args[4], "--data-file=") {
 		return fmt.Errorf("trusted coverage Python prefix is invalid")
 	}

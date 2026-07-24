@@ -17,7 +17,7 @@ func TestCoverageConfigPythonArgs(t *testing.T) {
 	got := cfg.PythonArgsPrefix()
 	want := []string{
 		"-m", "coverage", "run", "--parallel-mode",
-		"--data-file=/coverage/python/.coverage", "--source=strategy_service",
+		"--data-file=/coverage/python/.coverage", "--include=*/strategy_service/*",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("PythonArgsPrefix() = %v, want %v", got, want)

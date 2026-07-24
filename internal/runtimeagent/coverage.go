@@ -48,7 +48,7 @@ func (c CoverageConfig) PythonArgsPrefix() []string {
 		"run",
 		"--parallel-mode",
 		fmt.Sprintf("--data-file=%s", filepath.Join(c.RootDir, "python", ".coverage")),
-		"--source=strategy_service",
+		"--include=*/strategy_service/*",
 	}
 }
 

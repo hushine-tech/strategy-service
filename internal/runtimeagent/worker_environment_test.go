@@ -51,7 +51,7 @@ func TestResolveWorkerLaunchSpecBuildsOneSanitizedImmutableInvocation(t *testing
 	wantPrefix := []string{
 		"-I", "-Xfrozen_modules=off", "-m", "coverage", "run",
 		"--parallel-mode", "--data-file=" + filepath.Join(coverageRoot, "python", ".coverage"),
-		"--source=strategy_service",
+		"--include=*/strategy_service/*",
 	}
 	if !slices.Equal(spec.Invocation.ArgsPrefix, wantPrefix) {
 		t.Fatalf("args prefix = %v, want %v", spec.Invocation.ArgsPrefix, wantPrefix)

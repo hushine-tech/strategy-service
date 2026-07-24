@@ -214,14 +214,25 @@ scripts/restart-bare-worker-session.sh
 ```
 
 The command reads the state file written by
-`scripts/start-bare-runtime-debugpy.sh`, stops the old local Python worker,
-marks the old session recoverable through RuntimeChannel, clears local worker
-buffers, and starts a fresh worker against the same runtime. To target a known
-session explicitly:
+`scripts/start-bare-runtime-debugpy.sh`, claims cleanup ownership for the old
+worker generation, stops that Python worker, waits for admitted work to drain,
+finalizes and persists the indicator tail, marks the old session recoverable
+through RuntimeChannel, clears the old generation state, and starts a fresh
+worker against the same runtime. If drain, finalization, or its persistence ACK
+fails, the old state is retained and no replacement worker is started. To
+target a known session explicitly:
 
 ```bash
 scripts/restart-bare-worker-session.sh <session_id>
 ```
+
+Concurrent restart requests for the same old session share one in-flight
+operation and return the same replacement session instead of starting duplicate
+workers. Once cleanup closes a generation, authenticated platform and indicator
+frames retain that exact generation identity through admission; removing the
+generation from the agent registry cannot turn a late frame into an unguarded
+write. Unexpected worker disconnects use the same close, drain, indicator
+finalization, reconciliation, and retry boundary.
 
 Equivalent explicit form:
 

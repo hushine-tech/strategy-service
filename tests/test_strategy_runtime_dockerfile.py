@@ -209,7 +209,8 @@ def test_coverage_python_configuration_is_locked_and_image_scoped():
     coveragerc = (SERVICE_DIR / ".coveragerc").read_text(encoding="utf-8")
 
     assert 'coverage = [\n    "coverage>=7.0.0,<8.0.0",\n]' in pyproject
-    assert "source = strategy_service" in coveragerc
+    assert "source = strategy_service" not in coveragerc
+    assert "include = */strategy_service/*" in coveragerc
     assert "parallel = true" in coveragerc
     assert "sigterm = true" in coveragerc
     assert "disable_warnings = no-data-collected" in coveragerc

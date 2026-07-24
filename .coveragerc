@@ -1,5 +1,5 @@
 [run]
-source = strategy_service
+include = */strategy_service/*
 parallel = true
 sigterm = true
 disable_warnings = no-data-collected

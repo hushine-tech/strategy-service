@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -312,6 +313,75 @@ func TestGenerationCleanupDrainsAdmittedSaveBeforeFailedReconciliation(t *testin
 	agent.mu.Unlock()
 	if retained {
 		t.Fatal("generation retained after confirmed failed reconciliation")
+	}
+}
+
+func TestGenerationCleanupFinalizesIndicatorTailBeforeFailedReconciliation(t *testing.T) {
+	const sessionID = "13131313131313131313131313131313"
+	var methods []string
+	var indicatorReq portfoliov1.SaveStrategyIndicatorsRequest
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			methods = append(methods, method)
+			switch method {
+			case "portfolio.SaveStrategyIndicators":
+				if err := request.UnmarshalTo(&indicatorReq); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{
+					DefinitionsSaved: 1,
+					ChunksSaved:      1,
+				})
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId: sessionID,
+						UserId:    6,
+						RuntimeId: "rt-1",
+						Status:    "running",
+					},
+				})
+			case "portfolio.UpdateSession":
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, fmt.Errorf("unexpected method: %s", method)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		PlatformInvoker: invoker,
+		RequestTimeout:  time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 11)
+	generation.durablePossible = true
+	if !generation.bindAuthenticatedGeneration(19) {
+		t.Fatal("failed to bind authenticated generation")
+	}
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame(sessionID)); err != nil {
+		t.Fatalf("ReceiveFrame: %v", err)
+	}
+
+	if err := agent.HandleWorkerDisconnect(
+		WorkerIdentity{SessionID: sessionID, Generation: 19},
+		errors.New("worker exited unexpectedly"),
+	); err != nil {
+		t.Fatalf("HandleWorkerDisconnect: %v", err)
+	}
+
+	if !slices.Equal(methods, []string{
+		"portfolio.SaveStrategyIndicators",
+		"portfolio.GetSession",
+		"portfolio.UpdateSession",
+	}) {
+		t.Fatalf("cleanup methods = %v", methods)
+	}
+	if len(indicatorReq.GetChunks()) != 1 || !indicatorReq.GetChunks()[0].GetFinalized() {
+		t.Fatalf("unexpected disconnect did not finalize indicator tail: %+v", &indicatorReq)
 	}
 }
 
@@ -1856,8 +1926,11 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 	starter := &fakeWorkerStarter{}
 	stopper := &fakeWorkerStopper{}
 	var updateReq portfoliov1.UpdateSessionRequest
+	var indicatorReq portfoliov1.SaveStrategyIndicatorsRequest
+	var platformMethods []string
 	invoker := &fakePlatformInvoker{
 		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			platformMethods = append(platformMethods, method)
 			switch method {
 			case "portfolio.GetSession":
 				return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
@@ -1875,6 +1948,11 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 					BarsProcessed: 19,
 					Leverage:      3,
 				}})
+			case "portfolio.SaveStrategyIndicators":
+				if err := request.UnmarshalTo(&indicatorReq); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{})
 			case "portfolio.UpdateSession":
 				if err := request.UnmarshalTo(&updateReq); err != nil {
 					return nil, err
@@ -1928,6 +2006,21 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 	if updateReq.GetError() == "" {
 		t.Fatalf("update session error should explain local bare restart")
 	}
+	if len(indicatorReq.GetChunks()) != 1 || indicatorReq.GetChunks()[0].GetCount() != 1 || !indicatorReq.GetChunks()[0].GetFinalized() {
+		t.Fatalf("restart indicator finalization = %+v, want one finalized tail", &indicatorReq)
+	}
+	saveIndex, updateIndex := -1, -1
+	for index, method := range platformMethods {
+		switch method {
+		case "portfolio.SaveStrategyIndicators":
+			saveIndex = index
+		case "portfolio.UpdateSession":
+			updateIndex = index
+		}
+	}
+	if saveIndex < 0 || updateIndex < 0 || saveIndex > updateIndex {
+		t.Fatalf("restart platform method order = %v, want indicator save before recoverable update", platformMethods)
+	}
 	if agent.indicatorSync.lookupSession("sess-old") != nil {
 		t.Fatalf("old session indicator buffer was not cleared")
 	}
@@ -1939,6 +2032,282 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 	}
 	if starter.extraEnv["HUSHINE_RUNTIME_ID"] != "rt-1" || starter.extraEnv["HUSHINE_RUNTIME_SOURCE"] != "bare" {
 		t.Fatalf("worker env = %+v", starter.extraEnv)
+	}
+}
+
+func TestAgentConcurrentRestartSessionReusesOneReplacementWorker(t *testing.T) {
+	updateStarted := make(chan struct{})
+	releaseUpdate := make(chan struct{})
+	var updateOnce sync.Once
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, _ *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
+					SessionId: "sess-old", PortfolioId: 7, StrategyId: 12, UserId: 6,
+					RuntimeId: "rt-1", RuntimeSource: "bare", Status: "running",
+					Interval: "1m", StartTimeMs: 1000, EndTimeMs: 2000,
+				}})
+			case "portfolio.UpdateSession":
+				updateOnce.Do(func() { close(updateStarted) })
+				<-releaseUpdate
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, errors.New("unexpected method: " + method)
+			}
+		},
+	}
+	starter := &concurrentWorkerStarter{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", RuntimeSource: "bare", UserID: 6,
+		WorkerStarter: starter, WorkerStopper: &fakeWorkerStopper{}, PlatformInvoker: invoker,
+		StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+	starter.onStart = func(pendingSessionID string) {
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+					SessionId: pendingSessionID, Status: "running",
+				}},
+			}, nil)
+		}()
+	}
+
+	results := make(chan RestartSessionResult, 2)
+	errs := make(chan error, 2)
+	restart := func() {
+		result, err := agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "sess-old"})
+		results <- result
+		errs <- err
+	}
+	go restart()
+	select {
+	case <-updateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first restart did not reach recoverable update")
+	}
+	go restart()
+	time.Sleep(20 * time.Millisecond)
+	close(releaseUpdate)
+
+	firstResult, secondResult := <-results, <-results
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("RestartSession call %d: %v", i+1, err)
+		}
+	}
+	if firstResult.NewSessionID == "" || secondResult.NewSessionID != firstResult.NewSessionID {
+		t.Fatalf("concurrent restart results = %+v and %+v", firstResult, secondResult)
+	}
+	if starts := starter.snapshotStarts(); len(starts) != 1 {
+		t.Fatalf("replacement workers started = %v, want exactly one", starts)
+	}
+}
+
+func TestAgentRestartSessionRejectsIndicatorAfterFinalizationAdmissionCloses(t *testing.T) {
+	updateStarted := make(chan struct{})
+	releaseUpdate := make(chan struct{})
+	var indicatorReq portfoliov1.SaveStrategyIndicatorsRequest
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
+					SessionId: "sess-old", PortfolioId: 7, StrategyId: 12, UserId: 6,
+					RuntimeId: "rt-1", RuntimeSource: "bare", Status: "running",
+					Interval: "1m", StartTimeMs: 1000, EndTimeMs: 2000,
+				}})
+			case "portfolio.SaveStrategyIndicators":
+				if err := request.UnmarshalTo(&indicatorReq); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{})
+			case "portfolio.UpdateSession":
+				close(updateStarted)
+				<-releaseUpdate
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, errors.New("unexpected method: " + method)
+			}
+		},
+	}
+	starter := &fakeWorkerStarter{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", RuntimeSource: "bare", UserID: 6,
+		WorkerStarter: starter, WorkerStopper: &fakeWorkerStopper{}, PlatformInvoker: invoker,
+		StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+	generation := newWorkerGeneration("sess-old", 1)
+	if !generation.bindAuthenticatedGeneration(7) {
+		t.Fatal("failed to bind authenticated generation")
+	}
+	generation.connected = true
+	agent.generations["sess-old"] = generation
+	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
+		t.Fatalf("ReceiveFrame initial indicator: %v", err)
+	}
+	starter.onStart = func(pendingSessionID string) {
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+					SessionId: pendingSessionID, Status: "running",
+				}},
+			}, nil)
+		}()
+	}
+
+	restartDone := make(chan error, 1)
+	go func() {
+		_, err := agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "sess-old"})
+		restartDone <- err
+	}()
+	select {
+	case <-updateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart did not reach recoverable update after indicator finalization")
+	}
+	late := agentIndicatorFrame("sess-old")
+	late.MarketTimeMs += late.IntervalMs
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(),
+		WorkerIdentity{SessionID: "sess-old", Generation: 7},
+		&rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_IndicatorFrame{IndicatorFrame: late},
+		},
+		nil,
+	); err == nil {
+		t.Fatal("closing worker generation accepted an indicator after finalization")
+	}
+	close(releaseUpdate)
+	if err := <-restartDone; err != nil {
+		t.Fatalf("RestartSession: %v", err)
+	}
+	if len(indicatorReq.GetChunks()) != 1 || indicatorReq.GetChunks()[0].GetCount() != 1 {
+		t.Fatalf("finalized request absorbed a late indicator: %+v", &indicatorReq)
+	}
+}
+
+func TestAgentRestartSessionFinalizationFailureKeepsTailAndDoesNotStartNewWorker(t *testing.T) {
+	starter := &fakeWorkerStarter{}
+	stopper := &fakeWorkerStopper{}
+	var updateReq portfoliov1.UpdateSessionRequest
+	saveCalls := 0
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
+					SessionId: "sess-old", PortfolioId: 7, StrategyId: 12, UserId: 6,
+					RuntimeId: "rt-1", RuntimeSource: "bare", Status: "running",
+					Interval: "1m", StartTimeMs: 1000, EndTimeMs: 2000, BarsProcessed: 19,
+				}})
+			case "portfolio.SaveStrategyIndicators":
+				saveCalls++
+				return nil, errors.New("indicator store unavailable")
+			case "portfolio.UpdateSession":
+				if err := request.UnmarshalTo(&updateReq); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, errors.New("unexpected method: " + method)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", RuntimeSource: "bare", UserID: 6,
+		WorkerStarter: starter, WorkerStopper: stopper, PlatformInvoker: invoker,
+		StartTimeout: time.Second, RequestTimeout: time.Second,
+		IndicatorFinalizeTimeout: 20 * time.Millisecond,
+		IndicatorRetryInitial:    time.Millisecond,
+		IndicatorRetryMax:        2 * time.Millisecond,
+	})
+	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
+		t.Fatalf("ReceiveFrame old indicators: %v", err)
+	}
+
+	_, err := agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "sess-old"})
+	if err == nil || !strings.Contains(err.Error(), "indicator finalization failed") {
+		t.Fatalf("RestartSession error = %v, want indicator finalization failure", err)
+	}
+	if saveCalls < 1 {
+		t.Fatal("restart did not attempt indicator finalization")
+	}
+	if updateReq.GetStatus() != "recoverable" || !strings.Contains(updateReq.GetError(), "indicator finalization failed") {
+		t.Fatalf("recoverable update = %+v", &updateReq)
+	}
+	if agent.indicatorSync.lookupSession("sess-old") == nil {
+		t.Fatal("failed finalization discarded the retryable indicator tail")
+	}
+	if starter.startedSessionID != "" {
+		t.Fatalf("new worker started despite finalization failure: %s", starter.startedSessionID)
+	}
+}
+
+func TestAgentRestartSessionOwnsDisconnectCleanupUntilIndicatorTailIsFinalized(t *testing.T) {
+	starter := &fakeWorkerStarter{}
+	var indicatorReq portfoliov1.SaveStrategyIndicatorsRequest
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
+					SessionId: "sess-old", PortfolioId: 7, StrategyId: 12, UserId: 6,
+					RuntimeId: "rt-1", RuntimeSource: "bare", Status: "running",
+					Interval: "1m", StartTimeMs: 1000, EndTimeMs: 2000,
+				}})
+			case "portfolio.SaveStrategyIndicators":
+				if err := request.UnmarshalTo(&indicatorReq); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{})
+			case "portfolio.UpdateSession":
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, errors.New("unexpected method: " + method)
+			}
+		},
+	}
+	var agent *Agent
+	stopper := &callbackWorkerStopper{}
+	agent = NewAgent(AgentConfig{
+		RuntimeID: "rt-1", RuntimeSource: "bare", UserID: 6,
+		WorkerStarter: starter, WorkerStopper: stopper, PlatformInvoker: invoker,
+		StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+	generation := newWorkerGeneration("sess-old", 1)
+	if !generation.bindAuthenticatedGeneration(7) {
+		t.Fatal("failed to bind worker generation")
+	}
+	generation.connected = true
+	agent.generations["sess-old"] = generation
+	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
+		t.Fatalf("ReceiveFrame old indicators: %v", err)
+	}
+	stopper.onFirstStop = func() {
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_ = agent.HandleWorkerDisconnect(WorkerIdentity{SessionID: "sess-old", Generation: 7}, errors.New("worker stopped"))
+		}()
+		<-started
+		time.Sleep(20 * time.Millisecond)
+	}
+	starter.onStart = func(pendingSessionID string) {
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+					SessionId: pendingSessionID, Status: "running",
+				}},
+			}, nil)
+		}()
+	}
+
+	if _, err := agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "sess-old"}); err != nil {
+		t.Fatalf("RestartSession: %v", err)
+	}
+	if len(indicatorReq.GetChunks()) != 1 || !indicatorReq.GetChunks()[0].GetFinalized() {
+		t.Fatalf("disconnect raced away the restart indicator tail: %+v", &indicatorReq)
 	}
 }
 
@@ -2096,6 +2465,33 @@ func TestAgentRestartSessionPreservesCachedRunRequestOptions(t *testing.T) {
 	if restartedReq.GetPortfolioId() != 7 || restartedReq.GetInterval() != "1m" || restartedReq.GetLeverage() != 3 {
 		t.Fatalf("restart request did not apply session fields: %+v", &restartedReq)
 	}
+}
+
+type concurrentWorkerStarter struct {
+	mu      sync.Mutex
+	starts  []string
+	onStart func(string)
+}
+
+func (s *concurrentWorkerStarter) StartSessionWorker(
+	_ context.Context,
+	sessionID string,
+	_ []string,
+) (*ManagedWorker, error) {
+	s.mu.Lock()
+	s.starts = append(s.starts, sessionID)
+	callback := s.onStart
+	s.mu.Unlock()
+	if callback != nil {
+		callback(sessionID)
+	}
+	return &ManagedWorker{SessionID: sessionID}, nil
+}
+
+func (s *concurrentWorkerStarter) snapshotStarts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.starts...)
 }
 
 type fakeWorkerStarter struct {
@@ -2277,6 +2673,27 @@ func (s *signalingWorkerStopper) StopSessionWorker(_ context.Context, _ string, 
 	return nil
 }
 
+type callbackWorkerStopper struct {
+	mu          sync.Mutex
+	called      bool
+	onFirstStop func()
+}
+
+func (s *callbackWorkerStopper) StopSessionWorker(context.Context, string, time.Duration) error {
+	s.mu.Lock()
+	if s.called {
+		s.mu.Unlock()
+		return nil
+	}
+	s.called = true
+	callback := s.onFirstStop
+	s.mu.Unlock()
+	if callback != nil {
+		callback()
+	}
+	return nil
+}
+
 func (p *agentFinalPlatform) InvokePlatformAny(_ context.Context, method string, request *anypb.Any, _ time.Duration) (*anypb.Any, error) {
 	p.mu.Lock()
 	p.methods = append(p.methods, method)
@@ -2316,6 +2733,55 @@ func bufferAgentIndicator(t *testing.T, agent *Agent, sessionID string) {
 	}, nil)
 	if err != nil {
 		t.Fatalf("buffer indicator: %v", err)
+	}
+}
+
+func TestAuthenticatedIndicatorKeepsGenerationAdmissionAfterRegistryRemoval(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	const sessionID = "31313131313131313131313131313131"
+	agent := NewAgent(AgentConfig{})
+	generation := newWorkerGeneration(sessionID, 17)
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+
+	generation.mu.Lock()
+	agent.mu.Lock()
+	result := make(chan error, 1)
+	go func() {
+		result <- agent.HandleAuthenticatedWorkerFrame(
+			context.Background(),
+			WorkerIdentity{SessionID: sessionID, Generation: 23},
+			&rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_IndicatorFrame{
+					IndicatorFrame: agentIndicatorFrame(sessionID),
+				},
+			},
+			nil,
+		)
+	}()
+	runtime.Gosched()
+	agent.mu.Unlock()
+	runtime.Gosched()
+
+	agent.mu.Lock()
+	delete(agent.generations, sessionID)
+	agent.mu.Unlock()
+	generation.closing = true
+	generation.mu.Unlock()
+
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "worker generation is closing") {
+			t.Fatalf("late authenticated indicator error = %v, want closing-generation rejection", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("authenticated indicator did not complete")
+	}
+	if agent.indicatorSync.lookupSession(sessionID) != nil {
+		t.Fatal("late authenticated indicator recreated state after generation removal")
 	}
 }
 

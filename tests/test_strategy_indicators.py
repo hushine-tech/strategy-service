@@ -1,4 +1,9 @@
+from hushine_strategy.indicator_output import IndicatorWriter as SharedIndicatorWriter
 from strategy_service.indicators import IndicatorChunkBuffer, IndicatorWriter, parse_indicator_definitions
+
+
+def test_hosted_worker_uses_shared_indicator_writer():
+    assert IndicatorWriter is SharedIndicatorWriter
 
 
 def test_parse_indicator_definitions_defaults_name_and_optional_fields():
