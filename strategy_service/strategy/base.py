@@ -319,6 +319,7 @@ class BaseStrategy:
                     "_decl": declarations,
                     "_indicator_definitions": list(indicator_definitions),
                     "_indicator_writer": writer,
+                    "_next_indicator_sequence": {},
                     "_inputs": inputs,
                     "_order_targets": list(declarations.order_targets),
                     "_input_keys": declarations.input_keys,
@@ -477,6 +478,9 @@ class BaseStrategy:
                 return
             prepared = prepare_strategy(gate.gated_source)
             candidate_decl = prepared.declarations
+            candidate_indicator_definitions = list(
+                prepared.indicator_definitions
+            )
         except BaseException:
             self._hot_reload_signature = signature
             logger.warning("STRATEGY_HOT_RELOAD_PREPARE_FAILED session=%s", self._session_id)
@@ -486,6 +490,15 @@ class BaseStrategy:
             self._hot_reload_signature = signature
             logger.warning(
                 "STRATEGY_HOT_RELOAD_DECLARATION_CHANGED session=%s strategy_id=%s",
+                self._session_id,
+                self._strategy_id,
+            )
+            return
+        if candidate_indicator_definitions != self._indicator_definitions:
+            self._hot_reload_signature = signature
+            logger.warning(
+                "STRATEGY_HOT_RELOAD_INDICATOR_DECLARATION_CHANGED "
+                "session=%s strategy_id=%s",
                 self._session_id,
                 self._strategy_id,
             )
@@ -606,17 +619,23 @@ class BaseStrategy:
                 self._session_id,
                 self._strategy_id,
             )
+        sequence = self._next_indicator_sequence.get(stream_key, 0)
+        self._next_indicator_sequence[stream_key] = sequence + 1
         if self.on_indicator_frame is None:
             return
         callback_fatal = False
         try:
-            self.on_indicator_frame(stream_key, market_time_ms, interval_ms, frame)
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "STRATEGY_INDICATOR_CALLBACK_FAILED session=%s strategy_id=%s",
-                self._session_id,
-                self._strategy_id,
+            self.on_indicator_frame(
+                stream_key,
+                sequence,
+                market_time_ms,
+                interval_ms,
+                frame,
             )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"indicator V2 transport failed: {exc}"
+            ) from exc
         except BaseException:
             callback_fatal = True
         if callback_fatal:
@@ -1093,6 +1112,9 @@ class BaseStrategy:
         interval: str,
     ) -> None:
         key = (exchange, market, symbol, interval)
+        stream_key = _stream_key(exchange, market, symbol, interval)
+        market_time_ms = _market_time_ms(market_data)
+        interval_ms = _interval_to_ms(interval)
 
         # Declaration gate: only declared (market, symbol, interval) keys reach
         # the strategy. Wallet state is irrelevant here per pre_C3.
@@ -1128,6 +1150,12 @@ class BaseStrategy:
             self.raise_if_user_code_fatal()
             callback = getattr(self._strategy_instance, "on_market_data")
         except Exception as exc:  # noqa: BLE001
+            self._prepare_indicator_frame()
+            self._drain_indicator_frame(
+                stream_key,
+                market_time_ms,
+                interval_ms,
+            )
             self._handle_on_market_data_exception(exc)
             self.raise_if_user_code_fatal()
             return
@@ -1144,19 +1172,31 @@ class BaseStrategy:
         try:
             raw_signals = callback(self._view, self.wallet)
         except Exception as exc:  # noqa: BLE001
+            self._prepare_indicator_frame()
+            self._drain_indicator_frame(
+                stream_key,
+                market_time_ms,
+                interval_ms,
+            )
             self._handle_on_market_data_exception(exc)
             self.raise_if_user_code_fatal()
             return
         except BaseException:
+            self._prepare_indicator_frame()
+            self._drain_indicator_frame(
+                stream_key,
+                market_time_ms,
+                interval_ms,
+            )
             callback_fatal = True
             raw_signals = None
         if callback_fatal:
             raise _user_code_fatal("callback")
         self.raise_if_user_code_fatal()
         self._drain_indicator_frame(
-            _stream_key(exchange, market, symbol, interval),
-            _market_time_ms(market_data),
-            _interval_to_ms(interval),
+            stream_key,
+            market_time_ms,
+            interval_ms,
         )
         self.raise_if_user_code_fatal()
         self._emit_user_code_recovered()

@@ -18,6 +18,7 @@ from strategy_service.gen import runtime_worker_pb2 as worker_pb2
 from strategy_service.gen import runtime_worker_pb2_grpc as worker_grpc
 
 WORKER_VERSION = "0.1.0"
+WORKER_PROTOCOL_VERSION = 2
 
 
 class FinalStatusRejected(RuntimeError):
@@ -74,6 +75,7 @@ def build_worker_hello_frame(env: WorkerEnv, *, pid: int | None = None) -> worke
             token=env.token,
             worker_version=WORKER_VERSION,
             pid=int(pid if pid is not None else os.getpid()),
+            protocol_version=WORKER_PROTOCOL_VERSION,
         )
     )
 
@@ -307,16 +309,18 @@ class WorkerAgentClient:
         user_id: int,
         strategy_id: int,
         stream_key: str,
+        stream_sequence: int,
         market_time_ms: int,
         interval_ms: int,
         definitions: list[object],
         frame: object,
     ) -> None:
-        msg = worker_pb2.IndicatorFrame(
+        msg = worker_pb2.IndicatorFrameV2(
             session_id=str(session_id or ""),
             user_id=int(user_id or 0),
             strategy_id=int(strategy_id or 0),
             stream_key=str(stream_key or ""),
+            stream_sequence=int(stream_sequence),
             market_time_ms=int(market_time_ms or 0),
             interval_ms=int(interval_ms or 0),
         )
@@ -337,27 +341,36 @@ class WorkerAgentClient:
                 description=str(getattr(definition, "description", "") or ""),
                 config_json=json.dumps(cfg, separators=(",", ":")),
             )
-        known_keys = {
-            str(getattr(definition, "key", "") or getattr(definition, "indicator_key", "") or "").strip()
-            for definition in definitions or []
-        }
-        known_keys.update(str(key or "").strip() for key in values.keys())
-        known_keys.update(str(key or "").strip() for key in markers.keys())
-        for key in sorted(item for item in known_keys if item):
-            marker_items = markers.get(key) or []
-            if marker_items:
-                msg.values.add(
-                    indicator_key=key,
-                    has_value=False,
-                    marker_json=json.dumps(list(marker_items), separators=(",", ":")),
+        value_keys = {str(key or "").strip() for key in values}
+        marker_keys = {str(key or "").strip() for key in markers}
+        overlap = sorted((value_keys & marker_keys) - {""})
+        if overlap:
+            raise ValueError(
+                "indicator key cannot contain both scalar and marker samples: "
+                + ", ".join(overlap)
+            )
+        for raw_key, raw_value in sorted(values.items(), key=lambda item: str(item[0])):
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            sample = msg.samples.add(indicator_key=key)
+            if raw_value is not None:
+                sample.scalar_value = float(raw_value)
+        for raw_key, raw_markers in sorted(markers.items(), key=lambda item: str(item[0])):
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            sample = msg.samples.add(indicator_key=key)
+            for raw in raw_markers or []:
+                marker = sample.markers.add(
+                    text=str(raw.get("text", "") or ""),
+                    color=str(raw.get("color", "") or ""),
+                    position=str(raw.get("position", "") or ""),
+                    shape=str(raw.get("shape", "") or ""),
                 )
-                continue
-            raw_value = values.get(key)
-            if raw_value is None:
-                msg.values.add(indicator_key=key, has_value=False)
-                continue
-            msg.values.add(indicator_key=key, value=float(raw_value), has_value=True)
-        self._enqueue_outbound(worker_pb2.WorkerFrame(indicator_frame=msg))
+                if raw.get("price") is not None:
+                    marker.price = float(raw["price"])
+        self._enqueue_outbound(worker_pb2.WorkerFrame(indicator_frame_v2=msg))
 
     def next_agent_frame(self, *, timeout_seconds: float = 1.0) -> worker_pb2.AgentFrame | None:
         try:

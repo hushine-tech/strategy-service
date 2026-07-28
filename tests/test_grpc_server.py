@@ -3045,12 +3045,14 @@ def test_indicator_collection_failure_logs_are_fixed_and_redacted(monkeypatch, c
             state,
             sink_engine,
         )
-        sink_strategy.on_indicator_frame(
-            "indicator-stream-key-log-canary",
-            1,
-            1,
-            IndicatorFrame(values={"alpha": 1.0}),
-        )
+        with pytest.raises(RuntimeError, match="indicator-sink-log-canary"):
+            sink_strategy.on_indicator_frame(
+                "indicator-stream-key-log-canary",
+                0,
+                1,
+                1,
+                IndicatorFrame(values={"alpha": 1.0}),
+            )
         missing_save_servicer._install_indicator_collection(
             "indicator-log-session",
             state,
@@ -3058,6 +3060,7 @@ def test_indicator_collection_failure_logs_are_fixed_and_redacted(monkeypatch, c
         )
         missing_save_strategy.on_indicator_frame(
             "indicator-stream-key-log-canary",
+            0,
             1,
             1,
             IndicatorFrame(values={"alpha": 1.0}),
@@ -3069,6 +3072,7 @@ def test_indicator_collection_failure_logs_are_fixed_and_redacted(monkeypatch, c
         )
         save_strategy.on_indicator_frame(
             "indicator-stream-key-log-canary",
+            0,
             1,
             1,
             IndicatorFrame(values={"alpha": 1.0}),
@@ -3076,7 +3080,6 @@ def test_indicator_collection_failure_logs_are_fixed_and_redacted(monkeypatch, c
 
     assert [record.getMessage() for record in caplog.records] == [
         "STRATEGY_INDICATOR_CLIENT_UNAVAILABLE session=indicator-log-session strategy_id=202",
-        "STRATEGY_INDICATOR_SINK_FAILED session=indicator-log-session strategy_id=202",
         "STRATEGY_INDICATOR_SAVE_UNAVAILABLE session=indicator-log-session strategy_id=202",
         "STRATEGY_INDICATOR_SAVE_FAILED session=indicator-log-session strategy_id=202",
     ]
@@ -3089,6 +3092,75 @@ def test_indicator_collection_failure_logs_are_fixed_and_redacted(monkeypatch, c
         "Traceback",
     ):
         assert canary not in caplog.text
+
+
+def test_agent_indicator_sink_uses_v2_sequence_and_retries_first_definitions(monkeypatch):
+    definition = IndicatorDefinition(
+        key="alpha",
+        name="Alpha",
+        type="line",
+        pane="strategy",
+    )
+    state = SessionState(environment=1, user_id=17, strategy_id=202)
+    strategy = SimpleNamespace(
+        indicator_definitions=[definition],
+        on_indicator_frame=None,
+    )
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
+    )
+    monkeypatch.setattr(
+        servicer,
+        "_portfolio_client",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("agent-managed V2 must not acquire portfolio client")
+        ),
+    )
+    calls = []
+
+    def sink(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError("first transport attempt failed")
+
+    servicer._indicator_frame_sink = sink
+    servicer._install_indicator_collection(
+        "indicator-v2-session",
+        state,
+        SimpleNamespace(strategies={"active": strategy}),
+    )
+
+    with pytest.raises(RuntimeError, match="first transport attempt failed"):
+        strategy.on_indicator_frame(
+            "binance:perpetual_futures:TESTUSDT:1m",
+            0,
+            1_000,
+            60_000,
+            IndicatorFrame(values={"alpha": 1.0}),
+        )
+    strategy.on_indicator_frame(
+        "binance:perpetual_futures:TESTUSDT:1m",
+        0,
+        1_000,
+        60_000,
+        IndicatorFrame(values={"alpha": 1.0}),
+    )
+    strategy.on_indicator_frame(
+        "binance:perpetual_futures:TESTUSDT:1m",
+        1,
+        61_000,
+        60_000,
+        IndicatorFrame(),
+    )
+
+    assert [call["stream_sequence"] for call in calls] == [0, 0, 1]
+    assert len(calls[0]["definitions"]) == 1
+    assert len(calls[1]["definitions"]) == 1
+    assert calls[2]["definitions"] == []
 
 
 def test_backtest_indicator_flush_baseexception_preserves_exact_user_fatal(

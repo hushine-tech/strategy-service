@@ -83,6 +83,102 @@ func TestAgentRunStrategyUsesOneCanonicalSessionIDWithoutAlias(t *testing.T) {
 	}
 }
 
+func TestAgentRejectsUnsupportedWorkerProtocolBeforeStartSession(t *testing.T) {
+	for _, version := range []uint32{0, 1, 3} {
+		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
+			starter := &fakeWorkerStarter{}
+			stopper := &fakeWorkerStopper{}
+			sent := make(chan *rwv1.AgentFrame, 2)
+			agent := NewAgent(AgentConfig{
+				RuntimeID:      "rt-1",
+				WorkerStarter:  starter,
+				WorkerStopper:  stopper,
+				StartTimeout:   20 * time.Millisecond,
+				RequestTimeout: 100 * time.Millisecond,
+			})
+			starter.onStart = func(sessionID string) {
+				_ = agent.HandleWorkerFrame(
+					context.Background(),
+					sessionID,
+					&rwv1.WorkerFrame{
+						Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+							SessionId:       sessionID,
+							ProtocolVersion: version,
+						}},
+					},
+					func(frame *rwv1.AgentFrame) error {
+						sent <- frame
+						return nil
+					},
+				)
+			}
+			packed, err := anypb.New(&strategyv1.RunStrategyRequest{
+				PortfolioId: 1,
+				UserId:      6,
+				RuntimeId:   "rt-1",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			frame := agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+				CorrelationId: "corr-protocol",
+				Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+					Method:  "RunStrategy",
+					Request: packed,
+				}},
+			})
+
+			if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+				t.Fatalf("frame = %+v", frame)
+			}
+			if got := frame.GetError().GetCode(); got != "RUNTIME_WORKER_PROTOCOL_UNSUPPORTED" {
+				t.Fatalf("error code = %q", got)
+			}
+			wantMessage := fmt.Sprintf(
+				"runtime worker protocol unsupported: required=2 received=%d",
+				version,
+			)
+			if got := frame.GetError().GetMessage(); got != wantMessage {
+				t.Fatalf("error message = %q, want %q", got, wantMessage)
+			}
+			close(sent)
+			var shutdownSeen bool
+			for outbound := range sent {
+				if outbound.GetStartSession() != nil {
+					t.Fatal("unsupported worker received StartSession")
+				}
+				if shutdown := outbound.GetShutdownWorker(); shutdown != nil {
+					shutdownSeen = true
+					if shutdown.GetSessionId() != starter.startedSessionID ||
+						shutdown.GetReason() != wantMessage {
+						t.Fatalf("shutdown = %+v", shutdown)
+					}
+				}
+			}
+			if !shutdownSeen {
+				t.Fatal("unsupported worker did not receive ShutdownWorker")
+			}
+			if stopper.sessionID != starter.startedSessionID {
+				t.Fatalf(
+					"stopped session = %q, want %q",
+					stopper.sessionID,
+					starter.startedSessionID,
+				)
+			}
+			agent.mu.Lock()
+			defer agent.mu.Unlock()
+			if len(agent.pending) != 0 || len(agent.generations) != 0 {
+				t.Fatalf(
+					"rejected worker state leaked: pending=%d generations=%d",
+					len(agent.pending),
+					len(agent.generations),
+				)
+			}
+		})
+	}
+}
+
 func TestAgentRunStrategyRejectsMismatchedCanonicalSessionID(t *testing.T) {
 	starter := &fakeWorkerStarter{}
 	agent := NewAgent(AgentConfig{
@@ -128,7 +224,9 @@ func TestValidateDependencyFailureIsTypedAndOneShotWorkerIsRemoved(t *testing.T)
 	starter.onStart = func(sessionID string) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
-				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{SessionId: sessionID}},
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+					SessionId: sessionID, ProtocolVersion: RuntimeWorkerProtocolVersion,
+				}},
 			}, nil)
 		}()
 	}
@@ -177,7 +275,9 @@ func TestValidateDeclarationsRoundTripThroughOneShotWorkerAndCleanup(t *testing.
 	starter.onStart = func(sessionID string) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
-				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{SessionId: sessionID}},
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+					SessionId: sessionID, ProtocolVersion: RuntimeWorkerProtocolVersion,
+				}},
 			}, nil)
 		}()
 	}
@@ -915,9 +1015,10 @@ func TestAgentPreviewRunStrategyRunsOneShotWorkerUnary(t *testing.T) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
 				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
-					SessionId: pendingSessionID,
-					Token:     "token",
-					Pid:       123,
+					SessionId:       pendingSessionID,
+					Token:           "token",
+					Pid:             123,
+					ProtocolVersion: RuntimeWorkerProtocolVersion,
 				}},
 			}, nil)
 		}()
@@ -991,7 +1092,9 @@ func TestAgentPreviewRunStrategyWaitsForNaturalManagedCleanup(t *testing.T) {
 	manager.onStart = func(sessionID string) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
-				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{SessionId: sessionID}},
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+					SessionId: sessionID, ProtocolVersion: RuntimeWorkerProtocolVersion,
+				}},
 			}, nil)
 		}()
 	}
@@ -1063,7 +1166,9 @@ func TestAgentPreviewRunStrategyWaitTimeoutStopsOneShotWorker(t *testing.T) {
 	manager.onStart = func(sessionID string) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
-				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{SessionId: sessionID}},
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+					SessionId: sessionID, ProtocolVersion: RuntimeWorkerProtocolVersion,
+				}},
 			}, nil)
 		}()
 	}

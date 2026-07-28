@@ -23,6 +23,9 @@ def _adapt_kline(kline: MarketKline, market: str | None = None) -> MarketData:
         market=resolved_market,
         interval=str(getattr(kline, "interval", "") or "1m").strip(),
         klines={
+            "open_time": kline.open_time,
+            "close_time": kline.close_time,
+            "timestamp": kline.timestamp,
             "open": kline.open,
             "high": kline.high,
             "low": kline.low,

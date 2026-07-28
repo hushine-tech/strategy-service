@@ -29,6 +29,9 @@ def test_adapt_kline_maps_fields():
     assert md.market == "futures"
     assert md.interval == "1m"
     assert md.klines == {
+        "open_time": 1000,
+        "close_time": 60000,
+        "timestamp": 60000,
         "open": 49000.0,
         "high": 51000.0,
         "low": 48000.0,

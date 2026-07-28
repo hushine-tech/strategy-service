@@ -803,7 +803,10 @@ def test_main_path_user_fatal_latches_original_and_disarms_later_callbacks():
     assert instance.market_calls == 1
     assert instance.order_response_calls == 0
     assert instance.order_update_calls == 0
-    assert indicator_calls == []
+    # A fatal user callback still consumes this accepted bar. V2 must emit one
+    # empty frame before latching the fatal error so stream sequence stays
+    # contiguous.
+    assert indicator_calls == [True]
     assert snapshot_calls == []
     assert recovery_calls == []
     assert wallet.on_market_data.call_count == 1
@@ -1176,14 +1179,19 @@ def test_user_runtime_and_callback_logs_are_fixed_and_redacted(tmp_path: Path, c
                 {"warnings": ["indicator-warning-log-canary"]},
             )()
 
-    strategy.on_indicator_frame = callback_failure
+    strategy.on_indicator_frame = None
     strategy.on_order_callback = callback_failure
 
     with caplog.at_level("WARNING"):
         strategy.running_strategy(_md())
         strategy._emit_user_code_recovered()
         strategy._get_strategy().indicators = WarningWriter()
-        strategy._drain_indicator_frame("stream-key-log-canary", 1, 1)
+        strategy.on_indicator_frame = callback_failure
+        with pytest.raises(
+            RuntimeError,
+            match="indicator V2 transport failed",
+        ):
+            strategy._drain_indicator_frame("stream-key-log-canary", 1, 1)
         strategy._notify_order_response(object())
         strategy._notify_order_update(type("Event", (), {"event_id": 8})())
         strategy._notify_order_snapshot()
@@ -1199,7 +1207,7 @@ def test_user_runtime_and_callback_logs_are_fixed_and_redacted(tmp_path: Path, c
         for message in messages
     )
     assert any(message.startswith("STRATEGY_INDICATOR_WARNING ") for message in messages)
-    assert any(
+    assert not any(
         message.startswith("STRATEGY_INDICATOR_CALLBACK_FAILED ")
         for message in messages
     )
@@ -2193,16 +2201,91 @@ def test_strategy_engine_collects_indicator_values_per_bar():
         strategy_code=strategy_code,
     )
     strat.on_indicator_frame = (
-        lambda stream_key, market_time_ms, interval_ms, frame:
-        frames.append((stream_key, market_time_ms, interval_ms, frame))
+        lambda stream_key, sequence, market_time_ms, interval_ms, frame:
+        frames.append((stream_key, sequence, market_time_ms, interval_ms, frame))
     )
 
-    svc.running_strategy(_md(price=1580.2, timestamp=datetime(2026, 6, 1, tzinfo=timezone.utc)))
+    tick = _md(
+        price=1580.2,
+        timestamp=datetime(2026, 6, 1, 0, 0, 59, tzinfo=timezone.utc),
+    )
+    object.__setattr__(tick, "klines", {"open_time": 1_780_272_000_000})
+    svc.running_strategy(tick)
 
     assert frames[0][0] == "binance:perpetual_futures:TESTUSDT:1m"
-    assert frames[0][1] == 1_780_272_000_000
-    assert frames[0][2] == 60_000
-    assert frames[0][3].values == {"alpha_score": 1580.2}
+    assert frames[0][1] == 0
+    assert frames[0][2] == 1_780_272_000_000
+    assert frames[0][3] == 60_000
+    assert frames[0][4].values == {"alpha_score": 1580.2}
+
+
+def test_indicator_sequences_are_contiguous_and_independent_per_stream():
+    frames = []
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [\n'
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT", "interval": "1m"},\n'
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT", "interval": "5m"},\n'
+        "    ]\n"
+        "    ORDER_TARGETS = []\n"
+        '    INDICATORS = {"alpha": {"type": "line", "pane": "strategy"}}\n'
+        "    def on_market_data(self, data, wallet):\n"
+        '        self.indicators.set("alpha", data.price)\n'
+        "        return None\n"
+    )
+    strategy = _create_strategy(
+        StrategyEngine(),
+        "indicator-stream-sequence",
+        _prepare_inline_source(source, filename="<db:indicator-stream-sequence>"),
+        _wallet_with_futures_slot(),
+    )
+    strategy.on_indicator_frame = (
+        lambda stream_key, sequence, *_args:
+        frames.append((stream_key, sequence))
+    )
+
+    strategy.running_strategy(_md(interval="1m"))
+    strategy.running_strategy(_md(interval="5m"))
+    strategy.running_strategy(_md(interval="1m"))
+
+    assert frames == [
+        ("binance:perpetual_futures:TESTUSDT:1m", 0),
+        ("binance:perpetual_futures:TESTUSDT:5m", 0),
+        ("binance:perpetual_futures:TESTUSDT:1m", 1),
+    ]
+
+
+def test_failed_user_callback_discards_partial_indicator_and_emits_empty_frame():
+    frames = []
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "TESTUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        '    INDICATORS = {"alpha": {"type": "line", "pane": "strategy"}}\n'
+        "    def on_market_data(self, data, wallet):\n"
+        '        self.indicators.set("alpha", 99)\n'
+        '        raise RuntimeError("user failure")\n'
+    )
+    strategy = _create_strategy(
+        StrategyEngine(),
+        "indicator-failed-bar",
+        _prepare_inline_source(source, filename="<db:indicator-failed-bar>"),
+        _wallet_with_futures_slot(),
+    )
+    strategy.on_indicator_frame = (
+        lambda stream_key, sequence, market_time_ms, interval_ms, frame:
+        frames.append(
+            (stream_key, sequence, market_time_ms, interval_ms, frame)
+        )
+    )
+
+    with pytest.raises(Exception, match="user strategy on_market_data failed"):
+        strategy.running_strategy(_md())
+
+    assert len(frames) == 1
+    assert frames[0][1] == 0
+    assert frames[0][4].values == {}
+    assert frames[0][4].markers == {}
 
 
 def test_futures_short_signal_closes_one_way_position():

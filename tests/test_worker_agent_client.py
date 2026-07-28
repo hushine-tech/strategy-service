@@ -260,6 +260,7 @@ def test_build_worker_hello_frame_contains_env_identity():
         token="token",
         worker_version="0.1.0",
         pid=123,
+        protocol_version=2,
     )
 
 
@@ -386,7 +387,7 @@ def test_worker_agent_client_dispatches_agent_platform_call():
     assert results[0].ok is True
 
 
-def test_worker_agent_client_sends_indicator_frame_with_definitions():
+def test_worker_agent_client_sends_sparse_indicator_v2_frame_with_definitions():
     client = WorkerAgentClient(
         WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
         stub=_FakeWorkerStub([]),
@@ -403,7 +404,27 @@ def test_worker_agent_client_sends_indicator_frame_with_definitions():
     })()
     frame = type("Frame", (), {
         "values": {"bb_mid": 100.5},
-        "markers": {},
+        "markers": {
+            "trade_signal": [
+                {
+                    "text": "BUY",
+                    "price": 100.0,
+                    "color": "#16a34a",
+                    "position": "belowBar",
+                    "shape": "arrowUp",
+                }
+            ]
+        },
+    })()
+    marker_definition = type("Definition", (), {
+        "key": "trade_signal",
+        "name": "Trades",
+        "type": "marker",
+        "pane": "price",
+        "color": "",
+        "unit": "",
+        "description": "",
+        "config": {},
     })()
 
     client.send_indicator_frame(
@@ -411,20 +432,50 @@ def test_worker_agent_client_sends_indicator_frame_with_definitions():
         user_id=6,
         strategy_id=12,
         stream_key="futures:ZECUSDT:1m",
+        stream_sequence=9,
         market_time_ms=123000,
         interval_ms=60000,
-        definitions=[definition],
+        definitions=[definition, marker_definition],
         frame=frame,
     )
 
     sent = client._outbound.get_nowait()
-    indicator = sent.indicator_frame
+    assert sent.WhichOneof("payload") == "indicator_frame_v2"
+    indicator = sent.indicator_frame_v2
     assert indicator.session_id == "sess-1"
     assert indicator.user_id == 6
     assert indicator.strategy_id == 12
+    assert indicator.stream_sequence == 9
     assert indicator.definitions[0].indicator_key == "bb_mid"
-    assert indicator.values[0].indicator_key == "bb_mid"
-    assert indicator.values[0].value == 100.5
+    assert indicator.samples[0].indicator_key == "bb_mid"
+    assert indicator.samples[0].HasField("scalar_value")
+    assert indicator.samples[0].scalar_value == 100.5
+    assert indicator.samples[1].indicator_key == "trade_signal"
+    assert indicator.samples[1].markers[0].text == "BUY"
+    assert indicator.samples[1].markers[0].HasField("price")
+
+
+def test_worker_agent_client_sends_empty_v2_frame_without_null_samples():
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=_FakeWorkerStub([]),
+    )
+
+    client.send_indicator_frame(
+        session_id="sess-1",
+        user_id=6,
+        strategy_id=12,
+        stream_key="spot:BTCUSDT:1m",
+        stream_sequence=3,
+        market_time_ms=240_000,
+        interval_ms=60_000,
+        definitions=[],
+        frame=type("Frame", (), {"values": {}, "markers": {}})(),
+    )
+
+    indicator = client._outbound.get_nowait().indicator_frame_v2
+    assert indicator.stream_sequence == 3
+    assert len(indicator.samples) == 0
 
 
 class _FakeWorkerStub:

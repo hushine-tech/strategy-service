@@ -2664,26 +2664,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if not strategies:
             return lambda: None
 
-        try:
-            portfolio_client = self._portfolio_client()
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "STRATEGY_INDICATOR_CLIENT_UNAVAILABLE session=%s strategy_id=%s",
-                session_id,
-                int(getattr(state, "strategy_id", 0) or 0),
-            )
-            return lambda: None
-
         user_id = int(getattr(request, "user_id", 0) or getattr(state, "user_id", 0) or 0)
         sink = self._indicator_frame_sink
         if callable(sink):
-            flushers: list[Callable[[], None]] = []
             for strategy in strategies:
                 definitions = list(getattr(strategy, "indicator_definitions", []) or [])
                 definition_streams_sent: set[str] = set()
 
                 def on_frame(
                     stream_key: str,
+                    stream_sequence: int,
                     market_time_ms: int,
                     interval_ms: int,
                     frame,
@@ -2693,27 +2683,40 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 ) -> None:
                     definition_payload = []
                     if stream_key not in definition_streams_sent:
+                        if stream_sequence != 0:
+                            raise RuntimeError(
+                                "first indicator V2 frame must have sequence zero"
+                            )
                         definition_payload = [replace(definition, stream_key=stream_key) for definition in definitions]
+                    elif stream_sequence == 0:
+                        raise RuntimeError(
+                            "indicator V2 sequence zero was already sent"
+                        )
+                    sink(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=int(getattr(state, "strategy_id", 0) or 0),
+                        stream_key=stream_key,
+                        stream_sequence=stream_sequence,
+                        market_time_ms=market_time_ms,
+                        interval_ms=interval_ms,
+                        definitions=definition_payload,
+                        frame=frame,
+                    )
+                    if definition_payload:
                         definition_streams_sent.add(stream_key)
-                    try:
-                        sink(
-                            session_id=session_id,
-                            user_id=user_id,
-                            strategy_id=int(getattr(state, "strategy_id", 0) or 0),
-                            stream_key=stream_key,
-                            market_time_ms=market_time_ms,
-                            interval_ms=interval_ms,
-                            definitions=definition_payload,
-                            frame=frame,
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "STRATEGY_INDICATOR_SINK_FAILED session=%s strategy_id=%s",
-                            session_id,
-                            int(getattr(state, "strategy_id", 0) or 0),
-                        )
 
                 strategy.on_indicator_frame = on_frame
+            return lambda: None
+
+        try:
+            portfolio_client = self._portfolio_client()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "STRATEGY_INDICATOR_CLIENT_UNAVAILABLE session=%s strategy_id=%s",
+                session_id,
+                int(getattr(state, "strategy_id", 0) or 0),
+            )
             return lambda: None
 
         flushers: list[Callable[[], None]] = []
@@ -2750,6 +2753,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
             def on_frame(
                 stream_key: str,
+                stream_sequence: int,
                 market_time_ms: int,
                 interval_ms: int,
                 frame,
@@ -2758,6 +2762,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 buffer=buffer,
                 definition_streams_saved=definition_streams_saved,
             ) -> None:
+                del stream_sequence
                 if stream_key not in definition_streams_saved:
                     save_payload(
                         definitions=[replace(definition, stream_key=stream_key) for definition in definitions],

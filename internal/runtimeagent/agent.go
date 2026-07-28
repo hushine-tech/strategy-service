@@ -18,6 +18,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+const RuntimeWorkerProtocolVersion uint32 = 2
+
 type WorkerStarter interface {
 	StartSessionWorker(ctx context.Context, sessionID string, extraEnv []string) (*ManagedWorker, error)
 }
@@ -233,9 +235,10 @@ func (g *workerGeneration) markConnected() bool {
 }
 
 type pendingSessionStart struct {
-	started chan string
-	failed  chan *RuntimeRequestError
-	start   *rwv1.StartSession
+	started  chan string
+	failed   chan *RuntimeRequestError
+	start    *rwv1.StartSession
+	rejected *RuntimeRequestError
 }
 
 func NewAgent(cfg AgentConfig) *Agent {
@@ -1068,6 +1071,43 @@ func (a *Agent) handleWorkerFrameForGeneration(
 ) error {
 	switch frame.GetPayload().(type) {
 	case *rwv1.WorkerFrame_Hello:
+		hello := frame.GetHello()
+		gotProtocolVersion := hello.GetProtocolVersion()
+		a.mu.Lock()
+		pending := a.pending[workerSessionID]
+		if pending != nil && pending.rejected == nil &&
+			gotProtocolVersion != RuntimeWorkerProtocolVersion {
+			pending.rejected = &RuntimeRequestError{
+				Code: "RUNTIME_WORKER_PROTOCOL_UNSUPPORTED",
+				Message: fmt.Sprintf(
+					"runtime worker protocol unsupported: required=%d received=%d",
+					RuntimeWorkerProtocolVersion,
+					gotProtocolVersion,
+				),
+			}
+		}
+		rejection := (*RuntimeRequestError)(nil)
+		if pending != nil {
+			rejection = pending.rejected
+		}
+		a.mu.Unlock()
+		if rejection != nil {
+			select {
+			case pending.failed <- rejection:
+			default:
+			}
+			if send != nil {
+				_ = send(&rwv1.AgentFrame{
+					Payload: &rwv1.AgentFrame_ShutdownWorker{
+						ShutdownWorker: &rwv1.ShutdownWorker{
+							SessionId: workerSessionID,
+							Reason:    rejection.Message,
+						},
+					},
+				})
+			}
+			return nil
+		}
 		a.mu.Lock()
 		ready := a.ready[workerSessionID]
 		a.mu.Unlock()
@@ -1077,9 +1117,6 @@ func (a *Agent) handleWorkerFrameForGeneration(
 			default:
 			}
 		}
-		a.mu.Lock()
-		pending := a.pending[workerSessionID]
-		a.mu.Unlock()
 		if pending != nil && send != nil {
 			return send(&rwv1.AgentFrame{
 				Payload: &rwv1.AgentFrame_StartSession{StartSession: pending.start},
@@ -1103,7 +1140,11 @@ func (a *Agent) handleWorkerFrameForGeneration(
 		statusValue := strings.TrimSpace(strings.ToLower(progress.GetStatus()))
 		a.mu.Lock()
 		pending := a.pending[workerSessionID]
+		rejected := pending != nil && pending.rejected != nil
 		a.mu.Unlock()
+		if rejected {
+			return nil
+		}
 		if pending != nil && isSessionStartFailureStatus(statusValue) {
 			message := strings.TrimSpace(progress.GetError())
 			if message == "" {
