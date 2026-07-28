@@ -44,6 +44,11 @@ from tests.helpers.order_client import FilledOrderClient
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
+def test_indicator_interval_preserves_binance_month_case() -> None:
+    assert strategy_base._interval_to_ms("1m") == 60_000
+    assert strategy_base._interval_to_ms("1M") == 30 * 24 * 60 * 60_000
+
+
 def _prepare_source(
     strategy_path: str,
     strategy_code: str | None = None,

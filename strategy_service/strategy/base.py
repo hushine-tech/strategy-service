@@ -97,8 +97,9 @@ _INTERVAL_MS = {
     "1h": 3_600_000,
     "1d": 86_400_000,
     "1w": 604_800_000,
+    "1M": 2_592_000_000,
 }
-_INTERVAL_RE = re.compile(r"^(\d+)([smhdw])$")
+_INTERVAL_RE = re.compile(r"^(\d+)([smhdwM])$")
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -129,7 +130,7 @@ def _norm_interval(interval: str) -> str:
 
 
 def _interval_to_ms(interval: str) -> int:
-    raw = _norm_interval(interval).lower()
+    raw = _norm_interval(interval)
     if raw in _INTERVAL_MS:
         return _INTERVAL_MS[raw]
     match = _INTERVAL_RE.match(raw)
@@ -143,6 +144,7 @@ def _interval_to_ms(interval: str) -> int:
         "h": 3_600_000,
         "d": 86_400_000,
         "w": 604_800_000,
+        "M": 2_592_000_000,
     }[unit]
     return qty * unit_ms
 
