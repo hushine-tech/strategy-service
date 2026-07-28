@@ -133,7 +133,7 @@ class MyStrategy:
             indicators.set("bb_upper", None)
             indicators.set("bb_middle", price)
             indicators.set("bb_lower", None)
-        indicators.set("bb_width_bps", None)
+            indicators.set("bb_width_bps", None)
         change_bps = float(change) * 10000.0
         indicators.set("price_change_histogram_bps", change_bps)
 

@@ -90,8 +90,9 @@ func ResolveWorkerLaunchSpec(
 	argsPrefix = append(argsPrefix, cfg.PythonArgsPrefix...)
 
 	values := map[string]string{
-		"PYTHONUNBUFFERED":        "1",
-		"PYTHONDONTWRITEBYTECODE": "1",
+		"GRPC_ENABLE_FORK_SUPPORT": "0",
+		"PYTHONUNBUFFERED":         "1",
+		"PYTHONDONTWRITEBYTECODE":  "1",
 	}
 	platformValues, err := trustedWorkerPlatformEnvironment(executable)
 	if err != nil {

@@ -28,6 +28,10 @@ type WorkerStopper interface {
 	StopSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error
 }
 
+type WorkerStopAll interface {
+	StopAll(ctx context.Context, timeout time.Duration) error
+}
+
 type WorkerExitWaiter interface {
 	WaitSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error
 }
@@ -62,6 +66,7 @@ type AgentConfig struct {
 	RuntimeSource            string
 	RuntimeName              string
 	UserID                   int64
+	StateRoot                string
 	WorkerStarter            WorkerStarter
 	WorkerStopper            WorkerStopper
 	PlatformInvoker          PlatformInvoker
@@ -83,11 +88,21 @@ type Agent struct {
 	generations       map[string]*workerGeneration
 	pending           map[string]*pendingSessionStart
 	ready             map[string]chan struct{}
+	readyFailures     map[string]chan *RuntimeRequestError
 	workerCallReply   map[string]chan *rwv1.PlatformCallResult
 	workerCallSession map[string]string
 	runRequests       map[string]*anypb.Any
 	restartCalls      map[string]*restartSessionCall
+	shuttingDown      bool
+	shutdownRunning   bool
+	shutdownDone      chan struct{}
+	shutdownErr       error
 	indicatorSync     *IndicatorSyncManager
+	retryMu           sync.Mutex
+	retryStore        *TerminalRetryStore
+	terminalRetries   map[string]TerminalRetryRecord
+	retryClaims       map[string]struct{}
+	retryInitErr      error
 }
 
 type restartSessionCall struct {
@@ -100,6 +115,7 @@ type workerGeneration struct {
 	sessionID  string
 	generation uint64
 
+	lifecycleMu        sync.Mutex
 	mu                 sync.Mutex
 	closing            bool
 	inFlight           int
@@ -112,9 +128,11 @@ type workerGeneration struct {
 	explicitStopAck    bool
 	explicitStopStatus string
 	cleanupRunning     bool
+	cleanupComplete    bool
 	cleanupDone        chan struct{}
 	cleanupErr         error
 	authGeneration     uint64
+	protocolFailure    string
 }
 
 func newWorkerGeneration(sessionID string, generation uint64) *workerGeneration {
@@ -165,6 +183,11 @@ func (g *workerGeneration) beginCleanup() (bool, <-chan struct{}) {
 	if g.inFlight == 0 {
 		g.drainOnce.Do(func() { close(g.drained) })
 	}
+	if g.cleanupComplete {
+		done := make(chan struct{})
+		close(done)
+		return false, done
+	}
 	if g.cleanupRunning {
 		return false, g.cleanupDone
 	}
@@ -178,6 +201,7 @@ func (g *workerGeneration) finishCleanup(err error) {
 	g.mu.Lock()
 	g.cleanupErr = err
 	g.cleanupRunning = false
+	g.cleanupComplete = err == nil
 	done := g.cleanupDone
 	g.cleanupDone = nil
 	g.mu.Unlock()
@@ -221,6 +245,35 @@ func (g *workerGeneration) acceptRunning() bool {
 	return true
 }
 
+func (g *workerGeneration) closeAdmission(reason string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.closing = true
+	if strings.TrimSpace(reason) != "" && g.protocolFailure == "" {
+		g.protocolFailure = strings.TrimSpace(reason)
+	}
+	if g.inFlight == 0 {
+		g.drainOnce.Do(func() { close(g.drained) })
+	}
+	g.mu.Unlock()
+}
+
+func (g *workerGeneration) closeAdmissionForExpectedStop(status string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.closing = true
+	g.explicitStopAck = true
+	g.explicitStopStatus = strings.TrimSpace(strings.ToLower(status))
+	if g.inFlight == 0 {
+		g.drainOnce.Do(func() { close(g.drained) })
+	}
+	g.mu.Unlock()
+}
+
 func (g *workerGeneration) markConnected() bool {
 	if g == nil {
 		return false
@@ -253,10 +306,13 @@ func NewAgent(cfg AgentConfig) *Agent {
 		generations:       map[string]*workerGeneration{},
 		pending:           map[string]*pendingSessionStart{},
 		ready:             map[string]chan struct{}{},
+		readyFailures:     map[string]chan *RuntimeRequestError{},
 		workerCallReply:   map[string]chan *rwv1.PlatformCallResult{},
 		workerCallSession: map[string]string{},
 		runRequests:       map[string]*anypb.Any{},
 		restartCalls:      map[string]*restartSessionCall{},
+		terminalRetries:   map[string]TerminalRetryRecord{},
+		retryClaims:       map[string]struct{}{},
 	}
 	agent.indicatorSync = NewIndicatorSyncManager(IndicatorSyncConfig{
 		PlatformInvoker: cfg.PlatformInvoker,
@@ -267,6 +323,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 		RetryInitial:    cfg.IndicatorRetryInitial,
 		RetryMax:        cfg.IndicatorRetryMax,
 	})
+	agent.initializeTerminalRetries()
 	return agent
 }
 
@@ -293,6 +350,23 @@ func (a *Agent) SetWorkerSender(sender WorkerSender) {
 }
 
 func (a *Agent) HandleRuntimeRequest(ctx context.Context, frame *cpv1.RuntimeFrame) *cpv1.RuntimeFrame {
+	if err := a.RetryInitializationError(); err != nil {
+		return runtimeErrorFrame(
+			frame.GetCorrelationId(),
+			"FailedPrecondition",
+			"runtime terminal retry state is invalid: "+err.Error(),
+		)
+	}
+	a.mu.Lock()
+	shuttingDown := a.shuttingDown
+	a.mu.Unlock()
+	if shuttingDown {
+		return runtimeErrorFrame(
+			frame.GetCorrelationId(),
+			"Unavailable",
+			"runtime Agent is shutting down",
+		)
+	}
 	req := frame.GetRequest()
 	if req == nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "InvalidArgument", "runtime request payload is empty")
@@ -321,7 +395,14 @@ func (a *Agent) handleRunStrategy(
 	if a.cfg.WorkerStarter == nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", "worker starter is not configured")
 	}
-	sessionID, generation := a.reserveWorkerGeneration()
+	sessionID, generation, err := a.reserveWorkerGeneration()
+	if err != nil {
+		return runtimeErrorFrame(
+			frame.GetCorrelationId(),
+			"Unavailable",
+			err.Error(),
+		)
+	}
 	runtimeID := strings.TrimSpace(runReq.GetRuntimeId())
 	if runtimeID == "" {
 		runtimeID = strings.TrimSpace(a.cfg.RuntimeID)
@@ -414,9 +495,16 @@ func (a *Agent) watchWorkerGeneration(
 	}()
 }
 
-func (a *Agent) reserveWorkerGeneration() (string, *workerGeneration) {
+func (a *Agent) reserveWorkerGeneration() (
+	string,
+	*workerGeneration,
+	error,
+) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.shuttingDown {
+		return "", nil, fmt.Errorf("runtime Agent is shutting down")
+	}
 	for {
 		sessionID := mustRandomToken()[:32]
 		if _, exists := a.generations[sessionID]; exists {
@@ -425,7 +513,7 @@ func (a *Agent) reserveWorkerGeneration() (string, *workerGeneration) {
 		a.nextGeneration++
 		generation := newWorkerGeneration(sessionID, a.nextGeneration)
 		a.generations[sessionID] = generation
-		return sessionID, generation
+		return sessionID, generation, nil
 	}
 }
 
@@ -439,15 +527,18 @@ func (a *Agent) forgetWorkerGeneration(sessionID string, generation *workerGener
 	return true
 }
 
-func (a *Agent) beginSessionRestart(sessionID string) (*restartSessionCall, bool) {
+func (a *Agent) beginSessionRestart(sessionID string) (*restartSessionCall, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.shuttingDown {
+		return nil, false, fmt.Errorf("runtime Agent is shutting down")
+	}
 	if call := a.restartCalls[sessionID]; call != nil {
-		return call, false
+		return call, false, nil
 	}
 	call := &restartSessionCall{done: make(chan struct{})}
 	a.restartCalls[sessionID] = call
-	return call, true
+	return call, true, nil
 }
 
 func (a *Agent) finishSessionRestart(
@@ -467,6 +558,14 @@ func (a *Agent) finishSessionRestart(
 }
 
 func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) (result RestartSessionResult, returnErr error) {
+	a.mu.Lock()
+	shuttingDown := a.shuttingDown
+	a.mu.Unlock()
+	if shuttingDown {
+		return RestartSessionResult{}, fmt.Errorf(
+			"runtime Agent is shutting down",
+		)
+	}
 	if a.cfg.PlatformInvoker == nil {
 		return RestartSessionResult{}, fmt.Errorf("platform invoker is not configured")
 	}
@@ -509,7 +608,10 @@ func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) 
 		runReq.Leverage = leverage
 	}
 
-	restartCall, restartOwner := a.beginSessionRestart(oldSessionID)
+	restartCall, restartOwner, err := a.beginSessionRestart(oldSessionID)
+	if err != nil {
+		return RestartSessionResult{}, err
+	}
 	if !restartOwner {
 		select {
 		case <-restartCall.done:
@@ -539,10 +641,19 @@ func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) 
 				return RestartSessionResult{}, ctx.Err()
 			}
 		} else {
+			restartGeneration.lifecycleMu.Lock()
+			defer restartGeneration.lifecycleMu.Unlock()
 			ownsGenerationCleanup = true
 			defer func() {
 				if ownsGenerationCleanup {
 					restartGeneration.finishCleanup(returnErr)
+					if returnErr != nil {
+						a.scheduleWorkerGenerationCleanup(
+							oldSessionID,
+							restartGeneration,
+							"bare debug worker restart retry",
+						)
+					}
 				}
 			}()
 		}
@@ -563,20 +674,60 @@ func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) 
 		case <-restartGeneration.drained:
 		case <-drainCtx.Done():
 			reason := "bare debug worker restart drain failed: " + drainCtx.Err().Error()
-			if markErr := a.markSessionRecoverable(ctx, session, runtimeID, reason); markErr != nil {
-				return RestartSessionResult{}, fmt.Errorf("%s; mark session recoverable: %w", reason, markErr)
-			}
-			return RestartSessionResult{}, errors.New(reason)
+			markErr := a.markSessionRecoverable(
+				ctx,
+				session,
+				runtimeID,
+				reason,
+				true,
+			)
+			retryErr := a.checkpointTerminalRetry(
+				TerminalRequest{
+					SessionID:     oldSessionID,
+					Status:        "recoverable",
+					BarsProcessed: int64(session.GetBarsProcessed()),
+					Error:         reason,
+				},
+				restartGeneration.generation,
+				"recoverable",
+				reason,
+			)
+			return RestartSessionResult{}, errors.Join(
+				errors.New(reason),
+				markErr,
+				retryErr,
+			)
 		}
 	}
 	if err := a.indicatorSync.FinalizeSession(ctx, oldSessionID); err != nil {
 		reason := "bare debug worker restart indicator finalization failed: " + err.Error()
-		if markErr := a.markSessionRecoverable(ctx, session, runtimeID, reason); markErr != nil {
+		if markErr := a.markSessionRecoverable(ctx, session, runtimeID, reason, true); markErr != nil {
 			return RestartSessionResult{}, fmt.Errorf("%s; mark session recoverable: %w", reason, markErr)
+		}
+		generationNumber := uint64(0)
+		if restartGeneration != nil {
+			generationNumber = restartGeneration.generation
+		}
+		if retryErr := a.checkpointTerminalRetry(
+			TerminalRequest{
+				SessionID:     oldSessionID,
+				Status:        "recoverable",
+				BarsProcessed: int64(session.GetBarsProcessed()),
+				Error:         reason,
+			},
+			generationNumber,
+			"recoverable",
+			reason,
+		); retryErr != nil {
+			return RestartSessionResult{}, fmt.Errorf(
+				"%s; checkpoint retry: %w",
+				reason,
+				retryErr,
+			)
 		}
 		return RestartSessionResult{}, errors.New(reason)
 	}
-	if err := a.markSessionRecoverable(ctx, session, runtimeID, "bare debug worker restarted locally"); err != nil {
+	if err := a.markSessionRecoverable(ctx, session, runtimeID, "bare debug worker restarted locally", false); err != nil {
 		return RestartSessionResult{}, err
 	}
 	if ownsGenerationCleanup {
@@ -617,6 +768,127 @@ func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) 
 		NewSessionID: resp.GetSessionId(),
 		RuntimeID:    runtimeID,
 	}, nil
+}
+
+// Shutdown is the single owner of worker shutdown. RuntimeChannel and worker
+// IPC must remain available while this method runs so worker disconnect
+// reconciliation can either finish remotely or persist an exact retry record.
+func (a *Agent) Shutdown(
+	ctx context.Context,
+	workerTimeout time.Duration,
+) error {
+	if a == nil {
+		return fmt.Errorf("runtime Agent is nil")
+	}
+	a.mu.Lock()
+	a.shuttingDown = true
+	if a.shutdownRunning {
+		done := a.shutdownDone
+		a.mu.Unlock()
+		select {
+		case <-done:
+			a.mu.Lock()
+			err := a.shutdownErr
+			a.mu.Unlock()
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if a.shutdownDone != nil {
+		err := a.shutdownErr
+		a.mu.Unlock()
+		return err
+	}
+	a.shutdownRunning = true
+	a.shutdownDone = make(chan struct{})
+	done := a.shutdownDone
+	a.mu.Unlock()
+
+	shutdownErr := a.shutdownWorkerGenerations(ctx, workerTimeout)
+
+	a.mu.Lock()
+	a.shutdownErr = shutdownErr
+	a.shutdownRunning = false
+	close(done)
+	if shutdownErr != nil {
+		// A failed shutdown did not grant the process permission to tear down
+		// RuntimeChannel or worker IPC. Keep rejecting new work, but allow the
+		// lifecycle owner to retry the incomplete terminal operations.
+		a.shutdownDone = nil
+	}
+	a.mu.Unlock()
+	return shutdownErr
+}
+
+func (a *Agent) shutdownWorkerGenerations(
+	ctx context.Context,
+	workerTimeout time.Duration,
+) error {
+	if workerTimeout <= 0 {
+		workerTimeout = 5 * time.Second
+	}
+	var shutdownErrors []error
+
+	a.mu.Lock()
+	generations := make(map[string]*workerGeneration, len(a.generations))
+	for sessionID, generation := range a.generations {
+		generations[sessionID] = generation
+		generation.closeAdmissionForExpectedStop("recoverable")
+	}
+	a.mu.Unlock()
+
+	if stopAll, ok := a.cfg.WorkerStopper.(WorkerStopAll); ok {
+		if err := stopAll.StopAll(ctx, workerTimeout); err != nil {
+			shutdownErrors = append(
+				shutdownErrors,
+				fmt.Errorf("stop all session workers: %w", err),
+			)
+		}
+	}
+
+	for sessionID, generation := range generations {
+		if ctx.Err() != nil {
+			shutdownErrors = append(shutdownErrors, ctx.Err())
+			break
+		}
+		a.mu.Lock()
+		current := a.generations[sessionID]
+		a.mu.Unlock()
+		if current != generation {
+			continue
+		}
+		err := a.cleanupWorkerGenerationWithContext(
+			ctx,
+			sessionID,
+			generation,
+			"runtime Agent shutting down",
+		)
+		if err == nil {
+			continue
+		}
+		if a.hasDurableTerminalRetry(
+			sessionID,
+			generation.generation,
+		) {
+			if a.forgetWorkerGeneration(sessionID, generation) {
+				a.cleanupSessionState(
+					sessionID,
+					"runtime Agent persisted terminal retry",
+				)
+			}
+			continue
+		}
+		shutdownErrors = append(
+			shutdownErrors,
+			fmt.Errorf(
+				"shutdown session %s: %w",
+				sessionID,
+				err,
+			),
+		)
+	}
+	return errors.Join(shutdownErrors...)
 }
 
 func (a *Agent) resolveRestartSession(ctx context.Context, opts RestartSessionOptions) (*portfoliov1.StrategySessionEntry, error) {
@@ -665,17 +937,19 @@ func (a *Agent) markSessionRecoverable(
 	session *portfoliov1.StrategySessionEntry,
 	runtimeID string,
 	reason string,
+	indicatorFinalizationPending bool,
 ) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "bare debug worker restarted locally"
 	}
 	req := &portfoliov1.UpdateSessionRequest{
-		SessionId:     session.GetSessionId(),
-		Status:        "recoverable",
-		BarsProcessed: session.GetBarsProcessed(),
-		Error:         reason,
-		RuntimeId:     runtimeID,
+		SessionId:                    session.GetSessionId(),
+		Status:                       "recoverable",
+		BarsProcessed:                session.GetBarsProcessed(),
+		Error:                        reason,
+		RuntimeId:                    runtimeID,
+		IndicatorFinalizationPending: &indicatorFinalizationPending,
 	}
 	var resp portfoliov1.UpdateSessionResponse
 	return a.invokePlatformProto(ctx, "portfolio.UpdateSession", req, &resp)
@@ -711,6 +985,7 @@ func (a *Agent) cleanupSessionState(sessionID string, reason string) {
 	a.mu.Lock()
 	delete(a.pending, sessionID)
 	delete(a.ready, sessionID)
+	delete(a.readyFailures, sessionID)
 	delete(a.runRequests, sessionID)
 	for callID, callSessionID := range a.workerCallSession {
 		if callSessionID != sessionID {
@@ -764,29 +1039,94 @@ func (a *Agent) cleanupWorkerGeneration(
 	generation *workerGeneration,
 	reason string,
 ) error {
+	return a.cleanupWorkerGenerationWithContext(
+		context.Background(),
+		sessionID,
+		generation,
+		reason,
+	)
+}
+
+func (a *Agent) cleanupWorkerGenerationWithContext(
+	parent context.Context,
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) error {
+	if parent == nil {
+		parent = context.Background()
+	}
 	owner, done := generation.beginCleanup()
 	if !owner {
 		if done != nil {
-			<-done
+			select {
+			case <-done:
+			case <-parent.Done():
+				return parent.Err()
+			}
 		}
 		return generation.cleanupResult()
 	}
+	generation.lifecycleMu.Lock()
+	defer generation.lifecycleMu.Unlock()
 	timeout := a.cfg.RequestTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	var cleanupErr error
 	select {
 	case <-generation.drained:
 		if err := a.indicatorSync.FinalizeSession(ctx, sessionID); err != nil {
 			cleanupErr = fmt.Errorf("finalize worker generation indicators: %w", err)
+			cleanupErr = errors.Join(
+				cleanupErr,
+				a.retainWorkerGenerationFinalizationFailure(
+					parent,
+					sessionID,
+					generation,
+					cleanupErr.Error(),
+				),
+			)
 		} else {
-			cleanupErr = a.reconcileWorkerGeneration(ctx, sessionID, generation, reason)
+			if retry, exists := a.terminalRetryRecord(
+				sessionID,
+				generation.generation,
+			); exists {
+				cleanupErr = a.retryTerminalSessionWithinLifecycle(
+					ctx,
+					retry,
+				)
+			} else {
+				cleanupErr = a.reconcileWorkerGeneration(
+					ctx,
+					sessionID,
+					generation,
+					reason,
+				)
+			}
+			if cleanupErr == nil {
+				cleanupErr = a.deleteTerminalRetry(
+					sessionID,
+					generation.generation,
+				)
+			}
 		}
 	case <-ctx.Done():
-		cleanupErr = fmt.Errorf("drain worker generation platform calls: %w", ctx.Err())
+		drainErr := fmt.Errorf(
+			"drain worker generation platform calls: %w",
+			ctx.Err(),
+		)
+		cleanupErr = errors.Join(
+			drainErr,
+			a.retainWorkerGenerationFinalizationFailure(
+				parent,
+				sessionID,
+				generation,
+				drainErr.Error(),
+			),
+		)
 	}
 	if cleanupErr == nil && a.cfg.WorkerStopper != nil {
 		cleanupErr = a.cfg.WorkerStopper.StopSessionWorker(ctx, sessionID, timeout)
@@ -833,6 +1173,7 @@ func (a *Agent) reconcileWorkerGeneration(
 	terminalAcknowledged := generation.terminalAck
 	explicitStopAcknowledged := generation.explicitStopAck
 	explicitStopStatus := generation.explicitStopStatus
+	protocolFailure := generation.protocolFailure
 	generation.mu.Unlock()
 	if terminalAcknowledged || !durablePossible {
 		return nil
@@ -866,6 +1207,21 @@ func (a *Agent) reconcileWorkerGeneration(
 	statusValue := strings.TrimSpace(strings.ToLower(session.GetStatus()))
 	switch statusValue {
 	case "finished", "stopped", "failed", "stop_failed", "recoverable":
+		if session.GetIndicatorFinalizationPending() {
+			pending := false
+			request := TerminalRequest{
+				SessionID:                    sessionID,
+				Status:                       statusValue,
+				BarsProcessed:                int64(session.GetBarsProcessed()),
+				Error:                        session.GetError(),
+				IndicatorFinalizationPending: &pending,
+			}
+			return a.updateReconciledTerminalSession(
+				ctx,
+				generation,
+				request,
+			)
+		}
 		return nil
 	case "pending", "running", "stopping":
 		message := strings.TrimSpace(reason)
@@ -873,17 +1229,66 @@ func (a *Agent) reconcileWorkerGeneration(
 			message = "session worker disconnected"
 		}
 		targetStatus := "failed"
-		if explicitStopAcknowledged && statusValue != "pending" {
+		if statusValue != "pending" {
+			// Once a Session reached an externally active state, losing its
+			// worker without an acknowledged FinalStatus is an infrastructure
+			// interruption. Preserve it for an explicit resume instead of
+			// misreporting a user-strategy failure.
+			targetStatus = "recoverable"
+		}
+		if protocolFailure != "" {
+			targetStatus = "recoverable"
+			message = protocolFailure
+		} else if explicitStopAcknowledged {
 			targetStatus = strings.TrimSpace(strings.ToLower(explicitStopStatus))
 			if targetStatus == "" {
 				targetStatus = "stopped"
 			}
 			message = ""
 		}
-		return a.updateSession(ctx, sessionID, targetStatus, int64(session.GetBarsProcessed()), message)
+		pending := false
+		return a.updateReconciledTerminalSession(
+			ctx,
+			generation,
+			TerminalRequest{
+				SessionID:                    sessionID,
+				Status:                       targetStatus,
+				BarsProcessed:                int64(session.GetBarsProcessed()),
+				Error:                        message,
+				IndicatorFinalizationPending: &pending,
+			},
+		)
 	default:
 		return fmt.Errorf("cannot reconcile session %s from status %q", sessionID, session.GetStatus())
 	}
+}
+
+func (a *Agent) updateReconciledTerminalSession(
+	ctx context.Context,
+	generation *workerGeneration,
+	request TerminalRequest,
+) error {
+	err := a.updateSessionWithIndicatorFinalization(
+		ctx,
+		request.SessionID,
+		request.Status,
+		request.BarsProcessed,
+		request.Error,
+		request.IndicatorFinalizationPending,
+	)
+	if err == nil {
+		return nil
+	}
+	if generation == nil {
+		return err
+	}
+	checkpointErr := a.checkpointTerminalRetry(
+		request,
+		generation.generation,
+		request.Status,
+		request.Error,
+	)
+	return errors.Join(err, checkpointErr)
 }
 
 func isExplicitPlatformNotFound(err error) bool {
@@ -910,12 +1315,15 @@ func (a *Agent) handleOneShotRuntimeUnary(
 	}
 	pendingID := "control-" + mustRandomToken()[:16]
 	ready := make(chan struct{}, 1)
+	failed := make(chan *RuntimeRequestError, 1)
 	a.mu.Lock()
 	a.ready[pendingID] = ready
+	a.readyFailures[pendingID] = failed
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
 		delete(a.ready, pendingID)
+		delete(a.readyFailures, pendingID)
 		a.mu.Unlock()
 	}()
 
@@ -929,8 +1337,8 @@ func (a *Agent) handleOneShotRuntimeUnary(
 			a.cleanupOneShotWorker(pendingID, a.timeoutForFrame(frame))
 		}
 	}()
-	if err := a.waitWorkerReady(ctx, ready, worker, a.timeoutForFrame(frame)); err != nil {
-		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+	if err := a.waitWorkerReady(ctx, ready, failed, worker, a.timeoutForFrame(frame)); err != nil {
+		return runtimeRequestErrorFrame(frame.GetCorrelationId(), err)
 	}
 	resp, err := a.invokeWorkerUnary(ctx, pendingID, req.GetMethod(), req.GetRequest(), a.timeoutForFrame(frame))
 	if err != nil {
@@ -1059,13 +1467,30 @@ func (a *Agent) HandleWorkerFrame(
 	a.mu.Lock()
 	generation := a.generations[strings.TrimSpace(workerSessionID)]
 	a.mu.Unlock()
-	return a.handleWorkerFrameForGeneration(ctx, workerSessionID, generation, frame, send)
+	identity := WorkerIdentity{SessionID: strings.TrimSpace(workerSessionID)}
+	if generation != nil {
+		generation.mu.Lock()
+		identity.Generation = generation.authGeneration
+		if identity.Generation == 0 {
+			identity.Generation = generation.generation
+		}
+		generation.mu.Unlock()
+	}
+	return a.handleWorkerFrameForGeneration(
+		ctx,
+		workerSessionID,
+		generation,
+		identity,
+		frame,
+		send,
+	)
 }
 
 func (a *Agent) handleWorkerFrameForGeneration(
 	ctx context.Context,
 	workerSessionID string,
 	generation *workerGeneration,
+	identity WorkerIdentity,
 	frame *rwv1.WorkerFrame,
 	send func(*rwv1.AgentFrame) error,
 ) error {
@@ -1075,6 +1500,7 @@ func (a *Agent) handleWorkerFrameForGeneration(
 		gotProtocolVersion := hello.GetProtocolVersion()
 		a.mu.Lock()
 		pending := a.pending[workerSessionID]
+		oneShotFailure := a.readyFailures[workerSessionID]
 		if pending != nil && pending.rejected == nil &&
 			gotProtocolVersion != RuntimeWorkerProtocolVersion {
 			pending.rejected = &RuntimeRequestError{
@@ -1089,12 +1515,29 @@ func (a *Agent) handleWorkerFrameForGeneration(
 		rejection := (*RuntimeRequestError)(nil)
 		if pending != nil {
 			rejection = pending.rejected
+		} else if oneShotFailure != nil &&
+			gotProtocolVersion != RuntimeWorkerProtocolVersion {
+			rejection = &RuntimeRequestError{
+				Code: "RUNTIME_WORKER_PROTOCOL_UNSUPPORTED",
+				Message: fmt.Sprintf(
+					"runtime worker protocol unsupported: required=%d received=%d",
+					RuntimeWorkerProtocolVersion,
+					gotProtocolVersion,
+				),
+			}
 		}
 		a.mu.Unlock()
 		if rejection != nil {
-			select {
-			case pending.failed <- rejection:
-			default:
+			if pending != nil {
+				select {
+				case pending.failed <- rejection:
+				default:
+				}
+			} else if oneShotFailure != nil {
+				select {
+				case oneShotFailure <- rejection:
+				default:
+				}
 			}
 			if send != nil {
 				_ = send(&rwv1.AgentFrame{
@@ -1211,17 +1654,74 @@ func (a *Agent) handleWorkerFrameForGeneration(
 			defer generation.completePlatformCall()
 		}
 		return a.indicatorSync.ReceiveFrame(frame.GetIndicatorFrame())
+	case *rwv1.WorkerFrame_IndicatorFrameV2:
+		indicatorFrame := frame.GetIndicatorFrameV2()
+		if generation == nil {
+			return fmt.Errorf(
+				"indicator V2 frame requires an authenticated worker generation",
+			)
+		}
+		if strings.TrimSpace(indicatorFrame.GetSessionId()) !=
+			strings.TrimSpace(workerSessionID) {
+			return a.rejectIndicatorV2Frame(
+				generation,
+				workerSessionID,
+				indicatorFrame,
+				fmt.Errorf(
+					"indicator V2 payload session_id does not match authenticated generation",
+				),
+				send,
+			)
+		}
+		if err := a.validateIndicatorV2RunFacts(
+			workerSessionID,
+			indicatorFrame,
+		); err != nil {
+			return a.rejectIndicatorV2Frame(
+				generation,
+				workerSessionID,
+				indicatorFrame,
+				err,
+				send,
+			)
+		}
+		if !generation.admit("indicator-v2") {
+			return fmt.Errorf(
+				"worker generation is closing: %s",
+				workerSessionID,
+			)
+		}
+		err := a.indicatorSync.ReceiveFrameV2(identity, indicatorFrame)
+		if err == nil {
+			generation.completePlatformCall()
+			return nil
+		}
+		var protocolErr *IndicatorProtocolError
+		if !errors.As(err, &protocolErr) {
+			generation.completePlatformCall()
+			return err
+		}
+		rejected := a.rejectIndicatorV2Frame(
+			generation,
+			workerSessionID,
+			indicatorFrame,
+			protocolErr,
+			send,
+		)
+		generation.completePlatformCall()
+		return rejected
 	case *rwv1.WorkerFrame_FinalStatus:
 		if generation != nil && strings.TrimSpace(frame.GetFinalStatus().GetSessionId()) != strings.TrimSpace(workerSessionID) {
 			return fmt.Errorf("final status session_id does not match authenticated generation")
 		}
-		if err := a.handleWorkerFinalStatus(ctx, frame.GetFrameId(), frame.GetFinalStatus(), send); err != nil {
+		if err := a.handleWorkerFinalStatus(
+			ctx,
+			generation,
+			frame.GetFrameId(),
+			frame.GetFinalStatus(),
+			send,
+		); err != nil {
 			return err
-		}
-		if generation != nil {
-			generation.mu.Lock()
-			generation.terminalAck = true
-			generation.mu.Unlock()
 		}
 		return nil
 	case *rwv1.WorkerFrame_WorkerError:
@@ -1286,7 +1786,73 @@ func (a *Agent) HandleAuthenticatedWorkerFrame(
 			return fmt.Errorf("worker generation is closing: %s", sessionID)
 		}
 	}
-	return a.handleWorkerFrameForGeneration(ctx, sessionID, generation, frame, send)
+	return a.handleWorkerFrameForGeneration(
+		ctx,
+		sessionID,
+		generation,
+		identity,
+		frame,
+		send,
+	)
+}
+
+func (a *Agent) validateIndicatorV2RunFacts(
+	sessionID string,
+	frame *rwv1.IndicatorFrameV2,
+) error {
+	a.mu.Lock()
+	packed := a.runRequests[strings.TrimSpace(sessionID)]
+	a.mu.Unlock()
+	if packed == nil {
+		return fmt.Errorf("indicator V2 run facts are unavailable")
+	}
+	var request strategyv1.RunStrategyRequest
+	if err := packed.UnmarshalTo(&request); err != nil {
+		return fmt.Errorf("decode indicator V2 run facts: %w", err)
+	}
+	if request.GetUserId() > 0 &&
+		request.GetUserId() != frame.GetUserId() {
+		return fmt.Errorf("indicator V2 user_id does not match run facts")
+	}
+	expectedRuntimeID := firstNonEmpty(
+		request.GetRuntimeId(),
+		a.cfg.RuntimeID,
+	)
+	if expectedRuntimeID != "" &&
+		expectedRuntimeID != strings.TrimSpace(a.cfg.RuntimeID) {
+		return fmt.Errorf("indicator V2 runtime_id does not match Agent")
+	}
+	return nil
+}
+
+func (a *Agent) rejectIndicatorV2Frame(
+	generation *workerGeneration,
+	sessionID string,
+	frame *rwv1.IndicatorFrameV2,
+	err error,
+	send func(*rwv1.AgentFrame) error,
+) error {
+	var protocolErr *IndicatorProtocolError
+	if !errors.As(err, &protocolErr) {
+		protocolErr = &IndicatorProtocolError{
+			SessionID: strings.TrimSpace(sessionID),
+			StreamKey: strings.TrimSpace(frame.GetStreamKey()),
+			Sequence:  frame.GetStreamSequence(),
+			Reason:    err.Error(),
+		}
+	}
+	generation.closeAdmission(protocolErr.Error())
+	if send != nil {
+		_ = send(&rwv1.AgentFrame{
+			Payload: &rwv1.AgentFrame_ShutdownWorker{
+				ShutdownWorker: &rwv1.ShutdownWorker{
+					SessionId: strings.TrimSpace(sessionID),
+					Reason:    protocolErr.Error(),
+				},
+			},
+		})
+	}
+	return protocolErr
 }
 
 func (a *Agent) invokeWorkerPlatformCallForGeneration(
@@ -1369,6 +1935,7 @@ func (a *Agent) invokeWorkerPlatformCall(ctx context.Context, call *rwv1.Platfor
 
 func (a *Agent) handleWorkerFinalStatus(
 	ctx context.Context,
+	generation *workerGeneration,
 	frameID string,
 	status *rwv1.FinalStatus,
 	send func(*rwv1.AgentFrame) error,
@@ -1394,37 +1961,138 @@ func (a *Agent) handleWorkerFinalStatus(
 	if err != nil {
 		return err
 	}
+	if generation != nil {
+		generation.lifecycleMu.Lock()
+		defer generation.lifecycleMu.Unlock()
+	}
 	if drainer, ok := a.cfg.WorkerStopper.(WorkerDrainer); ok {
 		drainer.MarkSessionWorkerDraining(request.SessionID)
 	}
+	if generation != nil {
+		generation.closeAdmission("")
+		drainTimeout := a.cfg.RequestTimeout
+		if drainTimeout <= 0 {
+			drainTimeout = 30 * time.Second
+		}
+		drainCtx, cancelDrain := context.WithTimeout(ctx, drainTimeout)
+		select {
+		case <-generation.drained:
+			cancelDrain()
+		case <-drainCtx.Done():
+			drainErr := drainCtx.Err()
+			cancelDrain()
+			reason := "worker frame drain failed before terminal indicator finalization: " +
+				drainErr.Error()
+			pending := true
+			publishErr := a.updateSessionWithIndicatorFinalization(
+				ctx,
+				request.SessionID,
+				"recoverable",
+				request.BarsProcessed,
+				reason,
+				&pending,
+			)
+			checkpointErr := a.checkpointTerminalRetry(
+				request,
+				generation.generation,
+				"recoverable",
+				reason,
+			)
+			sendErr := send(&rwv1.AgentFrame{
+				ReplyTo: frameID,
+				Payload: &rwv1.AgentFrame_Error{
+					Error: &rwv1.AgentError{
+						Code:    "WORKER_FRAME_DRAIN_TIMEOUT",
+						Message: reason,
+					},
+				},
+			})
+			return errors.Join(
+				errors.New(reason),
+				publishErr,
+				checkpointErr,
+				sendErr,
+			)
+		}
+	}
 	lifecycle := NewSessionLifecycle(a.indicatorSync, func(publishCtx context.Context, terminal TerminalRequest) error {
-		return a.updateSession(
+		return a.updateSessionWithIndicatorFinalization(
 			publishCtx,
 			terminal.SessionID,
 			terminal.Status,
 			terminal.BarsProcessed,
 			terminal.Error,
+			terminal.IndicatorFinalizationPending,
 		)
 	})
 	if err := lifecycle.Complete(ctx, request); err != nil {
-		var finalizationErr *IndicatorFinalizationError
-		if !errors.As(err, &finalizationErr) {
-			return err
+		a.mu.Lock()
+		generation := a.generations[request.SessionID]
+		a.mu.Unlock()
+		generationNumber := uint64(0)
+		if generation != nil {
+			generationNumber = generation.generation
 		}
-		return send(&rwv1.AgentFrame{
+		effectiveStatus := request.Status
+		retryReason := request.Error
+		var finalizationErr *IndicatorFinalizationError
+		if errors.As(err, &finalizationErr) {
+			effectiveStatus = "recoverable"
+			retryReason = finalizationErr.Error()
+		}
+		checkpointErr := a.checkpointTerminalRetry(
+			request,
+			generationNumber,
+			effectiveStatus,
+			retryReason,
+		)
+		if !errors.As(err, &finalizationErr) {
+			return errors.Join(err, checkpointErr)
+		}
+		if sendErr := send(&rwv1.AgentFrame{
 			ReplyTo: frameID,
 			Payload: &rwv1.AgentFrame_Error{Error: &rwv1.AgentError{
 				Code: "INDICATOR_FINALIZATION_FAILED", Message: finalizationErr.Error(),
 			}},
-		})
+		}); sendErr != nil {
+			return fmt.Errorf(
+				"%w; send finalization failure acknowledgement: %v",
+				errors.Join(finalizationErr, checkpointErr),
+				sendErr,
+			)
+		}
+		return errors.Join(finalizationErr, checkpointErr)
 	}
 	if err := send(&rwv1.AgentFrame{ReplyTo: frameID}); err != nil {
 		return err
+	}
+	if generation != nil {
+		generation.mu.Lock()
+		generation.terminalAck = true
+		generation.mu.Unlock()
 	}
 	return nil
 }
 
 func (a *Agent) updateSession(ctx context.Context, sessionID, status string, barsProcessed int64, message string) error {
+	return a.updateSessionWithIndicatorFinalization(
+		ctx,
+		sessionID,
+		status,
+		barsProcessed,
+		message,
+		nil,
+	)
+}
+
+func (a *Agent) updateSessionWithIndicatorFinalization(
+	ctx context.Context,
+	sessionID string,
+	status string,
+	barsProcessed int64,
+	message string,
+	indicatorFinalizationPending *bool,
+) error {
 	if barsProcessed < 0 {
 		barsProcessed = 0
 	}
@@ -1435,6 +2103,7 @@ func (a *Agent) updateSession(ctx context.Context, sessionID, status string, bar
 	req := &portfoliov1.UpdateSessionRequest{
 		SessionId: sessionID, Status: status, BarsProcessed: int32(barsProcessed),
 		Error: message, RuntimeId: strings.TrimSpace(a.cfg.RuntimeID),
+		IndicatorFinalizationPending: indicatorFinalizationPending,
 	}
 	var response portfoliov1.UpdateSessionResponse
 	return a.invokePlatformProto(ctx, "portfolio.UpdateSession", req, &response)
@@ -1664,7 +2333,13 @@ func cloneDependencyError(detail *strategyv1.RuntimeDependencyError) *strategyv1
 	return cloned
 }
 
-func (a *Agent) waitWorkerReady(ctx context.Context, ready <-chan struct{}, worker *ManagedWorker, timeout time.Duration) error {
+func (a *Agent) waitWorkerReady(
+	ctx context.Context,
+	ready <-chan struct{},
+	failed <-chan *RuntimeRequestError,
+	worker *ManagedWorker,
+	timeout time.Duration,
+) error {
 	if timeout <= 0 {
 		timeout = a.cfg.RequestTimeout
 	}
@@ -1678,11 +2353,15 @@ func (a *Agent) waitWorkerReady(ctx context.Context, ready <-chan struct{}, work
 		return fmt.Errorf("session worker did not connect")
 	case <-workerExited:
 		select {
+		case err := <-failed:
+			return err
 		case <-ready:
 			return nil
 		default:
 		}
 		return managedWorkerExitError("connecting", worker.processError())
+	case err := <-failed:
+		return err
 	case <-ready:
 		return nil
 	}

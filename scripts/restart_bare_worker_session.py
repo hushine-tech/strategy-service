@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -69,17 +70,21 @@ def build_restart_payload(session_id: str, max_loss_close_pct: float, leverage: 
     return payload
 
 
-def discover_latest_state_file(base_dir: Path = Path("/tmp")) -> Path | None:
+def discover_latest_state_file(base_dir: Path | None = None) -> Path | None:
+    if base_dir is None:
+        base_dir = Path(tempfile.gettempdir())
     candidates = list(base_dir.glob("hushine-bare-debugpy-user-*/runtime.env"))
     if not candidates:
         return None
     return max(candidates, key=lambda item: item.stat().st_mtime)
 
 
-def default_state_file(user_id: str, base_dir: Path = Path("/tmp")) -> Path:
+def default_state_file(user_id: str, base_dir: Path | None = None) -> Path:
     explicit = os.environ.get("RUNTIME_BARE_STATE_FILE", "").strip()
     if explicit:
         return Path(explicit)
+    if base_dir is None:
+        base_dir = Path(tempfile.gettempdir())
     user_id = (user_id or os.environ.get("USER_ID") or "").strip()
     if user_id:
         return base_dir / f"hushine-bare-debugpy-user-{user_id}" / "runtime.env"

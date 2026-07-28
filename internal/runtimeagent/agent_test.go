@@ -18,6 +18,7 @@ import (
 	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
 	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -259,8 +260,16 @@ func TestValidateDependencyFailureIsTypedAndOneShotWorkerIsRemoved(t *testing.T)
 	}
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
-	if len(agent.ready) != 0 || len(agent.workerCallReply) != 0 || len(agent.workerCallSession) != 0 {
-		t.Fatalf("one-shot state leaked: ready=%d replies=%d sessions=%d", len(agent.ready), len(agent.workerCallReply), len(agent.workerCallSession))
+	if len(agent.ready) != 0 || len(agent.readyFailures) != 0 ||
+		len(agent.workerCallReply) != 0 ||
+		len(agent.workerCallSession) != 0 {
+		t.Fatalf(
+			"one-shot state leaked: ready=%d failures=%d replies=%d sessions=%d",
+			len(agent.ready),
+			len(agent.readyFailures),
+			len(agent.workerCallReply),
+			len(agent.workerCallSession),
+		)
 	}
 }
 
@@ -349,8 +358,16 @@ func TestValidateDeclarationsRoundTripThroughOneShotWorkerAndCleanup(t *testing.
 	}
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
-	if len(agent.ready) != 0 || len(agent.workerCallReply) != 0 || len(agent.workerCallSession) != 0 {
-		t.Fatalf("one-shot state leaked: ready=%d replies=%d sessions=%d", len(agent.ready), len(agent.workerCallReply), len(agent.workerCallSession))
+	if len(agent.ready) != 0 || len(agent.readyFailures) != 0 ||
+		len(agent.workerCallReply) != 0 ||
+		len(agent.workerCallSession) != 0 {
+		t.Fatalf(
+			"one-shot state leaked: ready=%d failures=%d replies=%d sessions=%d",
+			len(agent.ready),
+			len(agent.readyFailures),
+			len(agent.workerCallReply),
+			len(agent.workerCallSession),
+		)
 	}
 }
 
@@ -485,6 +502,659 @@ func TestGenerationCleanupFinalizesIndicatorTailBeforeFailedReconciliation(t *te
 	}
 }
 
+func TestGenerationCleanupCheckpointsFailedIndicatorTailAndPublishesPending(t *testing.T) {
+	const sessionID = "14141414141414141414141414141414"
+	stateRoot := t.TempDir()
+	var update portfoliov1.UpdateSessionRequest
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.SaveStrategyIndicatorsV2":
+				return nil, errors.New("indicator database unavailable")
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId:     sessionID,
+						UserId:        6,
+						RuntimeId:     "rt-1",
+						Status:        "running",
+						BarsProcessed: 1,
+					},
+				})
+			case "portfolio.UpdateSession":
+				if err := request.UnmarshalTo(&update); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, fmt.Errorf("unexpected method: %s", method)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:                "rt-1",
+		UserID:                   6,
+		StateRoot:                stateRoot,
+		PlatformInvoker:          invoker,
+		RequestTimeout:           60 * time.Millisecond,
+		IndicatorFinalizeTimeout: 20 * time.Millisecond,
+		IndicatorRetryInitial:    10 * time.Millisecond,
+		IndicatorRetryMax:        10 * time.Millisecond,
+	})
+	generation := newWorkerGeneration(sessionID, 12)
+	generation.durablePossible = true
+	agent.generations[sessionID] = generation
+	if err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{
+			SessionID:  sessionID,
+			PID:        123,
+			Generation: 19,
+			token:      "worker-token",
+		},
+		indicatorSyncFrameV2(
+			sessionID,
+			"binance:spot:BTCUSDT:1m",
+			0,
+			60_000,
+		),
+	); err != nil {
+		t.Fatalf("ReceiveFrameV2: %v", err)
+	}
+
+	err := agent.cleanupWorkerGeneration(
+		sessionID,
+		generation,
+		"worker disconnected",
+	)
+	agent.mu.Lock()
+	delete(agent.generations, sessionID)
+	agent.mu.Unlock()
+	if err == nil ||
+		!strings.Contains(err.Error(), "finalize worker generation indicators") {
+		t.Fatalf("cleanup error = %v", err)
+	}
+	if update.GetStatus() != "recoverable" ||
+		update.IndicatorFinalizationPending == nil ||
+		!update.GetIndicatorFinalizationPending() {
+		t.Fatalf("pending recovery update = %+v", &update)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 ||
+		records[0].SessionID != sessionID ||
+		records[0].Indicators == nil {
+		t.Fatalf("cleanup retry records = %+v", records)
+	}
+}
+
+func TestGenerationCleanupDrainTimeoutPersistsRecoverableRetry(t *testing.T) {
+	const sessionID = "18181818181818181818181818181818"
+	stateRoot := t.TempDir()
+	platform := &admissionCleanupPlatform{
+		saveStarted: make(chan struct{}),
+		releaseSave: make(chan struct{}),
+		status:      "running",
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		StateRoot:       stateRoot,
+		PlatformInvoker: platform,
+		RequestTimeout:  20 * time.Millisecond,
+	})
+	generation := newWorkerGeneration(sessionID, 18)
+	if !generation.admit("portfolio.SaveSession") {
+		t.Fatal("admit durable in-flight call")
+	}
+	if !generation.bindAuthenticatedGeneration(28) {
+		t.Fatal("bind worker generation")
+	}
+	agent.generations[sessionID] = generation
+
+	err := agent.HandleWorkerDisconnect(
+		WorkerIdentity{SessionID: sessionID, Generation: 28},
+		errors.New("worker disconnected"),
+	)
+	if err == nil || !strings.Contains(err.Error(), "drain worker generation") {
+		t.Fatalf("disconnect drain error = %v", err)
+	}
+	update := platform.snapshotLastUpdate()
+	if update == nil ||
+		update.GetStatus() != "recoverable" ||
+		update.IndicatorFinalizationPending == nil ||
+		!update.GetIndicatorFinalizationPending() {
+		t.Fatalf("disconnect drain update = %+v", update)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 ||
+		records[0].SessionID != sessionID ||
+		records[0].Generation != 18 ||
+		records[0].EffectiveStatus != "recoverable" {
+		t.Fatalf("disconnect drain retry records = %+v", records)
+	}
+	generation.completePlatformCall()
+}
+
+func TestAgentShutdownClosesAdmissionAndFinalizesWorkerGenerations(t *testing.T) {
+	const sessionID = "15151515151515151515151515151515"
+	workers := &shutdownWorkerStopper{}
+	methods := make([]string, 0, 4)
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(
+			method string,
+			_ *anypb.Any,
+		) (*anypb.Any, error) {
+			methods = append(methods, method)
+			switch method {
+			case "portfolio.SaveStrategyIndicatorsV2":
+				return anypb.New(
+					&portfoliov1.SaveStrategyIndicatorsV2Response{
+						DefinitionsSaved: 1,
+						ChunksSaved:      1,
+					},
+				)
+			case "portfolio.FinalizeStrategyIndicatorChunksV2":
+				return anypb.New(
+					&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{
+						ChunksFinalized: 1,
+					},
+				)
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId: sessionID,
+						UserId:    6,
+						RuntimeId: "rt-1",
+						Status:    "running",
+					},
+				})
+			case "portfolio.UpdateSession":
+				return anypb.New(
+					&portfoliov1.UpdateSessionResponse{},
+				)
+			default:
+				return nil, fmt.Errorf(
+					"unexpected method: %s",
+					method,
+				)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		StateRoot:       t.TempDir(),
+		WorkerStopper:   workers,
+		PlatformInvoker: invoker,
+		RequestTimeout:  time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 21)
+	generation.durablePossible = true
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+	if err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{
+			SessionID:  sessionID,
+			PID:        123,
+			Generation: 21,
+			token:      "worker-token",
+		},
+		indicatorSyncFrameV2(
+			sessionID,
+			"binance:spot:BTCUSDT:1m",
+			0,
+			60_000,
+		),
+	); err != nil {
+		t.Fatalf("ReceiveFrameV2: %v", err)
+	}
+
+	if err := agent.Shutdown(context.Background(), time.Second); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if workers.stopAllCalls != 1 {
+		t.Fatalf("StopAll calls = %d, want 1", workers.stopAllCalls)
+	}
+	if !slices.Equal(methods, []string{
+		"portfolio.SaveStrategyIndicatorsV2",
+		"portfolio.FinalizeStrategyIndicatorChunksV2",
+		"portfolio.GetSession",
+		"portfolio.UpdateSession",
+	}) {
+		t.Fatalf("shutdown methods = %v", methods)
+	}
+	agent.mu.Lock()
+	_, retained := agent.generations[sessionID]
+	agent.mu.Unlock()
+	if retained || agent.indicatorSync.lookupSession(sessionID) != nil {
+		t.Fatal("shutdown retained finalized generation or indicator state")
+	}
+	response := agent.HandleRuntimeRequest(
+		context.Background(),
+		&cpv1.RuntimeFrame{
+			CorrelationId: "after-shutdown",
+			Payload: &cpv1.RuntimeFrame_Request{
+				Request: &cpv1.StrategyRequest{
+					Method: "RunStrategy",
+				},
+			},
+		},
+	)
+	if response.GetError().GetCode() != "Unavailable" {
+		t.Fatalf("post-shutdown response = %+v", response)
+	}
+}
+
+func TestAgentShutdownClaimsRecoverableBeforeStopAllDisconnect(t *testing.T) {
+	const sessionID = "18181818181818181818181818181818"
+	platform := &admissionCleanupPlatform{
+		saveStarted: make(chan struct{}),
+		releaseSave: make(chan struct{}),
+		status:      "running",
+	}
+	workers := &shutdownWorkerStopper{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		StateRoot:       t.TempDir(),
+		WorkerStopper:   workers,
+		PlatformInvoker: platform,
+		RequestTimeout:  time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 24)
+	generation.durablePossible = true
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+
+	var disconnectErr error
+	workers.onStopAll = func() {
+		disconnectErr = agent.HandleWorkerDisconnect(
+			WorkerIdentity{
+				SessionID:  sessionID,
+				Generation: 24,
+			},
+			errors.New("worker exited during runtime shutdown"),
+		)
+	}
+
+	if err := agent.Shutdown(context.Background(), time.Second); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if disconnectErr != nil {
+		t.Fatalf("shutdown disconnect cleanup: %v", disconnectErr)
+	}
+	if got := platform.snapshotEvents(); !slices.Equal(got, []string{
+		"GetSession",
+		"UpdateSession:recoverable",
+	}) {
+		t.Fatalf(
+			"shutdown disconnect events = %v, want recoverable terminal claim",
+			got,
+		)
+	}
+}
+
+func TestAgentShutdownWaitsForInFlightFinalStatusLifecycle(t *testing.T) {
+	const sessionID = "18191919191919191919191919191919"
+	platform := &finalStatusShutdownRacePlatform{
+		updateStarted: make(chan struct{}),
+		releaseUpdate: make(chan struct{}),
+		getStarted:    make(chan struct{}, 1),
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		PlatformInvoker: platform,
+		RequestTimeout:  time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 24)
+	generation.durablePossible = true
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+
+	finalDone := make(chan error, 1)
+	go func() {
+		err := agent.handleWorkerFinalStatus(
+			context.Background(),
+			generation,
+			"final-frame",
+			&rwv1.FinalStatus{
+				SessionId:     sessionID,
+				Status:        "finished",
+				BarsProcessed: 10,
+			},
+			func(*rwv1.AgentFrame) error { return nil },
+		)
+		if err == nil {
+			generation.mu.Lock()
+			generation.terminalAck = true
+			generation.mu.Unlock()
+		}
+		finalDone <- err
+	}()
+	select {
+	case <-platform.updateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("FinalStatus did not reach its terminal update")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- agent.Shutdown(context.Background(), time.Second)
+	}()
+	reconciledEarly := false
+	select {
+	case <-platform.getStarted:
+		reconciledEarly = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(platform.releaseUpdate)
+	if err := <-finalDone; err != nil {
+		t.Fatalf("FinalStatus: %v", err)
+	}
+	if err := <-shutdownDone; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if reconciledEarly {
+		t.Fatal("shutdown reconciliation ran concurrently with FinalStatus")
+	}
+}
+
+func TestAgentShutdownPersistsStatusRetryWithoutIndicators(t *testing.T) {
+	const sessionID = "19191919191919191919191919191919"
+	stateRoot := t.TempDir()
+	var update portfoliov1.UpdateSessionRequest
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(
+			method string,
+			request *anypb.Any,
+		) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId: sessionID,
+						UserId:    6,
+						RuntimeId: "rt-1",
+						Status:    "running",
+					},
+				})
+			case "portfolio.UpdateSession":
+				if err := request.UnmarshalTo(&update); err != nil {
+					return nil, err
+				}
+				return nil, errors.New("database unavailable")
+			default:
+				return nil, fmt.Errorf(
+					"unexpected method: %s",
+					method,
+				)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		StateRoot:       stateRoot,
+		WorkerStopper:   &shutdownWorkerStopper{},
+		PlatformInvoker: invoker,
+		RequestTimeout:  time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 25)
+	generation.durablePossible = true
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+
+	if err := agent.Shutdown(context.Background(), time.Second); err != nil {
+		t.Fatalf("Shutdown with durable status retry: %v", err)
+	}
+	if update.GetStatus() != "recoverable" {
+		t.Fatalf("terminal update = %+v, want recoverable", &update)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("terminal retry records = %+v, want one record", records)
+	}
+	record := records[0]
+	if record.SessionID != sessionID ||
+		record.Generation != 25 ||
+		record.DesiredStatus != "recoverable" ||
+		record.EffectiveStatus != "recoverable" ||
+		record.Indicators != nil {
+		t.Fatalf("terminal retry record = %+v", record)
+	}
+}
+
+func TestAgentShutdownCanRetryAfterUnsafeTerminalFailure(t *testing.T) {
+	const sessionID = "20202020202020202020202020202020"
+	updateCalls := 0
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(
+			method string,
+			_ *anypb.Any,
+		) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId: sessionID,
+						UserId:    6,
+						RuntimeId: "rt-1",
+						Status:    "running",
+					},
+				})
+			case "portfolio.UpdateSession":
+				updateCalls++
+				if updateCalls == 1 {
+					return nil, errors.New("database unavailable")
+				}
+				return anypb.New(
+					&portfoliov1.UpdateSessionResponse{},
+				)
+			default:
+				return nil, fmt.Errorf(
+					"unexpected method: %s",
+					method,
+				)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		WorkerStopper:   &shutdownWorkerStopper{},
+		PlatformInvoker: invoker,
+		RequestTimeout:  time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 26)
+	generation.durablePossible = true
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+
+	if err := agent.Shutdown(
+		context.Background(),
+		time.Second,
+	); err == nil {
+		t.Fatal("first Shutdown error = nil, want unsafe persistence failure")
+	}
+	if err := agent.Shutdown(
+		context.Background(),
+		time.Second,
+	); err != nil {
+		t.Fatalf("second Shutdown: %v", err)
+	}
+	if updateCalls != 2 {
+		t.Fatalf("terminal UpdateSession calls = %d, want 2", updateCalls)
+	}
+	agent.mu.Lock()
+	_, retained := agent.generations[sessionID]
+	agent.mu.Unlock()
+	if retained {
+		t.Fatal("successful shutdown retry retained worker generation")
+	}
+}
+
+func TestAgentShutdownAcceptsPersistedIndicatorRetryWhenPlatformSaveFails(
+	t *testing.T,
+) {
+	const sessionID = "16161616161616161616161616161616"
+	stateRoot := t.TempDir()
+	workers := &shutdownWorkerStopper{}
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(
+			method string,
+			_ *anypb.Any,
+		) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.SaveStrategyIndicatorsV2":
+				return nil, errors.New("database unavailable")
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId: sessionID,
+						UserId:    6,
+						RuntimeId: "rt-1",
+						Status:    "running",
+					},
+				})
+			case "portfolio.UpdateSession":
+				return anypb.New(
+					&portfoliov1.UpdateSessionResponse{},
+				)
+			default:
+				return nil, fmt.Errorf(
+					"unexpected method: %s",
+					method,
+				)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:                "rt-1",
+		UserID:                   6,
+		StateRoot:                stateRoot,
+		WorkerStopper:            workers,
+		PlatformInvoker:          invoker,
+		RequestTimeout:           80 * time.Millisecond,
+		IndicatorFinalizeTimeout: 20 * time.Millisecond,
+		IndicatorRetryInitial:    10 * time.Millisecond,
+		IndicatorRetryMax:        10 * time.Millisecond,
+	})
+	generation := newWorkerGeneration(sessionID, 22)
+	generation.durablePossible = true
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+	if err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{
+			SessionID:  sessionID,
+			PID:        123,
+			Generation: 22,
+			token:      "worker-token",
+		},
+		indicatorSyncFrameV2(
+			sessionID,
+			"binance:spot:BTCUSDT:1m",
+			0,
+			60_000,
+		),
+	); err != nil {
+		t.Fatalf("ReceiveFrameV2: %v", err)
+	}
+
+	if err := agent.Shutdown(context.Background(), time.Second); err != nil {
+		t.Fatalf("Shutdown with durable retry: %v", err)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 ||
+		records[0].SessionID != sessionID ||
+		records[0].Indicators == nil {
+		t.Fatalf("shutdown retry records = %+v", records)
+	}
+}
+
+func TestAgentShutdownUsesSharedDeadlineWhilePersistingIndicatorRetry(
+	t *testing.T,
+) {
+	const sessionID = "17171717171717171717171717171717"
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		StateRoot:       t.TempDir(),
+		WorkerStopper:   &shutdownWorkerStopper{},
+		PlatformInvoker: blockingPlatformInvoker{},
+		RequestTimeout:  time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 23)
+	generation.durablePossible = true
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+	if err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{
+			SessionID:  sessionID,
+			PID:        123,
+			Generation: 23,
+			token:      "worker-token",
+		},
+		indicatorSyncFrameV2(
+			sessionID,
+			"binance:spot:BTCUSDT:1m",
+			0,
+			60_000,
+		),
+	); err != nil {
+		t.Fatalf("ReceiveFrameV2: %v", err)
+	}
+	shutdownCtx, cancel := context.WithTimeout(
+		context.Background(),
+		30*time.Millisecond,
+	)
+	defer cancel()
+	started := time.Now()
+	if err := agent.Shutdown(shutdownCtx, time.Second); err != nil {
+		t.Fatalf("Shutdown with persisted retry: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf(
+			"shutdown elapsed = %v, want shared shutdown deadline",
+			elapsed,
+		)
+	}
+}
+
 func TestGenerationAdmissionCapsWorkerRequestedPlatformTimeout(t *testing.T) {
 	const sessionID = "12121212121212121212121212121212"
 	platform := &contextDeadlinePlatform{done: make(chan struct{})}
@@ -519,7 +1189,15 @@ func TestGenerationAdmissionCapsWorkerRequestedPlatformTimeout(t *testing.T) {
 }
 
 func TestGenerationCleanupReconcilesRunningOnceAndPreservesTerminalStatuses(t *testing.T) {
-	for _, statusValue := range []string{"running", "finished", "stopped", "failed", "recoverable"} {
+	for _, statusValue := range []string{
+		"pending",
+		"running",
+		"stopping",
+		"finished",
+		"stopped",
+		"failed",
+		"recoverable",
+	} {
 		t.Run(statusValue, func(t *testing.T) {
 			const sessionID = "22222222222222222222222222222222"
 			platform := &admissionCleanupPlatform{
@@ -542,14 +1220,63 @@ func TestGenerationCleanupReconcilesRunningOnceAndPreservesTerminalStatuses(t *t
 				t.Fatal(err)
 			}
 			events := platform.snapshotEvents()
-			if statusValue == "running" {
-				if !slices.Equal(events, []string{"GetSession", "UpdateSession:failed"}) {
+			switch statusValue {
+			case "pending":
+				if !slices.Equal(events, []string{
+					"GetSession",
+					"UpdateSession:failed",
+				}) {
 					t.Fatalf("events = %v", events)
 				}
-			} else if !slices.Equal(events, []string{"GetSession"}) {
-				t.Fatalf("terminal events = %v", events)
+			case "running", "stopping":
+				if !slices.Equal(events, []string{
+					"GetSession",
+					"UpdateSession:recoverable",
+				}) {
+					t.Fatalf("events = %v", events)
+				}
+			default:
+				if !slices.Equal(events, []string{"GetSession"}) {
+					t.Fatalf("terminal events = %v", events)
+				}
 			}
 		})
+	}
+}
+
+func TestGenerationCleanupClearsPendingAfterRetainedTailFinalizes(t *testing.T) {
+	const sessionID = "29292929292929292929292929292929"
+	platform := &admissionCleanupPlatform{
+		saveStarted:                  make(chan struct{}),
+		releaseSave:                  make(chan struct{}),
+		status:                       "recoverable",
+		indicatorFinalizationPending: true,
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, PlatformInvoker: platform, RequestTimeout: time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 15)
+	generation.durablePossible = true
+	agent.mu.Lock()
+	agent.generations[sessionID] = generation
+	agent.mu.Unlock()
+
+	if err := agent.HandleWorkerDisconnect(
+		WorkerIdentity{SessionID: sessionID, Generation: 15},
+		errors.New("worker exited after retained indicator retry"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := platform.snapshotEvents(); !slices.Equal(got, []string{
+		"GetSession", "UpdateSession:recoverable",
+	}) {
+		t.Fatalf("events = %v", got)
+	}
+	update := platform.snapshotLastUpdate()
+	if update == nil ||
+		update.IndicatorFinalizationPending == nil ||
+		update.GetIndicatorFinalizationPending() {
+		t.Fatalf("pending-clear update = %+v, want explicit false", update)
 	}
 }
 
@@ -701,7 +1428,9 @@ func TestReconcileWorkerGenerationOnlyAcceptsExplicitNotFoundCode(t *testing.T) 
 	}
 }
 
-func TestAgentChildExitAfterRunningReconcilesCanonicalRowFailed(t *testing.T) {
+func TestAgentChildExitAfterRunningReconcilesCanonicalRowRecoverable(
+	t *testing.T,
+) {
 	processExited := make(chan struct{})
 	platform := &admissionCleanupPlatform{
 		saveStarted: make(chan struct{}), releaseSave: make(chan struct{}),
@@ -749,7 +1478,8 @@ func TestAgentChildExitAfterRunningReconcilesCanonicalRowFailed(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		events := platform.snapshotEvents()
-		if len(events) >= 5 && events[len(events)-1] == "UpdateSession:failed" {
+		if len(events) >= 5 &&
+			events[len(events)-1] == "UpdateSession:recoverable" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1076,6 +1806,74 @@ func TestAgentPreviewRunStrategyRunsOneShotWorkerUnary(t *testing.T) {
 	}
 }
 
+func TestAgentPreviewRejectsUnsupportedOneShotWorkerProtocolBeforeUnary(t *testing.T) {
+	starter := &fakeWorkerStarter{}
+	stopper := &fakeWorkerStopper{}
+	sender := &fakeWorkerSender{}
+	var unaryCalls int
+	var shutdown *rwv1.ShutdownWorker
+	agent := NewAgent(AgentConfig{
+		RuntimeID:      "rt-1",
+		WorkerStarter:  starter,
+		WorkerStopper:  stopper,
+		WorkerSender:   sender,
+		RequestTimeout: time.Second,
+	})
+	starter.onStart = func(sessionID string) {
+		if err := agent.HandleWorkerFrame(
+			context.Background(),
+			sessionID,
+			&rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+					SessionId:       sessionID,
+					ProtocolVersion: 1,
+				}},
+			},
+			func(frame *rwv1.AgentFrame) error {
+				shutdown = frame.GetShutdownWorker()
+				return nil
+			},
+		); err != nil {
+			t.Errorf("HandleWorkerFrame: %v", err)
+		}
+	}
+	sender.onSend = func(string, *rwv1.AgentFrame) {
+		unaryCalls++
+	}
+	request, err := anypb.New(&strategyv1.PreviewRunStrategyRequest{
+		PortfolioId: 1,
+		UserId:      6,
+		RuntimeId:   "rt-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frame := agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+		CorrelationId: "corr-preview-protocol",
+		Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+			Method:  "PreviewRunStrategy",
+			Request: request,
+		}},
+	})
+
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+		t.Fatalf("frame = %+v, want error", frame)
+	}
+	if got := frame.GetError().GetCode(); got != "RUNTIME_WORKER_PROTOCOL_UNSUPPORTED" {
+		t.Fatalf("error code = %q", got)
+	}
+	if unaryCalls != 0 {
+		t.Fatalf("unsupported one-shot worker received %d unary calls", unaryCalls)
+	}
+	if shutdown == nil || shutdown.GetSessionId() != starter.startedSessionID {
+		t.Fatalf("shutdown = %+v, started session = %q", shutdown, starter.startedSessionID)
+	}
+	if stopper.sessionID != starter.startedSessionID {
+		t.Fatalf("stopped session = %q, want %q", stopper.sessionID, starter.startedSessionID)
+	}
+}
+
 func TestAgentPreviewRunStrategyWaitsForNaturalManagedCleanup(t *testing.T) {
 	manager := &blockingWorkerLifecycle{
 		waitStarted: make(chan workerExitWait, 1),
@@ -1343,7 +2141,7 @@ func TestWaitWorkerReadyPrefersReadyWhenProcessAlsoExited(t *testing.T) {
 			processExited:  processExited,
 			processExitErr: errors.New("worker exited"),
 		}
-		if err := agent.waitWorkerReady(context.Background(), ready, worker, time.Second); err != nil {
+		if err := agent.waitWorkerReady(context.Background(), ready, nil, worker, time.Second); err != nil {
 			t.Fatalf("iteration %d waitWorkerReady: %v", i, err)
 		}
 	}
@@ -1706,6 +2504,308 @@ func TestAgentFinalStatusFlushesThenPersistsFinishedThenAcknowledges(t *testing.
 	}
 }
 
+func TestAgentFinalStatusWaitsForGenerationAdmissionToDrain(t *testing.T) {
+	const sessionID = "61616161616161616161616161616161"
+	platformCall := make(chan string, 8)
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, _ *anypb.Any) (*anypb.Any, error) {
+			platformCall <- method
+			switch method {
+			case "portfolio.SaveStrategyIndicatorsV2":
+				return anypb.New(
+					&portfoliov1.SaveStrategyIndicatorsV2Response{
+						DefinitionsSaved: 1,
+						ChunksSaved:      1,
+					},
+				)
+			case "portfolio.FinalizeStrategyIndicatorChunksV2":
+				return anypb.New(
+					&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{
+						ChunksFinalized: 1,
+					},
+				)
+			case "portfolio.UpdateSession":
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, fmt.Errorf("unexpected method: %s", method)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:                "rt-1",
+		UserID:                   6,
+		PlatformInvoker:          invoker,
+		RequestTimeout:           time.Second,
+		IndicatorFinalizeTimeout: time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 1)
+	generation.durablePossible = true
+	agent.generations[sessionID] = generation
+	if err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{
+			SessionID:  sessionID,
+			PID:        123,
+			Generation: 7,
+		},
+		indicatorSyncFrameV2(
+			sessionID,
+			"binance:spot:BTCUSDT:1m",
+			0,
+			60_000,
+		),
+	); err != nil {
+		t.Fatalf("ReceiveFrameV2: %v", err)
+	}
+	if !generation.admit("test-in-flight-frame") {
+		t.Fatal("admit in-flight frame")
+	}
+
+	finalDone := make(chan error, 1)
+	go func() {
+		finalDone <- agent.HandleWorkerFrame(
+			context.Background(),
+			sessionID,
+			&rwv1.WorkerFrame{
+				FrameId: "final-drain",
+				Payload: &rwv1.WorkerFrame_FinalStatus{
+					FinalStatus: &rwv1.FinalStatus{
+						SessionId: sessionID,
+						Status:    "finished",
+					},
+				},
+			},
+			func(*rwv1.AgentFrame) error { return nil },
+		)
+	}()
+
+	select {
+	case method := <-platformCall:
+		t.Fatalf(
+			"terminal platform method %q ran before admitted frame drained",
+			method,
+		)
+	case err := <-finalDone:
+		t.Fatalf("final status returned before admitted frame drained: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	generation.completePlatformCall()
+	select {
+	case err := <-finalDone:
+		if err != nil {
+			t.Fatalf("HandleWorkerFrame final: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("final status did not continue after admission drained")
+	}
+}
+
+func TestAgentFinalStatusDrainTimeoutPersistsTerminalRetry(t *testing.T) {
+	const sessionID = "71717171717171717171717171717171"
+	stateRoot := t.TempDir()
+	var update portfoliov1.UpdateSessionRequest
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			if method != "portfolio.UpdateSession" {
+				return nil, fmt.Errorf("unexpected method: %s", method)
+			}
+			if err := request.UnmarshalTo(&update); err != nil {
+				return nil, err
+			}
+			return anypb.New(&portfoliov1.UpdateSessionResponse{})
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		StateRoot:       stateRoot,
+		PlatformInvoker: invoker,
+		RequestTimeout:  20 * time.Millisecond,
+	})
+	generation := newWorkerGeneration(sessionID, 17)
+	if !generation.admit("portfolio.SaveSession") {
+		t.Fatal("admit durable in-flight call")
+	}
+	agent.generations[sessionID] = generation
+
+	err := agent.HandleWorkerFrame(
+		context.Background(),
+		sessionID,
+		&rwv1.WorkerFrame{
+			FrameId: "final-drain-timeout",
+			Payload: &rwv1.WorkerFrame_FinalStatus{
+				FinalStatus: &rwv1.FinalStatus{
+					SessionId:     sessionID,
+					Status:        "finished",
+					BarsProcessed: 9,
+				},
+			},
+		},
+		func(*rwv1.AgentFrame) error { return nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "worker frame drain failed") {
+		t.Fatalf("final drain error = %v", err)
+	}
+	if update.GetStatus() != "recoverable" ||
+		update.IndicatorFinalizationPending == nil ||
+		!update.GetIndicatorFinalizationPending() {
+		t.Fatalf("recoverable drain update = %+v", &update)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 ||
+		records[0].SessionID != sessionID ||
+		records[0].Generation != 17 ||
+		records[0].DesiredStatus != "finished" ||
+		records[0].EffectiveStatus != "recoverable" {
+		t.Fatalf("terminal drain retry records = %+v", records)
+	}
+	generation.completePlatformCall()
+}
+
+func TestAgentTerminalStatusPersistFailureRetriesDesiredStatusBeforeCleanup(
+	t *testing.T,
+) {
+	const sessionID = "62626262626262626262626262626262"
+	stateRoot := t.TempDir()
+	var (
+		mu             sync.Mutex
+		updateStatuses []string
+		updateErrors   []string
+		updateCalls    int
+	)
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.SaveStrategyIndicatorsV2":
+				return anypb.New(
+					&portfoliov1.SaveStrategyIndicatorsV2Response{
+						DefinitionsSaved: 1,
+						ChunksSaved:      1,
+					},
+				)
+			case "portfolio.FinalizeStrategyIndicatorChunksV2":
+				return anypb.New(
+					&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{
+						ChunksFinalized: 1,
+					},
+				)
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId: sessionID,
+						UserId:    6,
+						RuntimeId: "rt-1",
+						Status:    "running",
+					},
+				})
+			case "portfolio.UpdateSession":
+				var update portfoliov1.UpdateSessionRequest
+				if err := request.UnmarshalTo(&update); err != nil {
+					return nil, err
+				}
+				mu.Lock()
+				updateCalls++
+				call := updateCalls
+				updateStatuses = append(updateStatuses, update.GetStatus())
+				updateErrors = append(updateErrors, update.GetError())
+				mu.Unlock()
+				if call == 1 {
+					return nil, errors.New("temporary status persistence failure")
+				}
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, fmt.Errorf("unexpected method: %s", method)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:                "rt-1",
+		UserID:                   6,
+		StateRoot:                stateRoot,
+		PlatformInvoker:          invoker,
+		RequestTimeout:           time.Second,
+		IndicatorFinalizeTimeout: time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 3)
+	generation.durablePossible = true
+	agent.generations[sessionID] = generation
+	if err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{
+			SessionID:  sessionID,
+			PID:        123,
+			Generation: 7,
+		},
+		indicatorSyncFrameV2(
+			sessionID,
+			"binance:spot:BTCUSDT:1m",
+			0,
+			60_000,
+		),
+	); err != nil {
+		t.Fatalf("ReceiveFrameV2: %v", err)
+	}
+
+	err := agent.HandleWorkerFrame(
+		context.Background(),
+		sessionID,
+		&rwv1.WorkerFrame{
+			FrameId: "final-persist-retry",
+			Payload: &rwv1.WorkerFrame_FinalStatus{
+				FinalStatus: &rwv1.FinalStatus{
+					SessionId:     sessionID,
+					Status:        "finished",
+					BarsProcessed: 1,
+				},
+			},
+		},
+		func(*rwv1.AgentFrame) error { return nil },
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "temporary status persistence failure") {
+		t.Fatalf("final status error = %v, want persistence failure", err)
+	}
+	if err := agent.HandleWorkerDisconnect(
+		WorkerIdentity{SessionID: sessionID, Generation: 3},
+		errors.New("worker exited after failed terminal acknowledgement"),
+	); err != nil {
+		t.Fatalf("HandleWorkerDisconnect: %v", err)
+	}
+
+	mu.Lock()
+	gotStatuses := append([]string(nil), updateStatuses...)
+	gotErrors := append([]string(nil), updateErrors...)
+	mu.Unlock()
+	if !slices.Equal(gotStatuses, []string{"finished", "finished"}) {
+		t.Fatalf(
+			"terminal update statuses = %v, want desired status retried without failed downgrade",
+			gotStatuses,
+		)
+	}
+	if !slices.Equal(gotErrors, []string{"", ""}) {
+		t.Fatalf(
+			"terminal update errors = %v, persistence diagnostics must not become session errors",
+			gotErrors,
+		)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("completed terminal retry records = %+v", records)
+	}
+}
+
 func TestAgentFinalStatusMarksWorkerDrainingBeforePlatformUpdate(t *testing.T) {
 	probe := &finalStatusDrainProbe{}
 	agent := NewAgent(AgentConfig{
@@ -1847,8 +2947,9 @@ func TestAgentFinalStatusFlushFailurePersistsRecoverableAndReturnsErrorAck(t *te
 			SessionId: "sess-1", Status: "finished", BarsProcessed: 1440,
 		}},
 	}, func(frame *rwv1.AgentFrame) error { ack = frame; return nil })
-	if err != nil {
-		t.Fatalf("HandleWorkerFrame final: %v", err)
+	var finalizationErr *IndicatorFinalizationError
+	if !errors.As(err, &finalizationErr) {
+		t.Fatalf("HandleWorkerFrame final error = %v, want IndicatorFinalizationError", err)
 	}
 	_, updates := invoker.snapshot()
 	if len(updates) != 1 || updates[0].GetStatus() != "recoverable" ||
@@ -1876,8 +2977,9 @@ func TestAgentSpotStoppedFlushFailurePersistsRecoverableAndReturnsErrorAck(t *te
 			ReconciliationRunId: "recon-123",
 		}},
 	}, func(frame *rwv1.AgentFrame) error { ack = frame; return nil })
-	if err != nil {
-		t.Fatalf("HandleWorkerFrame final: %v", err)
+	var finalizationErr *IndicatorFinalizationError
+	if !errors.As(err, &finalizationErr) {
+		t.Fatalf("HandleWorkerFrame final error = %v, want IndicatorFinalizationError", err)
 	}
 	_, updates := invoker.snapshot()
 	if len(updates) != 1 || updates[0].GetStatus() != "recoverable" {
@@ -1885,6 +2987,236 @@ func TestAgentSpotStoppedFlushFailurePersistsRecoverableAndReturnsErrorAck(t *te
 	}
 	if ack == nil || ack.GetReplyTo() != "final-spot-stop" || ack.GetError().GetCode() != "INDICATOR_FINALIZATION_FAILED" {
 		t.Fatalf("ack = %+v", ack)
+	}
+}
+
+func TestAgentReloadsDurableIndicatorTailAndClearsPendingAfterRetry(t *testing.T) {
+	const sessionID = "51515151515151515151515151515151"
+	stateRoot := t.TempDir()
+	var firstUpdate portfoliov1.UpdateSessionRequest
+	failingPlatform := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.SaveStrategyIndicatorsV2":
+				return nil, errors.New("database unavailable")
+			case "portfolio.UpdateSession":
+				if err := request.UnmarshalTo(&firstUpdate); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, fmt.Errorf(
+					"unexpected first platform method: %s",
+					method,
+				)
+			}
+		},
+	}
+	first := NewAgent(AgentConfig{
+		RuntimeID:                "rt-1",
+		UserID:                   6,
+		StateRoot:                stateRoot,
+		PlatformInvoker:          failingPlatform,
+		RequestTimeout:           50 * time.Millisecond,
+		IndicatorFinalizeTimeout: 15 * time.Millisecond,
+		IndicatorRetryInitial:    time.Millisecond,
+		IndicatorRetryMax:        2 * time.Millisecond,
+	})
+	generation := newWorkerGeneration(sessionID, 1)
+	generation.durablePossible = true
+	first.generations[sessionID] = generation
+	frame := indicatorSyncFrameV2(
+		sessionID,
+		"binance:spot:BTCUSDT:1m",
+		0,
+		60_000,
+	)
+	if err := first.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{
+			SessionID:  sessionID,
+			PID:        123,
+			Generation: 7,
+			token:      "worker-token",
+		},
+		frame,
+	); err != nil {
+		t.Fatalf("ReceiveFrameV2: %v", err)
+	}
+	var ack *rwv1.AgentFrame
+	err := first.HandleWorkerFrame(
+		context.Background(),
+		sessionID,
+		&rwv1.WorkerFrame{
+			FrameId: "final-durable-retry",
+			Payload: &rwv1.WorkerFrame_FinalStatus{
+				FinalStatus: &rwv1.FinalStatus{
+					SessionId:     sessionID,
+					Status:        "finished",
+					BarsProcessed: 1,
+				},
+			},
+		},
+		func(frame *rwv1.AgentFrame) error {
+			ack = frame
+			return nil
+		},
+	)
+	var finalizationErr *IndicatorFinalizationError
+	if !errors.As(err, &finalizationErr) {
+		t.Fatalf(
+			"final status error = %v, want IndicatorFinalizationError",
+			err,
+		)
+	}
+	if firstUpdate.GetStatus() != "recoverable" ||
+		firstUpdate.IndicatorFinalizationPending == nil ||
+		!firstUpdate.GetIndicatorFinalizationPending() {
+		t.Fatalf("first recoverable update = %+v", &firstUpdate)
+	}
+	if ack == nil ||
+		ack.GetError().GetCode() != "INDICATOR_FINALIZATION_FAILED" {
+		t.Fatalf("failure acknowledgement = %+v", ack)
+	}
+
+	var retryMethods []string
+	var retryUpdate portfoliov1.UpdateSessionRequest
+	retryPlatform := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			retryMethods = append(retryMethods, method)
+			switch method {
+			case "portfolio.SaveStrategyIndicatorsV2":
+				return anypb.New(
+					&portfoliov1.SaveStrategyIndicatorsV2Response{
+						DefinitionsSaved: 1,
+						ChunksSaved:      1,
+					},
+				)
+			case "portfolio.FinalizeStrategyIndicatorChunksV2":
+				return anypb.New(
+					&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{
+						ChunksFinalized: 1,
+					},
+				)
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId:                    sessionID,
+						UserId:                       6,
+						RuntimeId:                    "rt-1",
+						Status:                       "recoverable",
+						BarsProcessed:                1,
+						IndicatorFinalizationPending: true,
+					},
+				})
+			case "portfolio.UpdateSession":
+				if err := request.UnmarshalTo(&retryUpdate); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, fmt.Errorf(
+					"unexpected retry platform method: %s",
+					method,
+				)
+			}
+		},
+	}
+	restarted := NewAgent(AgentConfig{
+		RuntimeID:                "rt-1",
+		UserID:                   6,
+		StateRoot:                stateRoot,
+		PlatformInvoker:          retryPlatform,
+		RequestTimeout:           time.Second,
+		IndicatorFinalizeTimeout: time.Second,
+	})
+	if err := restarted.RetryInitializationError(); err != nil {
+		t.Fatalf("retry initialization: %v", err)
+	}
+	if err := restarted.RetryTerminalSessions(
+		context.Background(),
+	); err != nil {
+		t.Fatalf("RetryTerminalSessions: %v", err)
+	}
+	wantMethods := []string{
+		"portfolio.SaveStrategyIndicatorsV2",
+		"portfolio.FinalizeStrategyIndicatorChunksV2",
+		"portfolio.GetSession",
+		"portfolio.UpdateSession",
+	}
+	if !slices.Equal(retryMethods, wantMethods) {
+		t.Fatalf("retry methods = %v, want %v", retryMethods, wantMethods)
+	}
+	if retryUpdate.GetStatus() != "recoverable" ||
+		retryUpdate.IndicatorFinalizationPending == nil ||
+		retryUpdate.GetIndicatorFinalizationPending() {
+		t.Fatalf("retry pending-clear update = %+v", &retryUpdate)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("completed retry records = %+v", records)
+	}
+	if restarted.indicatorSync.lookupSession(sessionID) != nil {
+		t.Fatal("completed retry retained indicator state")
+	}
+}
+
+func TestRetryTerminalSessionsClaimsRecordBeforePlatformReplay(t *testing.T) {
+	const sessionID = "52525252525252525252525252525252"
+	platform := &concurrentTerminalRetryPlatform{
+		started: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		UserID:          6,
+		PlatformInvoker: platform,
+		RequestTimeout:  time.Second,
+	})
+	record := TerminalRetryRecord{
+		SchemaVersion:   indicatorTerminalRetrySchemaVersion,
+		SessionID:       sessionID,
+		Generation:      1,
+		DesiredStatus:   "finished",
+		EffectiveStatus: "recoverable",
+		BarsProcessed:   10,
+		Reason:          "retry",
+	}
+	agent.terminalRetries[terminalRetryKey(sessionID, 1)] = record
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- agent.RetryTerminalSessions(context.Background())
+	}()
+	select {
+	case <-platform.started:
+	case <-time.After(time.Second):
+		t.Fatal("first terminal retry did not reach the platform")
+	}
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- agent.RetryTerminalSessions(context.Background())
+	}()
+	replayedConcurrently := false
+	select {
+	case <-platform.started:
+		replayedConcurrently = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(platform.release)
+	_ = <-firstDone
+	_ = <-secondDone
+	if replayedConcurrently || platform.maximumConcurrent() != 1 {
+		t.Fatalf(
+			"terminal retry max concurrency = %d, want one claimed replay",
+			platform.maximumConcurrent(),
+		)
 	}
 }
 
@@ -2209,6 +3541,70 @@ func TestAgentConcurrentRestartSessionReusesOneReplacementWorker(t *testing.T) {
 	}
 }
 
+func TestAgentRestartSessionDoesNotMutateOldSessionAfterShutdownBegins(t *testing.T) {
+	getSessionStarted := make(chan struct{})
+	releaseGetSession := make(chan struct{})
+	var updateCalls int
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, _ *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.GetSession":
+				close(getSessionStarted)
+				<-releaseGetSession
+				return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
+					SessionId: "sess-old", PortfolioId: 7, StrategyId: 12, UserId: 6,
+					RuntimeId: "rt-1", RuntimeSource: "bare", Status: "running",
+					Interval: "1m", StartTimeMs: 1000, EndTimeMs: 2000,
+				}})
+			case "portfolio.UpdateSession":
+				updateCalls++
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, errors.New("unexpected method: " + method)
+			}
+		},
+	}
+	starter := &fakeWorkerStarter{}
+	stopper := &fakeWorkerStopper{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", RuntimeSource: "bare", UserID: 6,
+		WorkerStarter: starter, WorkerStopper: stopper, PlatformInvoker: invoker,
+		StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+
+	restartDone := make(chan error, 1)
+	go func() {
+		_, err := agent.RestartSession(
+			context.Background(),
+			RestartSessionOptions{SessionID: "sess-old"},
+		)
+		restartDone <- err
+	}()
+	select {
+	case <-getSessionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart did not begin resolving the old session")
+	}
+	if err := agent.Shutdown(context.Background(), time.Second); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	close(releaseGetSession)
+
+	err := <-restartDone
+	if err == nil || !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("RestartSession error = %v, want Agent shutdown rejection", err)
+	}
+	if stopper.sessionID != "" {
+		t.Fatalf("restart stopped old worker %q after shutdown began", stopper.sessionID)
+	}
+	if updateCalls != 0 {
+		t.Fatalf("restart updated old session %d times after shutdown began", updateCalls)
+	}
+	if starter.startedSessionID != "" {
+		t.Fatalf("restart started replacement worker %q after shutdown began", starter.startedSessionID)
+	}
+}
+
 func TestAgentRestartSessionRejectsIndicatorAfterFinalizationAdmissionCloses(t *testing.T) {
 	updateStarted := make(chan struct{})
 	releaseUpdate := make(chan struct{})
@@ -2292,9 +3688,94 @@ func TestAgentRestartSessionRejectsIndicatorAfterFinalizationAdmissionCloses(t *
 	}
 }
 
+func TestAgentRestartSessionDrainTimeoutPersistsRecoverableRetry(t *testing.T) {
+	const sessionID = "sess-old"
+	stateRoot := t.TempDir()
+	starter := &fakeWorkerStarter{}
+	stopper := &fakeWorkerStopper{}
+	var update portfoliov1.UpdateSessionRequest
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			switch method {
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId:     sessionID,
+						PortfolioId:   7,
+						StrategyId:    12,
+						UserId:        6,
+						RuntimeId:     "rt-1",
+						RuntimeSource: "bare",
+						Status:        "running",
+						Interval:      "1m",
+						StartTimeMs:   1000,
+						EndTimeMs:     2000,
+						BarsProcessed: 19,
+					},
+				})
+			case "portfolio.UpdateSession":
+				if err := request.UnmarshalTo(&update); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, fmt.Errorf("unexpected method: %s", method)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		RuntimeSource:   "bare",
+		UserID:          6,
+		StateRoot:       stateRoot,
+		WorkerStarter:   starter,
+		WorkerStopper:   stopper,
+		PlatformInvoker: invoker,
+		StartTimeout:    time.Second,
+		RequestTimeout:  20 * time.Millisecond,
+	})
+	generation := newWorkerGeneration(sessionID, 27)
+	if !generation.admit("portfolio.SaveSession") {
+		t.Fatal("admit durable in-flight call")
+	}
+	agent.generations[sessionID] = generation
+
+	_, err := agent.RestartSession(
+		context.Background(),
+		RestartSessionOptions{SessionID: sessionID},
+	)
+	if err == nil || !strings.Contains(err.Error(), "worker restart drain failed") {
+		t.Fatalf("restart drain error = %v", err)
+	}
+	if update.GetStatus() != "recoverable" ||
+		update.IndicatorFinalizationPending == nil ||
+		!update.GetIndicatorFinalizationPending() {
+		t.Fatalf("restart drain update = %+v", &update)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 ||
+		records[0].SessionID != sessionID ||
+		records[0].Generation != 27 ||
+		records[0].DesiredStatus != "recoverable" {
+		t.Fatalf("restart drain retry records = %+v", records)
+	}
+	if starter.startedSessionID != "" {
+		t.Fatalf("replacement worker started after drain timeout: %s", starter.startedSessionID)
+	}
+	generation.completePlatformCall()
+}
+
 func TestAgentRestartSessionFinalizationFailureKeepsTailAndDoesNotStartNewWorker(t *testing.T) {
 	starter := &fakeWorkerStarter{}
 	stopper := &fakeWorkerStopper{}
+	stateRoot := t.TempDir()
 	var updateReq portfoliov1.UpdateSessionRequest
 	saveCalls := 0
 	invoker := &fakePlatformInvoker{
@@ -2306,7 +3787,7 @@ func TestAgentRestartSessionFinalizationFailureKeepsTailAndDoesNotStartNewWorker
 					RuntimeId: "rt-1", RuntimeSource: "bare", Status: "running",
 					Interval: "1m", StartTimeMs: 1000, EndTimeMs: 2000, BarsProcessed: 19,
 				}})
-			case "portfolio.SaveStrategyIndicators":
+			case "portfolio.SaveStrategyIndicatorsV2":
 				saveCalls++
 				return nil, errors.New("indicator store unavailable")
 			case "portfolio.UpdateSession":
@@ -2321,13 +3802,30 @@ func TestAgentRestartSessionFinalizationFailureKeepsTailAndDoesNotStartNewWorker
 	}
 	agent := NewAgent(AgentConfig{
 		RuntimeID: "rt-1", RuntimeSource: "bare", UserID: 6,
+		StateRoot:     stateRoot,
 		WorkerStarter: starter, WorkerStopper: stopper, PlatformInvoker: invoker,
 		StartTimeout: time.Second, RequestTimeout: time.Second,
 		IndicatorFinalizeTimeout: 20 * time.Millisecond,
 		IndicatorRetryInitial:    time.Millisecond,
 		IndicatorRetryMax:        2 * time.Millisecond,
 	})
-	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
+	generation := newWorkerGeneration("sess-old", 7)
+	generation.durablePossible = true
+	agent.generations["sess-old"] = generation
+	if err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{
+			SessionID:  "sess-old",
+			PID:        123,
+			Generation: 11,
+			token:      "worker-token",
+		},
+		indicatorSyncFrameV2(
+			"sess-old",
+			"binance:spot:BTCUSDT:1m",
+			0,
+			60_000,
+		),
+	); err != nil {
 		t.Fatalf("ReceiveFrame old indicators: %v", err)
 	}
 
@@ -2341,11 +3839,29 @@ func TestAgentRestartSessionFinalizationFailureKeepsTailAndDoesNotStartNewWorker
 	if updateReq.GetStatus() != "recoverable" || !strings.Contains(updateReq.GetError(), "indicator finalization failed") {
 		t.Fatalf("recoverable update = %+v", &updateReq)
 	}
+	if updateReq.IndicatorFinalizationPending == nil ||
+		!updateReq.GetIndicatorFinalizationPending() {
+		t.Fatalf("recoverable update must retain indicator finalization: %+v", &updateReq)
+	}
 	if agent.indicatorSync.lookupSession("sess-old") == nil {
 		t.Fatal("failed finalization discarded the retryable indicator tail")
 	}
 	if starter.startedSessionID != "" {
 		t.Fatalf("new worker started despite finalization failure: %s", starter.startedSessionID)
+	}
+	store, err := NewTerminalRetryStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 ||
+		records[0].SessionID != "sess-old" ||
+		records[0].Generation != 7 ||
+		records[0].Indicators == nil {
+		t.Fatalf("restart retry records = %+v", records)
 	}
 }
 
@@ -2841,7 +4357,7 @@ func bufferAgentIndicator(t *testing.T, agent *Agent, sessionID string) {
 	}
 }
 
-func TestAuthenticatedIndicatorKeepsGenerationAdmissionAfterRegistryRemoval(t *testing.T) {
+func TestAuthenticatedIndicatorRejectsDuringRegistryRemovalWithoutRecreatingState(t *testing.T) {
 	oldProcs := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(oldProcs)
 
@@ -2879,8 +4395,17 @@ func TestAuthenticatedIndicatorKeepsGenerationAdmissionAfterRegistryRemoval(t *t
 
 	select {
 	case err := <-result:
-		if err == nil || !strings.Contains(err.Error(), "worker generation is closing") {
-			t.Fatalf("late authenticated indicator error = %v, want closing-generation rejection", err)
+		// Registry removal races with the initial generation lookup. A request
+		// that captured the generation is rejected by its closing admission;
+		// one that observes removal first is rejected as stale. Neither result
+		// may recreate indicator state.
+		if err == nil ||
+			(!strings.Contains(err.Error(), "worker generation is closing") &&
+				!strings.Contains(err.Error(), "stale worker generation")) {
+			t.Fatalf(
+				"late authenticated indicator error = %v, want closing or stale rejection",
+				err,
+			)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("authenticated indicator did not complete")
@@ -2901,6 +4426,278 @@ func agentIndicatorFrame(sessionID string) *rwv1.IndicatorFrame {
 	}
 }
 
+func TestAuthenticatedIndicatorV2RejectsPayloadSessionBeforeBuffering(t *testing.T) {
+	agent := NewAgent(AgentConfig{})
+	const sessionID = "41414141414141414141414141414141"
+	generation := newWorkerGeneration(sessionID, 1)
+	if !generation.bindAuthenticatedGeneration(7) {
+		t.Fatal("bind authenticated generation")
+	}
+	agent.generations[sessionID] = generation
+	frame := indicatorSyncFrameV2(
+		"other-session",
+		"binance:spot:BTCUSDT:1m",
+		0,
+		60_000,
+	)
+	var shutdown *rwv1.ShutdownWorker
+
+	err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(),
+		WorkerIdentity{
+			SessionID:  sessionID,
+			PID:        123,
+			Generation: 7,
+			token:      "worker-token",
+		},
+		&rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_IndicatorFrameV2{
+				IndicatorFrameV2: frame,
+			},
+		},
+		func(frame *rwv1.AgentFrame) error {
+			shutdown = frame.GetShutdownWorker()
+			return nil
+		},
+	)
+	var protocolErr *IndicatorProtocolError
+	if !errors.As(err, &protocolErr) ||
+		!strings.Contains(protocolErr.Error(), "payload session_id") {
+		t.Fatalf("error = %v, want payload-session protocol error", err)
+	}
+	if agent.indicatorSync.lookupSession(sessionID) != nil ||
+		agent.indicatorSync.lookupSession("other-session") != nil {
+		t.Fatal("cross-session frame created indicator state")
+	}
+	generation.mu.Lock()
+	closing := generation.closing
+	generation.mu.Unlock()
+	if !closing {
+		t.Fatal("cross-session protocol failure left worker generation open")
+	}
+	if shutdown == nil || shutdown.GetSessionId() != sessionID {
+		t.Fatalf("shutdown = %+v", shutdown)
+	}
+}
+
+func TestAuthenticatedIndicatorV2ProtocolFailureClosesGenerationImmediately(t *testing.T) {
+	agent := NewAgent(AgentConfig{})
+	const sessionID = "42424242424242424242424242424242"
+	generation := newWorkerGeneration(sessionID, 1)
+	if !generation.bindAuthenticatedGeneration(7) {
+		t.Fatal("bind authenticated generation")
+	}
+	agent.generations[sessionID] = generation
+	runRequest, err := anypb.New(&strategyv1.RunStrategyRequest{
+		UserId:    6,
+		RuntimeId: "runtime-v2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.cfg.RuntimeID = "runtime-v2"
+	agent.rememberRunRequest(sessionID, runRequest)
+	identity := WorkerIdentity{
+		SessionID:  sessionID,
+		PID:        123,
+		Generation: 7,
+		token:      "worker-token",
+	}
+	first := indicatorSyncFrameV2(
+		sessionID,
+		"binance:spot:BTCUSDT:1m",
+		0,
+		60_000,
+	)
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(),
+		identity,
+		&rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_IndicatorFrameV2{
+				IndicatorFrameV2: first,
+			},
+		},
+		func(*rwv1.AgentFrame) error { return nil },
+	); err != nil {
+		t.Fatalf("first frame: %v", err)
+	}
+
+	conflict := proto.Clone(first).(*rwv1.IndicatorFrameV2)
+	conflict.Samples[0].ScalarValue = proto.Float64(2)
+	var sent []*rwv1.AgentFrame
+	err = agent.HandleAuthenticatedWorkerFrame(
+		context.Background(),
+		identity,
+		&rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_IndicatorFrameV2{
+				IndicatorFrameV2: conflict,
+			},
+		},
+		func(frame *rwv1.AgentFrame) error {
+			sent = append(sent, frame)
+			return nil
+		},
+	)
+	var protocolErr *IndicatorProtocolError
+	if !errors.As(err, &protocolErr) {
+		t.Fatalf("error = %v, want IndicatorProtocolError", err)
+	}
+	generation.mu.Lock()
+	closing := generation.closing
+	inFlight := generation.inFlight
+	generation.mu.Unlock()
+	if !closing || inFlight != 0 {
+		t.Fatalf("generation closing=%v inFlight=%d", closing, inFlight)
+	}
+	if len(sent) != 1 ||
+		sent[0].GetShutdownWorker() == nil ||
+		sent[0].GetShutdownWorker().GetSessionId() != sessionID {
+		t.Fatalf("sent = %+v", sent)
+	}
+}
+
+func TestAuthenticatedIndicatorV2ProtocolFailureDisconnectFinalizesAndRecovers(t *testing.T) {
+	const sessionID = "43434343434343434343434343434343"
+	var methods []string
+	var update portfoliov1.UpdateSessionRequest
+	invoker := &fakePlatformInvoker{
+		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
+			methods = append(methods, method)
+			switch method {
+			case "portfolio.SaveStrategyIndicatorsV2":
+				var save portfoliov1.SaveStrategyIndicatorsV2Request
+				if err := request.UnmarshalTo(&save); err != nil {
+					return nil, err
+				}
+				if len(save.GetChunks()) != 1 || save.GetChunks()[0].GetCount() != 1 {
+					return nil, fmt.Errorf("unexpected V2 save: %+v", &save)
+				}
+				return anypb.New(&portfoliov1.SaveStrategyIndicatorsV2Response{
+					DefinitionsSaved: 1,
+					ChunksSaved:      1,
+				})
+			case "portfolio.FinalizeStrategyIndicatorChunksV2":
+				var finalize portfoliov1.FinalizeStrategyIndicatorChunksV2Request
+				if err := request.UnmarshalTo(&finalize); err != nil {
+					return nil, err
+				}
+				if len(finalize.GetChunks()) != 1 ||
+					finalize.GetChunks()[0].GetExpectedRevision() != 1 {
+					return nil, fmt.Errorf("unexpected V2 finalization: %+v", &finalize)
+				}
+				return anypb.New(
+					&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{
+						ChunksFinalized: 1,
+					},
+				)
+			case "portfolio.GetSession":
+				return anypb.New(&portfoliov1.GetSessionResponse{
+					Session: &portfoliov1.StrategySessionEntry{
+						SessionId:     sessionID,
+						UserId:        6,
+						RuntimeId:     "runtime-v2",
+						Status:        "running",
+						BarsProcessed: 1,
+					},
+				})
+			case "portfolio.UpdateSession":
+				if err := request.UnmarshalTo(&update); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.UpdateSessionResponse{})
+			default:
+				return nil, fmt.Errorf("unexpected method: %s", method)
+			}
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "runtime-v2",
+		UserID:          6,
+		PlatformInvoker: invoker,
+		RequestTimeout:  time.Second,
+	})
+	generation := newWorkerGeneration(sessionID, 1)
+	generation.durablePossible = true
+	if !generation.bindAuthenticatedGeneration(7) {
+		t.Fatal("bind authenticated generation")
+	}
+	agent.generations[sessionID] = generation
+	runRequest, err := anypb.New(&strategyv1.RunStrategyRequest{
+		UserId:    6,
+		RuntimeId: "runtime-v2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.rememberRunRequest(sessionID, runRequest)
+	identity := WorkerIdentity{
+		SessionID:  sessionID,
+		PID:        123,
+		Generation: 7,
+		token:      "worker-token",
+	}
+	first := indicatorSyncFrameV2(
+		sessionID,
+		"binance:spot:BTCUSDT:1m",
+		0,
+		60_000,
+	)
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(),
+		identity,
+		&rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_IndicatorFrameV2{
+				IndicatorFrameV2: first,
+			},
+		},
+		func(*rwv1.AgentFrame) error { return nil },
+	); err != nil {
+		t.Fatalf("first frame: %v", err)
+	}
+	conflict := proto.Clone(first).(*rwv1.IndicatorFrameV2)
+	conflict.Samples[0].ScalarValue = proto.Float64(2)
+	protocolErr := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(),
+		identity,
+		&rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_IndicatorFrameV2{
+				IndicatorFrameV2: conflict,
+			},
+		},
+		func(*rwv1.AgentFrame) error { return nil },
+	)
+	if protocolErr == nil {
+		t.Fatal("conflicting duplicate was accepted")
+	}
+
+	if err := agent.HandleWorkerDisconnect(identity, protocolErr); err != nil {
+		t.Fatalf("HandleWorkerDisconnect: %v", err)
+	}
+	wantMethods := []string{
+		"portfolio.SaveStrategyIndicatorsV2",
+		"portfolio.FinalizeStrategyIndicatorChunksV2",
+		"portfolio.GetSession",
+		"portfolio.UpdateSession",
+	}
+	if !slices.Equal(methods, wantMethods) {
+		t.Fatalf("cleanup methods = %v, want %v", methods, wantMethods)
+	}
+	if update.GetStatus() != "recoverable" ||
+		!strings.Contains(update.GetError(), "conflicting duplicate payload") {
+		t.Fatalf("protocol recovery update = %+v", &update)
+	}
+	if update.IndicatorFinalizationPending == nil ||
+		update.GetIndicatorFinalizationPending() {
+		t.Fatalf("successful protocol cleanup must clear finalization pending: %+v", &update)
+	}
+	agent.mu.Lock()
+	_, retained := agent.generations[sessionID]
+	agent.mu.Unlock()
+	if retained || agent.indicatorSync.lookupSession(sessionID) != nil {
+		t.Fatal("successful protocol cleanup retained generation or indicator state")
+	}
+}
+
 type fakePlatformInvoker struct {
 	method   string
 	request  *anypb.Any
@@ -2909,15 +4706,147 @@ type fakePlatformInvoker struct {
 }
 
 type admissionCleanupPlatform struct {
-	mu          sync.Mutex
-	events      []string
-	saveStarted chan struct{}
-	releaseSave chan struct{}
-	status      string
+	mu                           sync.Mutex
+	events                       []string
+	saveStarted                  chan struct{}
+	releaseSave                  chan struct{}
+	status                       string
+	indicatorFinalizationPending bool
+	lastUpdate                   *portfoliov1.UpdateSessionRequest
+}
+
+type finalStatusShutdownRacePlatform struct {
+	updateOnce    sync.Once
+	updateStarted chan struct{}
+	releaseUpdate chan struct{}
+	getStarted    chan struct{}
+}
+
+func (p *finalStatusShutdownRacePlatform) InvokePlatformAny(
+	ctx context.Context,
+	method string,
+	_ *anypb.Any,
+	_ time.Duration,
+) (*anypb.Any, error) {
+	switch method {
+	case "portfolio.UpdateSession":
+		p.updateOnce.Do(func() { close(p.updateStarted) })
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-p.releaseUpdate:
+			return anypb.New(&portfoliov1.UpdateSessionResponse{})
+		}
+	case "portfolio.GetSession":
+		select {
+		case p.getStarted <- struct{}{}:
+		default:
+		}
+		return anypb.New(&portfoliov1.GetSessionResponse{
+			Session: &portfoliov1.StrategySessionEntry{
+				SessionId: "18191919191919191919191919191919",
+				UserId:    6,
+				RuntimeId: "rt-1",
+				Status:    "running",
+			},
+		})
+	default:
+		return nil, fmt.Errorf("unexpected method: %s", method)
+	}
+}
+
+type concurrentTerminalRetryPlatform struct {
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	started   chan struct{}
+	release   chan struct{}
+}
+
+func (p *concurrentTerminalRetryPlatform) InvokePlatformAny(
+	ctx context.Context,
+	method string,
+	_ *anypb.Any,
+	_ time.Duration,
+) (*anypb.Any, error) {
+	switch method {
+	case "portfolio.GetSession":
+		p.mu.Lock()
+		p.active++
+		if p.active > p.maxActive {
+			p.maxActive = p.active
+		}
+		p.mu.Unlock()
+		p.started <- struct{}{}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-p.release:
+		}
+		p.mu.Lock()
+		p.active--
+		p.mu.Unlock()
+		return anypb.New(&portfoliov1.GetSessionResponse{
+			Session: &portfoliov1.StrategySessionEntry{
+				SessionId:                    "52525252525252525252525252525252",
+				UserId:                       6,
+				RuntimeId:                    "rt-1",
+				Status:                       "recoverable",
+				BarsProcessed:                10,
+				IndicatorFinalizationPending: true,
+			},
+		})
+	case "portfolio.UpdateSession":
+		return anypb.New(&portfoliov1.UpdateSessionResponse{})
+	default:
+		return nil, fmt.Errorf("unexpected method: %s", method)
+	}
+}
+
+func (p *concurrentTerminalRetryPlatform) maximumConcurrent() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxActive
+}
+
+type shutdownWorkerStopper struct {
+	stopAllCalls int
+	onStopAll    func()
+}
+
+func (s *shutdownWorkerStopper) StopAll(
+	context.Context,
+	time.Duration,
+) error {
+	s.stopAllCalls++
+	if s.onStopAll != nil {
+		s.onStopAll()
+	}
+	return nil
+}
+
+func (*shutdownWorkerStopper) StopSessionWorker(
+	context.Context,
+	string,
+	time.Duration,
+) error {
+	return nil
 }
 
 type contextDeadlinePlatform struct {
 	done chan struct{}
+}
+
+type blockingPlatformInvoker struct{}
+
+func (blockingPlatformInvoker) InvokePlatformAny(
+	ctx context.Context,
+	_ string,
+	_ *anypb.Any,
+	_ time.Duration,
+) (*anypb.Any, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func (p *contextDeadlinePlatform) InvokePlatformAny(
@@ -2955,9 +4884,11 @@ func (p *admissionCleanupPlatform) InvokePlatformAny(
 		}
 		p.mu.Lock()
 		status := p.status
+		indicatorFinalizationPending := p.indicatorFinalizationPending
 		p.mu.Unlock()
 		return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
 			SessionId: get.GetSessionId(), UserId: 6, RuntimeId: "rt-1", Status: status,
+			IndicatorFinalizationPending: indicatorFinalizationPending,
 		}})
 	case "portfolio.UpdateSession":
 		var update portfoliov1.UpdateSessionRequest
@@ -2966,6 +4897,10 @@ func (p *admissionCleanupPlatform) InvokePlatformAny(
 		}
 		p.mu.Lock()
 		p.status = update.GetStatus()
+		if update.IndicatorFinalizationPending != nil {
+			p.indicatorFinalizationPending = update.GetIndicatorFinalizationPending()
+		}
+		p.lastUpdate = proto.Clone(&update).(*portfoliov1.UpdateSessionRequest)
 		p.events = append(p.events, "UpdateSession:"+update.GetStatus())
 		p.mu.Unlock()
 		return anypb.New(&portfoliov1.UpdateSessionResponse{})
@@ -2984,6 +4919,15 @@ func (p *admissionCleanupPlatform) snapshotEvents() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.events...)
+}
+
+func (p *admissionCleanupPlatform) snapshotLastUpdate() *portfoliov1.UpdateSessionRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastUpdate == nil {
+		return nil
+	}
+	return proto.Clone(p.lastUpdate).(*portfoliov1.UpdateSessionRequest)
 }
 
 func (i *fakePlatformInvoker) InvokePlatformAny(ctx context.Context, method string, request *anypb.Any, timeout time.Duration) (*anypb.Any, error) {

@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -235,6 +236,67 @@ func TestRuntimeChannelClientSendsInitialHello(t *testing.T) {
 	}
 }
 
+func TestRuntimeChannelClientWaitAuthenticatedRequiresHelloAck(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	capture := &delayedHelloAckRuntimeChannelServer{
+		firstFrame: make(chan *cpv1.RuntimeFrame, 1),
+		sendAck:    make(chan struct{}),
+	}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer server.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
+		Address: "bufnet",
+		Identity: RuntimeIdentity{
+			Source:            "bare",
+			UserID:            6,
+			RuntimeID:         "bare-6-auth-gate",
+			DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile,
+		},
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- client.Run(ctx)
+	}()
+
+	select {
+	case <-capture.firstFrame:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime channel did not send HELLO")
+	}
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelWait()
+	if err := client.WaitAuthenticated(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitAuthenticated before HELLO_ACK = %v, want deadline exceeded", err)
+	}
+
+	close(capture.sendAck)
+	ackCtx, cancelAck := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelAck()
+	if err := client.WaitAuthenticated(ackCtx); err != nil {
+		t.Fatalf("WaitAuthenticated after HELLO_ACK: %v", err)
+	}
+
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime channel did not stop after context cancel")
+	}
+}
+
 func TestRuntimeChannelClientInvokesPlatformRequest(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -295,6 +357,94 @@ func TestRuntimeChannelClientInvokesPlatformRequest(t *testing.T) {
 	<-errCh
 }
 
+func TestRuntimeChannelHeartbeatIndependentOfBlockedRequestHandler(
+	t *testing.T,
+) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	capture := &blockedRequestRuntimeChannelServer{
+		heartbeats: make(chan time.Time, 4),
+	}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer server.Stop()
+
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
+		Address: "bufnet",
+		Identity: RuntimeIdentity{
+			Source:            "bare",
+			UserID:            6,
+			RuntimeID:         "bare-6-heartbeat",
+			DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile,
+		},
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(
+				context.Context,
+				string,
+			) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+		HeartbeatSeconds: 1,
+		RequestHandler: func(
+			context.Context,
+			*cpv1.RuntimeFrame,
+		) *cpv1.RuntimeFrame {
+			close(handlerStarted)
+			<-releaseHandler
+			return &cpv1.RuntimeFrame{
+				CorrelationId: "blocked-request",
+				FrameType:     cpv1.FrameType_FRAME_TYPE_RESPONSE,
+			}
+		},
+	})
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- client.Run(ctx)
+	}()
+	select {
+	case <-handlerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked request handler did not start")
+	}
+	timestamps := make([]time.Time, 0, 3)
+	for len(timestamps) < 3 {
+		select {
+		case timestamp := <-capture.heartbeats:
+			timestamps = append(timestamps, timestamp)
+		case <-time.After(5 * time.Second):
+			t.Fatalf(
+				"received %d heartbeats while request handler was blocked",
+				len(timestamps),
+			)
+		}
+	}
+	select {
+	case <-releaseHandler:
+		t.Fatal("blocked request handler was unexpectedly released")
+	default:
+	}
+	for index := 1; index < len(timestamps); index++ {
+		if gap := timestamps[index].Sub(timestamps[index-1]); gap > 2*time.Second {
+			t.Fatalf("heartbeat gap = %v, want <= 2s", gap)
+		}
+	}
+	close(releaseHandler)
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime channel did not stop")
+	}
+}
+
 func TestRuntimeChannelDataHandlerErrorDoesNotAckDroppedData(t *testing.T) {
 	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
 		DataHandler: func(context.Context, *cpv1.RuntimeFrame) error {
@@ -336,6 +486,37 @@ type captureRuntimeChannelServer struct {
 	firstFrame chan *cpv1.RuntimeFrame
 }
 
+type delayedHelloAckRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+	firstFrame chan *cpv1.RuntimeFrame
+	sendAck    chan struct{}
+}
+
+func (s *delayedHelloAckRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
+) error {
+	frame, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	s.firstFrame <- frame
+	select {
+	case <-stream.Context().Done():
+		return stream.Context().Err()
+	case <-s.sendAck:
+	}
+	if err := stream.Send(&cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_HELLO_ACK,
+		Payload: &cpv1.RuntimeFrame_HelloAck{HelloAck: &cpv1.RuntimeHelloAck{
+			RuntimeId: "bare-6-auth-gate",
+		}},
+	}); err != nil {
+		return err
+	}
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
+
 func (s *captureRuntimeChannelServer) RuntimeChannel(stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame]) error {
 	frame, err := stream.Recv()
 	if err != nil {
@@ -355,6 +536,57 @@ func (s *captureRuntimeChannelServer) RuntimeChannel(stream grpc.BidiStreamingSe
 type platformRequestRuntimeChannelServer struct {
 	cpv1.UnimplementedControlPanelServiceServer
 	requestFrame chan *cpv1.RuntimeFrame
+}
+
+type blockedRequestRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+	heartbeats chan time.Time
+}
+
+func (s *blockedRequestRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[
+		cpv1.RuntimeFrame,
+		cpv1.RuntimeFrame,
+	],
+) error {
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if first.GetFrameType() != cpv1.FrameType_FRAME_TYPE_HELLO {
+		return nil
+	}
+	if err := stream.Send(&cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_HELLO_ACK,
+		Payload: &cpv1.RuntimeFrame_HelloAck{
+			HelloAck: &cpv1.RuntimeHelloAck{
+				RuntimeId: "bare-6-heartbeat",
+			},
+		},
+	}); err != nil {
+		return err
+	}
+	if err := stream.Send(&cpv1.RuntimeFrame{
+		CorrelationId: "blocked-request",
+		FrameType:     cpv1.FrameType_FRAME_TYPE_REQUEST,
+		Payload: &cpv1.RuntimeFrame_Request{
+			Request: &cpv1.StrategyRequest{
+				Method: "RunStrategy",
+			},
+		},
+	}); err != nil {
+		return err
+	}
+	for {
+		frame, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if frame.GetFrameType() ==
+			cpv1.FrameType_FRAME_TYPE_HEARTBEAT {
+			s.heartbeats <- time.Now()
+		}
+	}
 }
 
 func (s *platformRequestRuntimeChannelServer) RuntimeChannel(stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame]) error {

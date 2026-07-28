@@ -289,11 +289,17 @@ func validateResolvedWorkerBaseEnvironment(environment []string) error {
 	if err != nil {
 		return errors.New("worker base environment is invalid")
 	}
-	if values["PYTHONUNBUFFERED"] != "1" || values["PYTHONDONTWRITEBYTECODE"] != "1" || values["PATH"] == "" {
+	if values["GRPC_ENABLE_FORK_SUPPORT"] != "0" ||
+		values["PYTHONUNBUFFERED"] != "1" ||
+		values["PYTHONDONTWRITEBYTECODE"] != "1" ||
+		values["PATH"] == "" {
 		return errors.New("worker base environment is incomplete")
 	}
 	allowed := map[string]struct{}{
-		"PATH": {}, "PYTHONUNBUFFERED": {}, "PYTHONDONTWRITEBYTECODE": {},
+		"GRPC_ENABLE_FORK_SUPPORT": {},
+		"PATH":                     {},
+		"PYTHONUNBUFFERED":         {},
+		"PYTHONDONTWRITEBYTECODE":  {},
 	}
 	if runtime.GOOS == "windows" {
 		for _, key := range []string{"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"} {

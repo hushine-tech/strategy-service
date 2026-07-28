@@ -150,7 +150,6 @@ func (c *RuntimeChannelClient) Run(ctx context.Context) error {
 	if err := c.sendOutbound(runCtx, outbound, initial); err != nil {
 		return err
 	}
-	c.connectOnce.Do(func() { close(c.connected) })
 
 	heartbeatStop := make(chan struct{})
 	go c.heartbeatLoop(runCtx, outbound, heartbeatStop)
@@ -209,6 +208,22 @@ func (c *RuntimeChannelClient) Send(frame *cpv1.RuntimeFrame) error {
 		return nil
 	default:
 		return fmt.Errorf("runtime channel outbound queue is full")
+	}
+}
+
+// WaitAuthenticated blocks until control-panel-service has accepted the
+// initial HELLO and returned HELLO_ACK. Merely opening the transport or
+// enqueueing HELLO is not sufficient proof that the runtime identity was
+// admitted.
+func (c *RuntimeChannelClient) WaitAuthenticated(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.connected:
+		return nil
 	}
 }
 
@@ -358,6 +373,7 @@ func (c *RuntimeChannelClient) handleInboundFrame(
 			c.runtimeID = strings.TrimSpace(ack.GetRuntimeId())
 			c.fingerprint = strings.TrimSpace(firstNonEmpty(ack.GetFingerprint(), ack.GetResumeToken()))
 			c.mu.Unlock()
+			c.connectOnce.Do(func() { close(c.connected) })
 		}
 	case cpv1.FrameType_FRAME_TYPE_HEARTBEAT_ACK:
 		ack := frame.GetHeartbeatAck()

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -139,13 +140,199 @@ func TestRunAgentStartsIndicatorSyncLoopWithProcessContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	startAgentBackgroundLoops(ctx, agent)
+	startAgentBackgroundLoops(ctx, agent, func(context.Context) error {
+		return nil
+	})
 	select {
 	case <-invoker.called:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for indicator sync loop")
 	}
 	cancel()
+}
+
+func TestRunAfterRuntimeAuthenticationDoesNotStartEarly(t *testing.T) {
+	authenticated := make(chan struct{})
+	started := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runAfterRuntimeAuthentication(
+		ctx,
+		func(waitCtx context.Context) error {
+			select {
+			case <-waitCtx.Done():
+				return waitCtx.Err()
+			case <-authenticated:
+				return nil
+			}
+		},
+		func() {
+			close(started)
+		},
+	)
+
+	select {
+	case <-started:
+		t.Fatal("terminal retry loop started before RuntimeChannel authentication")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(authenticated)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("terminal retry loop did not start after RuntimeChannel authentication")
+	}
+}
+
+func TestRunAfterRuntimeAuthenticationHonorsCancellation(t *testing.T) {
+	started := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runAfterRuntimeAuthentication(
+		ctx,
+		func(waitCtx context.Context) error {
+			<-waitCtx.Done()
+			return waitCtx.Err()
+		},
+		func() {
+			close(started)
+		},
+	)
+	select {
+	case <-started:
+		t.Fatal("terminal retry loop started after authentication wait was cancelled")
+	default:
+	}
+}
+
+func TestCoordinateRuntimeLifecycleKeepsChannelContextAliveUntilAgentShutdown(
+	t *testing.T,
+) {
+	signalCtx, cancelSignal := context.WithCancel(context.Background())
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
+	events := make(chan string, 3)
+	runtimeStarted := make(chan struct{})
+	result := make(chan struct {
+		runErr      error
+		shutdownErr error
+	}, 1)
+	go func() {
+		runErr, shutdownErr := coordinateRuntimeLifecycle(
+			signalCtx,
+			serviceCtx,
+			cancelService,
+			func(runCtx context.Context) error {
+				close(runtimeStarted)
+				<-runCtx.Done()
+				events <- "runtime-channel-stopped"
+				return runCtx.Err()
+			},
+			func() error {
+				if serviceCtx.Err() != nil {
+					return fmt.Errorf(
+						"runtime channel context was cancelled before Agent shutdown",
+					)
+				}
+				events <- "agent-shutdown"
+				return nil
+			},
+		)
+		result <- struct {
+			runErr      error
+			shutdownErr error
+		}{runErr: runErr, shutdownErr: shutdownErr}
+	}()
+	<-runtimeStarted
+	cancelSignal()
+	outcome := <-result
+	if outcome.shutdownErr != nil {
+		t.Fatal(outcome.shutdownErr)
+	}
+	if !errors.Is(outcome.runErr, context.Canceled) {
+		t.Fatalf("runtime error = %v", outcome.runErr)
+	}
+	close(events)
+	got := make([]string, 0, 2)
+	for event := range events {
+		got = append(got, event)
+	}
+	if !slices.Equal(got, []string{
+		"agent-shutdown",
+		"runtime-channel-stopped",
+	}) {
+		t.Fatalf("lifecycle events = %v", got)
+	}
+}
+
+func TestCoordinateRuntimeLifecycleRetriesUnsafeShutdownBeforeCancellation(
+	t *testing.T,
+) {
+	signalCtx, cancelSignal := context.WithCancel(context.Background())
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
+	events := make(chan string, 4)
+	runtimeStarted := make(chan struct{})
+	result := make(chan struct {
+		runErr      error
+		shutdownErr error
+	}, 1)
+	shutdownCalls := 0
+	go func() {
+		runErr, shutdownErr := coordinateRuntimeLifecycle(
+			signalCtx,
+			serviceCtx,
+			cancelService,
+			func(runCtx context.Context) error {
+				close(runtimeStarted)
+				<-runCtx.Done()
+				events <- "runtime-channel-stopped"
+				return runCtx.Err()
+			},
+			func() error {
+				shutdownCalls++
+				if serviceCtx.Err() != nil {
+					return fmt.Errorf(
+						"runtime channel context cancelled before safe shutdown",
+					)
+				}
+				events <- fmt.Sprintf("agent-shutdown-%d", shutdownCalls)
+				if shutdownCalls == 1 {
+					return errors.New("terminal state is not durable")
+				}
+				return nil
+			},
+		)
+		result <- struct {
+			runErr      error
+			shutdownErr error
+		}{runErr: runErr, shutdownErr: shutdownErr}
+	}()
+	<-runtimeStarted
+	cancelSignal()
+	select {
+	case outcome := <-result:
+		if outcome.shutdownErr != nil {
+			t.Fatal(outcome.shutdownErr)
+		}
+		if !errors.Is(outcome.runErr, context.Canceled) {
+			t.Fatalf("runtime error = %v", outcome.runErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("safe shutdown retry did not complete")
+	}
+	close(events)
+	got := make([]string, 0, 3)
+	for event := range events {
+		got = append(got, event)
+	}
+	if !slices.Equal(got, []string{
+		"agent-shutdown-1",
+		"agent-shutdown-2",
+		"runtime-channel-stopped",
+	}) {
+		t.Fatalf("lifecycle events = %v", got)
+	}
 }
 
 type syncLoopPlatformInvoker struct {
@@ -181,6 +368,28 @@ func TestRuntimeIdentityFromConfigBuildsBareIdentity(t *testing.T) {
 	}
 	if !strings.HasPrefix(identity.Name, "bare-debug-6-") {
 		t.Fatalf("name = %q", identity.Name)
+	}
+}
+
+func TestWorkerIPCListenerUsesLoopbackTCP(t *testing.T) {
+	listener, err := listenWorkerIPC()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if listener.Addr().Network() != "tcp" {
+		t.Fatalf(
+			"worker IPC network = %q, want tcp",
+			listener.Addr().Network(),
+		)
+	}
+	host, _, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		t.Fatalf("worker IPC address = %q, want loopback", host)
 	}
 }
 
@@ -341,7 +550,7 @@ func TestShutdownStopsActiveWorkersBeforeBoundedGRPCStop(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		shutdownAgentOnContext(ctx, "", "", "", workers, grpcServer, 20*time.Millisecond, 5*time.Millisecond, defaultCoverageShutdownOps())
+		shutdownAgentOnContext(ctx, "", "", "", workers, workers, grpcServer, 20*time.Millisecond, 5*time.Millisecond, defaultCoverageShutdownOps())
 		close(done)
 	}()
 
@@ -371,6 +580,55 @@ func TestShutdownStopsActiveWorkersBeforeBoundedGRPCStop(t *testing.T) {
 	}
 }
 
+func TestShutdownKeepsWorkerIPCAvailableWhenTerminalStateIsUnsafe(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make([]string, 0, 3)
+	workers := &orderedShutdownWorkers{
+		events:  &events,
+		stopErr: errors.New("terminal state is not durable"),
+	}
+	grpcServer := &orderedShutdownGRPC{events: &events}
+	ops := coverageShutdownOps{
+		writeSnapshot: func(string) error {
+			events = append(events, "snapshot")
+			return nil
+		},
+		writeFinalization: func(
+			string,
+			runtimeagent.CoverageFinalization,
+		) error {
+			events = append(events, "finalization")
+			return nil
+		},
+		now: time.Now,
+	}
+	cancel()
+
+	err := shutdownAgentOnContext(
+		ctx,
+		"/coverage",
+		"rt-1",
+		"boot-1",
+		workers,
+		workers,
+		grpcServer,
+		time.Second,
+		time.Second,
+		ops,
+	)
+	if err == nil {
+		t.Fatal("shutdown error = nil, want unsafe terminal-state failure")
+	}
+	if !slices.Equal(events, []string{"workers"}) {
+		t.Fatalf(
+			"unsafe shutdown events = %v, want IPC and coverage left active",
+			events,
+		)
+	}
+}
+
 func TestShutdownFinalizesCoverageAfterWorkersAndSnapshot(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make([]string, 0, 4)
@@ -391,7 +649,7 @@ func TestShutdownFinalizesCoverageAfterWorkersAndSnapshot(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		shutdownAgentOnContext(ctx, "/coverage", "rt-1", "boot-1", workers, grpcServer, time.Second, time.Second, ops)
+		shutdownAgentOnContext(ctx, "/coverage", "rt-1", "boot-1", workers, workers, grpcServer, time.Second, time.Second, ops)
 		close(done)
 	}()
 	cancel()
@@ -421,7 +679,6 @@ func TestShutdownMarksCoverageIncompleteForForcedWorkerOrSnapshotFailure(t *test
 		goStatus      string
 	}{
 		{name: "forced worker", workers: &orderedShutdownWorkers{forced: 1}, workerStatus: "forced", forcedWorkers: 1, goStatus: "ok"},
-		{name: "worker stop error", workers: &orderedShutdownWorkers{stopErr: errors.New("stop failed")}, workerStatus: "error", goStatus: "ok"},
 		{name: "snapshot error", workers: &orderedShutdownWorkers{}, snapshotError: errors.New("snapshot failed"), workerStatus: "ok", goStatus: "error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -437,7 +694,7 @@ func TestShutdownMarksCoverageIncompleteForForcedWorkerOrSnapshotFailure(t *test
 			}
 			done := make(chan struct{})
 			go func() {
-				shutdownAgentOnContext(ctx, "/coverage", "rt-1", "boot-1", tc.workers, &orderedShutdownGRPC{}, time.Second, time.Second, ops)
+				shutdownAgentOnContext(ctx, "/coverage", "rt-1", "boot-1", tc.workers, tc.workers, &orderedShutdownGRPC{}, time.Second, time.Second, ops)
 				close(done)
 			}()
 			cancel()
@@ -461,7 +718,7 @@ type orderedShutdownWorkers struct {
 	forced  int
 }
 
-func (w *orderedShutdownWorkers) StopAll(context.Context, time.Duration) error {
+func (w *orderedShutdownWorkers) Shutdown(context.Context, time.Duration) error {
 	if w.events != nil {
 		*w.events = append(*w.events, "workers")
 	}
@@ -487,13 +744,17 @@ type shutdownTestWorkerManager struct {
 	events chan<- string
 }
 
-func (m *shutdownTestWorkerManager) StopAll(_ context.Context, _ time.Duration) error {
+func (m *shutdownTestWorkerManager) Shutdown(_ context.Context, _ time.Duration) error {
 	if !m.active {
 		return fmt.Errorf("no active worker")
 	}
 	m.events <- "workers"
 	m.active = false
 	return nil
+}
+
+func (*shutdownTestWorkerManager) ShutdownSummary() runtimeagent.WorkerShutdownSummary {
+	return runtimeagent.WorkerShutdownSummary{}
 }
 
 type shutdownTestGRPCServer struct {

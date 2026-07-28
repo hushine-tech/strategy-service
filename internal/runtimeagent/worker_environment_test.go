@@ -26,6 +26,7 @@ func TestResolveWorkerLaunchSpecBuildsOneSanitizedImmutableInvocation(t *testing
 		"CORE_SERVICE_GRPC_ADDR=secret:50051",
 		"ORDER_SERVICE_GRPC_ADDR=secret:50052",
 		"RUNTIME_CREDENTIAL_JSON=secret-token",
+		"GRPC_ENABLE_FORK_SUPPORT=1",
 		"HUSHINE_WORKER_PYTHON_ARGS=-Xfrozen_modules=off",
 		"HUSHINE_RUNTIME_PROFILE_NAME=platform-python-3.13",
 		"HUSHINE_RUNTIME_PROFILE_VERSION=1.0.0",
@@ -78,6 +79,12 @@ func TestResolveWorkerLaunchSpecBuildsOneSanitizedImmutableInvocation(t *testing
 	}
 	if strings.Contains(strings.Join(spec.Invocation.Env, "\n"), poison) {
 		t.Fatalf("poisoned parent value reached child: %v", spec.Invocation.Env)
+	}
+	if childEnv["GRPC_ENABLE_FORK_SUPPORT"] != "0" {
+		t.Fatalf(
+			"GRPC_ENABLE_FORK_SUPPORT = %q, want 0 so import probes cannot inherit active gRPC fork handlers",
+			childEnv["GRPC_ENABLE_FORK_SUPPORT"],
+		)
 	}
 	for _, required := range []string{
 		"HUSHINE_RUNTIME_PROFILE_NAME", "HUSHINE_RUNTIME_PROFILE_VERSION",

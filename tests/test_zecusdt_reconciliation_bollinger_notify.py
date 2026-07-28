@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
+
+import pytest
 
 from strategy_service.inputs import InputView, parse_declared_inputs
 from strategy_service.types import (
@@ -43,8 +46,25 @@ class _IndicatorRecorder:
     def set(self, key: str, value: object) -> None:
         self.values[key] = value
 
-    def mark(self, key: str, text: str = "", price: float | None = None, color: str = "") -> None:
+    def mark(
+        self,
+        key: str,
+        *,
+        text: str = "",
+        price: float | None = None,
+        color: str = "",
+        position: str = "",
+        shape: str = "",
+    ) -> None:
+        del position, shape
         self.markers.append((key, text, price, color))
+
+    def drain(self) -> tuple[dict[str, object], list[tuple[str, str, float | None, str]]]:
+        values = dict(self.values)
+        markers = list(self.markers)
+        self.values.clear()
+        self.markers.clear()
+        return values, markers
 
 
 class _NotifyRecorder:
@@ -109,6 +129,30 @@ def test_declares_zecusdt_one_minute_futures_inputs_targets_and_indicators():
     assert MyStrategy.INDICATORS["trade_signal"]["type"] == "marker"
 
 
+def test_bollinger_width_is_numeric_from_second_bar_and_uses_trailing_window():
+    strategy = MyStrategy()
+    recorder = _IndicatorRecorder()
+    strategy.indicators = recorder
+    observed: list[float | None] = []
+
+    for price in [float(value) for value in range(100, 125)]:
+        strategy._record_indicators(price, 0.0)
+        values, _ = recorder.drain()
+        width = values["bb_width_bps"]
+        observed.append(None if width is None else float(width))
+
+    assert observed[0] is None
+    for index, width in enumerate(observed[1:], start=1):
+        window = [float(value) for value in range(100, 100 + index + 1)][-20:]
+        middle = sum(window) / len(window)
+        variance = sum((value - middle) ** 2 for value in window) / len(window)
+        band = 2.0 * math.sqrt(variance)
+        expected = (((middle + band) - (middle - band)) / middle) * 10_000.0
+        assert width is not None
+        assert math.isfinite(width)
+        assert width == pytest.approx(expected)
+
+
 def test_point_one_percent_rise_buys_one_percent_wallet_balance_and_notifies():
     strategy = MyStrategy()
     strategy.indicators = _IndicatorRecorder()
@@ -117,6 +161,8 @@ def test_point_one_percent_rise_buys_one_percent_wallet_balance_and_notifies():
     wallet = _StubWallet(wallet_balance=5000.0)
 
     assert _feed(strategy, view, 100.0, wallet) is None
+    _, initial_markers = strategy.indicators.drain()
+    assert initial_markers == []
     decision = _feed(strategy, view, 100.1, wallet)
 
     assert isinstance(decision, OrderDecision)
@@ -136,7 +182,11 @@ def test_point_one_percent_rise_buys_one_percent_wallet_balance_and_notifies():
     } <= set(strategy.indicators.values)
     assert "price_change_bps" not in strategy.indicators.values
     assert abs(float(strategy.indicators.values["price_change_histogram_bps"]) - 10.0) < 1e-9
-    assert strategy.indicators.markers == [("trade_signal", "BUY", 100.1, "#16a34a")]
+    _, decision_markers = strategy.indicators.drain()
+    assert decision_markers == [("trade_signal", "BUY", 100.1, "#16a34a")]
+    assert _feed(strategy, view, 100.15, wallet) is None
+    _, later_markers = strategy.indicators.drain()
+    assert later_markers == []
     assert strategy.notify.calls
     assert strategy.notify.calls[-1]["severity"] == "warn"
     assert "BUY ZECUSDT" in strategy.notify.calls[-1]["message"]
@@ -151,12 +201,18 @@ def test_point_one_percent_drop_sells_one_percent_wallet_balance_and_notifies():
     wallet = _StubWallet(wallet_balance=5000.0)
 
     assert _feed(strategy, view, 100.0, wallet) is None
+    _, initial_markers = strategy.indicators.drain()
+    assert initial_markers == []
     decision = _feed(strategy, view, 99.9, wallet)
 
     assert isinstance(decision, OrderDecision)
     assert decision.side == OrderSide.SELL
     assert decision.qty == "0.5"
-    assert strategy.indicators.markers == [("trade_signal", "SELL", 99.9, "#dc2626")]
+    _, decision_markers = strategy.indicators.drain()
+    assert decision_markers == [("trade_signal", "SELL", 99.9, "#dc2626")]
+    assert _feed(strategy, view, 99.85, wallet) is None
+    _, later_markers = strategy.indicators.drain()
+    assert later_markers == []
     assert strategy.notify.calls[-1]["severity"] == "warn"
     assert "SELL ZECUSDT" in strategy.notify.calls[-1]["message"]
     assert "-0.1000%" in strategy.notify.calls[-1]["message"]

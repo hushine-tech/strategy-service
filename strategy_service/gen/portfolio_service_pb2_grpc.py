@@ -240,6 +240,26 @@ class PortfolioServiceStub:
                 request_serializer=portfolio__service__pb2.ListStrategyIndicatorChunksRequest.SerializeToString,
                 response_deserializer=portfolio__service__pb2.ListStrategyIndicatorChunksResponse.FromString,
                 _registered_method=True)
+        self.SaveStrategyIndicatorsV2 = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/SaveStrategyIndicatorsV2',
+                request_serializer=portfolio__service__pb2.SaveStrategyIndicatorsV2Request.SerializeToString,
+                response_deserializer=portfolio__service__pb2.SaveStrategyIndicatorsV2Response.FromString,
+                _registered_method=True)
+        self.FinalizeStrategyIndicatorChunksV2 = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/FinalizeStrategyIndicatorChunksV2',
+                request_serializer=portfolio__service__pb2.FinalizeStrategyIndicatorChunksV2Request.SerializeToString,
+                response_deserializer=portfolio__service__pb2.FinalizeStrategyIndicatorChunksV2Response.FromString,
+                _registered_method=True)
+        self.ListStrategyIndicatorsV2 = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/ListStrategyIndicatorsV2',
+                request_serializer=portfolio__service__pb2.ListStrategyIndicatorsV2Request.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListStrategyIndicatorsV2Response.FromString,
+                _registered_method=True)
+        self.ListStrategyIndicatorChunksV2 = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/ListStrategyIndicatorChunksV2',
+                request_serializer=portfolio__service__pb2.ListStrategyIndicatorChunksV2Request.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListStrategyIndicatorChunksV2Response.FromString,
+                _registered_method=True)
         self.GetNotificationSettings = channel.unary_unary(
                 '/portfolio.v1.PortfolioService/GetNotificationSettings',
                 request_serializer=portfolio__service__pb2.GetNotificationSettingsRequest.SerializeToString,
@@ -568,6 +588,34 @@ class PortfolioServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SaveStrategyIndicatorsV2(self, request, context):
+        """保存 typed V2 指标声明和未封块的 revision。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def FinalizeStrategyIndicatorChunksV2(self, request, context):
+        """使用 expected_revision 显式封块；已封块数据不可再更新。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListStrategyIndicatorsV2(self, request, context):
+        """列出 typed V2 指标声明。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListStrategyIndicatorChunksV2(self, request, context):
+        """按实际 K 线时间窗口列出 typed V2 chunk。
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetNotificationSettings(self, request, context):
         """── 通知管理（Notification Management）────────────────────────────────────
 
@@ -819,6 +867,26 @@ def add_PortfolioServiceServicer_to_server(servicer, server):
                     servicer.ListStrategyIndicatorChunks,
                     request_deserializer=portfolio__service__pb2.ListStrategyIndicatorChunksRequest.FromString,
                     response_serializer=portfolio__service__pb2.ListStrategyIndicatorChunksResponse.SerializeToString,
+            ),
+            'SaveStrategyIndicatorsV2': grpc.unary_unary_rpc_method_handler(
+                    servicer.SaveStrategyIndicatorsV2,
+                    request_deserializer=portfolio__service__pb2.SaveStrategyIndicatorsV2Request.FromString,
+                    response_serializer=portfolio__service__pb2.SaveStrategyIndicatorsV2Response.SerializeToString,
+            ),
+            'FinalizeStrategyIndicatorChunksV2': grpc.unary_unary_rpc_method_handler(
+                    servicer.FinalizeStrategyIndicatorChunksV2,
+                    request_deserializer=portfolio__service__pb2.FinalizeStrategyIndicatorChunksV2Request.FromString,
+                    response_serializer=portfolio__service__pb2.FinalizeStrategyIndicatorChunksV2Response.SerializeToString,
+            ),
+            'ListStrategyIndicatorsV2': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListStrategyIndicatorsV2,
+                    request_deserializer=portfolio__service__pb2.ListStrategyIndicatorsV2Request.FromString,
+                    response_serializer=portfolio__service__pb2.ListStrategyIndicatorsV2Response.SerializeToString,
+            ),
+            'ListStrategyIndicatorChunksV2': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListStrategyIndicatorChunksV2,
+                    request_deserializer=portfolio__service__pb2.ListStrategyIndicatorChunksV2Request.FromString,
+                    response_serializer=portfolio__service__pb2.ListStrategyIndicatorChunksV2Response.SerializeToString,
             ),
             'GetNotificationSettings': grpc.unary_unary_rpc_method_handler(
                     servicer.GetNotificationSettings,
@@ -1959,6 +2027,114 @@ class PortfolioService:
             '/portfolio.v1.PortfolioService/ListStrategyIndicatorChunks',
             portfolio__service__pb2.ListStrategyIndicatorChunksRequest.SerializeToString,
             portfolio__service__pb2.ListStrategyIndicatorChunksResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SaveStrategyIndicatorsV2(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/SaveStrategyIndicatorsV2',
+            portfolio__service__pb2.SaveStrategyIndicatorsV2Request.SerializeToString,
+            portfolio__service__pb2.SaveStrategyIndicatorsV2Response.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FinalizeStrategyIndicatorChunksV2(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/FinalizeStrategyIndicatorChunksV2',
+            portfolio__service__pb2.FinalizeStrategyIndicatorChunksV2Request.SerializeToString,
+            portfolio__service__pb2.FinalizeStrategyIndicatorChunksV2Response.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListStrategyIndicatorsV2(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/ListStrategyIndicatorsV2',
+            portfolio__service__pb2.ListStrategyIndicatorsV2Request.SerializeToString,
+            portfolio__service__pb2.ListStrategyIndicatorsV2Response.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListStrategyIndicatorChunksV2(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/ListStrategyIndicatorChunksV2',
+            portfolio__service__pb2.ListStrategyIndicatorChunksV2Request.SerializeToString,
+            portfolio__service__pb2.ListStrategyIndicatorChunksV2Response.FromString,
             options,
             channel_credentials,
             insecure,

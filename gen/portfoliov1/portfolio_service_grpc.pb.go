@@ -19,53 +19,57 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PortfolioService_CreateUser_FullMethodName                      = "/portfolio.v1.PortfolioService/CreateUser"
-	PortfolioService_VerifyUserPassword_FullMethodName              = "/portfolio.v1.PortfolioService/VerifyUserPassword"
-	PortfolioService_GetUser_FullMethodName                         = "/portfolio.v1.PortfolioService/GetUser"
-	PortfolioService_CreatePortfolio_FullMethodName                 = "/portfolio.v1.PortfolioService/CreatePortfolio"
-	PortfolioService_ListPortfolios_FullMethodName                  = "/portfolio.v1.PortfolioService/ListPortfolios"
-	PortfolioService_GetPortfolio_FullMethodName                    = "/portfolio.v1.PortfolioService/GetPortfolio"
-	PortfolioService_CreateVenue_FullMethodName                     = "/portfolio.v1.PortfolioService/CreateVenue"
-	PortfolioService_ListVenues_FullMethodName                      = "/portfolio.v1.PortfolioService/ListVenues"
-	PortfolioService_GetVenue_FullMethodName                        = "/portfolio.v1.PortfolioService/GetVenue"
-	PortfolioService_GetVenueOnlineInfo_FullMethodName              = "/portfolio.v1.PortfolioService/GetVenueOnlineInfo"
-	PortfolioService_BindVenue_FullMethodName                       = "/portfolio.v1.PortfolioService/BindVenue"
-	PortfolioService_ReleaseVenue_FullMethodName                    = "/portfolio.v1.PortfolioService/ReleaseVenue"
-	PortfolioService_ArchiveVenue_FullMethodName                    = "/portfolio.v1.PortfolioService/ArchiveVenue"
-	PortfolioService_PreflightStrategySession_FullMethodName        = "/portfolio.v1.PortfolioService/PreflightStrategySession"
-	PortfolioService_GetProductCapabilities_FullMethodName          = "/portfolio.v1.PortfolioService/GetProductCapabilities"
-	PortfolioService_GetPortfolioSnapshot_FullMethodName            = "/portfolio.v1.PortfolioService/GetPortfolioSnapshot"
-	PortfolioService_UpdatePortfolioSnapshot_FullMethodName         = "/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot"
-	PortfolioService_UpdatePortfolioWalletState_FullMethodName      = "/portfolio.v1.PortfolioService/UpdatePortfolioWalletState"
-	PortfolioService_ListSymbols_FullMethodName                     = "/portfolio.v1.PortfolioService/ListSymbols"
-	PortfolioService_CreateStrategy_FullMethodName                  = "/portfolio.v1.PortfolioService/CreateStrategy"
-	PortfolioService_ListStrategies_FullMethodName                  = "/portfolio.v1.PortfolioService/ListStrategies"
-	PortfolioService_GetStrategy_FullMethodName                     = "/portfolio.v1.PortfolioService/GetStrategy"
-	PortfolioService_ArchiveStrategy_FullMethodName                 = "/portfolio.v1.PortfolioService/ArchiveStrategy"
-	PortfolioService_MountStrategy_FullMethodName                   = "/portfolio.v1.PortfolioService/MountStrategy"
-	PortfolioService_UnmountStrategy_FullMethodName                 = "/portfolio.v1.PortfolioService/UnmountStrategy"
-	PortfolioService_ActivateStrategy_FullMethodName                = "/portfolio.v1.PortfolioService/ActivateStrategy"
-	PortfolioService_DeactivateStrategy_FullMethodName              = "/portfolio.v1.PortfolioService/DeactivateStrategy"
-	PortfolioService_ListPortfolioStrategies_FullMethodName         = "/portfolio.v1.PortfolioService/ListPortfolioStrategies"
-	PortfolioService_GetActiveStrategy_FullMethodName               = "/portfolio.v1.PortfolioService/GetActiveStrategy"
-	PortfolioService_SaveSession_FullMethodName                     = "/portfolio.v1.PortfolioService/SaveSession"
-	PortfolioService_UpdateSession_FullMethodName                   = "/portfolio.v1.PortfolioService/UpdateSession"
-	PortfolioService_GetSession_FullMethodName                      = "/portfolio.v1.PortfolioService/GetSession"
-	PortfolioService_ListSessions_FullMethodName                    = "/portfolio.v1.PortfolioService/ListSessions"
-	PortfolioService_ListRunningSessions_FullMethodName             = "/portfolio.v1.PortfolioService/ListRunningSessions"
-	PortfolioService_MarkRuntimeSessionsRecoverable_FullMethodName  = "/portfolio.v1.PortfolioService/MarkRuntimeSessionsRecoverable"
-	PortfolioService_ListSessionSnapshots_FullMethodName            = "/portfolio.v1.PortfolioService/ListSessionSnapshots"
-	PortfolioService_ListReconciliationRuns_FullMethodName          = "/portfolio.v1.PortfolioService/ListReconciliationRuns"
-	PortfolioService_GetSessionReconciliationSummary_FullMethodName = "/portfolio.v1.PortfolioService/GetSessionReconciliationSummary"
-	PortfolioService_SaveStrategyIndicators_FullMethodName          = "/portfolio.v1.PortfolioService/SaveStrategyIndicators"
-	PortfolioService_ListStrategyIndicators_FullMethodName          = "/portfolio.v1.PortfolioService/ListStrategyIndicators"
-	PortfolioService_ListStrategyIndicatorChunks_FullMethodName     = "/portfolio.v1.PortfolioService/ListStrategyIndicatorChunks"
-	PortfolioService_GetNotificationSettings_FullMethodName         = "/portfolio.v1.PortfolioService/GetNotificationSettings"
-	PortfolioService_UpdateNotificationPreferences_FullMethodName   = "/portfolio.v1.PortfolioService/UpdateNotificationPreferences"
-	PortfolioService_CreateNotificationBindCode_FullMethodName      = "/portfolio.v1.PortfolioService/CreateNotificationBindCode"
-	PortfolioService_ConfirmNotificationBinding_FullMethodName      = "/portfolio.v1.PortfolioService/ConfirmNotificationBinding"
-	PortfolioService_UnbindNotificationChannel_FullMethodName       = "/portfolio.v1.PortfolioService/UnbindNotificationChannel"
-	PortfolioService_SendTestNotification_FullMethodName            = "/portfolio.v1.PortfolioService/SendTestNotification"
+	PortfolioService_CreateUser_FullMethodName                        = "/portfolio.v1.PortfolioService/CreateUser"
+	PortfolioService_VerifyUserPassword_FullMethodName                = "/portfolio.v1.PortfolioService/VerifyUserPassword"
+	PortfolioService_GetUser_FullMethodName                           = "/portfolio.v1.PortfolioService/GetUser"
+	PortfolioService_CreatePortfolio_FullMethodName                   = "/portfolio.v1.PortfolioService/CreatePortfolio"
+	PortfolioService_ListPortfolios_FullMethodName                    = "/portfolio.v1.PortfolioService/ListPortfolios"
+	PortfolioService_GetPortfolio_FullMethodName                      = "/portfolio.v1.PortfolioService/GetPortfolio"
+	PortfolioService_CreateVenue_FullMethodName                       = "/portfolio.v1.PortfolioService/CreateVenue"
+	PortfolioService_ListVenues_FullMethodName                        = "/portfolio.v1.PortfolioService/ListVenues"
+	PortfolioService_GetVenue_FullMethodName                          = "/portfolio.v1.PortfolioService/GetVenue"
+	PortfolioService_GetVenueOnlineInfo_FullMethodName                = "/portfolio.v1.PortfolioService/GetVenueOnlineInfo"
+	PortfolioService_BindVenue_FullMethodName                         = "/portfolio.v1.PortfolioService/BindVenue"
+	PortfolioService_ReleaseVenue_FullMethodName                      = "/portfolio.v1.PortfolioService/ReleaseVenue"
+	PortfolioService_ArchiveVenue_FullMethodName                      = "/portfolio.v1.PortfolioService/ArchiveVenue"
+	PortfolioService_PreflightStrategySession_FullMethodName          = "/portfolio.v1.PortfolioService/PreflightStrategySession"
+	PortfolioService_GetProductCapabilities_FullMethodName            = "/portfolio.v1.PortfolioService/GetProductCapabilities"
+	PortfolioService_GetPortfolioSnapshot_FullMethodName              = "/portfolio.v1.PortfolioService/GetPortfolioSnapshot"
+	PortfolioService_UpdatePortfolioSnapshot_FullMethodName           = "/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot"
+	PortfolioService_UpdatePortfolioWalletState_FullMethodName        = "/portfolio.v1.PortfolioService/UpdatePortfolioWalletState"
+	PortfolioService_ListSymbols_FullMethodName                       = "/portfolio.v1.PortfolioService/ListSymbols"
+	PortfolioService_CreateStrategy_FullMethodName                    = "/portfolio.v1.PortfolioService/CreateStrategy"
+	PortfolioService_ListStrategies_FullMethodName                    = "/portfolio.v1.PortfolioService/ListStrategies"
+	PortfolioService_GetStrategy_FullMethodName                       = "/portfolio.v1.PortfolioService/GetStrategy"
+	PortfolioService_ArchiveStrategy_FullMethodName                   = "/portfolio.v1.PortfolioService/ArchiveStrategy"
+	PortfolioService_MountStrategy_FullMethodName                     = "/portfolio.v1.PortfolioService/MountStrategy"
+	PortfolioService_UnmountStrategy_FullMethodName                   = "/portfolio.v1.PortfolioService/UnmountStrategy"
+	PortfolioService_ActivateStrategy_FullMethodName                  = "/portfolio.v1.PortfolioService/ActivateStrategy"
+	PortfolioService_DeactivateStrategy_FullMethodName                = "/portfolio.v1.PortfolioService/DeactivateStrategy"
+	PortfolioService_ListPortfolioStrategies_FullMethodName           = "/portfolio.v1.PortfolioService/ListPortfolioStrategies"
+	PortfolioService_GetActiveStrategy_FullMethodName                 = "/portfolio.v1.PortfolioService/GetActiveStrategy"
+	PortfolioService_SaveSession_FullMethodName                       = "/portfolio.v1.PortfolioService/SaveSession"
+	PortfolioService_UpdateSession_FullMethodName                     = "/portfolio.v1.PortfolioService/UpdateSession"
+	PortfolioService_GetSession_FullMethodName                        = "/portfolio.v1.PortfolioService/GetSession"
+	PortfolioService_ListSessions_FullMethodName                      = "/portfolio.v1.PortfolioService/ListSessions"
+	PortfolioService_ListRunningSessions_FullMethodName               = "/portfolio.v1.PortfolioService/ListRunningSessions"
+	PortfolioService_MarkRuntimeSessionsRecoverable_FullMethodName    = "/portfolio.v1.PortfolioService/MarkRuntimeSessionsRecoverable"
+	PortfolioService_ListSessionSnapshots_FullMethodName              = "/portfolio.v1.PortfolioService/ListSessionSnapshots"
+	PortfolioService_ListReconciliationRuns_FullMethodName            = "/portfolio.v1.PortfolioService/ListReconciliationRuns"
+	PortfolioService_GetSessionReconciliationSummary_FullMethodName   = "/portfolio.v1.PortfolioService/GetSessionReconciliationSummary"
+	PortfolioService_SaveStrategyIndicators_FullMethodName            = "/portfolio.v1.PortfolioService/SaveStrategyIndicators"
+	PortfolioService_ListStrategyIndicators_FullMethodName            = "/portfolio.v1.PortfolioService/ListStrategyIndicators"
+	PortfolioService_ListStrategyIndicatorChunks_FullMethodName       = "/portfolio.v1.PortfolioService/ListStrategyIndicatorChunks"
+	PortfolioService_SaveStrategyIndicatorsV2_FullMethodName          = "/portfolio.v1.PortfolioService/SaveStrategyIndicatorsV2"
+	PortfolioService_FinalizeStrategyIndicatorChunksV2_FullMethodName = "/portfolio.v1.PortfolioService/FinalizeStrategyIndicatorChunksV2"
+	PortfolioService_ListStrategyIndicatorsV2_FullMethodName          = "/portfolio.v1.PortfolioService/ListStrategyIndicatorsV2"
+	PortfolioService_ListStrategyIndicatorChunksV2_FullMethodName     = "/portfolio.v1.PortfolioService/ListStrategyIndicatorChunksV2"
+	PortfolioService_GetNotificationSettings_FullMethodName           = "/portfolio.v1.PortfolioService/GetNotificationSettings"
+	PortfolioService_UpdateNotificationPreferences_FullMethodName     = "/portfolio.v1.PortfolioService/UpdateNotificationPreferences"
+	PortfolioService_CreateNotificationBindCode_FullMethodName        = "/portfolio.v1.PortfolioService/CreateNotificationBindCode"
+	PortfolioService_ConfirmNotificationBinding_FullMethodName        = "/portfolio.v1.PortfolioService/ConfirmNotificationBinding"
+	PortfolioService_UnbindNotificationChannel_FullMethodName         = "/portfolio.v1.PortfolioService/UnbindNotificationChannel"
+	PortfolioService_SendTestNotification_FullMethodName              = "/portfolio.v1.PortfolioService/SendTestNotification"
 )
 
 // PortfolioServiceClient is the client API for PortfolioService service.
@@ -155,6 +159,14 @@ type PortfolioServiceClient interface {
 	ListStrategyIndicators(ctx context.Context, in *ListStrategyIndicatorsRequest, opts ...grpc.CallOption) (*ListStrategyIndicatorsResponse, error)
 	// 按时间窗口列出 session 自定义指标 chunk。
 	ListStrategyIndicatorChunks(ctx context.Context, in *ListStrategyIndicatorChunksRequest, opts ...grpc.CallOption) (*ListStrategyIndicatorChunksResponse, error)
+	// 保存 typed V2 指标声明和未封块的 revision。
+	SaveStrategyIndicatorsV2(ctx context.Context, in *SaveStrategyIndicatorsV2Request, opts ...grpc.CallOption) (*SaveStrategyIndicatorsV2Response, error)
+	// 使用 expected_revision 显式封块；已封块数据不可再更新。
+	FinalizeStrategyIndicatorChunksV2(ctx context.Context, in *FinalizeStrategyIndicatorChunksV2Request, opts ...grpc.CallOption) (*FinalizeStrategyIndicatorChunksV2Response, error)
+	// 列出 typed V2 指标声明。
+	ListStrategyIndicatorsV2(ctx context.Context, in *ListStrategyIndicatorsV2Request, opts ...grpc.CallOption) (*ListStrategyIndicatorsV2Response, error)
+	// 按实际 K 线时间窗口列出 typed V2 chunk。
+	ListStrategyIndicatorChunksV2(ctx context.Context, in *ListStrategyIndicatorChunksV2Request, opts ...grpc.CallOption) (*ListStrategyIndicatorChunksV2Response, error)
 	// 获取当前用户通知偏好、plan 权限、Telegram 绑定状态和 bot 用户名。
 	GetNotificationSettings(ctx context.Context, in *GetNotificationSettingsRequest, opts ...grpc.CallOption) (*GetNotificationSettingsResponse, error)
 	// 更新当前用户通知偏好。Plan 禁用的类别仍可存储偏好，但发送时 fail-closed。
@@ -587,6 +599,46 @@ func (c *portfolioServiceClient) ListStrategyIndicatorChunks(ctx context.Context
 	return out, nil
 }
 
+func (c *portfolioServiceClient) SaveStrategyIndicatorsV2(ctx context.Context, in *SaveStrategyIndicatorsV2Request, opts ...grpc.CallOption) (*SaveStrategyIndicatorsV2Response, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveStrategyIndicatorsV2Response)
+	err := c.cc.Invoke(ctx, PortfolioService_SaveStrategyIndicatorsV2_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *portfolioServiceClient) FinalizeStrategyIndicatorChunksV2(ctx context.Context, in *FinalizeStrategyIndicatorChunksV2Request, opts ...grpc.CallOption) (*FinalizeStrategyIndicatorChunksV2Response, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FinalizeStrategyIndicatorChunksV2Response)
+	err := c.cc.Invoke(ctx, PortfolioService_FinalizeStrategyIndicatorChunksV2_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *portfolioServiceClient) ListStrategyIndicatorsV2(ctx context.Context, in *ListStrategyIndicatorsV2Request, opts ...grpc.CallOption) (*ListStrategyIndicatorsV2Response, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListStrategyIndicatorsV2Response)
+	err := c.cc.Invoke(ctx, PortfolioService_ListStrategyIndicatorsV2_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *portfolioServiceClient) ListStrategyIndicatorChunksV2(ctx context.Context, in *ListStrategyIndicatorChunksV2Request, opts ...grpc.CallOption) (*ListStrategyIndicatorChunksV2Response, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListStrategyIndicatorChunksV2Response)
+	err := c.cc.Invoke(ctx, PortfolioService_ListStrategyIndicatorChunksV2_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *portfolioServiceClient) GetNotificationSettings(ctx context.Context, in *GetNotificationSettingsRequest, opts ...grpc.CallOption) (*GetNotificationSettingsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNotificationSettingsResponse)
@@ -734,6 +786,14 @@ type PortfolioServiceServer interface {
 	ListStrategyIndicators(context.Context, *ListStrategyIndicatorsRequest) (*ListStrategyIndicatorsResponse, error)
 	// 按时间窗口列出 session 自定义指标 chunk。
 	ListStrategyIndicatorChunks(context.Context, *ListStrategyIndicatorChunksRequest) (*ListStrategyIndicatorChunksResponse, error)
+	// 保存 typed V2 指标声明和未封块的 revision。
+	SaveStrategyIndicatorsV2(context.Context, *SaveStrategyIndicatorsV2Request) (*SaveStrategyIndicatorsV2Response, error)
+	// 使用 expected_revision 显式封块；已封块数据不可再更新。
+	FinalizeStrategyIndicatorChunksV2(context.Context, *FinalizeStrategyIndicatorChunksV2Request) (*FinalizeStrategyIndicatorChunksV2Response, error)
+	// 列出 typed V2 指标声明。
+	ListStrategyIndicatorsV2(context.Context, *ListStrategyIndicatorsV2Request) (*ListStrategyIndicatorsV2Response, error)
+	// 按实际 K 线时间窗口列出 typed V2 chunk。
+	ListStrategyIndicatorChunksV2(context.Context, *ListStrategyIndicatorChunksV2Request) (*ListStrategyIndicatorChunksV2Response, error)
 	// 获取当前用户通知偏好、plan 权限、Telegram 绑定状态和 bot 用户名。
 	GetNotificationSettings(context.Context, *GetNotificationSettingsRequest) (*GetNotificationSettingsResponse, error)
 	// 更新当前用户通知偏好。Plan 禁用的类别仍可存储偏好，但发送时 fail-closed。
@@ -878,6 +938,18 @@ func (UnimplementedPortfolioServiceServer) ListStrategyIndicators(context.Contex
 }
 func (UnimplementedPortfolioServiceServer) ListStrategyIndicatorChunks(context.Context, *ListStrategyIndicatorChunksRequest) (*ListStrategyIndicatorChunksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListStrategyIndicatorChunks not implemented")
+}
+func (UnimplementedPortfolioServiceServer) SaveStrategyIndicatorsV2(context.Context, *SaveStrategyIndicatorsV2Request) (*SaveStrategyIndicatorsV2Response, error) {
+	return nil, status.Error(codes.Unimplemented, "method SaveStrategyIndicatorsV2 not implemented")
+}
+func (UnimplementedPortfolioServiceServer) FinalizeStrategyIndicatorChunksV2(context.Context, *FinalizeStrategyIndicatorChunksV2Request) (*FinalizeStrategyIndicatorChunksV2Response, error) {
+	return nil, status.Error(codes.Unimplemented, "method FinalizeStrategyIndicatorChunksV2 not implemented")
+}
+func (UnimplementedPortfolioServiceServer) ListStrategyIndicatorsV2(context.Context, *ListStrategyIndicatorsV2Request) (*ListStrategyIndicatorsV2Response, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListStrategyIndicatorsV2 not implemented")
+}
+func (UnimplementedPortfolioServiceServer) ListStrategyIndicatorChunksV2(context.Context, *ListStrategyIndicatorChunksV2Request) (*ListStrategyIndicatorChunksV2Response, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListStrategyIndicatorChunksV2 not implemented")
 }
 func (UnimplementedPortfolioServiceServer) GetNotificationSettings(context.Context, *GetNotificationSettingsRequest) (*GetNotificationSettingsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNotificationSettings not implemented")
@@ -1656,6 +1728,78 @@ func _PortfolioService_ListStrategyIndicatorChunks_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PortfolioService_SaveStrategyIndicatorsV2_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveStrategyIndicatorsV2Request)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PortfolioServiceServer).SaveStrategyIndicatorsV2(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PortfolioService_SaveStrategyIndicatorsV2_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PortfolioServiceServer).SaveStrategyIndicatorsV2(ctx, req.(*SaveStrategyIndicatorsV2Request))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PortfolioService_FinalizeStrategyIndicatorChunksV2_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinalizeStrategyIndicatorChunksV2Request)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PortfolioServiceServer).FinalizeStrategyIndicatorChunksV2(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PortfolioService_FinalizeStrategyIndicatorChunksV2_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PortfolioServiceServer).FinalizeStrategyIndicatorChunksV2(ctx, req.(*FinalizeStrategyIndicatorChunksV2Request))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PortfolioService_ListStrategyIndicatorsV2_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListStrategyIndicatorsV2Request)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PortfolioServiceServer).ListStrategyIndicatorsV2(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PortfolioService_ListStrategyIndicatorsV2_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PortfolioServiceServer).ListStrategyIndicatorsV2(ctx, req.(*ListStrategyIndicatorsV2Request))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PortfolioService_ListStrategyIndicatorChunksV2_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListStrategyIndicatorChunksV2Request)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PortfolioServiceServer).ListStrategyIndicatorChunksV2(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PortfolioService_ListStrategyIndicatorChunksV2_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PortfolioServiceServer).ListStrategyIndicatorChunksV2(ctx, req.(*ListStrategyIndicatorChunksV2Request))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PortfolioService_GetNotificationSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNotificationSettingsRequest)
 	if err := dec(in); err != nil {
@@ -1934,6 +2078,22 @@ var PortfolioService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListStrategyIndicatorChunks",
 			Handler:    _PortfolioService_ListStrategyIndicatorChunks_Handler,
+		},
+		{
+			MethodName: "SaveStrategyIndicatorsV2",
+			Handler:    _PortfolioService_SaveStrategyIndicatorsV2_Handler,
+		},
+		{
+			MethodName: "FinalizeStrategyIndicatorChunksV2",
+			Handler:    _PortfolioService_FinalizeStrategyIndicatorChunksV2_Handler,
+		},
+		{
+			MethodName: "ListStrategyIndicatorsV2",
+			Handler:    _PortfolioService_ListStrategyIndicatorsV2_Handler,
+		},
+		{
+			MethodName: "ListStrategyIndicatorChunksV2",
+			Handler:    _PortfolioService_ListStrategyIndicatorChunksV2_Handler,
 		},
 		{
 			MethodName: "GetNotificationSettings",

@@ -38,6 +38,7 @@ func TestVerifyRuntimeDependencyProfileUsesExactWorkerInvocation(t *testing.T) {
 		ArgsPrefix: []string{"-I", "-Xfrozen_modules=off"},
 		WorkDir:    "/app/strategy-service",
 		Env: []string{
+			"GRPC_ENABLE_FORK_SUPPORT=0",
 			"PATH=/app/strategy-service/.venv/bin:/usr/bin:/bin",
 			"PYTHONDONTWRITEBYTECODE=1",
 			"PYTHONUNBUFFERED=1",
@@ -88,6 +89,7 @@ func TestVerifyRuntimeDependencyProfileRejectsUnsafeOrMismatchedResults(t *testi
 		ArgsPrefix: []string{"-I"},
 		WorkDir:    "/app/strategy-service",
 		Env: []string{
+			"GRPC_ENABLE_FORK_SUPPORT=0",
 			"PATH=/app/strategy-service/.venv/bin:/usr/bin:/bin",
 			"PYTHONDONTWRITEBYTECODE=1",
 			"PYTHONUNBUFFERED=1",
@@ -166,6 +168,7 @@ func TestVerifyRuntimeDependencyProfilePreservesOnlySafeReportedFailureModule(t 
 		ArgsPrefix: []string{"-I"},
 		WorkDir:    "/app/strategy-service",
 		Env: []string{
+			"GRPC_ENABLE_FORK_SUPPORT=0",
 			"PATH=/app/strategy-service/.venv/bin:/usr/bin:/bin",
 			"PYTHONDONTWRITEBYTECODE=1",
 			"PYTHONUNBUFFERED=1",

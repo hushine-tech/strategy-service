@@ -37,6 +37,18 @@ done
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
+tmp_build="${tmpdir}/build"
+mkdir -p "${tmp_build}"
+(
+  cd "${SERVICE_DIR}"
+  CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+    go build -o "${tmp_build}/runtime-agent.exe" ./cmd/runtime-agent
+  CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+    go test -c -o "${tmp_build}/runtimeagent.test.exe" ./internal/runtimeagent
+)
+test -s "${tmp_build}/runtime-agent.exe"
+test -s "${tmp_build}/runtimeagent.test.exe"
+
 mkdir -p "${tmpdir}/dist/runtime-agent/linux-amd64" "${tmpdir}/bin"
 printf '#!/usr/bin/env bash\n' > "${tmpdir}/dist/runtime-agent/linux-amd64/runtime-agent"
 printf '#!/usr/bin/env bash\n' > "${tmpdir}/bin/runtime-agent"

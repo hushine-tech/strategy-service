@@ -154,7 +154,7 @@ func runWithOps(args []string, ops runtimeBootstrapOps) int {
 	}
 	defer func() { _ = shutdownObservability(context.Background()) }()
 
-	workerListener, err := net.Listen("tcp", "127.0.0.1:0")
+	workerListener, err := listenWorkerIPC()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "listen worker ipc: %v\n", err)
 		return 1
@@ -183,7 +183,22 @@ func runWithOps(args []string, ops runtimeBootstrapOps) int {
 		return 1
 	}
 
-	return runAgent(ctx, cfg, identity, credential, workerManager, workerListener, dialOptions, coverageRoot, coverageBootID)
+	return runAgent(
+		ctx,
+		cfg,
+		identity,
+		credential,
+		workerManager,
+		workerListener,
+		dialOptions,
+		coverageRoot,
+		coverageBootID,
+		resolution.launchSpec.StateRoot,
+	)
+}
+
+func listenWorkerIPC() (net.Listener, error) {
+	return net.Listen("tcp", "127.0.0.1:0")
 }
 
 func resolveRuntimeWorkerLaunchSpec(
@@ -316,9 +331,10 @@ func runAgent(
 	dialOptions []grpc.DialOption,
 	coverageRoot string,
 	coverageBootID string,
+	workerStateRoot string,
 ) int {
-	agentCtx, cancelAgent := context.WithCancel(ctx)
-	defer cancelAgent()
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
 	var agent *runtimeagent.Agent
 	runtimeClient := runtimeagent.NewRuntimeChannelClient(runtimeagent.RuntimeChannelClientConfig{
 		Address:          cfg.RuntimeChannelAddr,
@@ -338,10 +354,15 @@ func runAgent(
 		RuntimeSource:   identity.Source,
 		RuntimeName:     identity.Name,
 		UserID:          identity.UserID,
+		StateRoot:       workerStateRoot,
 		WorkerStarter:   workerManager,
 		WorkerStopper:   workerManager,
 		PlatformInvoker: runtimeClient,
 	})
+	if err := agent.RetryInitializationError(); err != nil {
+		fmt.Fprintln(os.Stderr, "load runtime terminal retry state: failed")
+		return 1
+	}
 	workerServer := runtimeagent.NewAuthenticatedWorkerIPCServer(
 		workerManager.Registry(),
 		agent.HandleAuthenticatedWorkerFrame,
@@ -352,7 +373,7 @@ func runAgent(
 	agent.SetWorkerSender(workerServer)
 
 	if controlAddr := strings.TrimSpace(os.Getenv("RUNTIME_AGENT_CONTROL_ADDR")); controlAddr != "" && !strings.EqualFold(controlAddr, "off") && controlAddr != "0" {
-		addr, shutdown, err := runtimeagent.StartLocalControlServer(agentCtx, controlAddr, agent)
+		addr, shutdown, err := runtimeagent.StartLocalControlServer(serviceCtx, controlAddr, agent)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "start local control: %v\n", err)
 			return 1
@@ -366,21 +387,6 @@ func runAgent(
 	go func() {
 		_ = grpcServer.Serve(workerListener)
 	}()
-	shutdownDone := make(chan struct{})
-	go func() {
-		shutdownAgentOnContext(
-			agentCtx,
-			coverageRoot,
-			identity.RuntimeID,
-			coverageBootID,
-			workerManager,
-			grpcServer,
-			10*time.Second,
-			5*time.Second,
-			defaultCoverageShutdownOps(),
-		)
-		close(shutdownDone)
-	}()
 
 	fmt.Printf(
 		"runtime-agent started: runtime_id=%s name=%s source=%s runtime-channel=%s worker-ipc=%s\n",
@@ -390,19 +396,98 @@ func runAgent(
 		cfg.RuntimeChannelAddr,
 		workerListener.Addr().String(),
 	)
-	startAgentBackgroundLoops(agentCtx, agent)
-	runErr := runtimeClient.Run(agentCtx)
-	cancelAgent()
-	<-shutdownDone
+	startAgentBackgroundLoops(
+		serviceCtx,
+		agent,
+		runtimeClient.WaitAuthenticated,
+	)
+	runErr, shutdownErr := coordinateRuntimeLifecycle(
+		ctx,
+		serviceCtx,
+		cancelService,
+		runtimeClient.Run,
+		func() error {
+			shutdownTrigger, cancelShutdown := context.WithCancel(
+				context.Background(),
+			)
+			cancelShutdown()
+			return shutdownAgentOnContext(
+				shutdownTrigger,
+				coverageRoot,
+				identity.RuntimeID,
+				coverageBootID,
+				agent,
+				workerManager,
+				grpcServer,
+				10*time.Second,
+				5*time.Second,
+				defaultCoverageShutdownOps(),
+			)
+		},
+	)
+	if shutdownErr != nil {
+		fmt.Fprintln(os.Stderr, "runtime Agent shutdown: failed")
+	}
 	if runErr != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "runtime channel stopped: %v\n", runErr)
+		return 1
+	}
+	if shutdownErr != nil {
 		return 1
 	}
 	return 0
 }
 
-type agentWorkerStopper interface {
-	StopAll(context.Context, time.Duration) error
+func coordinateRuntimeLifecycle(
+	signalCtx context.Context,
+	serviceCtx context.Context,
+	cancelService context.CancelFunc,
+	runRuntimeChannel func(context.Context) error,
+	shutdownAgent func() error,
+) (error, error) {
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runRuntimeChannel(serviceCtx)
+	}()
+	var runErr error
+	runtimeReturned := false
+	select {
+	case runErr = <-runDone:
+		runtimeReturned = true
+	case <-signalCtx.Done():
+	}
+	var shutdownErr error
+	for {
+		shutdownErr = shutdownAgent()
+		if shutdownErr == nil {
+			break
+		}
+		retry := time.NewTimer(250 * time.Millisecond)
+		if runtimeReturned {
+			<-retry.C
+			continue
+		}
+		select {
+		case runErr = <-runDone:
+			runtimeReturned = true
+			if !retry.Stop() {
+				select {
+				case <-retry.C:
+				default:
+				}
+			}
+		case <-retry.C:
+		}
+	}
+	cancelService()
+	if !runtimeReturned {
+		runErr = <-runDone
+	}
+	return runErr, shutdownErr
+}
+
+type agentShutdownOwner interface {
+	Shutdown(context.Context, time.Duration) error
 }
 
 type agentWorkerShutdownReporter interface {
@@ -433,19 +518,27 @@ func shutdownAgentOnContext(
 	coverageRoot string,
 	runtimeID string,
 	coverageBootID string,
-	workerManager agentWorkerStopper,
+	agent agentShutdownOwner,
+	workerReporter agentWorkerShutdownReporter,
 	grpcServer agentGRPCStopper,
 	shutdownTimeout time.Duration,
 	workerTimeout time.Duration,
 	ops coverageShutdownOps,
-) {
+) error {
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	workerErr := workerManager.StopAll(shutdownCtx, workerTimeout)
+	workerErr := agent.Shutdown(shutdownCtx, workerTimeout)
+	if workerErr != nil {
+		// The Agent may only grant process-shutdown permission after every
+		// terminal operation completed or was atomically checkpointed. Keep
+		// worker IPC, RuntimeChannel, and the running coverage marker alive so
+		// the coordinator can retry.
+		return workerErr
+	}
 	forcedWorkers := 0
-	if reporter, ok := workerManager.(agentWorkerShutdownReporter); ok {
-		forcedWorkers = reporter.ShutdownSummary().ForcedStops
+	if workerReporter != nil {
+		forcedWorkers = workerReporter.ShutdownSummary().ForcedStops
 	}
 	var snapshotErr error
 	if coverageRoot != "" {
@@ -489,6 +582,7 @@ func shutdownAgentOnContext(
 	case <-shutdownCtx.Done():
 		grpcServer.Stop()
 	}
+	return workerErr
 }
 
 func prepareRuntimeCoverageRoot(root string) (string, error) {
@@ -507,8 +601,33 @@ func prepareRuntimeCoverageRoot(root string) (string, error) {
 	return root, nil
 }
 
-func startAgentBackgroundLoops(ctx context.Context, agent *runtimeagent.Agent) {
+func startAgentBackgroundLoops(
+	ctx context.Context,
+	agent *runtimeagent.Agent,
+	waitAuthenticated func(context.Context) error,
+) {
 	go agent.RunSyncLoop(ctx)
+	go runAfterRuntimeAuthentication(
+		ctx,
+		waitAuthenticated,
+		func() {
+			agent.RunTerminalRetryLoop(ctx, 2*time.Second)
+		},
+	)
+}
+
+func runAfterRuntimeAuthentication(
+	ctx context.Context,
+	waitAuthenticated func(context.Context) error,
+	run func(),
+) {
+	if waitAuthenticated == nil || run == nil {
+		return
+	}
+	if err := waitAuthenticated(ctx); err != nil {
+		return
+	}
+	run()
 }
 
 func runtimeIdentityFromConfig(cfg runtimeagent.Config, userID int64) runtimeagent.RuntimeIdentity {

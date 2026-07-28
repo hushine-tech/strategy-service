@@ -1,0 +1,69 @@
+name: runtime-agent-windows
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require scoped sibling-repository credential
+        shell: pwsh
+        env:
+          HUSHINE_CI_REPO_TOKEN: ${{ secrets.HUSHINE_CI_REPO_TOKEN }}
+        run: |
+          if (-not $env:HUSHINE_CI_REPO_TOKEN) {
+            throw "HUSHINE_CI_REPO_TOKEN is required for private sibling repositories"
+          }
+
+      - name: Check out strategy-service
+        uses: actions/checkout@v4
+        with:
+          path: strategy-service
+          token: ${{ secrets.HUSHINE_CI_REPO_TOKEN }}
+
+      - name: Check out golang-lib
+        uses: actions/checkout@v4
+        with:
+          repository: hushine-tech/golang-lib
+          path: golang-lib
+          token: ${{ secrets.HUSHINE_CI_REPO_TOKEN }}
+
+      - name: Check out strategy-library
+        uses: actions/checkout@v4
+        with:
+          repository: hushine-tech/strategy-library
+          path: strategy-library
+          token: ${{ secrets.HUSHINE_CI_REPO_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.1
+          cache-dependency-path: strategy-service/go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: strategy-service/uv.lock
+
+      - name: Run native Windows acceptance
+        shell: pwsh
+        run: pwsh -File strategy-service/scripts/runtime-agent-windows-native.test.ps1
+
+      - name: Upload native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-agent-windows-${{ github.sha }}
+          path: strategy-service/artifacts/runtime-agent-windows
+          if-no-files-found: error

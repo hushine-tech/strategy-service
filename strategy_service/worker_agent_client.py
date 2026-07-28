@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
+import math
 import os
 import queue
 import threading
 import time
 import uuid
-import json
 from dataclasses import dataclass
 from typing import Callable
 
@@ -330,7 +331,12 @@ class WorkerAgentClient:
             key = str(getattr(definition, "key", "") or getattr(definition, "indicator_key", "") or "").strip()
             if not key:
                 continue
-            cfg = getattr(definition, "config", {}) or {}
+            raw_config = getattr(definition, "config", None)
+            cfg = {} if raw_config is None else raw_config
+            if type(cfg) is not dict:
+                raise ValueError(
+                    f"indicator config must be a plain mapping: {key}"
+                )
             msg.definitions.add(
                 indicator_key=key,
                 name=str(getattr(definition, "name", "") or key),
@@ -339,7 +345,11 @@ class WorkerAgentClient:
                 color=str(getattr(definition, "color", "") or ""),
                 unit=str(getattr(definition, "unit", "") or ""),
                 description=str(getattr(definition, "description", "") or ""),
-                config_json=json.dumps(cfg, separators=(",", ":")),
+                config_json=json.dumps(
+                    cfg,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
             )
         value_keys = {str(key or "").strip() for key in values}
         marker_keys = {str(key or "").strip() for key in markers}
@@ -355,7 +365,10 @@ class WorkerAgentClient:
                 continue
             sample = msg.samples.add(indicator_key=key)
             if raw_value is not None:
-                sample.scalar_value = float(raw_value)
+                scalar_value = float(raw_value)
+                if not math.isfinite(scalar_value):
+                    raise ValueError(f"indicator scalar value must be finite: {key}")
+                sample.scalar_value = scalar_value
         for raw_key, raw_markers in sorted(markers.items(), key=lambda item: str(item[0])):
             key = str(raw_key or "").strip()
             if not key:
@@ -369,7 +382,10 @@ class WorkerAgentClient:
                     shape=str(raw.get("shape", "") or ""),
                 )
                 if raw.get("price") is not None:
-                    marker.price = float(raw["price"])
+                    marker_price = float(raw["price"])
+                    if not math.isfinite(marker_price):
+                        raise ValueError(f"indicator marker price must be finite: {key}")
+                    marker.price = marker_price
         self._enqueue_outbound(worker_pb2.WorkerFrame(indicator_frame_v2=msg))
 
     def next_agent_frame(self, *, timeout_seconds: float = 1.0) -> worker_pb2.AgentFrame | None:

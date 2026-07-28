@@ -478,6 +478,147 @@ def test_worker_agent_client_sends_empty_v2_frame_without_null_samples():
     assert len(indicator.samples) == 0
 
 
+def test_worker_agent_client_rejects_non_finite_indicator_config_before_enqueue():
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=_FakeWorkerStub([]),
+    )
+    definition = type("Definition", (), {
+        "key": "alpha",
+        "name": "Alpha",
+        "type": "line",
+        "pane": "strategy",
+        "color": "",
+        "unit": "",
+        "description": "",
+        "config": {"threshold": float("nan")},
+    })()
+    frame = type("Frame", (), {"values": {}, "markers": {}})()
+
+    with pytest.raises(ValueError, match="JSON"):
+        client.send_indicator_frame(
+            session_id="sess-1",
+            user_id=6,
+            strategy_id=12,
+            stream_key="binance:spot:BTCUSDT:1m",
+            stream_sequence=0,
+            market_time_ms=60_000,
+            interval_ms=60_000,
+            definitions=[definition],
+            frame=frame,
+        )
+
+    assert client._outbound.empty()
+
+
+@pytest.mark.parametrize("config", [[], "", 0, False])
+def test_worker_agent_client_rejects_non_mapping_indicator_config(config):
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=_FakeWorkerStub([]),
+    )
+    definition = type("Definition", (), {
+        "key": "alpha",
+        "name": "Alpha",
+        "type": "line",
+        "pane": "strategy",
+        "color": "",
+        "unit": "",
+        "description": "",
+        "config": config,
+    })()
+    frame = type("Frame", (), {"values": {}, "markers": {}})()
+
+    with pytest.raises(ValueError, match="mapping"):
+        client.send_indicator_frame(
+            session_id="sess-1",
+            user_id=6,
+            strategy_id=12,
+            stream_key="binance:spot:BTCUSDT:1m",
+            stream_sequence=0,
+            market_time_ms=60_000,
+            interval_ms=60_000,
+            definitions=[definition],
+            frame=frame,
+        )
+
+    assert client._outbound.empty()
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_worker_agent_client_rejects_non_finite_indicator_scalar(value):
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=_FakeWorkerStub([]),
+    )
+    definition = type("Definition", (), {
+        "key": "alpha",
+        "name": "Alpha",
+        "type": "line",
+        "pane": "strategy",
+        "color": "",
+        "unit": "",
+        "description": "",
+        "config": {},
+    })()
+    frame = type("Frame", (), {
+        "values": {"alpha": value},
+        "markers": {},
+    })()
+
+    with pytest.raises(ValueError, match="finite"):
+        client.send_indicator_frame(
+            session_id="sess-1",
+            user_id=6,
+            strategy_id=12,
+            stream_key="binance:spot:BTCUSDT:1m",
+            stream_sequence=0,
+            market_time_ms=60_000,
+            interval_ms=60_000,
+            definitions=[definition],
+            frame=frame,
+        )
+
+    assert client._outbound.empty()
+
+
+@pytest.mark.parametrize("price", [float("nan"), float("inf"), float("-inf")])
+def test_worker_agent_client_rejects_non_finite_indicator_marker_price(price):
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=_FakeWorkerStub([]),
+    )
+    definition = type("Definition", (), {
+        "key": "signal",
+        "name": "Signal",
+        "type": "marker",
+        "pane": "price",
+        "color": "",
+        "unit": "",
+        "description": "",
+        "config": {},
+    })()
+    frame = type("Frame", (), {
+        "values": {},
+        "markers": {"signal": [{"text": "BUY", "price": price}]},
+    })()
+
+    with pytest.raises(ValueError, match="finite"):
+        client.send_indicator_frame(
+            session_id="sess-1",
+            user_id=6,
+            strategy_id=12,
+            stream_key="binance:spot:BTCUSDT:1m",
+            stream_sequence=0,
+            market_time_ms=60_000,
+            interval_ms=60_000,
+            definitions=[definition],
+            frame=frame,
+        )
+
+    assert client._outbound.empty()
+
+
 class _FakeWorkerStub:
     def __init__(self, responses):
         self.responses = list(responses)

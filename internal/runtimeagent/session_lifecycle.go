@@ -2,6 +2,7 @@ package runtimeagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,11 +13,12 @@ import (
 // identity is carried through the lifecycle coordinator even though the legacy
 // UpdateSession wire message has no field for it.
 type TerminalRequest struct {
-	SessionID           string
-	Status              string
-	BarsProcessed       int64
-	Error               string
-	ReconciliationRunID string
+	SessionID                    string
+	Status                       string
+	BarsProcessed                int64
+	Error                        string
+	ReconciliationRunID          string
+	IndicatorFinalizationPending *bool
 }
 
 type terminalIndicatorLifecycle interface {
@@ -55,10 +57,25 @@ func (l *SessionLifecycle) Complete(ctx context.Context, request TerminalRequest
 		recoverable := request
 		recoverable.Status = "recoverable"
 		recoverable.Error = message
+		pending := true
+		recoverable.IndicatorFinalizationPending = &pending
 		if publishErr := l.publish(ctx, recoverable); publishErr != nil {
-			return publishErr
+			return errors.Join(
+				&IndicatorFinalizationError{
+					Message: message,
+					Cause:   err,
+				},
+				fmt.Errorf(
+					"publish recoverable indicator finalization state: %w",
+					publishErr,
+				),
+			)
 		}
 		return &IndicatorFinalizationError{Message: message, Cause: err}
+	}
+	if request.IndicatorFinalizationPending == nil {
+		pending := false
+		request.IndicatorFinalizationPending = &pending
 	}
 	if err := l.publish(ctx, request); err != nil {
 		return err

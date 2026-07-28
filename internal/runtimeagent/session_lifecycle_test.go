@@ -24,7 +24,9 @@ func (r *recordingTerminalIndicators) ForgetSession(context.Context, string) {
 func TestSessionLifecyclePublishesSpotStopOnlyAfterIndicatorTail(t *testing.T) {
 	events := []string{"close-admission"}
 	indicators := &recordingTerminalIndicators{events: &events}
+	var published TerminalRequest
 	lifecycle := NewSessionLifecycle(indicators, func(_ context.Context, request TerminalRequest) error {
+		published = request
 		events = append(events, "update-session:"+request.Status+":"+request.ReconciliationRunID)
 		return nil
 	})
@@ -36,6 +38,12 @@ func TestSessionLifecyclePublishesSpotStopOnlyAfterIndicatorTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
+	if published.IndicatorFinalizationPending == nil ||
+		*published.IndicatorFinalizationPending {
+		t.Fatalf("successful finalization pending = %+v, want explicit false", published)
+	}
+	// Successful finalization explicitly clears any retained retry flag.
+	// The pointer preserves optional-field presence across RuntimeChannel.
 	want := []string{
 		"close-admission",
 		"finalize-indicator-tail",
@@ -69,6 +77,10 @@ func TestSessionLifecycleFinalizationFailurePublishesRecoverableAndRetainsTail(t
 	}
 	if published.Status != "recoverable" || published.ReconciliationRunID != "recon-123" {
 		t.Fatalf("published = %+v", published)
+	}
+	if published.IndicatorFinalizationPending == nil ||
+		!*published.IndicatorFinalizationPending {
+		t.Fatalf("published finalization pending = %+v", published)
 	}
 	want := []string{
 		"close-admission",
