@@ -472,6 +472,10 @@ def test_fault_fixture_uninstalls_named_distribution_without_changing_contract()
 
 def test_makefile_exposes_release_and_development_image_gates():
     content = (SERVICE_DIR / "Makefile").read_text(encoding="utf-8")
+    assert '$$HOME/.local/bin/uv' in content
+    assert "export UV" in content
+    assert '"$(UV)" sync --python 3.13 --frozen --extra dev' in content
+    assert 'PYTHONPATH=../strategy-library "$(UV)" run --frozen' in content
     assert "runtime-images:" in content
     assert "build_strategy_runtime.sh --all --allow-dirty dev" in content
     assert "runtime-images-verify:" in content

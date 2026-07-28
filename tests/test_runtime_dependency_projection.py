@@ -189,7 +189,7 @@ def test_makefile_exposes_the_installed_dependency_contract_gate() -> None:
     makefile = MAKEFILE.read_text(encoding="utf-8")
 
     assert "dependency-contract:" in makefile
-    assert "uv sync --python 3.13 --frozen --extra dev" in makefile
+    assert '"$(UV)" sync --python 3.13 --frozen --extra dev' in makefile
     assert "--service-project pyproject.toml --service-lock uv.lock" in makefile
     assert "--installed-python strategy-service=.venv/bin/python" in makefile
     assert "--installed-python-version strategy-service=3.13" in makefile

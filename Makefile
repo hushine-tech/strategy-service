@@ -1,5 +1,6 @@
 PYTHON?=$(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; elif [ -x /opt/anaconda3/bin/python3 ]; then echo /opt/anaconda3/bin/python3; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
-UV?=$(shell if command -v uv >/dev/null 2>&1; then command -v uv; else echo uv; fi)
+UV?=$(shell if command -v uv >/dev/null 2>&1; then command -v uv; elif [ -n "$$HOME" ] && [ -x "$$HOME/.local/bin/uv" ]; then printf '%s\n' "$$HOME/.local/bin/uv"; else printf '%s\n' uv; fi)
+export UV
 PYTHONPATH_VAL=.:./strategy-library
 CONFIG?=./config.yaml
 PID_FILE=.run.pid
@@ -10,8 +11,8 @@ VERSION?=dev
 .PHONY: build build-release dependency-contract dev start stop clean test test-scripts runtime-images runtime-images-verify runtime-images-verify-dev
 
 dependency-contract:
-	uv sync --python 3.13 --frozen --extra dev
-	PYTHONPATH=../strategy-library uv run --frozen \
+	"$(UV)" sync --python 3.13 --frozen --extra dev
+	PYTHONPATH=../strategy-library "$(UV)" run --frozen \
 		python ../strategy-library/scripts/check_runtime_dependency_contract.py \
 		--service-project pyproject.toml --service-lock uv.lock \
 		--installed-python strategy-service=.venv/bin/python \

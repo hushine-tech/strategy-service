@@ -414,6 +414,12 @@ func (m *WorkerManager) runManagedWorkerStop(ctx context.Context, worker *Manage
 	sessionID := worker.SessionID
 	stopTimeout := timeout
 	var waitDone <-chan error
+	// A pre-canceled owner still force-stops and reaps the worker, but must
+	// report cancellation even if the process exits before the select below.
+	if err := ctx.Err(); err != nil {
+		waitDone = m.beginWorkerStopWait(sessionID, worker)
+		return errors.Join(err, m.forceStopWorker(ctx, sessionID, worker, waitDone))
+	}
 	if allowDrainGrace {
 		waitDone = m.beginWorkerStopWait(sessionID, worker)
 		graceTimer := time.NewTimer(timeout)
