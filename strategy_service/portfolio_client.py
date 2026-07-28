@@ -583,8 +583,8 @@ def _serialize_spot_wallet(sw: Any):
             avg_entry_price=float(asset.avg_entry_price),
             asset=asset_code,
             free=float(asset.free),
-            free_decimal=str(asset.free),
-            locked_decimal=str(asset.locked),
+            free_decimal=format(asset.free, "f"),
+            locked_decimal=format(asset.locked, "f"),
         )
         if asset.price is not None:
             kwargs["price"] = float(asset.price)

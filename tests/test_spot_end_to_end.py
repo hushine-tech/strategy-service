@@ -292,6 +292,19 @@ def test_spot_wallet_serialization_emits_asset_codes_and_exact_balances():
     assert all(not item.symbol.endswith("USDTUSDT") for item in payload.assets)
 
 
+def test_spot_wallet_serialization_emits_scaled_zero_as_plain_decimal():
+    wallet = SpotWallet.from_assets(
+        {"USDT": ("0E-8", "0E-8"), "BTC": ("0.01000000", "0E-8")}
+    )
+
+    payload = _serialize_spot_wallet(wallet)
+    by_asset = {item.asset: item for item in payload.assets}
+
+    assert by_asset["USDT"].free_decimal == "0.00000000"
+    assert by_asset["USDT"].locked_decimal == "0.00000000"
+    assert by_asset["BTC"].locked_decimal == "0.00000000"
+
+
 @pytest.mark.parametrize(
     ("side", "fee_asset", "fee", "expected_btc", "expected_usdt"),
     [
