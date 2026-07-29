@@ -482,3 +482,44 @@ def test_makefile_exposes_release_and_development_image_gates():
     assert "build_strategy_runtime.sh --all --no-cache --verify contract" in content
     assert "runtime-images-verify-dev:" in content
     assert "--all --no-cache --verify --allow-dirty contract" in content
+
+
+def test_makefile_honors_uv_bin_for_direct_managed_commands(tmp_path: Path):
+    uv = tmp_path / "portable uv"
+    uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    uv.chmod(0o700)
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path / "empty-home"),
+        "PATH": str(tmp_path / "empty-path"),
+        "UV_BIN": str(uv),
+        "UV": str(tmp_path / "must-not-run-uv"),
+    }
+
+    result = _run(
+        shutil.which("make") or "make",
+        "-n",
+        "dependency-contract",
+        cwd=SERVICE_DIR,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f'"{uv}" sync --python 3.13' in result.stdout
+
+
+def test_windows_native_acceptance_resolves_managed_uv_portably():
+    script = (
+        SERVICE_DIR / "scripts" / "runtime-agent-windows-native.test.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "function Resolve-UvExecutable" in script
+    assert "$env:UV_BIN" in script
+    assert "$env:UV" in script
+    assert ".local\\bin\\$Name" in script
+    assert '"uv.exe"' in script
+    assert "& $UvExecutable" in script
+    assert "[Environment]::OSVersion.Platform" in script
+    assert "$IsWindows" not in script
+    assert "\n    uv sync " not in script
+    assert "\n    uv run " not in script

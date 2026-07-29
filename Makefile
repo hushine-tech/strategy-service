@@ -1,5 +1,6 @@
 PYTHON?=$(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; elif [ -x /opt/anaconda3/bin/python3 ]; then echo /opt/anaconda3/bin/python3; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
-UV?=$(shell if command -v uv >/dev/null 2>&1; then command -v uv; elif [ -n "$$HOME" ] && [ -x "$$HOME/.local/bin/uv" ]; then printf '%s\n' "$$HOME/.local/bin/uv"; else printf '%s\n' uv; fi)
+UV_FALLBACK=$(shell if command -v uv >/dev/null 2>&1; then command -v uv; elif [ -n "$$HOME" ] && [ -x "$$HOME/.local/bin/uv" ]; then printf '%s\n' "$$HOME/.local/bin/uv"; else printf '%s\n' uv; fi)
+override UV:=$(if $(strip $(UV_BIN)),$(strip $(UV_BIN)),$(if $(strip $(UV)),$(strip $(UV)),$(UV_FALLBACK)))
 export UV
 PYTHONPATH_VAL=.:./strategy-library
 CONFIG?=./config.yaml

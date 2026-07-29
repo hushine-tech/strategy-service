@@ -570,6 +570,16 @@ def _serialize_future_wallet(fw: Any):
     )
 
 
+def _plain_unsigned_spot_decimal(value: Any) -> str:
+    if not value.is_finite():
+        raise ValueError("Spot balance must be finite")
+    if value < 0:
+        raise ValueError("Spot balance must be non-negative")
+    if value == 0:
+        value = abs(value)
+    return format(value, "f")
+
+
 def _serialize_spot_wallet(sw: Any):
     """Map strategy-service SpotWallet to proto SpotWallet."""
     from strategy_service.gen import portfolio_service_pb2
@@ -583,8 +593,8 @@ def _serialize_spot_wallet(sw: Any):
             avg_entry_price=float(asset.avg_entry_price),
             asset=asset_code,
             free=float(asset.free),
-            free_decimal=format(asset.free, "f"),
-            locked_decimal=format(asset.locked, "f"),
+            free_decimal=_plain_unsigned_spot_decimal(asset.free),
+            locked_decimal=_plain_unsigned_spot_decimal(asset.locked),
         )
         if asset.price is not None:
             kwargs["price"] = float(asset.price)

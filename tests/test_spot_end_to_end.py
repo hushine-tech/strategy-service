@@ -305,6 +305,36 @@ def test_spot_wallet_serialization_emits_scaled_zero_as_plain_decimal():
     assert by_asset["BTC"].locked_decimal == "0.00000000"
 
 
+def test_spot_wallet_serialization_normalizes_signed_scaled_zero():
+    wallet = SpotWallet.from_assets(
+        {"USDT": ("-0E-8", "-0E-8"), "BTC": ("0.01000000", "-0E-8")}
+    )
+
+    payload = _serialize_spot_wallet(wallet)
+    by_asset = {item.asset: item for item in payload.assets}
+
+    assert by_asset["USDT"].free_decimal == "0.00000000"
+    assert by_asset["USDT"].locked_decimal == "0.00000000"
+    assert by_asset["BTC"].locked_decimal == "0.00000000"
+
+
+def test_spot_wallet_serialization_rejects_negative_exact_balance():
+    wallet = SpotWallet.from_assets({"USDT": ("1", "0")})
+    wallet.assets["USDT"].free = Decimal("-0.01")
+
+    with pytest.raises(ValueError, match="Spot balance must be non-negative"):
+        _serialize_spot_wallet(wallet)
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_spot_wallet_serialization_rejects_nonfinite_exact_balance(value: str):
+    wallet = SpotWallet.from_assets({"USDT": ("1", "0")})
+    wallet.assets["USDT"].free = Decimal(value)
+
+    with pytest.raises(ValueError, match="Spot balance must be finite"):
+        _serialize_spot_wallet(wallet)
+
+
 @pytest.mark.parametrize(
     ("side", "fee_asset", "fee", "expected_btc", "expected_usdt"),
     [

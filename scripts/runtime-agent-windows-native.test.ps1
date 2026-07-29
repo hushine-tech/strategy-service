@@ -1,11 +1,52 @@
 $ErrorActionPreference = "Stop"
 
-if (-not $IsWindows) {
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "runtime-agent Windows native acceptance must run on Windows"
+}
+
+function Resolve-UvExecutable {
+    $Configured = if (-not [string]::IsNullOrWhiteSpace($env:UV_BIN)) {
+        $env:UV_BIN.Trim()
+    } elseif (-not [string]::IsNullOrWhiteSpace($env:UV)) {
+        $env:UV.Trim()
+    } else {
+        $null
+    }
+
+    if ($null -ne $Configured) {
+        $Command = Get-Command -Name $Configured -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($null -ne $Command) {
+            return $Command.Path
+        }
+        if (Test-Path -LiteralPath $Configured -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $Configured).Path
+        }
+        throw "configured uv executable was not found: $Configured"
+    }
+
+    $Command = Get-Command -Name "uv" -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -ne $Command) {
+        return $Command.Path
+    }
+    $ProfileHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $env:USERPROFILE
+    } else {
+        $HOME
+    }
+    foreach ($Name in @("uv.exe", "uv")) {
+        $Candidate = Join-Path $ProfileHome ".local\bin\$Name"
+        if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $Candidate).Path
+        }
+    }
+    throw "uv is required (set UV_BIN/UV or install it in PATH or .local\bin)"
 }
 
 $ServiceDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WorkspaceDir = Split-Path $ServiceDir -Parent
+$UvExecutable = Resolve-UvExecutable
 $ArtifactDir = if ($env:RUNTIME_AGENT_WINDOWS_ARTIFACT_DIR) {
     $env:RUNTIME_AGENT_WINDOWS_ARTIFACT_DIR
 } else {
@@ -44,11 +85,11 @@ try {
         throw "Windows lifecycle tests failed"
     }
 
-    uv sync --frozen --extra dev
+    & $UvExecutable sync --frozen --extra dev
     if ($LASTEXITCODE -ne 0) {
         throw "locked Python environment installation failed"
     }
-    uv run --frozen --extra dev pytest tests/test_restart_bare_worker_session.py -q
+    & $UvExecutable run --frozen --extra dev pytest tests/test_restart_bare_worker_session.py -q
     if ($LASTEXITCODE -ne 0) {
         throw "Windows bare restart helper tests failed"
     }
