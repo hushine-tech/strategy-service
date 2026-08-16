@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Futures initial balance is 1000 USDT.
-- Margin mode is `cross`.
+- Venue margin mode and each symbol's `configured_margin_mode` are `cross`.
 - Position mode is `one_way`; decisions use `PositionSide.BOTH`.
 - BTCUSDT, ETHUSDT, and ZECUSDT must each be configured at exactly 10x leverage.
 - Each successful trigger budgets `wallet_balance * 0.01` as margin and creates `margin_budget * 10` of order notional.
@@ -19,7 +19,7 @@
 - A move of at least +0.1% emits one BUY; a move of at most -0.1% emits one SELL; one callback emits at most one order.
 - Successful order construction resets only the triggering symbol's reference price.
 - Indicator keys are `reference_price`, `change_bps`, and `trade_signal`.
-- No Runtime, wallet, order protocol, or Indicator V2 protocol changes are in scope.
+- No external Runtime, wallet, order, or Indicator V2 protocol changes are in scope.
 
 ---
 
@@ -30,7 +30,7 @@
 - Create: `tests/test_btc_eth_zec_cross_momentum.py`
 
 **Interfaces:**
-- Consumes: `InputView.trigger`, `wallet.get(exchange, market)`, routed wallet `get_wallet_balance()`, Futures `margin_mode`, `position_mode`, and `risk_metadata[symbol]` with `configured_leverage` and `step_size`.
+- Consumes: `InputView.trigger`, `wallet.get(exchange, market)`, routed wallet `get_wallet_balance()`, Futures `margin_mode`, `position_mode`, and `risk_metadata[symbol]` with `configured_margin_mode`, `configured_leverage`, and `step_size`.
 - Produces: `MyStrategy.INPUTS`, `MyStrategy.ORDER_TARGETS`, `MyStrategy.INDICATORS`, and `MyStrategy.on_market_data(data, wallet) -> OrderDecision | None`.
 
 - [ ] **Step 1: Write the failing declaration, routing, sizing, and indicator tests**
@@ -470,3 +470,49 @@ git commit -m "feat: add three-symbol futures test strategy"
 ```
 
 Expected: only the new strategy template and its focused test are included in this implementation commit.
+
+---
+
+### Task 2: Apply final-review account-mode corrections
+
+**Files:**
+- Modify: `strategy_templates/btc_eth_zec_cross_momentum.py`
+- Modify: `tests/test_btc_eth_zec_cross_momentum.py`
+- Modify in core-service: `internal/exchange/adapter/capabilities.go`
+- Modify in core-service: `internal/exchange/binance.go`
+- Modify in core-service: `internal/exchange/binance/portfolio_snapshot.go`
+- Modify in core-service: `internal/service/grpc.go`
+- Modify in core-service: `internal/order/executor/adapter_recovery_client.go`
+- Modify the corresponding focused tests.
+
+- [ ] **Step 1: Reproduce the review findings**
+
+Add failing tests proving that a symbol whose `configured_margin_mode` is
+`isolated` is rejected even when the aggregate wallet says `cross`, an
+overflowing price is ignored, and the Binance wallet snapshot does not
+overwrite incoming Venue modes.
+
+- [ ] **Step 2: Correct strategy fail-closed checks**
+
+Require both the configured Venue wallet contract and the triggering symbol's
+`configured_margin_mode == "cross"`. Catch `OverflowError` at numeric ingress.
+
+- [ ] **Step 3: Propagate Venue modes through the internal snapshot request**
+
+Carry `margin_mode` and `position_mode` from `domain.Venue` through
+`PortfolioSnapshotRequest` into the request-scoped `domain.Portfolio`. Build the
+Binance Futures wallet using those values instead of hard-coded defaults. This
+is an internal fact propagation change, not a protobuf or Runtime protocol
+change. Forward the same already-resolved facts from the order recovery client
+so every Futures-capable snapshot request uses one contract.
+
+- [ ] **Step 4: Exercise the real StrategyEngine indicator path**
+
+Run the template through `StrategyEngine` with three routed symbols and assert
+independent stream sequences plus the BUY marker in the emitted Indicator V2
+frame.
+
+- [ ] **Step 5: Run full regression suites**
+
+Run the complete strategy-service pytest suite, then `go test ./...` and
+`go vet ./...` in core-service before committing the review corrections.

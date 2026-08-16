@@ -142,6 +142,12 @@ class MyStrategy:
             if metadata is None:
                 self._warn(f"risk metadata missing for {symbol}")
                 return None
+            configured_margin_mode = str(
+                getattr(metadata, "configured_margin_mode", "")
+            ).lower()
+            if configured_margin_mode != "cross":
+                self._warn(f"{symbol} must be configured in cross margin mode")
+                return None
             leverage = self._decimal(metadata.configured_leverage)
             if leverage != self.REQUIRED_LEVERAGE:
                 self._warn(f"{symbol} must be configured at 10x leverage")
@@ -164,7 +170,13 @@ class MyStrategy:
             if qty <= 0:
                 self._warn(f"rounded quantity is zero for {symbol}")
                 return None
-        except (AttributeError, InvalidOperation, TypeError, ValueError) as exc:
+        except (
+            AttributeError,
+            InvalidOperation,
+            OverflowError,
+            TypeError,
+            ValueError,
+        ) as exc:
             self._warn(f"cannot size {symbol} order: {type(exc).__name__}")
             return None
 
@@ -187,7 +199,7 @@ class MyStrategy:
             return None
         try:
             price = float(tick.price)
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             return None
         if not math.isfinite(price) or price <= 0:
             return None

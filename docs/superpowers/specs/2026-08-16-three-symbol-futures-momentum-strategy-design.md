@@ -11,8 +11,8 @@
 ## 运行前提
 
 - Futures 初始资金为 1000 USDT。
-- 保证金模式为 Cross。
-- 持仓模式为 One-way。
+- Venue 配置的保证金模式为 Cross，且三个 symbol 的交易所 risk metadata 均为 Cross。
+- Venue 配置的持仓模式为 One-way，并由 core-service 原样传入 Runtime 钱包快照。
 - BTCUSDT、ETHUSDT、ZECUSDT 的配置杠杆均为 10 倍。
 - 策略不修改交易所账户设置；账户设置不满足上述条件时必须明确告警并跳过下单。
 
@@ -52,10 +52,11 @@ raw_qty = order_notional / current_price
 100 USDT。单纯的价格变化不会改变 `wallet_balance`；已实现盈亏、手续费、资金费和
 其他账本事件可以改变后续订单大小。
 
-策略从当前 Futures risk metadata 读取 symbol 的 `step_size` 和配置杠杆，按
-`step_size` 向下取整数量。metadata 缺失、杠杆不是 10 或数量为零时，策略告警并
-跳过该笔订单。按当前 Binance Demo 约束，约 100 USDT 的名义价值高于三个合约的
-最小下单金额；服务端订单风控仍使用请求时的交易所规则执行最终校验。
+策略从当前 Futures risk metadata 读取 symbol 的 `configured_margin_mode`、
+`step_size` 和配置杠杆，按 `step_size` 向下取整数量。metadata 缺失、symbol 不是
+Cross、杠杆不是 10 或数量为零时，策略告警并跳过该笔订单。按当前 Binance Demo
+约束，约 100 USDT 的名义价值高于三个合约的最小下单金额；服务端订单风控仍使用
+请求时的交易所规则执行最终校验。
 
 ## 自定义指标
 
@@ -96,5 +97,8 @@ raw_qty = order_notional / current_price
 6. 账户模式、杠杆或 metadata 不满足前提时不产生订单并提供告警。
 7. 三个 stream 分别输出参考价、变化基点和 BUY/SELL 标记。
 
-不修改 Runtime、钱包、订单网关或 Indicator V2 协议；发现平台级缺陷时单独报告，不能在
-测试策略内绕过。
+不修改 Runtime、钱包、订单网关或 Indicator V2 的外部协议。最终复审发现
+core-service 的 Binance 钱包快照把保证金/持仓模式写死，因而增加一项内部修正：
+Venue fact 经内部 `PortfolioSnapshotRequest` 传给 Binance reader，reader 原样写入
+钱包快照；策略仍以 symbol 的 Binance metadata 判断实际保证金模式。该修正不新增
+跨服务字段，也不在策略内绕过平台契约。
