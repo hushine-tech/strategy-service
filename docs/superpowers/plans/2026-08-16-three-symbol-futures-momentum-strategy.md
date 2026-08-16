@@ -46,10 +46,15 @@ import pytest
 from strategy_service.inputs import InputView, parse_declared_inputs
 from strategy_service.strategy_validator import validate_strategy_code
 from strategy_service.types import Exchange, Market, MarketData, OrderDecision, OrderSide, PositionSide
-from strategy_templates.btc_eth_zec_cross_momentum import MyStrategy
 
 
 STEPS = {"BTCUSDT": 0.0001, "ETHUSDT": 0.001, "ZECUSDT": 0.001}
+
+
+def strategy_class():
+    from strategy_templates.btc_eth_zec_cross_momentum import MyStrategy
+
+    return MyStrategy
 
 
 class IndicatorRecorder:
@@ -118,6 +123,7 @@ def feed(strategy, view, wallet, symbol, price):
 
 
 def configured_strategy():
+    MyStrategy = strategy_class()
     strategy = MyStrategy()
     strategy.indicators = IndicatorRecorder()
     strategy.notify = NotifyRecorder()
@@ -126,8 +132,10 @@ def configured_strategy():
 
 def test_template_is_validator_accepted_and_declares_three_exact_streams_and_targets():
     path = Path("strategy_templates/btc_eth_zec_cross_momentum.py")
+    assert path.exists(), "three-symbol strategy template has not been implemented"
     result = validate_strategy_code(path.read_text(encoding="utf-8"))
     assert result.ok is True, result.issues
+    MyStrategy = strategy_class()
     assert [item["symbol"] for item in MyStrategy.INPUTS] == ["ZECUSDT", "ETHUSDT", "BTCUSDT"]
     assert [item["stream_id"] for item in MyStrategy.INPUTS] == [
         "futures-zecusdt-1m",
@@ -139,6 +147,7 @@ def test_template_is_validator_accepted_and_declares_three_exact_streams_and_tar
 
 
 def test_interleaved_symbols_keep_independent_references_and_emit_correct_orders():
+    MyStrategy = strategy_class()
     strategy = configured_strategy()
     view = InputView(parse_declared_inputs(MyStrategy.INPUTS))
     wallet = PortfolioWallet(RouteWallet())
@@ -167,6 +176,7 @@ def test_interleaved_symbols_keep_independent_references_and_emit_correct_orders
 
 
 def test_wallet_balance_one_percent_is_margin_budget_at_ten_x():
+    MyStrategy = strategy_class()
     strategy = configured_strategy()
     view = InputView(parse_declared_inputs(MyStrategy.INPUTS))
     route = RouteWallet(balance=2000.0)
@@ -190,6 +200,7 @@ def test_wallet_balance_one_percent_is_margin_budget_at_ten_x():
 def test_invalid_account_contract_warns_skips_and_does_not_advance_reference(
     margin_mode, position_mode, leverage, warning,
 ):
+    MyStrategy = strategy_class()
     strategy = configured_strategy()
     view = InputView(parse_declared_inputs(MyStrategy.INPUTS))
     route = RouteWallet(
@@ -206,6 +217,7 @@ def test_invalid_account_contract_warns_skips_and_does_not_advance_reference(
 
 
 def test_indicator_values_and_marker_belong_to_each_triggered_callback():
+    MyStrategy = strategy_class()
     strategy = configured_strategy()
     view = InputView(parse_declared_inputs(MyStrategy.INPUTS))
     wallet = PortfolioWallet(RouteWallet())
@@ -220,6 +232,7 @@ def test_indicator_values_and_marker_belong_to_each_triggered_callback():
 
 
 def test_missing_symbol_metadata_warns_and_preserves_reference():
+    MyStrategy = strategy_class()
     strategy = configured_strategy()
     view = InputView(parse_declared_inputs(MyStrategy.INPUTS))
     route = RouteWallet()
@@ -240,7 +253,7 @@ Run:
 PYTHONPATH=.:../strategy-library uv run --frozen --extra dev pytest tests/test_btc_eth_zec_cross_momentum.py -q
 ```
 
-Expected: collection fails with `ModuleNotFoundError: No module named 'strategy_templates.btc_eth_zec_cross_momentum'`.
+Expected: one or more tests fail at the explicit assertion `three-symbol strategy template has not been implemented`; test collection itself succeeds.
 
 - [ ] **Step 3: Implement the minimal complete strategy template**
 
