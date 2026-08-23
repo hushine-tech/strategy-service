@@ -1,7 +1,7 @@
 # Strategy Service
 
 Last verified: 2026-08-24 at implementation commit
-`6ec6671ec4dc4de4613a56ab779b5a34acd889ca` (before this documentation-only
+`eb18951b7542621e69a283d24040b1dd4dd81966` (before this documentation-only
 commit).
 
 Python strategy runtime service for Hushine.
@@ -182,9 +182,12 @@ acquire live admission, and the debugger has no leverage override. Demo
 the agent and worker receive no core/order, database, Kafka, credential, or
 caller-selected internal endpoint.
 
-Resume creates a new Session and repeats current-source preparation and
-commit; it does not reuse old target facts. Runtime loss leaves the old Session
-`recoverable`. A rollback failure remains a structured
+Resume creates a new Session, explicitly forwards the selected predecessor as
+`resume_session_id`, and repeats current-source preparation and commit; it does
+not reuse old target facts. Runtime loss first leaves the old Session
+`recoverable`; an accepted Resume atomically supersedes it to `stopped` in
+core-service before the new launch acquires admissions. It remains audit
+history and is never changed back to running. A rollback failure remains a structured
 `LEVERAGE_ROLLBACK_FAILED` result, and a committed start that cannot safely
 launch the worker is reconciled against the committed Session rather than
 starting from unconfirmed local state.
