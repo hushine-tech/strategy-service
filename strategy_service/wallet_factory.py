@@ -211,6 +211,7 @@ def install_simulated_target_leverages(
         raise ValueError("Backtest Futures wallet cannot accept target leverage facts")
     expected_exchange = str(exchange or "").strip().lower()
     expected_market = str(market or "").strip().lower()
+    installed = False
     for target in order_targets or ():
         target_market = str(getattr(target, "market", "") or "").strip().lower()
         if target_market == "spot":
@@ -230,6 +231,12 @@ def install_simulated_target_leverages(
                 getattr(target, "leverage_source", "") or ""
             ),
         )
+        installed = True
+    if installed:
+        refresh = getattr(futures, "refresh_simulated_target_leverage_risk", None)
+        if not callable(refresh):
+            raise ValueError("Backtest Futures wallet cannot refresh target leverage risk")
+        refresh()
     return runtime
 
 

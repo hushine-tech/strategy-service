@@ -384,6 +384,10 @@ class BinanceFuturesBook:
             position.leverage = float(leverage)
             position._refresh_derived_fields()
 
+    def refresh_simulated_target_leverage_risk(self) -> None:
+        """Recompute aggregate risk after a complete target overlay batch."""
+        self._refresh_portfolio_fields()
+
     def _position_key_from_order(self, symbol: str, position_side: str, side: str) -> int:
         if self.position_mode != "hedge":
             return 0

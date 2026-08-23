@@ -14,6 +14,7 @@ from strategy_service.wallet_factory import (
     RUNTIME_REGISTRY,
     _populate_runtime_registry,
     build_wallet_from_portfolio,
+    install_simulated_target_leverages,
     resolve_target,
 )
 from tests.helpers.wallet_fixtures import make_testnet_wallet
@@ -259,6 +260,143 @@ def test_http_backtest_wallet_installs_resolved_target_leverage_metadata():
         "BTCUSDT": (5, "strategy_default"),
         "ETHUSDT": (10, "order_target"),
     }
+
+
+def test_backtest_leverage_overlay_refreshes_position_order_and_portfolio_risk_fields():
+    wallet_proto = portfolio_service_pb2.PortfolioWalletState(
+        environment=0,
+        total_value=1000.0,
+        futures_position_equity=1000.0,
+        futures=portfolio_service_pb2.FuturesWallet(
+            margin_mode="cross",
+            position_mode="one_way",
+            initial_balance=1000.0,
+            wallet_balance=1000.0,
+            available_balance=500.0,
+            total_margin_balance=1000.0,
+            margin_balance=1000.0,
+            total_position_initial_margin=500.0,
+            total_cross_wallet_balance=1000.0,
+            positions=[
+                portfolio_service_pb2.FuturesPosition(
+                    symbol="BTCUSDT",
+                    direction=0,
+                    leverage=20.0,
+                    mark_price=100_000.0,
+                    qty=0.1,
+                    position_qty=0.1,
+                    entry_price=100_000.0,
+                    position_side="BOTH",
+                    margin_type="cross",
+                    margin_mode="cross",
+                    notional=10_000.0,
+                    initial_margin=500.0,
+                    position_initial_margin=500.0,
+                )
+            ],
+            risk_metadata=[
+                portfolio_service_pb2.FuturesRiskMetadata(
+                    symbol="BTCUSDT",
+                    configured_leverage=20.0,
+                    configured_margin_mode="cross",
+                    price_precision=2,
+                    step_size=0.001,
+                    brackets=[
+                        portfolio_service_pb2.FuturesRiskBracket(
+                            bracket=1,
+                            notional_cap=1_000_000.0,
+                            initial_leverage=20.0,
+                            maint_margin_ratio=0.004,
+                        )
+                    ],
+                )
+            ],
+        ),
+        spot=portfolio_service_pb2.SpotWallet(),
+    )
+    wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
+
+    class OpenOrder:
+        status = "NEW"
+        side = "BUY"
+        qty = 0.01
+        orig_qty = 0.01
+        executed_qty = 0.0
+        remaining_qty = 0.01
+        price = 100_000.0
+        fill_price = 0.0
+        order_id = "open-after-overlay"
+        position_side = "BOTH"
+        reduce_only = False
+        fee = 0.0
+
+    wallet.on_order("BTCUSDT", "futures", OpenOrder())
+    targets = resolve_order_target_leverages(
+        parse_order_targets(
+            [
+                {
+                    "exchange": "binance",
+                    "market": "perpetual_futures",
+                    "symbol": "BTCUSDT",
+                    "leverage": 5,
+                }
+            ]
+        ),
+        None,
+    )
+
+    install_simulated_target_leverages(wallet, targets)
+
+    futures = wallet.futures
+    position = futures.positions[("BTCUSDT", 0)]
+    metadata = futures.risk_metadata["BTCUSDT"]
+    assert position.leverage == pytest.approx(5.0)
+    assert position.position_initial_margin == pytest.approx(2000.0)
+    assert position.open_order_initial_margin == pytest.approx(200.0)
+    assert position.initial_margin == pytest.approx(2200.0)
+    assert futures.total_position_initial_margin == pytest.approx(2000.0)
+    assert futures.total_open_order_initial_margin == pytest.approx(200.0)
+    assert futures.get_available_balance() == pytest.approx(0.0)
+    assert position.maint_margin == pytest.approx(40.0)
+    assert futures.total_maint_margin == pytest.approx(40.0)
+    assert position.liquidation_price == pytest.approx(
+        (10_000.0 - 1000.0) / (0.1 * (1.0 - 0.004))
+    )
+    assert metadata.configured_margin_mode == "cross"
+    assert metadata.price_precision == 2
+    assert metadata.step_size == pytest.approx(0.001)
+    assert metadata.brackets[0].maint_margin_ratio == pytest.approx(0.004)
+
+
+@pytest.mark.parametrize("environment_code", [1, 2])
+def test_simulated_target_overlay_never_touches_demo_or_live(environment_code):
+    class ForbiddenFutures:
+        def __getattribute__(self, name):
+            raise AssertionError(
+                f"environment {environment_code} must not inspect Futures overlay member {name}"
+            )
+
+    class Runtime:
+        futures = ForbiddenFutures()
+
+        def __init__(self):
+            self.environment_code = environment_code
+
+    targets = resolve_order_target_leverages(
+        parse_order_targets(
+            [
+                {
+                    "exchange": "binance",
+                    "market": "perpetual_futures",
+                    "symbol": "BTCUSDT",
+                }
+            ]
+        ),
+        5,
+    )
+    runtime = Runtime()
+
+    assert install_simulated_target_leverages(runtime, targets) is runtime
 
 
 def test_binance_parity_runtime_preserves_flat_isolated_seed_balances_on_mode0():

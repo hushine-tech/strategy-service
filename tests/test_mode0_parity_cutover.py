@@ -12,17 +12,25 @@ smoke. They MUST continue to pass.
 from __future__ import annotations
 
 import socket
+import sys
+from pathlib import Path
 
 import pytest
-from hushine_strategy.replay import ReplayEngine
+from hushine_strategy.replay import ReplayConfig, run_replay
 from hushine_strategy.wallet import FuturesWallet as OfflineFuturesWallet
-from hushine_strategy.wallet import PortfolioWallet as OfflinePortfolioWallet
 
+from strategy_service import MarketData, StrategyEngine
 from strategy_service.gen import portfolio_service_pb2
-from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
+from strategy_service.strategy_imports import (
+    gate_strategy_source,
+    prepare_strategy,
+    resolve_strategy_source,
+)
 from strategy_service.wallet import BinanceWalletRuntime
+from strategy_service.wallet.portfolio_adapter import build_portfolio_wallet_from_snapshot
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet_factory import build_wallet_from_portfolio
+from tests.helpers.order_client import FilledOrderClient
 
 
 def _canonical_mode0(
@@ -215,73 +223,138 @@ def test_mode0_registry_binding_is_binance_runtime():
     assert RUNTIME_REGISTRY[("local", "backtest")] is BinanceWalletRuntime
 
 
-def test_mode0_and_offline_replay_expose_equal_leverage_and_strategy_sizing(monkeypatch):
+def _route_aware_leverage_strategy_source(
+    *,
+    strategy_leverage: int | None,
+    target_leverage: int | None,
+) -> str:
+    template = (
+        Path(__file__).resolve().parents[1].parent
+        / "strategy-library"
+        / "tests"
+        / "fixtures"
+        / "route_aware_leverage_strategy.py.template"
+    ).read_text(encoding="utf-8")
+    return template.replace(
+        "__STRATEGY_LEVERAGE_DECLARATION__",
+        "" if strategy_leverage is None else f"    LEVERAGE = {strategy_leverage}",
+    ).replace(
+        "__TARGET_LEVERAGE_DECLARATION__",
+        "" if target_leverage is None else f'            "leverage": {target_leverage},',
+    )
+
+
+@pytest.mark.parametrize(
+    ("strategy_leverage", "target_leverage", "expected_leverage", "expected_source"),
+    [
+        (None, None, 1, "platform_default"),
+        (5, None, 5, "strategy_default"),
+        (5, 10, 10, "order_target"),
+    ],
+)
+def test_mode0_engine_and_offline_replay_execute_identical_route_aware_strategy(
+    monkeypatch,
+    strategy_leverage,
+    target_leverage,
+    expected_leverage,
+    expected_source,
+):
     def fail_network(*_args, **_kwargs):
         raise AssertionError("simulated leverage must not access Binance")
 
     monkeypatch.setattr(socket, "create_connection", fail_network)
-    declared_targets = parse_order_targets(
-        [
-            {
-                "exchange": "binance",
-                "market": "perpetual_futures",
-                "symbol": "BTCUSDT",
-            },
-            {
-                "exchange": "binance",
-                "market": "perpetual_futures",
-                "symbol": "ETHUSDT",
-                "leverage": 10,
-            },
-        ]
+    source = _route_aware_leverage_strategy_source(
+        strategy_leverage=strategy_leverage,
+        target_leverage=target_leverage,
     )
-    resolved_targets = resolve_order_target_leverages(declared_targets, 5)
+    gate = gate_strategy_source(
+        resolve_strategy_source("route-aware-leverage.py", source),
+        python_invocation_path=sys.executable,
+    )
+    assert gate.ok, gate.issues
+    assert gate.gated_source is not None
+    prepared = prepare_strategy(gate.gated_source)
 
-    hosted_wallet = build_wallet_from_portfolio(
-        proto_to_portfolio_spec(
-            _canonical_mode0(
-                wallet_balance=1000.0,
-                available_balance=1000.0,
-                initial_balance=1000.0,
-            )
-        ),
-        simulated_order_targets=resolved_targets,
+    full_wallet = _canonical_mode0(
+        wallet_balance=1000.0,
+        available_balance=1000.0,
+        initial_balance=1000.0,
     )
-    offline_futures = OfflineFuturesWallet(initial_balance=1000.0)
-    offline_portfolio = OfflinePortfolioWallet(
+    venue = portfolio_service_pb2.VenueSnapshot(
+        venue_id=11,
+        exchange=1,
+        market=2,
+        total_value=1000.0,
+        wallet_balance=1000.0,
+        available_balance=1000.0,
+    )
+    venue.wallet.CopyFrom(full_wallet)
+    snapshot = portfolio_service_pb2.PortfolioSnapshot(
+        portfolio_id=7,
+        user_id=3,
+        total_value=1000.0,
+        wallet_balance=1000.0,
+        available_balance=1000.0,
+        venues=[venue],
+    )
+    hosted_wallet = build_portfolio_wallet_from_snapshot(
+        snapshot,
         allowed_routes={("binance", "perpetual_futures")},
-        wallets={("binance", "perpetual_futures", 1): offline_futures},
+        simulated_order_targets=prepared.declarations.order_targets,
     )
-    ReplayEngine(
-        wallet=offline_portfolio,
-        order_targets=declared_targets,
-        strategy_leverage=5,
+    hosted_orders = FilledOrderClient()
+    hosted_engine = StrategyEngine()
+    hosted_engine.create_strategy(
+        "parity",
+        prepared,
+        hosted_wallet,
+        order_client=hosted_orders,
+        portfolio_id=7,
     )
-
-    def strategy_qty(wallet, symbol: str, price: float) -> float:
-        metadata = wallet.futures.risk_metadata[symbol]
-        return (
-            wallet.get_wallet_balance()
-            * 0.01
-            * metadata.configured_leverage
-            / price
+    assert hosted_engine.running_strategy(
+        MarketData(
+            symbol="BTCUSDT",
+            price=100.0,
+            timestamp=1,
+            exchange="binance",
+            market="perpetual_futures",
+            interval="1m",
         )
+    )
 
-    hosted_metadata = {
-        symbol: (metadata.configured_leverage, metadata.leverage_source)
-        for symbol, metadata in hosted_wallet.futures.risk_metadata.items()
-    }
-    offline_metadata = {
-        symbol: (metadata.configured_leverage, metadata.leverage_source)
-        for symbol, metadata in offline_futures.risk_metadata.items()
-    }
-    assert hosted_metadata == offline_metadata == {
-        "BTCUSDT": (5, "strategy_default"),
-        "ETHUSDT": (10, "order_target"),
-    }
-    assert strategy_qty(hosted_wallet, "BTCUSDT", 100.0) == pytest.approx(
-        strategy_qty(offline_futures, "BTCUSDT", 100.0)
+    offline_futures = OfflineFuturesWallet(initial_balance=1000.0)
+    offline_result = run_replay(
+        ReplayConfig(
+            strategy_code=source,
+            ticks=[
+                MarketData(
+                    symbol="BTCUSDT",
+                    price=100.0,
+                    timestamp=1,
+                    exchange="binance",
+                    market="perpetual_futures",
+                    interval="1m",
+                )
+            ],
+            wallet=offline_futures,
+        )
     )
-    assert strategy_qty(hosted_wallet, "ETHUSDT", 200.0) == pytest.approx(
-        strategy_qty(offline_futures, "ETHUSDT", 200.0)
+    offline_route_wallet = offline_result.wallet.get(
+        "binance",
+        "perpetual_futures",
     )
+    hosted_route_wallet = hosted_wallet.get("binance", "perpetual_futures")
+    hosted_metadata = hosted_route_wallet.futures.risk_metadata["BTCUSDT"]
+    offline_metadata = offline_route_wallet.futures.risk_metadata["BTCUSDT"]
+    assert (
+        hosted_metadata.configured_leverage,
+        hosted_metadata.leverage_source,
+    ) == (
+        offline_metadata.configured_leverage,
+        offline_metadata.leverage_source,
+    ) == (expected_leverage, expected_source)
+    assert len(hosted_orders.calls) == 1
+    hosted_qty = float(hosted_orders.calls[0]["decision"].qty)
+    offline_qty = offline_route_wallet.position_qty("BTCUSDT")
+    assert hosted_qty == pytest.approx(offline_qty)
+    assert hosted_qty == pytest.approx(expected_leverage * 0.1)
