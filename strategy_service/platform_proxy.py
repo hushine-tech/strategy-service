@@ -218,6 +218,7 @@ class ProxyPortfolioClient:
         required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
         order_target_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+        order_targets: list[Any] | tuple[Any, ...] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
         leverage: float = 0.0,
@@ -242,6 +243,7 @@ class ProxyPortfolioClient:
                     portfolio_service_pb2,
                     required_symbols,
                     order_target_symbols=order_target_symbols,
+                    order_targets=order_targets,
                 ),
             )
             return self._proxy.invoke(

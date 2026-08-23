@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from strategy_service.inputs import StrategyOrderTarget
 from strategy_service.portfolio_client import PortfolioClient
 from strategy_service.gen import portfolio_service_pb2
 
@@ -180,15 +181,66 @@ def test_portfolio_client_preflight_sends_session_metadata():
     resp = client.preflight_strategy_session(
         portfolio_id=11,
         user_id=5,
-        required_routes={("binance", "perpetual_futures")},
-        required_symbols={("binance", "perpetual_futures", "ethusdt")},
+        required_routes={("binance", "perpetual_futures"), ("binance", "spot")},
+        required_symbols={
+            ("binance", "perpetual_futures", "ethusdt"),
+            ("binance", "perpetual_futures", "solusdt"),
+            ("binance", "spot", "btcusdt"),
+        },
+        order_targets=[
+            StrategyOrderTarget(
+                exchange="binance",
+                market="perpetual_futures",
+                symbol="ETHUSDT",
+                leverage=7,
+                effective_leverage=7,
+                leverage_source="order_target",
+            ),
+            StrategyOrderTarget(
+                exchange="binance",
+                market="spot",
+                symbol="BTCUSDT",
+            ),
+        ],
         session_id="preflight-session-1",
         strategy_id=22,
-        leverage=1,
+        leverage=7,
     )
 
     req = captured["req"]
     assert resp.ok is True
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 22
-    assert req.leverage == 1
+    assert req.leverage == 7
+    symbols = {
+        (item.exchange, item.market, item.symbol): item
+        for item in req.required_symbols
+    }
+    futures_target = symbols[(
+        1,
+        2,
+        "ETHUSDT",
+    )]
+    assert futures_target.order_target is True
+    assert list(futures_target.required_order_types) == ["MARKET", "LIMIT"]
+    assert futures_target.effective_leverage == 7
+    assert futures_target.leverage_source == "order_target"
+
+    futures_input = symbols[(
+        1,
+        2,
+        "SOLUSDT",
+    )]
+    assert futures_input.order_target is False
+    assert futures_input.effective_leverage == 0
+    assert futures_input.leverage_source == ""
+
+    spot_target = symbols[(
+        1,
+        1,
+        "BTCUSDT",
+    )]
+    assert spot_target.order_target is True
+    assert list(spot_target.required_order_types) == ["MARKET", "LIMIT"]
+    assert spot_target.effective_leverage == 0
+    assert spot_target.leverage_source == ""

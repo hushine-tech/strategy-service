@@ -23,6 +23,7 @@ from strategy_service.platform_proxy import (
     RuntimeChannelPlatformProxy,
 )
 from strategy_service.indicators import IndicatorChunk, IndicatorDefinition
+from strategy_service.inputs import StrategyOrderTarget
 from strategy_service.types import OrderDecision
 
 
@@ -210,7 +211,24 @@ def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_ch
         portfolio_id=7,
         user_id=3,
         required_routes={("binance", "perpetual_futures")},
-        required_symbols={("binance", "perpetual_futures", "btcusdt")},
+        required_symbols={
+            ("binance", "perpetual_futures", "btcusdt"),
+            ("binance", "spot", "ethusdt"),
+        },
+        order_targets=[
+            StrategyOrderTarget(
+                exchange="binance",
+                market="perpetual_futures",
+                symbol="BTCUSDT",
+                effective_leverage=3,
+                leverage_source="strategy_default",
+            ),
+            StrategyOrderTarget(
+                exchange="binance",
+                market="spot",
+                symbol="ETHUSDT",
+            ),
+        ],
         session_id="preflight-session-1",
         strategy_id=9,
         leverage=1,
@@ -222,6 +240,11 @@ def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_ch
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 9
     assert req.leverage == 1
+    symbols = {item.symbol: item for item in req.required_symbols}
+    assert symbols["BTCUSDT"].effective_leverage == 3
+    assert symbols["BTCUSDT"].leverage_source == "strategy_default"
+    assert symbols["ETHUSDT"].effective_leverage == 0
+    assert symbols["ETHUSDT"].leverage_source == ""
 
 
 def test_proxy_order_client_places_order_without_direct_stub():

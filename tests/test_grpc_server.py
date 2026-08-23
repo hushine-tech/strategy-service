@@ -359,6 +359,16 @@ def _phase3_strategy_code() -> str:
     )
 
 
+def _phase3_strategy_code_with_target_leverage() -> str:
+    return (
+        "from strategy_service.types import OrderDecision, OrderSide\n"
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "leverage": 7}, {"exchange": "binance", "market": "spot", "symbol": "ETH"}]\n'
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+
+
 def test_session_thread_otel_context_is_inherited_for_platform_proxy_calls():
     try:
         from opentelemetry import context as otel_context
@@ -920,7 +930,7 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
         def get_active_strategy(self, _portfolio_id: int):
             return SimpleNamespace(
                 strategy_id=42,
-                code=_phase3_strategy_code(),
+                code=_phase3_strategy_code_with_target_leverage(),
                 name="phase3",
                 version="v1",
             )
@@ -981,7 +991,15 @@ def test_run_strategy_preflight_sends_required_routes_and_symbols(monkeypatch):
         ("binance", "perpetual_futures", "BTCUSDT"),
         ("binance", "spot", "ETH"),
     }
-    assert req["leverage"] == 1
+    targets = {
+        (target.exchange, target.market, target.symbol): target
+        for target in req["order_targets"]
+    }
+    assert targets[("binance", "perpetual_futures", "BTCUSDT")].effective_leverage == 7
+    assert targets[("binance", "perpetual_futures", "BTCUSDT")].leverage_source == "order_target"
+    assert targets[("binance", "spot", "ETH")].effective_leverage is None
+    assert targets[("binance", "spot", "ETH")].leverage_source is None
+    assert req["leverage"] == 7
     assert captured["snapshots"][0] is None
     assert set(captured["snapshots"][1]) == {
         ("binance", "perpetual_futures", "BTCUSDT"),
@@ -9030,7 +9048,7 @@ def test_preview_run_strategy_portfolio_preflight_does_not_persist_session(monke
         strategy_code=(
             "class MyStrategy:\n"
             '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
-            '    ORDER_TARGETS = []\n'
+            '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "leverage": 5}]\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
         record_calls=calls,
@@ -9058,6 +9076,16 @@ def test_preview_run_strategy_portfolio_preflight_does_not_persist_session(monke
     preflight = calls["portfolio_preflight"][0]
     assert preflight.get("session_id", "") == ""
     assert preflight.get("strategy_id", 0) == 42
+    assert preflight["leverage"] == 5
+    assert len(preflight["order_targets"]) == 1
+    target = preflight["order_targets"][0]
+    assert (target.exchange, target.market, target.symbol) == (
+        "binance",
+        "perpetual_futures",
+        "BTCUSDT",
+    )
+    assert target.effective_leverage == 5
+    assert target.leverage_source == "order_target"
 
 
 def test_preview_run_strategy_preserves_structured_portfolio_preflight_failure(monkeypatch):

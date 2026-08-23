@@ -657,8 +657,8 @@ def _session_leverage_compatibility(
 
     This is deliberately not risk-control resolution: request leverage never
     enters it. Mixed Futures value/source facts cannot be represented by the
-    current preflight, persisted Session, and in-process SessionState contract,
-    so the bridge fails closed until Task 8 removes those scalar consumers.
+    deprecated preflight scalar, persisted Session, and in-process SessionState
+    fields, so the bridge fails closed until Task 8 removes those consumers.
     """
 
     futures_facts: set[tuple[int, str]] = set()
@@ -1574,7 +1574,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
-            order_target_symbols=set(declarations.order_target_keys),
+            order_targets=list(declarations.order_targets),
             session_id=preflight_session_id,
             strategy_id=strategy_id,
             leverage=session_leverage.leverage,
@@ -2382,6 +2382,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         required_routes: set[tuple[str, str]],
         required_symbols: set[tuple[str, str, str]],
         order_target_symbols: set[tuple[str, str, str]] | None = None,
+        order_targets: list[StrategyOrderTarget] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
         leverage: float = 0.0,
@@ -2403,6 +2404,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             required_routes=sorted(required_routes),
             required_symbols=sorted(required_symbols),
             order_target_symbols=sorted(order_target_symbols or set()),
+            order_targets=list(order_targets or []),
             session_id=str(session_id or ""),
             strategy_id=int(strategy_id),
             leverage=float(leverage or 0.0),
@@ -4414,7 +4416,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             user_id=user_id,
             required_routes=required_routes,
             required_symbols=required_symbols,
-            order_target_symbols=set(declarations.order_target_keys),
+            order_targets=list(declarations.order_targets),
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
             leverage=session_leverage.leverage,
             environment=environment,

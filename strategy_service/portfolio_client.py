@@ -135,6 +135,7 @@ class PortfolioClient:
         required_routes: list[tuple[str, str]] | set[tuple[str, str]] | None = None,
         required_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
         order_target_symbols: list[tuple[str, str, str]] | set[tuple[str, str, str]] | None = None,
+        order_targets: list[Any] | tuple[Any, ...] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
         leverage: float = 0.0,
@@ -162,6 +163,7 @@ class PortfolioClient:
                     portfolio_service_pb2,
                     required_symbols,
                     order_target_symbols=order_target_symbols,
+                    order_targets=order_targets,
                 ),
             )
             return self._stub.PreflightStrategySession(req)
@@ -395,33 +397,44 @@ def _required_symbol_protos(
     required_symbols,
     *,
     order_target_symbols=None,
+    order_targets=None,
 ):
     target_keys = {
         (str(exchange).strip().lower(), str(market).strip().lower(), str(symbol).strip().upper())
         for exchange, market, symbol in (order_target_symbols or [])
     }
-    return [
-        portfolio_service_pb2.RequiredSymbol(
-            exchange=_exchange_enum(exchange),
-            market=_market_enum(market),
-            symbol=str(symbol or "").strip().upper(),
-            order_target=(
-                str(exchange).strip().lower(),
-                str(market).strip().lower(),
-                str(symbol or "").strip().upper(),
-            ) in target_keys,
-            required_order_types=(
-                ["MARKET", "LIMIT"]
-                if (
-                    str(exchange).strip().lower(),
-                    str(market).strip().lower(),
-                    str(symbol or "").strip().upper(),
-                ) in target_keys
-                else []
-            ),
+    target_leverage_facts = {}
+    for target in order_targets or []:
+        key = (
+            str(getattr(target, "exchange", "") or "").strip().lower(),
+            str(getattr(target, "market", "") or "").strip().lower(),
+            str(getattr(target, "symbol", "") or "").strip().upper(),
         )
-        for exchange, market, symbol in sorted(required_symbols or [])
-    ]
+        target_keys.add(key)
+        if key[1] in {"perpetual_futures", "delivery_futures"}:
+            target_leverage_facts[key] = (
+                int(getattr(target, "effective_leverage")),
+                str(getattr(target, "leverage_source")),
+            )
+
+    protos = []
+    for exchange, market, symbol in sorted(required_symbols or []):
+        key = (
+            str(exchange).strip().lower(),
+            str(market).strip().lower(),
+            str(symbol or "").strip().upper(),
+        )
+        kwargs = {
+            "exchange": _exchange_enum(exchange),
+            "market": _market_enum(market),
+            "symbol": key[2],
+            "order_target": key in target_keys,
+            "required_order_types": ["MARKET", "LIMIT"] if key in target_keys else [],
+        }
+        if key in target_leverage_facts:
+            kwargs["effective_leverage"], kwargs["leverage_source"] = target_leverage_facts[key]
+        protos.append(portfolio_service_pb2.RequiredSymbol(**kwargs))
+    return protos
 
 
 def _get_wallet_balance(fw: Any) -> float:
