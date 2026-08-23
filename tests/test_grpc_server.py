@@ -510,6 +510,78 @@ class MyStrategy:
     assert servicer._sessions.list_ids() == ()
 
 
+def test_prepare_strategy_extracts_resolved_target_leverage_facts():
+    prepared = _prepare_strategy_code_for_test(
+        "<db:leverage-declarations>",
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = [\n"
+        '        {"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"},\n'
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT"},\n'
+        '        {"exchange": "okx", "market": "delivery_futures", "symbol": "BTCUSD", "leverage": 7},\n'
+        "    ]\n"
+        "    LEVERAGE = 3\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n",
+    )
+
+    assert [
+        (
+            target.market,
+            target.symbol,
+            target.leverage,
+            target.effective_leverage,
+            target.leverage_source,
+        )
+        for target in prepared.declarations.order_targets
+    ] == [
+        ("spot", "BTCUSDT", None, None, None),
+        ("perpetual_futures", "ETHUSDT", None, 3, "strategy_default"),
+        ("delivery_futures", "BTCUSD", 7, 7, "order_target"),
+    ]
+
+
+def test_validate_strategy_source_shapes_resolved_target_leverage_facts():
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", bound_user_id=7, runtime_id="rt-1",
+        restore_running_sessions=False,
+    )
+    context = _FakeContext()
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = [\n"
+        '        {"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"},\n'
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT"},\n'
+        '        {"exchange": "okx", "market": "delivery_futures", "symbol": "BTCUSD", "leverage": 7},\n'
+        "    ]\n"
+        "    LEVERAGE = 3\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    response = servicer.ValidateStrategySource(
+        pb2.ValidateStrategySourceRequest(
+            source=source,
+            user_id=7,
+            runtime_id="rt-1",
+            include_declarations=True,
+        ),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is True
+    assert [
+        (target.market, target.symbol, target.effective_leverage, target.leverage_source)
+        for target in response.declared_order_targets
+    ] == [
+        ("spot", "BTCUSDT", 0, ""),
+        ("perpetual_futures", "ETHUSDT", 3, "strategy_default"),
+        ("delivery_futures", "BTCUSD", 7, "order_target"),
+    ]
+
+
 def test_validate_strategy_source_does_not_execute_source_without_declaration_opt_in():
     servicer = StrategyServiceServicer(
         "", "", {}, "", bound_user_id=7, runtime_id="rt-1",
@@ -7983,6 +8055,7 @@ def test_run_strategy_stores_effective_risk_controls(monkeypatch):
             "class MyStrategy:\n"
             '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
             '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"}]\n'
+            "    LEVERAGE = 6\n"
             '    RISK_CONTROLS = {"max_loss_close_pct": 0.2}\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
@@ -8007,18 +8080,25 @@ def test_run_strategy_stores_effective_risk_controls(monkeypatch):
     state = servicer._sessions.get(resp.session_id)
     assert state.max_loss_close_pct == 0.2
     assert state.max_loss_close_source == "strategy"
-    assert state.leverage == 3
-    assert state.leverage_source == "request_default"
+    assert state.leverage == 6
+    assert state.leverage_source == "strategy_default"
     assert state.initial_margin_balance == 1000.0
     assert state.order_target_keys == {("binance", "perpetual_futures", "BTCUSDT")}
-    assert calls["save_kwargs"][-1]["leverage"] == 3
+    assert calls["save_kwargs"][-1]["leverage"] == 6
 
 
-def test_effective_risk_controls_rejects_fractional_leverage():
+def test_effective_risk_controls_excludes_leverage_authority():
     declarations = SimpleNamespace(risk_controls=SimpleNamespace(max_loss_close_pct=None))
 
-    with pytest.raises(grpc_server.StrategyDeclarationError, match="leverage must be a positive whole number"):
-        grpc_server._effective_risk_controls_from_request(declarations, 0.25, 1.5)
+    effective = grpc_server._effective_risk_controls_from_request(
+        declarations,
+        0.25,
+    )
+
+    assert effective.max_loss_close_pct == 0.25
+    assert effective.max_loss_close_source == "request_default"
+    assert not hasattr(effective, "leverage")
+    assert not hasattr(effective, "leverage_source")
 
 
 def test_run_strategy_portfolio_preflight_passes_persistence_session_id(monkeypatch):
@@ -9034,6 +9114,7 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
             "class MyStrategy:\n"
             '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
             '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT"}]\n'
+            "    LEVERAGE = 3\n"
             "    def on_market_data(self, data, wallet): return None\n"
         ),
     )
@@ -9049,6 +9130,7 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
         strategy_path="",
         start_time_ms=1_779_033_600_000,
         end_time_ms=1_779_037_200_000,
+        leverage=9,
     )
     context = _FakeContext()
     resp = servicer.PreviewRunStrategy(request, context)
@@ -9064,6 +9146,8 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
     assert resp.declared_order_targets[0].exchange == "binance"
     assert resp.declared_order_targets[0].market == "perpetual_futures"
     assert resp.declared_order_targets[0].symbol == "ETHUSDT"
+    assert resp.declared_order_targets[0].effective_leverage == 3
+    assert resp.declared_order_targets[0].leverage_source == "strategy_default"
     assert {(r.exchange, r.market) for r in resp.required_routes} == {
         ("binance", "perpetual_futures")
     }
@@ -9077,6 +9161,7 @@ def test_preview_run_strategy_returns_effective_risk_controls(monkeypatch):
             "class MyStrategy:\n"
             '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "interval": "1m"}]\n'
             '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT"}]\n'
+            "    LEVERAGE = 6\n"
             '    RISK_CONTROLS = {"max_loss_close_pct": 0.2}\n'
             "    def on_market_data(self, data, wallet): return None\n"
         ),
@@ -9103,9 +9188,47 @@ def test_preview_run_strategy_returns_effective_risk_controls(monkeypatch):
     assert context.code is None
     assert resp.risk_controls.max_loss_close_pct == 0.2
     assert resp.risk_controls.max_loss_close_source == "strategy"
-    assert resp.risk_controls.leverage == 4
-    assert resp.risk_controls.leverage_source == "request_default"
-    assert calls["portfolio_preflight"][-1]["leverage"] == 4
+    assert resp.risk_controls.leverage == 0
+    assert resp.risk_controls.leverage_source == ""
+    assert resp.declared_order_targets[0].effective_leverage == 6
+    assert resp.declared_order_targets[0].leverage_source == "strategy_default"
+    assert calls["portfolio_preflight"][-1]["leverage"] == 6
+
+
+def test_preview_run_strategy_fails_closed_when_scalar_preflight_cannot_represent_mixed_leverage(
+    monkeypatch,
+):
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=(
+            "class MyStrategy:\n"
+            '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+            "    ORDER_TARGETS = [\n"
+            '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "leverage": 2},\n'
+            '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT", "leverage": 3},\n'
+            "    ]\n"
+            "    def on_market_data(self, data, wallet): return None\n"
+        ),
+    )
+
+    context = _FakeContext()
+    response = servicer.PreviewRunStrategy(
+        SimpleNamespace(
+            portfolio_id=301,
+            user_id=17,
+            strategy_path="",
+            start_time_ms=1,
+            end_time_ms=2,
+            leverage=20,
+        ),
+        context,
+    )
+
+    assert response.ok is False
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details.startswith("STRATEGY_TARGET_LEVERAGE_CAPABILITY_UNSUPPORTED:")
+    assert "portfolio_preflight" not in calls
 
 
 def test_preview_run_strategy_uses_request_risk_default_when_strategy_omits(monkeypatch):
@@ -9133,6 +9256,7 @@ def test_preview_run_strategy_uses_request_risk_default_when_strategy_omits(monk
         start_time_ms=1,
         end_time_ms=2,
         max_loss_close_pct=0.25,
+        leverage=8,
     )
     context = _FakeContext()
     resp = servicer.PreviewRunStrategy(request, context)
@@ -9140,8 +9264,8 @@ def test_preview_run_strategy_uses_request_risk_default_when_strategy_omits(monk
     assert context.code is None
     assert resp.risk_controls.max_loss_close_pct == 0.25
     assert resp.risk_controls.max_loss_close_source == "request_default"
-    assert resp.risk_controls.leverage == 1
-    assert resp.risk_controls.leverage_source == "platform_default"
+    assert resp.risk_controls.leverage == 0
+    assert resp.risk_controls.leverage_source == ""
 
 
 def test_preview_run_strategy_reports_unsupported_live_profile(monkeypatch):

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import sys
 import threading
@@ -438,8 +437,23 @@ def _stop_market_code(market: Any) -> int:
 class _EffectiveRiskControls:
     max_loss_close_pct: float
     max_loss_close_source: str
+
+
+@dataclass(frozen=True)
+class _SessionLeverageCompatibility:
+    """Temporary scalar bridge for the pre-Task-8 session runtime.
+
+    Values come only from resolved Futures ORDER_TARGETS. Task 8 can delete
+    this bridge when portfolio preparation and session bootstrap consume the
+    target-level facts carried by the strategy protocol.
+    """
+
     leverage: float
     leverage_source: str
+
+
+class _TargetLeverageCapabilityError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -611,7 +625,6 @@ def _quantize_stop_futures_qty(qty: float, metadata: Any | None) -> float:
 def _effective_risk_controls_from_request(
     declarations: Any,
     request_value: Any,
-    leverage_value: Any = 0.0,
 ) -> _EffectiveRiskControls:
     declared_value = getattr(getattr(declarations, "risk_controls", None), "max_loss_close_pct", None)
     if declared_value is not None:
@@ -631,23 +644,61 @@ def _effective_risk_controls_from_request(
             max_loss_close_pct = DEFAULT_MAX_LOSS_CLOSE_PCT
             max_loss_close_source = "platform_default"
 
-    try:
-        raw_leverage = float(leverage_value or 0.0)
-    except (TypeError, ValueError) as exc:
-        raise StrategyDeclarationError("leverage must be a number") from exc
-    if not math.isfinite(raw_leverage) or raw_leverage < 0.0 or math.trunc(raw_leverage) != raw_leverage:
-        raise StrategyDeclarationError("leverage must be a positive whole number")
-    if raw_leverage > 0.0:
-        leverage = raw_leverage
-        leverage_source = "request_default"
-    else:
-        leverage = DEFAULT_SESSION_LEVERAGE
-        leverage_source = "platform_default"
     return _EffectiveRiskControls(
         max_loss_close_pct=max_loss_close_pct,
         max_loss_close_source=max_loss_close_source,
-        leverage=leverage,
+    )
+
+
+def _session_leverage_compatibility(
+    order_targets: list[StrategyOrderTarget],
+) -> _SessionLeverageCompatibility:
+    """Translate resolved target facts for legacy scalar-only consumers.
+
+    This is deliberately not risk-control resolution: request leverage never
+    enters it. Mixed Futures value/source facts cannot be represented by the
+    current preflight, persisted Session, and in-process SessionState contract,
+    so the bridge fails closed until Task 8 removes those scalar consumers.
+    """
+
+    futures_facts: set[tuple[int, str]] = set()
+    for target in order_targets:
+        if target.market not in {"perpetual_futures", "delivery_futures"}:
+            continue
+        if target.effective_leverage is None or not target.leverage_source:
+            raise StrategyDeclarationError(
+                "Futures ORDER_TARGETS must have resolved leverage facts"
+            )
+        futures_facts.add(
+            (int(target.effective_leverage), str(target.leverage_source))
+        )
+
+    if len(futures_facts) > 1:
+        raise _TargetLeverageCapabilityError(
+            "STRATEGY_TARGET_LEVERAGE_CAPABILITY_UNSUPPORTED: legacy scalar "
+            "session bridge cannot represent mixed Futures leverage facts"
+        )
+    if not futures_facts:
+        return _SessionLeverageCompatibility(
+            leverage=DEFAULT_SESSION_LEVERAGE,
+            leverage_source="platform_default",
+        )
+    leverage, leverage_source = next(iter(futures_facts))
+    return _SessionLeverageCompatibility(
+        leverage=float(leverage),
         leverage_source=leverage_source,
+    )
+
+
+def _strategy_order_target_binding(
+    target: StrategyOrderTarget,
+) -> pb2.StrategyOrderTargetBinding:
+    return pb2.StrategyOrderTargetBinding(
+        exchange=target.exchange,
+        market=target.market,
+        symbol=target.symbol,
+        effective_leverage=int(target.effective_leverage or 0),
+        leverage_source=str(target.leverage_source or ""),
     )
 
 
@@ -1382,11 +1433,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     for item in declarations.inputs
                 ]
                 declared_order_targets = [
-                    pb2.StrategyOrderTargetBinding(
-                        exchange=item.exchange,
-                        market=item.market,
-                        symbol=item.symbol,
-                    )
+                    _strategy_order_target_binding(item)
                     for item in declarations.order_targets
                 ]
         return pb2.ValidateStrategySourceResponse(
@@ -1494,11 +1541,18 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             effective_risk = _effective_risk_controls_from_request(
                 declarations,
                 getattr(request, "max_loss_close_pct", 0.0),
-                getattr(request, "leverage", 0.0),
             )
         except StrategyDeclarationError as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy risk control invalid: {e}")
+            return pb2.RunStrategyResponse()
+        try:
+            session_leverage = _session_leverage_compatibility(
+                list(declarations.order_targets)
+            )
+        except _TargetLeverageCapabilityError as e:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(str(e))
             return pb2.RunStrategyResponse()
         declared_inputs = list(declarations.inputs)
         required_routes = set(declarations.required_routes)
@@ -1523,7 +1577,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             order_target_symbols=set(declarations.order_target_keys),
             session_id=preflight_session_id,
             strategy_id=strategy_id,
-            leverage=effective_risk.leverage,
+            leverage=session_leverage.leverage,
             response_sink=preflight_responses,
             environment=environment,
         )
@@ -1648,8 +1702,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             order_target_keys=set(declarations.order_target_keys),
             max_loss_close_pct=effective_risk.max_loss_close_pct,
             max_loss_close_source=effective_risk.max_loss_close_source,
-            leverage=effective_risk.leverage,
-            leverage_source=effective_risk.leverage_source,
+            leverage=session_leverage.leverage,
+            leverage_source=session_leverage.leverage_source,
             initial_margin_balance=initial_margin_balance,
         )
 
@@ -1878,7 +1932,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             runtime_id=runtime_id,
             runtime_source=runtime_source,
             runtime_name=runtime_name,
-            leverage=effective_risk.leverage,
+            leverage=session_leverage.leverage,
             initial_status="pending",
         ):
             self._fail_unpersisted_startup(
@@ -4208,8 +4262,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             effective = risk_controls or _EffectiveRiskControls(
                 DEFAULT_MAX_LOSS_CLOSE_PCT,
                 "platform_default",
-                DEFAULT_SESSION_LEVERAGE,
-                "platform_default",
             )
             failures_proto: list[pb2.PreflightFailureProto] = []
             for f in preflight_result.failures:
@@ -4254,11 +4306,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 for inp in (declared or [])
             ]
             declared_order_targets_proto = [
-                pb2.StrategyOrderTargetBinding(
-                    exchange=target.exchange,
-                    market=target.market,
-                    symbol=target.symbol,
-                )
+                _strategy_order_target_binding(target)
                 for target in (order_targets or [])
             ]
             required_routes_proto = [
@@ -4277,8 +4325,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 risk_controls=pb2.RiskControls(
                     max_loss_close_pct=effective.max_loss_close_pct,
                     max_loss_close_source=effective.max_loss_close_source,
-                    leverage=effective.leverage,
-                    leverage_source=effective.leverage_source,
                 ),
             )
 
@@ -4342,11 +4388,18 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             effective_risk = _effective_risk_controls_from_request(
                 declarations,
                 getattr(request, "max_loss_close_pct", 0.0),
-                getattr(request, "leverage", 0.0),
             )
         except StrategyDeclarationError as e:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy risk control invalid: {e}")
+            return pb2.PreviewRunStrategyResponse()
+        try:
+            session_leverage = _session_leverage_compatibility(
+                list(declarations.order_targets)
+            )
+        except _TargetLeverageCapabilityError as e:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(str(e))
             return pb2.PreviewRunStrategyResponse()
         declared_inputs = list(declarations.inputs)
         required_routes = set(declarations.required_routes)
@@ -4363,7 +4416,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             required_symbols=required_symbols,
             order_target_symbols=set(declarations.order_target_keys),
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
-            leverage=effective_risk.leverage,
+            leverage=session_leverage.leverage,
             environment=environment,
         )
         if portfolio_preflight is not None:

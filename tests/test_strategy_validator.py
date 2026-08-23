@@ -294,6 +294,117 @@ class MyStrategy:
     assert any(issue.code == "invalid_risk_controls" for issue in result.issues)
 
 
+def test_validator_accepts_literal_strategy_and_target_leverage_with_target_precedence():
+    result = validate_strategy_code(
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = [\n"
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "leverage": 7},\n'
+        "    ]\n"
+        "    LEVERAGE = 3\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    assert result.ok is True
+    assert result.issues == []
+
+
+@pytest.mark.parametrize(
+    "value_source",
+    ["None", "True", "0", "-1", "1.5", "'3'", "DEFAULT_LEVERAGE", "1 + 1"],
+)
+def test_validator_rejects_non_literal_positive_integer_strategy_leverage_at_assignment(
+    value_source,
+):
+    result = validate_strategy_code(
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"}]\n'
+        f"    LEVERAGE = {value_source}\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    leverage_issues = [issue for issue in result.issues if "LEVERAGE" in issue.message]
+    assert result.ok is False
+    assert len(leverage_issues) == 1
+    assert leverage_issues[0].line == 4
+
+
+@pytest.mark.parametrize(
+    "value_source",
+    ["None", "True", "0", "-1", "1.5", "'3'", "self.default_leverage", "1 + 1"],
+)
+def test_validator_rejects_non_literal_positive_integer_target_leverage_at_target_entry(
+    value_source,
+):
+    result = validate_strategy_code(
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = [\n"
+        f'        {{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "leverage": {value_source}}},\n'
+        "    ]\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    leverage_issues = [issue for issue in result.issues if "leverage" in issue.message.lower()]
+    assert result.ok is False
+    assert len(leverage_issues) == 1
+    assert leverage_issues[0].line == 4
+
+
+def test_validator_rejects_strategy_leverage_for_spot_only_targets_at_assignment():
+    result = validate_strategy_code(
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"}]\n'
+        "    LEVERAGE = 3\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    leverage_issues = [issue for issue in result.issues if "LEVERAGE" in issue.message]
+    assert result.ok is False
+    assert len(leverage_issues) == 1
+    assert leverage_issues[0].line == 4
+
+
+def test_validator_rejects_spot_target_leverage_at_target_entry():
+    result = validate_strategy_code(
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = [\n"
+        '        {"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "leverage": 3},\n'
+        "    ]\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    leverage_issues = [issue for issue in result.issues if "leverage" in issue.message.lower()]
+    assert result.ok is False
+    assert len(leverage_issues) == 1
+    assert leverage_issues[0].line == 4
+
+
+def test_validator_accepts_strategy_leverage_for_mixed_spot_and_futures_targets():
+    result = validate_strategy_code(
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = [\n"
+        '        {"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"},\n'
+        '        {"exchange": "binance", "market": "perpetual_futures", "symbol": "ETHUSDT"},\n'
+        "    ]\n"
+        "    LEVERAGE = 3\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    assert result.ok is True
+    assert result.issues == []
+
+
 def test_validator_rejects_legacy_order_decision_shape():
     result = validate_strategy_code(
         """

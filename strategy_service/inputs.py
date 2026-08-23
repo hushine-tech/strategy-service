@@ -38,6 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+import hushine_strategy.inputs as _strategy_inputs
 from hushine_strategy.inputs import (
     StrategyInput,
     StrategyOrderTarget,
@@ -59,6 +60,7 @@ __all__ = [
     "parse_declared_inputs",
     "parse_order_targets",
     "parse_risk_controls",
+    "resolve_order_target_leverages",
     "extract_declarations",
     "_normalize_exchange",
     "_normalize_market",
@@ -140,6 +142,22 @@ def parse_risk_controls(raw: Any) -> StrategyRiskControls:
         raise StrategyDeclarationError(str(exc)) from exc
 
 
+def resolve_order_target_leverages(
+    order_targets: Iterable[StrategyOrderTarget],
+    strategy_leverage: Any,
+) -> list[StrategyOrderTarget]:
+    resolver = getattr(_strategy_inputs, "resolve_order_target_leverages", None)
+    if not callable(resolver):
+        raise StrategyDeclarationError(
+            "STRATEGY_LIBRARY_LEVERAGE_RESOLVER_UNAVAILABLE: strategy-library "
+            "runtime does not support strategy-owned Futures leverage"
+        )
+    try:
+        return resolver(order_targets, strategy_leverage)
+    except ValueError as exc:
+        raise StrategyDeclarationError(str(exc)) from exc
+
+
 @dataclass(frozen=True)
 class StrategyDeclarations:
     inputs: list[StrategyInput]
@@ -165,8 +183,9 @@ class StrategyDeclarations:
 
 def extract_declarations(strategy_instance: Any) -> StrategyDeclarations:
     inputs = parse_declared_inputs(getattr(strategy_instance, "INPUTS", None))
-    order_targets = parse_order_targets(
-        getattr(strategy_instance, "ORDER_TARGETS", None)
+    order_targets = resolve_order_target_leverages(
+        parse_order_targets(getattr(strategy_instance, "ORDER_TARGETS", None)),
+        getattr(strategy_instance, "LEVERAGE", None),
     )
     risk_controls = parse_risk_controls(getattr(strategy_instance, "RISK_CONTROLS", None))
     return StrategyDeclarations(

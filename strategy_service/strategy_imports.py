@@ -564,7 +564,7 @@ def _freeze_declaration_values(
     risk_controls: object,
 ) -> tuple[
     tuple[tuple[str, str, str, str, str, str], ...],
-    tuple[tuple[str, str, str], ...],
+    tuple[tuple[str, str, str, int | None, int | None, str | None], ...],
     float | None,
 ]:
     if type(inputs) is list:
@@ -595,14 +595,30 @@ def _freeze_declaration_values(
         target_values = tuple.__iter__(order_targets)
     else:
         raise ValueError("invalid strategy order targets")
-    frozen_targets: list[tuple[str, str, str]] = []
+    frozen_targets: list[
+        tuple[str, str, str, int | None, int | None, str | None]
+    ] = []
     for item in target_values:
         if type(item) is not StrategyOrderTarget:
             raise ValueError("invalid strategy order target")
-        fields = (item.exchange, item.market, item.symbol)
-        if any(type(field) is not str for field in fields):
+        route_fields = (item.exchange, item.market, item.symbol)
+        if any(type(field) is not str for field in route_fields):
             raise ValueError("invalid strategy order target")
-        frozen_targets.append(fields)
+        if item.leverage is not None and type(item.leverage) is not int:
+            raise ValueError("invalid strategy order target")
+        if (
+            item.effective_leverage is not None
+            and type(item.effective_leverage) is not int
+        ):
+            raise ValueError("invalid strategy order target")
+        if item.leverage_source is not None and type(item.leverage_source) is not str:
+            raise ValueError("invalid strategy order target")
+        frozen_targets.append((
+            *route_fields,
+            item.leverage,
+            item.effective_leverage,
+            item.leverage_source,
+        ))
 
     if type(risk_controls) is not StrategyRiskControls:
         raise ValueError("invalid strategy risk controls")
@@ -614,7 +630,9 @@ def _freeze_declaration_values(
 
 def _thaw_declaration_values(
     inputs: tuple[tuple[str, str, str, str, str, str], ...],
-    order_targets: tuple[tuple[str, str, str], ...],
+    order_targets: tuple[
+        tuple[str, str, str, int | None, int | None, str | None], ...
+    ],
     risk_value: float | None,
 ) -> StrategyDeclarations:
     return StrategyDeclarations(
@@ -959,7 +977,9 @@ class _PreparedIssuance:
     visible_gated_snapshot: _ResolvedSnapshot
     instance: object
     inputs: tuple[tuple[str, str, str, str, str, str], ...]
-    order_targets: tuple[tuple[str, str, str], ...]
+    order_targets: tuple[
+        tuple[str, str, str, int | None, int | None, str | None], ...
+    ]
     risk_value: float | None
     visible_inputs: tuple[StrategyInput, ...]
     visible_order_targets: tuple[StrategyOrderTarget, ...]

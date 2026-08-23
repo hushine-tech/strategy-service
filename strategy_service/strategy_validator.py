@@ -16,6 +16,7 @@ from strategy_service.inputs import (
     parse_declared_inputs,
     parse_order_targets,
     parse_risk_controls,
+    resolve_order_target_leverages,
 )
 from strategy_service.runtime_profile import current_runtime_profile
 
@@ -231,7 +232,11 @@ def _validate_phase3_contract(tree: ast.AST, issues: list[StrategyValidationIssu
             )
         )
     else:
-        _validate_order_targets_literal(assignments["ORDER_TARGETS"], issues)
+        _validate_order_targets_literal(
+            assignments["ORDER_TARGETS"],
+            assignments.get("LEVERAGE"),
+            issues,
+        )
 
     if "RISK_CONTROLS" in assignments:
         _validate_risk_controls_literal(assignments["RISK_CONTROLS"], issues)
@@ -274,10 +279,77 @@ def _validate_inputs_literal(node: ast.AST, issues: list[StrategyValidationIssue
         )
 
 
-def _validate_order_targets_literal(node: ast.AST, issues: list[StrategyValidationIssue]) -> None:
+def _validate_order_targets_literal(
+    node: ast.AST,
+    strategy_leverage_node: ast.AST | None,
+    issues: list[StrategyValidationIssue],
+) -> None:
+    strategy_leverage = None
+    strategy_leverage_valid = True
+    if strategy_leverage_node is not None:
+        try:
+            strategy_leverage = _literal_eval_phase3(strategy_leverage_node)
+        except ValueError:
+            strategy_leverage_valid = False
+            issues.append(
+                StrategyValidationIssue(
+                    code="invalid_leverage",
+                    message=(
+                        "invalid LEVERAGE declaration: LEVERAGE must be a "
+                        "literal positive integer"
+                    ),
+                    line=getattr(strategy_leverage_node, "lineno", 0),
+                )
+            )
+        else:
+            if strategy_leverage is None:
+                strategy_leverage_valid = False
+                issues.append(
+                    StrategyValidationIssue(
+                        code="invalid_leverage",
+                        message=(
+                            "invalid LEVERAGE declaration: LEVERAGE must be a "
+                            "literal positive integer"
+                        ),
+                        line=getattr(strategy_leverage_node, "lineno", 0),
+                    )
+                )
+
+    target_nodes = _order_target_entry_nodes(node)
+    for target_node in target_nodes:
+        target_leverage_node = _dict_value_node(target_node, "leverage")
+        if target_leverage_node is None:
+            continue
+        try:
+            target_leverage = _literal_eval_phase3(target_leverage_node)
+        except ValueError:
+            issues.append(
+                StrategyValidationIssue(
+                    code="invalid_order_targets",
+                    message=(
+                        "invalid ORDER_TARGETS declaration: leverage must be a "
+                        "literal positive integer"
+                    ),
+                    line=getattr(target_node, "lineno", 0),
+                )
+            )
+            return
+        if target_leverage is None:
+            issues.append(
+                StrategyValidationIssue(
+                    code="invalid_order_targets",
+                    message=(
+                        "invalid ORDER_TARGETS declaration: leverage must be a "
+                        "literal positive integer"
+                    ),
+                    line=getattr(target_node, "lineno", 0),
+                )
+            )
+            return
+
     try:
         raw = _literal_eval_phase3(node)
-        parse_order_targets(raw)
+        order_targets = parse_order_targets(raw)
     except (ValueError, StrategyDeclarationError) as exc:
         issues.append(
             StrategyValidationIssue(
@@ -286,6 +358,50 @@ def _validate_order_targets_literal(node: ast.AST, issues: list[StrategyValidati
                 line=getattr(node, "lineno", 0),
             )
         )
+        return
+
+    for target_node, target in zip(target_nodes, order_targets, strict=False):
+        if target.leverage is None:
+            continue
+        try:
+            resolve_order_target_leverages([target], None)
+        except StrategyDeclarationError as exc:
+            issues.append(
+                StrategyValidationIssue(
+                    code="invalid_order_targets",
+                    message=f"invalid ORDER_TARGETS declaration: {exc}",
+                    line=getattr(target_node, "lineno", 0),
+                )
+            )
+            return
+
+    if not strategy_leverage_valid:
+        return
+    try:
+        resolve_order_target_leverages(order_targets, strategy_leverage)
+    except StrategyDeclarationError as exc:
+        issues.append(
+            StrategyValidationIssue(
+                code="invalid_leverage",
+                message=f"invalid LEVERAGE declaration: {exc}",
+                line=getattr(strategy_leverage_node or node, "lineno", 0),
+            )
+        )
+
+
+def _order_target_entry_nodes(node: ast.AST) -> list[ast.AST]:
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return list(node.elts)
+    return []
+
+
+def _dict_value_node(node: ast.AST, field_name: str) -> ast.AST | None:
+    if not isinstance(node, ast.Dict):
+        return None
+    for key_node, value_node in zip(node.keys, node.values, strict=True):
+        if isinstance(key_node, ast.Constant) and key_node.value == field_name:
+            return value_node
+    return None
 
 
 def _validate_risk_controls_literal(node: ast.AST, issues: list[StrategyValidationIssue]) -> None:
