@@ -1877,75 +1877,6 @@ func TestGenerationCleanupDrainsAdmittedSaveBeforeFailedReconciliation(t *testin
 	}
 }
 
-func TestGenerationCleanupFinalizesIndicatorTailBeforeFailedReconciliation(t *testing.T) {
-	const sessionID = "13131313131313131313131313131313"
-	var methods []string
-	var indicatorReq portfoliov1.SaveStrategyIndicatorsRequest
-	invoker := &fakePlatformInvoker{
-		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
-			methods = append(methods, method)
-			switch method {
-			case "portfolio.SaveStrategyIndicators":
-				if err := request.UnmarshalTo(&indicatorReq); err != nil {
-					return nil, err
-				}
-				return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{
-					DefinitionsSaved: 1,
-					ChunksSaved:      1,
-				})
-			case "portfolio.GetSession":
-				return anypb.New(&portfoliov1.GetSessionResponse{
-					Session: &portfoliov1.StrategySessionEntry{
-						SessionId: sessionID,
-						UserId:    6,
-						RuntimeId: "rt-1",
-						Status:    "running",
-					},
-				})
-			case "portfolio.UpdateSession":
-				return anypb.New(&portfoliov1.UpdateSessionResponse{})
-			default:
-				return nil, fmt.Errorf("unexpected method: %s", method)
-			}
-		},
-	}
-	agent := NewAgent(AgentConfig{
-		RuntimeID:       "rt-1",
-		UserID:          6,
-		PlatformInvoker: invoker,
-		RequestTimeout:  time.Second,
-	})
-	generation := newWorkerGeneration(sessionID, 11)
-	generation.durablePossible = true
-	if !generation.bindAuthenticatedGeneration(19) {
-		t.Fatal("failed to bind authenticated generation")
-	}
-	agent.mu.Lock()
-	agent.generations[sessionID] = generation
-	agent.mu.Unlock()
-	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame(sessionID)); err != nil {
-		t.Fatalf("ReceiveFrame: %v", err)
-	}
-
-	if err := agent.HandleWorkerDisconnect(
-		WorkerIdentity{SessionID: sessionID, Generation: 19},
-		errors.New("worker exited unexpectedly"),
-	); err != nil {
-		t.Fatalf("HandleWorkerDisconnect: %v", err)
-	}
-
-	if !slices.Equal(methods, []string{
-		"portfolio.SaveStrategyIndicators",
-		"portfolio.GetSession",
-		"portfolio.UpdateSession",
-	}) {
-		t.Fatalf("cleanup methods = %v", methods)
-	}
-	if len(indicatorReq.GetChunks()) != 1 || !indicatorReq.GetChunks()[0].GetFinalized() {
-		t.Fatalf("unexpected disconnect did not finalize indicator tail: %+v", &indicatorReq)
-	}
-}
-
 func TestGenerationCleanupCheckpointsFailedIndicatorTailAndPublishesPending(t *testing.T) {
 	const sessionID = "14141414141414141414141414141414"
 	stateRoot := t.TempDir()
@@ -3862,34 +3793,21 @@ func TestAgentRuntimeDataReturnsDeliveryError(t *testing.T) {
 	}
 }
 
-func TestAgentIndicatorFrameBuffersWithoutImmediatePlatformWrite(t *testing.T) {
+func TestAgentIndicatorFrameV2BuffersWithoutImmediatePlatformWrite(t *testing.T) {
 	invoker := &fakePlatformInvoker{}
 	agent := NewAgent(AgentConfig{
 		PlatformInvoker: invoker,
 	})
 
-	err := agent.HandleWorkerFrame(context.Background(), "sess-1", &rwv1.WorkerFrame{
-		Payload: &rwv1.WorkerFrame_IndicatorFrame{IndicatorFrame: &rwv1.IndicatorFrame{
-			SessionId:    "sess-1",
-			UserId:       6,
-			StrategyId:   12,
-			StreamKey:    "futures:ZECUSDT:1m",
-			MarketTimeMs: 123000,
-			IntervalMs:   60000,
-			Definitions: []*rwv1.IndicatorDefinition{{
-				IndicatorKey: "bb_mid",
-				Name:         "BB Mid",
-				Type:         "line",
-				Pane:         "price",
-				Color:        "#22c55e",
-			}},
-			Values: []*rwv1.IndicatorValue{{
-				IndicatorKey: "bb_mid",
-				Value:        100.5,
-				HasValue:     true,
-			}},
-		}},
-	}, nil)
+	err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{SessionID: "sess-1", Generation: 7},
+		indicatorSyncFrameV2(
+			"sess-1",
+			"futures:ZECUSDT:1m",
+			0,
+			123000,
+		),
+	)
 	if err != nil {
 		t.Fatalf("HandleWorkerFrame indicator: %v", err)
 	}
@@ -3900,28 +3818,25 @@ func TestAgentIndicatorFrameBuffersWithoutImmediatePlatformWrite(t *testing.T) {
 		t.Fatalf("FlushSession: %v", err)
 	}
 
-	if invoker.method != "portfolio.SaveStrategyIndicators" {
+	if invoker.method != "portfolio.SaveStrategyIndicatorsV2" {
 		t.Fatalf("platform method = %q", invoker.method)
 	}
-	var req portfoliov1.SaveStrategyIndicatorsRequest
+	var req portfoliov1.SaveStrategyIndicatorsV2Request
 	if err := invoker.request.UnmarshalTo(&req); err != nil {
 		t.Fatalf("unpack save indicators request: %v", err)
 	}
 	if req.GetSessionId() != "sess-1" || req.GetUserId() != 6 {
 		t.Fatalf("save request session/user = %q/%d", req.GetSessionId(), req.GetUserId())
 	}
-	if len(req.GetDefinitions()) != 1 || req.GetDefinitions()[0].GetIndicatorKey() != "bb_mid" {
+	if len(req.GetDefinitions()) != 1 || req.GetDefinitions()[0].GetIndicatorKey() != "alpha" {
 		t.Fatalf("definitions = %+v", req.GetDefinitions())
 	}
 	if len(req.GetChunks()) != 1 {
 		t.Fatalf("chunks = %+v", req.GetChunks())
 	}
 	chunk := req.GetChunks()[0]
-	if chunk.GetIndicatorKey() != "bb_mid" || chunk.GetCount() != 1 || chunk.GetFinalized() {
+	if chunk.GetIndicatorKey() != "alpha" || chunk.GetCount() != 1 || chunk.GetFinalized() {
 		t.Fatalf("chunk = %+v", chunk)
-	}
-	if chunk.GetValuesJson() != `{"values":[100.5],"times":null}` {
-		t.Fatalf("values_json = %q", chunk.GetValuesJson())
 	}
 }
 
@@ -3943,7 +3858,11 @@ func TestAgentFinalStatusFlushesThenPersistsFinishedThenAcknowledges(t *testing.
 		t.Fatalf("HandleWorkerFrame final: %v", err)
 	}
 	methods, updates := invoker.snapshot()
-	if len(methods) != 2 || methods[0] != "portfolio.SaveStrategyIndicators" || methods[1] != "portfolio.UpdateSession" {
+	if !slices.Equal(methods, []string{
+		"portfolio.SaveStrategyIndicatorsV2",
+		"portfolio.FinalizeStrategyIndicatorChunksV2",
+		"portfolio.UpdateSession",
+	}) {
 		t.Fatalf("platform methods = %v", methods)
 	}
 	if len(updates) != 1 || updates[0].GetStatus() != "finished" || updates[0].GetBarsProcessed() != 1440 {
@@ -5002,12 +4921,8 @@ func TestAgentFinalStatusRejectsNonTerminalStatus(t *testing.T) {
 
 func TestAgentCleanupForgetsOnlyRequestedIndicatorSession(t *testing.T) {
 	agent := NewAgent(AgentConfig{})
-	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
-		t.Fatalf("ReceiveFrame old: %v", err)
-	}
-	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-new")); err != nil {
-		t.Fatalf("ReceiveFrame new: %v", err)
-	}
+	receiveAgentIndicator(t, agent, "sess-old")
+	receiveAgentIndicator(t, agent, "sess-new")
 	agent.cleanupSessionState("sess-old", "test cleanup")
 	if agent.indicatorSync.lookupSession("sess-old") != nil {
 		t.Fatal("old session indicator state was not cleared")
@@ -5030,9 +4945,7 @@ func TestAgentRestartWaitsForFlushThenForgetsOldSession(t *testing.T) {
 	})
 	enableStrategyStartProtocol(agent, starter)
 	for _, sessionID := range []string{"sess-old", "sess-new"} {
-		if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame(sessionID)); err != nil {
-			t.Fatalf("ReceiveFrame %s: %v", sessionID, err)
-		}
+		receiveAgentIndicator(t, agent, sessionID)
 	}
 	flushDone := make(chan error, 1)
 	go func() {
@@ -5089,7 +5002,8 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 	starter := &fakeWorkerStarter{}
 	stopper := &fakeWorkerStopper{}
 	var updateReq portfoliov1.UpdateSessionRequest
-	var indicatorReq portfoliov1.SaveStrategyIndicatorsRequest
+	var indicatorReq portfoliov1.SaveStrategyIndicatorsV2Request
+	var finalizeReq portfoliov1.FinalizeStrategyIndicatorChunksV2Request
 	var platformMethods []string
 	invoker := &fakePlatformInvoker{
 		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
@@ -5111,11 +5025,16 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 					BarsProcessed: 19,
 					Leverage:      3,
 				}})
-			case "portfolio.SaveStrategyIndicators":
+			case "portfolio.SaveStrategyIndicatorsV2":
 				if err := request.UnmarshalTo(&indicatorReq); err != nil {
 					return nil, err
 				}
-				return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{})
+				return anypb.New(&portfoliov1.SaveStrategyIndicatorsV2Response{})
+			case "portfolio.FinalizeStrategyIndicatorChunksV2":
+				if err := request.UnmarshalTo(&finalizeReq); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{})
 			case "portfolio.UpdateSession":
 				if err := request.UnmarshalTo(&updateReq); err != nil {
 					return nil, err
@@ -5138,9 +5057,7 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 		RequestTimeout:  time.Second,
 	})
 	enableStrategyStartProtocol(agent, starter)
-	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
-		t.Fatalf("ReceiveFrame old indicators: %v", err)
-	}
+	receiveAgentIndicator(t, agent, "sess-old")
 	agent.ready["sess-old"] = make(chan struct{}, 1)
 	starter.onStart = func(pendingSessionID string) {
 		go func() {
@@ -5170,19 +5087,22 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 	if updateReq.GetError() == "" {
 		t.Fatalf("update session error should explain local bare restart")
 	}
-	if len(indicatorReq.GetChunks()) != 1 || indicatorReq.GetChunks()[0].GetCount() != 1 || !indicatorReq.GetChunks()[0].GetFinalized() {
-		t.Fatalf("restart indicator finalization = %+v, want one finalized tail", &indicatorReq)
+	if len(indicatorReq.GetChunks()) != 1 || indicatorReq.GetChunks()[0].GetCount() != 1 ||
+		len(finalizeReq.GetChunks()) != 1 {
+		t.Fatalf("restart indicator finalization = save=%+v finalize=%+v, want one finalized tail", &indicatorReq, &finalizeReq)
 	}
-	saveIndex, updateIndex := -1, -1
+	saveIndex, finalizeIndex, updateIndex := -1, -1, -1
 	for index, method := range platformMethods {
 		switch method {
-		case "portfolio.SaveStrategyIndicators":
+		case "portfolio.SaveStrategyIndicatorsV2":
 			saveIndex = index
+		case "portfolio.FinalizeStrategyIndicatorChunksV2":
+			finalizeIndex = index
 		case "portfolio.UpdateSession":
 			updateIndex = index
 		}
 	}
-	if saveIndex < 0 || updateIndex < 0 || saveIndex > updateIndex {
+	if saveIndex < 0 || finalizeIndex < saveIndex || updateIndex < finalizeIndex {
 		t.Fatalf("restart platform method order = %v, want indicator save before recoverable update", platformMethods)
 	}
 	if agent.indicatorSync.lookupSession("sess-old") != nil {
@@ -5336,7 +5256,7 @@ func TestAgentRestartSessionDoesNotMutateOldSessionAfterShutdownBegins(t *testin
 func TestAgentRestartSessionRejectsIndicatorAfterFinalizationAdmissionCloses(t *testing.T) {
 	updateStarted := make(chan struct{})
 	releaseUpdate := make(chan struct{})
-	var indicatorReq portfoliov1.SaveStrategyIndicatorsRequest
+	var indicatorReq portfoliov1.SaveStrategyIndicatorsV2Request
 	invoker := &fakePlatformInvoker{
 		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
 			switch method {
@@ -5346,11 +5266,13 @@ func TestAgentRestartSessionRejectsIndicatorAfterFinalizationAdmissionCloses(t *
 					RuntimeId: "rt-1", RuntimeSource: "bare", Status: "running",
 					Interval: "1m", StartTimeMs: 1000, EndTimeMs: 2000,
 				}})
-			case "portfolio.SaveStrategyIndicators":
+			case "portfolio.SaveStrategyIndicatorsV2":
 				if err := request.UnmarshalTo(&indicatorReq); err != nil {
 					return nil, err
 				}
-				return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{})
+				return anypb.New(&portfoliov1.SaveStrategyIndicatorsV2Response{})
+			case "portfolio.FinalizeStrategyIndicatorChunksV2":
+				return anypb.New(&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{})
 			case "portfolio.UpdateSession":
 				close(updateStarted)
 				<-releaseUpdate
@@ -5373,9 +5295,7 @@ func TestAgentRestartSessionRejectsIndicatorAfterFinalizationAdmissionCloses(t *
 	}
 	generation.connected = true
 	agent.generations["sess-old"] = generation
-	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
-		t.Fatalf("ReceiveFrame initial indicator: %v", err)
-	}
+	receiveAgentIndicator(t, agent, "sess-old")
 	starter.onStart = func(pendingSessionID string) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
@@ -5396,13 +5316,12 @@ func TestAgentRestartSessionRejectsIndicatorAfterFinalizationAdmissionCloses(t *
 	case <-time.After(time.Second):
 		t.Fatal("restart did not reach recoverable update after indicator finalization")
 	}
-	late := agentIndicatorFrame("sess-old")
-	late.MarketTimeMs += late.IntervalMs
+	late := indicatorSyncFrameV2("sess-old", "futures:ZECUSDT:1m", 1, 183000)
 	if err := agent.HandleAuthenticatedWorkerFrame(
 		context.Background(),
 		WorkerIdentity{SessionID: "sess-old", Generation: 7},
 		&rwv1.WorkerFrame{
-			Payload: &rwv1.WorkerFrame_IndicatorFrame{IndicatorFrame: late},
+			Payload: &rwv1.WorkerFrame_IndicatorFrameV2{IndicatorFrameV2: late},
 		},
 		nil,
 	); err == nil {
@@ -5596,7 +5515,8 @@ func TestAgentRestartSessionFinalizationFailureKeepsTailAndDoesNotStartNewWorker
 
 func TestAgentRestartSessionOwnsDisconnectCleanupUntilIndicatorTailIsFinalized(t *testing.T) {
 	starter := &fakeWorkerStarter{}
-	var indicatorReq portfoliov1.SaveStrategyIndicatorsRequest
+	var indicatorReq portfoliov1.SaveStrategyIndicatorsV2Request
+	var finalizeReq portfoliov1.FinalizeStrategyIndicatorChunksV2Request
 	invoker := &fakePlatformInvoker{
 		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
 			switch method {
@@ -5606,11 +5526,16 @@ func TestAgentRestartSessionOwnsDisconnectCleanupUntilIndicatorTailIsFinalized(t
 					RuntimeId: "rt-1", RuntimeSource: "bare", Status: "running",
 					Interval: "1m", StartTimeMs: 1000, EndTimeMs: 2000,
 				}})
-			case "portfolio.SaveStrategyIndicators":
+			case "portfolio.SaveStrategyIndicatorsV2":
 				if err := request.UnmarshalTo(&indicatorReq); err != nil {
 					return nil, err
 				}
-				return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{})
+				return anypb.New(&portfoliov1.SaveStrategyIndicatorsV2Response{})
+			case "portfolio.FinalizeStrategyIndicatorChunksV2":
+				if err := request.UnmarshalTo(&finalizeReq); err != nil {
+					return nil, err
+				}
+				return anypb.New(&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{})
 			case "portfolio.UpdateSession":
 				return anypb.New(&portfoliov1.UpdateSessionResponse{})
 			default:
@@ -5632,9 +5557,7 @@ func TestAgentRestartSessionOwnsDisconnectCleanupUntilIndicatorTailIsFinalized(t
 	}
 	generation.connected = true
 	agent.generations["sess-old"] = generation
-	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
-		t.Fatalf("ReceiveFrame old indicators: %v", err)
-	}
+	receiveAgentIndicator(t, agent, "sess-old")
 	stopper.onFirstStop = func() {
 		started := make(chan struct{})
 		go func() {
@@ -5657,8 +5580,8 @@ func TestAgentRestartSessionOwnsDisconnectCleanupUntilIndicatorTailIsFinalized(t
 	if _, err := agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "sess-old"}); err != nil {
 		t.Fatalf("RestartSession: %v", err)
 	}
-	if len(indicatorReq.GetChunks()) != 1 || !indicatorReq.GetChunks()[0].GetFinalized() {
-		t.Fatalf("disconnect raced away the restart indicator tail: %+v", &indicatorReq)
+	if len(indicatorReq.GetChunks()) != 1 || len(finalizeReq.GetChunks()) != 1 {
+		t.Fatalf("disconnect raced away the restart indicator tail: save=%+v finalize=%+v", &indicatorReq, &finalizeReq)
 	}
 }
 
@@ -5996,13 +5919,15 @@ type blockingRestartPlatform struct {
 
 func (p *blockingRestartPlatform) InvokePlatformAny(_ context.Context, method string, _ *anypb.Any, _ time.Duration) (*anypb.Any, error) {
 	switch method {
-	case "portfolio.SaveStrategyIndicators":
+	case "portfolio.SaveStrategyIndicatorsV2":
 		select {
 		case p.saveStarted <- struct{}{}:
 		default:
 		}
 		<-p.releaseSave
-		return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{DefinitionsSaved: 1, ChunksSaved: 1})
+		return anypb.New(&portfoliov1.SaveStrategyIndicatorsV2Response{DefinitionsSaved: 1, ChunksSaved: 1})
+	case "portfolio.FinalizeStrategyIndicatorChunksV2":
+		return anypb.New(&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{ChunksFinalized: 1})
 	case "portfolio.GetSession":
 		return anypb.New(&portfoliov1.GetSessionResponse{Session: &portfoliov1.StrategySessionEntry{
 			SessionId: "sess-old", UserId: 6, RuntimeId: "rt-1", Status: "running",
@@ -6052,11 +5977,13 @@ func (p *agentFinalPlatform) InvokePlatformAny(_ context.Context, method string,
 	p.methods = append(p.methods, method)
 	p.mu.Unlock()
 	switch method {
-	case "portfolio.SaveStrategyIndicators":
+	case "portfolio.SaveStrategyIndicatorsV2":
 		if p.saveErr != nil {
 			return nil, p.saveErr
 		}
-		return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{DefinitionsSaved: 1, ChunksSaved: 1})
+		return anypb.New(&portfoliov1.SaveStrategyIndicatorsV2Response{DefinitionsSaved: 1, ChunksSaved: 1})
+	case "portfolio.FinalizeStrategyIndicatorChunksV2":
+		return anypb.New(&portfoliov1.FinalizeStrategyIndicatorChunksV2Response{ChunksFinalized: 1})
 	case "portfolio.UpdateSession":
 		update := &portfoliov1.UpdateSessionRequest{}
 		if err := request.UnmarshalTo(update); err != nil {
@@ -6081,21 +6008,34 @@ func (p *agentFinalPlatform) snapshot() ([]string, []*portfoliov1.UpdateSessionR
 
 func bufferAgentIndicator(t *testing.T, agent *Agent, sessionID string) {
 	t.Helper()
-	err := agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
-		Payload: &rwv1.WorkerFrame_IndicatorFrame{IndicatorFrame: agentIndicatorFrame(sessionID)},
-	}, nil)
-	if err != nil {
-		t.Fatalf("buffer indicator: %v", err)
+	receiveAgentIndicator(t, agent, sessionID)
+}
+
+func receiveAgentIndicator(t *testing.T, agent *Agent, sessionID string) {
+	t.Helper()
+	if err := agent.indicatorSync.ReceiveFrameV2(
+		WorkerIdentity{SessionID: sessionID, Generation: 7},
+		indicatorSyncFrameV2(sessionID, "futures:ZECUSDT:1m", 0, 123000),
+	); err != nil {
+		t.Fatalf("ReceiveFrameV2 %s: %v", sessionID, err)
 	}
 }
 
-func TestAuthenticatedIndicatorRejectsDuringRegistryRemovalWithoutRecreatingState(t *testing.T) {
+func TestAuthenticatedIndicatorV2RejectsDuringRegistryRemovalWithoutRecreatingState(t *testing.T) {
 	oldProcs := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(oldProcs)
 
 	const sessionID = "31313131313131313131313131313131"
 	agent := NewAgent(AgentConfig{})
 	generation := newWorkerGeneration(sessionID, 17)
+	if !generation.bindAuthenticatedGeneration(23) {
+		t.Fatal("bind authenticated generation")
+	}
+	runRequest, err := anypb.New(&strategyv1.RunStrategyRequest{UserId: 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.rememberRunRequest(sessionID, runRequest)
 	agent.mu.Lock()
 	agent.generations[sessionID] = generation
 	agent.mu.Unlock()
@@ -6108,8 +6048,13 @@ func TestAuthenticatedIndicatorRejectsDuringRegistryRemovalWithoutRecreatingStat
 			context.Background(),
 			WorkerIdentity{SessionID: sessionID, Generation: 23},
 			&rwv1.WorkerFrame{
-				Payload: &rwv1.WorkerFrame_IndicatorFrame{
-					IndicatorFrame: agentIndicatorFrame(sessionID),
+				Payload: &rwv1.WorkerFrame_IndicatorFrameV2{
+					IndicatorFrameV2: indicatorSyncFrameV2(
+						sessionID,
+						"futures:ZECUSDT:1m",
+						0,
+						123000,
+					),
 				},
 			},
 			nil,
@@ -6144,17 +6089,6 @@ func TestAuthenticatedIndicatorRejectsDuringRegistryRemovalWithoutRecreatingStat
 	}
 	if agent.indicatorSync.lookupSession(sessionID) != nil {
 		t.Fatal("late authenticated indicator recreated state after generation removal")
-	}
-}
-
-func agentIndicatorFrame(sessionID string) *rwv1.IndicatorFrame {
-	return &rwv1.IndicatorFrame{
-		SessionId: sessionID, UserId: 6, StrategyId: 12,
-		StreamKey: "futures:ZECUSDT:1m", MarketTimeMs: 123000, IntervalMs: 60000,
-		Definitions: []*rwv1.IndicatorDefinition{{
-			IndicatorKey: "bb_mid", Name: "BB Mid", Type: "line", Pane: "price",
-		}},
-		Values: []*rwv1.IndicatorValue{{IndicatorKey: "bb_mid", Value: 100.5, HasValue: true}},
 	}
 }
 
@@ -6669,7 +6603,7 @@ func (i *fakePlatformInvoker) InvokePlatformAny(ctx context.Context, method stri
 		return i.onInvoke(method, request)
 	}
 	if i.response == nil {
-		resp, _ := anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{DefinitionsSaved: 1, ChunksSaved: 1})
+		resp, _ := anypb.New(&portfoliov1.SaveStrategyIndicatorsV2Response{DefinitionsSaved: 1, ChunksSaved: 1})
 		i.response = resp
 	}
 	return i.response, nil

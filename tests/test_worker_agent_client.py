@@ -140,10 +140,12 @@ def test_send_final_status_waits_until_matching_reply_to():
     client.start()
     for index in range(1440):
         client._outbound.put(worker_pb2.WorkerFrame(
-            indicator_frame=worker_pb2.IndicatorFrame(
+            indicator_frame_v2=worker_pb2.IndicatorFrameV2(
                 session_id="sess-1",
                 stream_key="binance:perpetual_futures:TESTUSDT:1m",
+                stream_sequence=index,
                 market_time_ms=index * 60_000,
+                interval_ms=60_000,
             ),
         ))
     done = threading.Event()
@@ -166,7 +168,7 @@ def test_send_final_status_waits_until_matching_reply_to():
     thread.start()
     assert stub.final_seen.wait(timeout=1.0)
     assert not done.is_set()
-    assert sum(frame.WhichOneof("payload") == "indicator_frame" for frame in stub.sent) == 1440
+    assert sum(frame.WhichOneof("payload") == "indicator_frame_v2" for frame in stub.sent) == 1440
     stub.allow_ack.set()
     assert done.wait(timeout=1.0)
     thread.join(timeout=1.0)

@@ -1,5 +1,6 @@
 from hushine_strategy.indicator_output import IndicatorWriter as SharedIndicatorWriter
-from strategy_service.indicators import IndicatorChunkBuffer, IndicatorWriter, parse_indicator_definitions
+from strategy_service import indicators
+from strategy_service.indicators import IndicatorWriter, parse_indicator_definitions
 
 
 def test_hosted_worker_uses_shared_indicator_writer():
@@ -30,38 +31,5 @@ def test_indicator_writer_rejects_undeclared_key():
     assert frame.warnings == ["undeclared indicator key ignored: missing"]
 
 
-def test_chunk_buffer_flushes_1024_values_and_keeps_nulls():
-    defs = parse_indicator_definitions({"alpha_score": {"type": "line", "pane": "strategy"}})
-    buffer = IndicatorChunkBuffer(defs, chunk_size=1024)
-    stream_key = "binance:perpetual_futures:ETHUSDT:1m"
-
-    chunks = []
-    for index in range(1024):
-        writer = IndicatorWriter(defs)
-        if index != 2:
-            writer.set("alpha_score", float(index))
-        chunks = buffer.record_bar(stream_key, 1_780_000_000_000 + index * 60_000, 60_000, writer.drain())
-
-    assert len(chunks) == 1
-    assert chunks[0].indicator_key == "alpha_score"
-    assert chunks[0].chunk_index == 0
-    assert chunks[0].count == 1024
-    assert chunks[0].values_json["values"][2] is None
-    assert chunks[0].values_json["values"][1023] == 1023.0
-
-
-def test_marker_chunk_allows_multiple_markers_at_same_offset():
-    defs = parse_indicator_definitions({"signal": {"type": "marker", "pane": "price"}})
-    buffer = IndicatorChunkBuffer(defs, chunk_size=2)
-    stream_key = "binance:perpetual_futures:ETHUSDT:1m"
-
-    writer = IndicatorWriter(defs)
-    writer.mark("signal", text="BUY", price=1580.2, color="#16a34a")
-    writer.mark("signal", text="RISK", price=1581.0, color="#d97706")
-    assert buffer.record_bar(stream_key, 1_780_000_000_000, 60_000, writer.drain()) == []
-
-    chunks = buffer.record_bar(stream_key, 1_780_000_060_000, 60_000, IndicatorWriter(defs).drain())
-
-    assert len(chunks) == 1
-    assert chunks[0].values_json["markers"][0]["offset"] == 0
-    assert chunks[0].values_json["markers"][1]["text"] == "RISK"
+def test_direct_indicator_chunk_buffer_is_removed():
+    assert not hasattr(indicators, "IndicatorChunkBuffer")

@@ -67,11 +67,6 @@ func (m *IndicatorSyncManager) CheckpointSessionV2(
 	defer state.flushMu.Unlock()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if len(state.series) != 0 {
-		return nil, fmt.Errorf(
-			"legacy indicator state cannot be durably checkpointed",
-		)
-	}
 	checkpoint := &IndicatorSessionCheckpointV2{
 		SchemaVersion: indicatorSessionCheckpointSchemaV2,
 		SessionID:     sessionID,
@@ -173,7 +168,6 @@ func (m *IndicatorSyncManager) RestoreSessionV2(
 		)
 	}
 	state := &indicatorSessionState{
-		series:    map[string]*indicatorSeriesState{},
 		streamsV2: map[string]*indicatorStreamStateV2{},
 		identityV2: WorkerIdentity{
 			SessionID:  sessionID,

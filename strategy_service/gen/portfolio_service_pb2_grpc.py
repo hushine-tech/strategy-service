@@ -230,21 +230,6 @@ class PortfolioServiceStub:
                 request_serializer=portfolio__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
                 response_deserializer=portfolio__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
                 _registered_method=True)
-        self.SaveStrategyIndicators = channel.unary_unary(
-                '/portfolio.v1.PortfolioService/SaveStrategyIndicators',
-                request_serializer=portfolio__service__pb2.SaveStrategyIndicatorsRequest.SerializeToString,
-                response_deserializer=portfolio__service__pb2.SaveStrategyIndicatorsResponse.FromString,
-                _registered_method=True)
-        self.ListStrategyIndicators = channel.unary_unary(
-                '/portfolio.v1.PortfolioService/ListStrategyIndicators',
-                request_serializer=portfolio__service__pb2.ListStrategyIndicatorsRequest.SerializeToString,
-                response_deserializer=portfolio__service__pb2.ListStrategyIndicatorsResponse.FromString,
-                _registered_method=True)
-        self.ListStrategyIndicatorChunks = channel.unary_unary(
-                '/portfolio.v1.PortfolioService/ListStrategyIndicatorChunks',
-                request_serializer=portfolio__service__pb2.ListStrategyIndicatorChunksRequest.SerializeToString,
-                response_deserializer=portfolio__service__pb2.ListStrategyIndicatorChunksResponse.FromString,
-                _registered_method=True)
         self.SaveStrategyIndicatorsV2 = channel.unary_unary(
                 '/portfolio.v1.PortfolioService/SaveStrategyIndicatorsV2',
                 request_serializer=portfolio__service__pb2.SaveStrategyIndicatorsV2Request.SerializeToString,
@@ -583,27 +568,6 @@ class PortfolioServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def SaveStrategyIndicators(self, request, context):
-        """保存 strategy runtime 输出的 session 级自定义指标声明和 chunk 数据。
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ListStrategyIndicators(self, request, context):
-        """列出 session 自定义指标声明。
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ListStrategyIndicatorChunks(self, request, context):
-        """按时间窗口列出 session 自定义指标 chunk。
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def SaveStrategyIndicatorsV2(self, request, context):
         """保存 typed V2 指标声明和未封块的 revision。
         """
@@ -873,21 +837,6 @@ def add_PortfolioServiceServicer_to_server(servicer, server):
                     servicer.GetSessionReconciliationSummary,
                     request_deserializer=portfolio__service__pb2.GetSessionReconciliationSummaryRequest.FromString,
                     response_serializer=portfolio__service__pb2.GetSessionReconciliationSummaryResponse.SerializeToString,
-            ),
-            'SaveStrategyIndicators': grpc.unary_unary_rpc_method_handler(
-                    servicer.SaveStrategyIndicators,
-                    request_deserializer=portfolio__service__pb2.SaveStrategyIndicatorsRequest.FromString,
-                    response_serializer=portfolio__service__pb2.SaveStrategyIndicatorsResponse.SerializeToString,
-            ),
-            'ListStrategyIndicators': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListStrategyIndicators,
-                    request_deserializer=portfolio__service__pb2.ListStrategyIndicatorsRequest.FromString,
-                    response_serializer=portfolio__service__pb2.ListStrategyIndicatorsResponse.SerializeToString,
-            ),
-            'ListStrategyIndicatorChunks': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListStrategyIndicatorChunks,
-                    request_deserializer=portfolio__service__pb2.ListStrategyIndicatorChunksRequest.FromString,
-                    response_serializer=portfolio__service__pb2.ListStrategyIndicatorChunksResponse.SerializeToString,
             ),
             'SaveStrategyIndicatorsV2': grpc.unary_unary_rpc_method_handler(
                     servicer.SaveStrategyIndicatorsV2,
@@ -1994,87 +1943,6 @@ class PortfolioService:
             '/portfolio.v1.PortfolioService/GetSessionReconciliationSummary',
             portfolio__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
             portfolio__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def SaveStrategyIndicators(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/portfolio.v1.PortfolioService/SaveStrategyIndicators',
-            portfolio__service__pb2.SaveStrategyIndicatorsRequest.SerializeToString,
-            portfolio__service__pb2.SaveStrategyIndicatorsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ListStrategyIndicators(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/portfolio.v1.PortfolioService/ListStrategyIndicators',
-            portfolio__service__pb2.ListStrategyIndicatorsRequest.SerializeToString,
-            portfolio__service__pb2.ListStrategyIndicatorsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ListStrategyIndicatorChunks(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/portfolio.v1.PortfolioService/ListStrategyIndicatorChunks',
-            portfolio__service__pb2.ListStrategyIndicatorChunksRequest.SerializeToString,
-            portfolio__service__pb2.ListStrategyIndicatorChunksResponse.FromString,
             options,
             channel_credentials,
             insecure,

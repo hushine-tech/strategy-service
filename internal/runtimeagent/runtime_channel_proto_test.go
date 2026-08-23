@@ -152,30 +152,23 @@ func TestRuntimeDependencyChannelProto(t *testing.T) {
 		assertTask7MessageField(t, requireTask7Message(t, workerFile, item.message), "dependency_error", item.tag, "strategy.v1.RuntimeDependencyError")
 	}
 	workerFrame := requireTask7Message(t, workerFile, "WorkerFrame")
-	legacyIndicator := workerFrame.Fields().ByName("indicator_frame")
 	v2Indicator := workerFrame.Fields().ByName("indicator_frame_v2")
-	switch {
-	case v2Indicator == nil:
-		if legacyIndicator == nil || legacyIndicator.Number() != 15 {
-			t.Fatal("legacy WorkerFrame.indicator_frame tag 15 is missing")
-		}
-	case legacyIndicator != nil:
-		workerHello := requireTask7Message(t, workerFile, "WorkerHello")
-		protocolVersion := workerHello.Fields().ByName("protocol_version")
-		if protocolVersion == nil || protocolVersion.Number() != 5 || v2Indicator.Number() != 21 {
-			t.Fatal("additive Indicator V2 tags are invalid")
-		}
-		if workerFrame.ReservedRanges().Has(15) {
-			t.Fatal("legacy indicator tag 15 cannot be reserved during additive V2")
-		}
-	default:
-		workerHello := requireTask7Message(t, workerFile, "WorkerHello")
-		protocolVersion := workerHello.Fields().ByName("protocol_version")
-		if protocolVersion == nil || protocolVersion.Number() != 5 || v2Indicator.Number() != 21 {
-			t.Fatal("sealed Indicator V2 tags are invalid")
-		}
-		if !workerFrame.ReservedRanges().Has(15) || !workerFrame.ReservedNames().Has("indicator_frame") {
-			t.Fatal("sealed Indicator V2 must reserve legacy indicator tag and name")
+	workerHello := requireTask7Message(t, workerFile, "WorkerHello")
+	protocolVersion := workerHello.Fields().ByName("protocol_version")
+	if workerFrame.Fields().ByName("indicator_frame") != nil {
+		t.Fatal("legacy WorkerFrame.indicator_frame remains")
+	}
+	if protocolVersion == nil || protocolVersion.Number() != 5 ||
+		v2Indicator == nil || v2Indicator.Number() != 21 {
+		t.Fatal("sealed Indicator V2 tags are invalid")
+	}
+	if !workerFrame.ReservedRanges().Has(15) ||
+		!workerFrame.ReservedNames().Has("indicator_frame") {
+		t.Fatal("sealed Indicator V2 must reserve legacy indicator tag and name")
+	}
+	for _, name := range []protoreflect.Name{"IndicatorValue", "IndicatorFrame"} {
+		if workerFile.Messages().ByName(name) != nil {
+			t.Fatalf("legacy worker message remains: %s", name)
 		}
 	}
 	finalStatus := requireTask7Message(t, workerFile, "FinalStatus")

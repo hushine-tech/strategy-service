@@ -7711,598 +7711,6 @@ func (x *SnapshotEntry) GetStrategyId() int64 {
 	return 0
 }
 
-type StrategyIndicatorDefinition struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	StrategyId    int64                  `protobuf:"varint,2,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
-	StreamKey     string                 `protobuf:"bytes,3,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`
-	IndicatorKey  string                 `protobuf:"bytes,4,opt,name=indicator_key,json=indicatorKey,proto3" json:"indicator_key,omitempty"`
-	Name          string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
-	Type          string                 `protobuf:"bytes,6,opt,name=type,proto3" json:"type,omitempty"`
-	Pane          string                 `protobuf:"bytes,7,opt,name=pane,proto3" json:"pane,omitempty"`
-	Color         string                 `protobuf:"bytes,8,opt,name=color,proto3" json:"color,omitempty"`
-	Unit          string                 `protobuf:"bytes,9,opt,name=unit,proto3" json:"unit,omitempty"`
-	Description   string                 `protobuf:"bytes,10,opt,name=description,proto3" json:"description,omitempty"`
-	ConfigJson    string                 `protobuf:"bytes,11,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StrategyIndicatorDefinition) Reset() {
-	*x = StrategyIndicatorDefinition{}
-	mi := &file_portfolio_service_proto_msgTypes[101]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StrategyIndicatorDefinition) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StrategyIndicatorDefinition) ProtoMessage() {}
-
-func (x *StrategyIndicatorDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[101]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StrategyIndicatorDefinition.ProtoReflect.Descriptor instead.
-func (*StrategyIndicatorDefinition) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{101}
-}
-
-func (x *StrategyIndicatorDefinition) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetStrategyId() int64 {
-	if x != nil {
-		return x.StrategyId
-	}
-	return 0
-}
-
-func (x *StrategyIndicatorDefinition) GetStreamKey() string {
-	if x != nil {
-		return x.StreamKey
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetIndicatorKey() string {
-	if x != nil {
-		return x.IndicatorKey
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetType() string {
-	if x != nil {
-		return x.Type
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetPane() string {
-	if x != nil {
-		return x.Pane
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetColor() string {
-	if x != nil {
-		return x.Color
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetUnit() string {
-	if x != nil {
-		return x.Unit
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetDescription() string {
-	if x != nil {
-		return x.Description
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorDefinition) GetConfigJson() string {
-	if x != nil {
-		return x.ConfigJson
-	}
-	return ""
-}
-
-type StrategyIndicatorChunk struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	StreamKey     string                 `protobuf:"bytes,2,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`
-	IndicatorKey  string                 `protobuf:"bytes,3,opt,name=indicator_key,json=indicatorKey,proto3" json:"indicator_key,omitempty"`
-	ChunkIndex    int32                  `protobuf:"varint,4,opt,name=chunk_index,json=chunkIndex,proto3" json:"chunk_index,omitempty"`
-	StartTimeMs   int64                  `protobuf:"varint,5,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"`
-	EndTimeMs     int64                  `protobuf:"varint,6,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
-	IntervalMs    int64                  `protobuf:"varint,7,opt,name=interval_ms,json=intervalMs,proto3" json:"interval_ms,omitempty"`
-	Count         int32                  `protobuf:"varint,8,opt,name=count,proto3" json:"count,omitempty"`
-	ValuesJson    string                 `protobuf:"bytes,9,opt,name=values_json,json=valuesJson,proto3" json:"values_json,omitempty"`
-	Finalized     bool                   `protobuf:"varint,10,opt,name=finalized,proto3" json:"finalized,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StrategyIndicatorChunk) Reset() {
-	*x = StrategyIndicatorChunk{}
-	mi := &file_portfolio_service_proto_msgTypes[102]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StrategyIndicatorChunk) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StrategyIndicatorChunk) ProtoMessage() {}
-
-func (x *StrategyIndicatorChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[102]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StrategyIndicatorChunk.ProtoReflect.Descriptor instead.
-func (*StrategyIndicatorChunk) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{102}
-}
-
-func (x *StrategyIndicatorChunk) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorChunk) GetStreamKey() string {
-	if x != nil {
-		return x.StreamKey
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorChunk) GetIndicatorKey() string {
-	if x != nil {
-		return x.IndicatorKey
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorChunk) GetChunkIndex() int32 {
-	if x != nil {
-		return x.ChunkIndex
-	}
-	return 0
-}
-
-func (x *StrategyIndicatorChunk) GetStartTimeMs() int64 {
-	if x != nil {
-		return x.StartTimeMs
-	}
-	return 0
-}
-
-func (x *StrategyIndicatorChunk) GetEndTimeMs() int64 {
-	if x != nil {
-		return x.EndTimeMs
-	}
-	return 0
-}
-
-func (x *StrategyIndicatorChunk) GetIntervalMs() int64 {
-	if x != nil {
-		return x.IntervalMs
-	}
-	return 0
-}
-
-func (x *StrategyIndicatorChunk) GetCount() int32 {
-	if x != nil {
-		return x.Count
-	}
-	return 0
-}
-
-func (x *StrategyIndicatorChunk) GetValuesJson() string {
-	if x != nil {
-		return x.ValuesJson
-	}
-	return ""
-}
-
-func (x *StrategyIndicatorChunk) GetFinalized() bool {
-	if x != nil {
-		return x.Finalized
-	}
-	return false
-}
-
-type SaveStrategyIndicatorsRequest struct {
-	state         protoimpl.MessageState         `protogen:"open.v1"`
-	SessionId     string                         `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Definitions   []*StrategyIndicatorDefinition `protobuf:"bytes,2,rep,name=definitions,proto3" json:"definitions,omitempty"`
-	Chunks        []*StrategyIndicatorChunk      `protobuf:"bytes,3,rep,name=chunks,proto3" json:"chunks,omitempty"`
-	UserId        int64                          `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SaveStrategyIndicatorsRequest) Reset() {
-	*x = SaveStrategyIndicatorsRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[103]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SaveStrategyIndicatorsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SaveStrategyIndicatorsRequest) ProtoMessage() {}
-
-func (x *SaveStrategyIndicatorsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[103]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SaveStrategyIndicatorsRequest.ProtoReflect.Descriptor instead.
-func (*SaveStrategyIndicatorsRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{103}
-}
-
-func (x *SaveStrategyIndicatorsRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *SaveStrategyIndicatorsRequest) GetDefinitions() []*StrategyIndicatorDefinition {
-	if x != nil {
-		return x.Definitions
-	}
-	return nil
-}
-
-func (x *SaveStrategyIndicatorsRequest) GetChunks() []*StrategyIndicatorChunk {
-	if x != nil {
-		return x.Chunks
-	}
-	return nil
-}
-
-func (x *SaveStrategyIndicatorsRequest) GetUserId() int64 {
-	if x != nil {
-		return x.UserId
-	}
-	return 0
-}
-
-type SaveStrategyIndicatorsResponse struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	DefinitionsSaved int32                  `protobuf:"varint,1,opt,name=definitions_saved,json=definitionsSaved,proto3" json:"definitions_saved,omitempty"`
-	ChunksSaved      int32                  `protobuf:"varint,2,opt,name=chunks_saved,json=chunksSaved,proto3" json:"chunks_saved,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
-}
-
-func (x *SaveStrategyIndicatorsResponse) Reset() {
-	*x = SaveStrategyIndicatorsResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[104]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SaveStrategyIndicatorsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SaveStrategyIndicatorsResponse) ProtoMessage() {}
-
-func (x *SaveStrategyIndicatorsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[104]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SaveStrategyIndicatorsResponse.ProtoReflect.Descriptor instead.
-func (*SaveStrategyIndicatorsResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{104}
-}
-
-func (x *SaveStrategyIndicatorsResponse) GetDefinitionsSaved() int32 {
-	if x != nil {
-		return x.DefinitionsSaved
-	}
-	return 0
-}
-
-func (x *SaveStrategyIndicatorsResponse) GetChunksSaved() int32 {
-	if x != nil {
-		return x.ChunksSaved
-	}
-	return 0
-}
-
-type ListStrategyIndicatorsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	StreamKey     string                 `protobuf:"bytes,2,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`
-	UserId        int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListStrategyIndicatorsRequest) Reset() {
-	*x = ListStrategyIndicatorsRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[105]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListStrategyIndicatorsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListStrategyIndicatorsRequest) ProtoMessage() {}
-
-func (x *ListStrategyIndicatorsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[105]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListStrategyIndicatorsRequest.ProtoReflect.Descriptor instead.
-func (*ListStrategyIndicatorsRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{105}
-}
-
-func (x *ListStrategyIndicatorsRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *ListStrategyIndicatorsRequest) GetStreamKey() string {
-	if x != nil {
-		return x.StreamKey
-	}
-	return ""
-}
-
-func (x *ListStrategyIndicatorsRequest) GetUserId() int64 {
-	if x != nil {
-		return x.UserId
-	}
-	return 0
-}
-
-type ListStrategyIndicatorsResponse struct {
-	state         protoimpl.MessageState         `protogen:"open.v1"`
-	Definitions   []*StrategyIndicatorDefinition `protobuf:"bytes,1,rep,name=definitions,proto3" json:"definitions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListStrategyIndicatorsResponse) Reset() {
-	*x = ListStrategyIndicatorsResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[106]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListStrategyIndicatorsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListStrategyIndicatorsResponse) ProtoMessage() {}
-
-func (x *ListStrategyIndicatorsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[106]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListStrategyIndicatorsResponse.ProtoReflect.Descriptor instead.
-func (*ListStrategyIndicatorsResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{106}
-}
-
-func (x *ListStrategyIndicatorsResponse) GetDefinitions() []*StrategyIndicatorDefinition {
-	if x != nil {
-		return x.Definitions
-	}
-	return nil
-}
-
-type ListStrategyIndicatorChunksRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	StreamKey     string                 `protobuf:"bytes,2,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`
-	IndicatorKeys []string               `protobuf:"bytes,3,rep,name=indicator_keys,json=indicatorKeys,proto3" json:"indicator_keys,omitempty"`
-	StartTimeMs   int64                  `protobuf:"varint,4,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"`
-	EndTimeMs     int64                  `protobuf:"varint,5,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
-	UserId        int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListStrategyIndicatorChunksRequest) Reset() {
-	*x = ListStrategyIndicatorChunksRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[107]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListStrategyIndicatorChunksRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListStrategyIndicatorChunksRequest) ProtoMessage() {}
-
-func (x *ListStrategyIndicatorChunksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[107]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListStrategyIndicatorChunksRequest.ProtoReflect.Descriptor instead.
-func (*ListStrategyIndicatorChunksRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{107}
-}
-
-func (x *ListStrategyIndicatorChunksRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *ListStrategyIndicatorChunksRequest) GetStreamKey() string {
-	if x != nil {
-		return x.StreamKey
-	}
-	return ""
-}
-
-func (x *ListStrategyIndicatorChunksRequest) GetIndicatorKeys() []string {
-	if x != nil {
-		return x.IndicatorKeys
-	}
-	return nil
-}
-
-func (x *ListStrategyIndicatorChunksRequest) GetStartTimeMs() int64 {
-	if x != nil {
-		return x.StartTimeMs
-	}
-	return 0
-}
-
-func (x *ListStrategyIndicatorChunksRequest) GetEndTimeMs() int64 {
-	if x != nil {
-		return x.EndTimeMs
-	}
-	return 0
-}
-
-func (x *ListStrategyIndicatorChunksRequest) GetUserId() int64 {
-	if x != nil {
-		return x.UserId
-	}
-	return 0
-}
-
-type ListStrategyIndicatorChunksResponse struct {
-	state         protoimpl.MessageState    `protogen:"open.v1"`
-	Chunks        []*StrategyIndicatorChunk `protobuf:"bytes,1,rep,name=chunks,proto3" json:"chunks,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListStrategyIndicatorChunksResponse) Reset() {
-	*x = ListStrategyIndicatorChunksResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[108]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListStrategyIndicatorChunksResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListStrategyIndicatorChunksResponse) ProtoMessage() {}
-
-func (x *ListStrategyIndicatorChunksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[108]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListStrategyIndicatorChunksResponse.ProtoReflect.Descriptor instead.
-func (*ListStrategyIndicatorChunksResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{108}
-}
-
-func (x *ListStrategyIndicatorChunksResponse) GetChunks() []*StrategyIndicatorChunk {
-	if x != nil {
-		return x.Chunks
-	}
-	return nil
-}
-
 type NullableDoubleV2 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Value         *float64               `protobuf:"fixed64,1,opt,name=value,proto3,oneof" json:"value,omitempty"`
@@ -8312,7 +7720,7 @@ type NullableDoubleV2 struct {
 
 func (x *NullableDoubleV2) Reset() {
 	*x = NullableDoubleV2{}
-	mi := &file_portfolio_service_proto_msgTypes[109]
+	mi := &file_portfolio_service_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8324,7 +7732,7 @@ func (x *NullableDoubleV2) String() string {
 func (*NullableDoubleV2) ProtoMessage() {}
 
 func (x *NullableDoubleV2) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[109]
+	mi := &file_portfolio_service_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8337,7 +7745,7 @@ func (x *NullableDoubleV2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NullableDoubleV2.ProtoReflect.Descriptor instead.
 func (*NullableDoubleV2) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{109}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *NullableDoubleV2) GetValue() float64 {
@@ -8363,7 +7771,7 @@ type StrategyIndicatorMarkerV2 struct {
 
 func (x *StrategyIndicatorMarkerV2) Reset() {
 	*x = StrategyIndicatorMarkerV2{}
-	mi := &file_portfolio_service_proto_msgTypes[110]
+	mi := &file_portfolio_service_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8375,7 +7783,7 @@ func (x *StrategyIndicatorMarkerV2) String() string {
 func (*StrategyIndicatorMarkerV2) ProtoMessage() {}
 
 func (x *StrategyIndicatorMarkerV2) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[110]
+	mi := &file_portfolio_service_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8388,7 +7796,7 @@ func (x *StrategyIndicatorMarkerV2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StrategyIndicatorMarkerV2.ProtoReflect.Descriptor instead.
 func (*StrategyIndicatorMarkerV2) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{110}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *StrategyIndicatorMarkerV2) GetSequence() uint64 {
@@ -8467,7 +7875,7 @@ type StrategyIndicatorDefinitionV2 struct {
 
 func (x *StrategyIndicatorDefinitionV2) Reset() {
 	*x = StrategyIndicatorDefinitionV2{}
-	mi := &file_portfolio_service_proto_msgTypes[111]
+	mi := &file_portfolio_service_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8479,7 +7887,7 @@ func (x *StrategyIndicatorDefinitionV2) String() string {
 func (*StrategyIndicatorDefinitionV2) ProtoMessage() {}
 
 func (x *StrategyIndicatorDefinitionV2) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[111]
+	mi := &file_portfolio_service_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8492,7 +7900,7 @@ func (x *StrategyIndicatorDefinitionV2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StrategyIndicatorDefinitionV2.ProtoReflect.Descriptor instead.
 func (*StrategyIndicatorDefinitionV2) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{111}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *StrategyIndicatorDefinitionV2) GetSessionId() string {
@@ -8603,7 +8011,7 @@ type StrategyIndicatorChunkV2 struct {
 
 func (x *StrategyIndicatorChunkV2) Reset() {
 	*x = StrategyIndicatorChunkV2{}
-	mi := &file_portfolio_service_proto_msgTypes[112]
+	mi := &file_portfolio_service_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8615,7 +8023,7 @@ func (x *StrategyIndicatorChunkV2) String() string {
 func (*StrategyIndicatorChunkV2) ProtoMessage() {}
 
 func (x *StrategyIndicatorChunkV2) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[112]
+	mi := &file_portfolio_service_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8628,7 +8036,7 @@ func (x *StrategyIndicatorChunkV2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StrategyIndicatorChunkV2.ProtoReflect.Descriptor instead.
 func (*StrategyIndicatorChunkV2) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{112}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *StrategyIndicatorChunkV2) GetSessionId() string {
@@ -8755,7 +8163,7 @@ type StrategyIndicatorChunkFinalizationV2 struct {
 
 func (x *StrategyIndicatorChunkFinalizationV2) Reset() {
 	*x = StrategyIndicatorChunkFinalizationV2{}
-	mi := &file_portfolio_service_proto_msgTypes[113]
+	mi := &file_portfolio_service_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8767,7 +8175,7 @@ func (x *StrategyIndicatorChunkFinalizationV2) String() string {
 func (*StrategyIndicatorChunkFinalizationV2) ProtoMessage() {}
 
 func (x *StrategyIndicatorChunkFinalizationV2) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[113]
+	mi := &file_portfolio_service_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8780,7 +8188,7 @@ func (x *StrategyIndicatorChunkFinalizationV2) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use StrategyIndicatorChunkFinalizationV2.ProtoReflect.Descriptor instead.
 func (*StrategyIndicatorChunkFinalizationV2) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{113}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *StrategyIndicatorChunkFinalizationV2) GetStreamKey() string {
@@ -8823,7 +8231,7 @@ type SaveStrategyIndicatorsV2Request struct {
 
 func (x *SaveStrategyIndicatorsV2Request) Reset() {
 	*x = SaveStrategyIndicatorsV2Request{}
-	mi := &file_portfolio_service_proto_msgTypes[114]
+	mi := &file_portfolio_service_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8835,7 +8243,7 @@ func (x *SaveStrategyIndicatorsV2Request) String() string {
 func (*SaveStrategyIndicatorsV2Request) ProtoMessage() {}
 
 func (x *SaveStrategyIndicatorsV2Request) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[114]
+	mi := &file_portfolio_service_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8848,7 +8256,7 @@ func (x *SaveStrategyIndicatorsV2Request) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveStrategyIndicatorsV2Request.ProtoReflect.Descriptor instead.
 func (*SaveStrategyIndicatorsV2Request) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{114}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *SaveStrategyIndicatorsV2Request) GetSessionId() string {
@@ -8889,7 +8297,7 @@ type SaveStrategyIndicatorsV2Response struct {
 
 func (x *SaveStrategyIndicatorsV2Response) Reset() {
 	*x = SaveStrategyIndicatorsV2Response{}
-	mi := &file_portfolio_service_proto_msgTypes[115]
+	mi := &file_portfolio_service_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8901,7 +8309,7 @@ func (x *SaveStrategyIndicatorsV2Response) String() string {
 func (*SaveStrategyIndicatorsV2Response) ProtoMessage() {}
 
 func (x *SaveStrategyIndicatorsV2Response) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[115]
+	mi := &file_portfolio_service_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8914,7 +8322,7 @@ func (x *SaveStrategyIndicatorsV2Response) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveStrategyIndicatorsV2Response.ProtoReflect.Descriptor instead.
 func (*SaveStrategyIndicatorsV2Response) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{115}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *SaveStrategyIndicatorsV2Response) GetDefinitionsSaved() int32 {
@@ -8942,7 +8350,7 @@ type FinalizeStrategyIndicatorChunksV2Request struct {
 
 func (x *FinalizeStrategyIndicatorChunksV2Request) Reset() {
 	*x = FinalizeStrategyIndicatorChunksV2Request{}
-	mi := &file_portfolio_service_proto_msgTypes[116]
+	mi := &file_portfolio_service_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8954,7 +8362,7 @@ func (x *FinalizeStrategyIndicatorChunksV2Request) String() string {
 func (*FinalizeStrategyIndicatorChunksV2Request) ProtoMessage() {}
 
 func (x *FinalizeStrategyIndicatorChunksV2Request) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[116]
+	mi := &file_portfolio_service_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8967,7 +8375,7 @@ func (x *FinalizeStrategyIndicatorChunksV2Request) ProtoReflect() protoreflect.M
 
 // Deprecated: Use FinalizeStrategyIndicatorChunksV2Request.ProtoReflect.Descriptor instead.
 func (*FinalizeStrategyIndicatorChunksV2Request) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{116}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *FinalizeStrategyIndicatorChunksV2Request) GetSessionId() string {
@@ -9000,7 +8408,7 @@ type FinalizeStrategyIndicatorChunksV2Response struct {
 
 func (x *FinalizeStrategyIndicatorChunksV2Response) Reset() {
 	*x = FinalizeStrategyIndicatorChunksV2Response{}
-	mi := &file_portfolio_service_proto_msgTypes[117]
+	mi := &file_portfolio_service_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9012,7 +8420,7 @@ func (x *FinalizeStrategyIndicatorChunksV2Response) String() string {
 func (*FinalizeStrategyIndicatorChunksV2Response) ProtoMessage() {}
 
 func (x *FinalizeStrategyIndicatorChunksV2Response) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[117]
+	mi := &file_portfolio_service_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9025,7 +8433,7 @@ func (x *FinalizeStrategyIndicatorChunksV2Response) ProtoReflect() protoreflect.
 
 // Deprecated: Use FinalizeStrategyIndicatorChunksV2Response.ProtoReflect.Descriptor instead.
 func (*FinalizeStrategyIndicatorChunksV2Response) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{117}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *FinalizeStrategyIndicatorChunksV2Response) GetChunksFinalized() int32 {
@@ -9046,7 +8454,7 @@ type ListStrategyIndicatorsV2Request struct {
 
 func (x *ListStrategyIndicatorsV2Request) Reset() {
 	*x = ListStrategyIndicatorsV2Request{}
-	mi := &file_portfolio_service_proto_msgTypes[118]
+	mi := &file_portfolio_service_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9058,7 +8466,7 @@ func (x *ListStrategyIndicatorsV2Request) String() string {
 func (*ListStrategyIndicatorsV2Request) ProtoMessage() {}
 
 func (x *ListStrategyIndicatorsV2Request) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[118]
+	mi := &file_portfolio_service_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9071,7 +8479,7 @@ func (x *ListStrategyIndicatorsV2Request) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStrategyIndicatorsV2Request.ProtoReflect.Descriptor instead.
 func (*ListStrategyIndicatorsV2Request) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{118}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *ListStrategyIndicatorsV2Request) GetSessionId() string {
@@ -9104,7 +8512,7 @@ type ListStrategyIndicatorsV2Response struct {
 
 func (x *ListStrategyIndicatorsV2Response) Reset() {
 	*x = ListStrategyIndicatorsV2Response{}
-	mi := &file_portfolio_service_proto_msgTypes[119]
+	mi := &file_portfolio_service_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9116,7 +8524,7 @@ func (x *ListStrategyIndicatorsV2Response) String() string {
 func (*ListStrategyIndicatorsV2Response) ProtoMessage() {}
 
 func (x *ListStrategyIndicatorsV2Response) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[119]
+	mi := &file_portfolio_service_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9129,7 +8537,7 @@ func (x *ListStrategyIndicatorsV2Response) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStrategyIndicatorsV2Response.ProtoReflect.Descriptor instead.
 func (*ListStrategyIndicatorsV2Response) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{119}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *ListStrategyIndicatorsV2Response) GetDefinitions() []*StrategyIndicatorDefinitionV2 {
@@ -9153,7 +8561,7 @@ type ListStrategyIndicatorChunksV2Request struct {
 
 func (x *ListStrategyIndicatorChunksV2Request) Reset() {
 	*x = ListStrategyIndicatorChunksV2Request{}
-	mi := &file_portfolio_service_proto_msgTypes[120]
+	mi := &file_portfolio_service_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9165,7 +8573,7 @@ func (x *ListStrategyIndicatorChunksV2Request) String() string {
 func (*ListStrategyIndicatorChunksV2Request) ProtoMessage() {}
 
 func (x *ListStrategyIndicatorChunksV2Request) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[120]
+	mi := &file_portfolio_service_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9178,7 +8586,7 @@ func (x *ListStrategyIndicatorChunksV2Request) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use ListStrategyIndicatorChunksV2Request.ProtoReflect.Descriptor instead.
 func (*ListStrategyIndicatorChunksV2Request) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{120}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *ListStrategyIndicatorChunksV2Request) GetSessionId() string {
@@ -9232,7 +8640,7 @@ type ListStrategyIndicatorChunksV2Response struct {
 
 func (x *ListStrategyIndicatorChunksV2Response) Reset() {
 	*x = ListStrategyIndicatorChunksV2Response{}
-	mi := &file_portfolio_service_proto_msgTypes[121]
+	mi := &file_portfolio_service_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9244,7 +8652,7 @@ func (x *ListStrategyIndicatorChunksV2Response) String() string {
 func (*ListStrategyIndicatorChunksV2Response) ProtoMessage() {}
 
 func (x *ListStrategyIndicatorChunksV2Response) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[121]
+	mi := &file_portfolio_service_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9257,7 +8665,7 @@ func (x *ListStrategyIndicatorChunksV2Response) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use ListStrategyIndicatorChunksV2Response.ProtoReflect.Descriptor instead.
 func (*ListStrategyIndicatorChunksV2Response) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{121}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *ListStrategyIndicatorChunksV2Response) GetChunks() []*StrategyIndicatorChunkV2 {
@@ -9279,7 +8687,7 @@ type ListReconciliationRunsRequest struct {
 
 func (x *ListReconciliationRunsRequest) Reset() {
 	*x = ListReconciliationRunsRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[122]
+	mi := &file_portfolio_service_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9291,7 +8699,7 @@ func (x *ListReconciliationRunsRequest) String() string {
 func (*ListReconciliationRunsRequest) ProtoMessage() {}
 
 func (x *ListReconciliationRunsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[122]
+	mi := &file_portfolio_service_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9304,7 +8712,7 @@ func (x *ListReconciliationRunsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReconciliationRunsRequest.ProtoReflect.Descriptor instead.
 func (*ListReconciliationRunsRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{122}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *ListReconciliationRunsRequest) GetSessionId() string {
@@ -9348,7 +8756,7 @@ type ListReconciliationRunsResponse struct {
 
 func (x *ListReconciliationRunsResponse) Reset() {
 	*x = ListReconciliationRunsResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[123]
+	mi := &file_portfolio_service_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9360,7 +8768,7 @@ func (x *ListReconciliationRunsResponse) String() string {
 func (*ListReconciliationRunsResponse) ProtoMessage() {}
 
 func (x *ListReconciliationRunsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[123]
+	mi := &file_portfolio_service_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9373,7 +8781,7 @@ func (x *ListReconciliationRunsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReconciliationRunsResponse.ProtoReflect.Descriptor instead.
 func (*ListReconciliationRunsResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{123}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *ListReconciliationRunsResponse) GetItems() []*ReconciliationRunEntry {
@@ -9414,7 +8822,7 @@ type GetSessionReconciliationSummaryRequest struct {
 
 func (x *GetSessionReconciliationSummaryRequest) Reset() {
 	*x = GetSessionReconciliationSummaryRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[124]
+	mi := &file_portfolio_service_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9426,7 +8834,7 @@ func (x *GetSessionReconciliationSummaryRequest) String() string {
 func (*GetSessionReconciliationSummaryRequest) ProtoMessage() {}
 
 func (x *GetSessionReconciliationSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[124]
+	mi := &file_portfolio_service_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9439,7 +8847,7 @@ func (x *GetSessionReconciliationSummaryRequest) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use GetSessionReconciliationSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionReconciliationSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{124}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *GetSessionReconciliationSummaryRequest) GetSessionId() string {
@@ -9467,7 +8875,7 @@ type GetSessionReconciliationSummaryResponse struct {
 
 func (x *GetSessionReconciliationSummaryResponse) Reset() {
 	*x = GetSessionReconciliationSummaryResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[125]
+	mi := &file_portfolio_service_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9479,7 +8887,7 @@ func (x *GetSessionReconciliationSummaryResponse) String() string {
 func (*GetSessionReconciliationSummaryResponse) ProtoMessage() {}
 
 func (x *GetSessionReconciliationSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[125]
+	mi := &file_portfolio_service_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9492,7 +8900,7 @@ func (x *GetSessionReconciliationSummaryResponse) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use GetSessionReconciliationSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionReconciliationSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{125}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *GetSessionReconciliationSummaryResponse) GetTotalRuns() int64 {
@@ -9539,7 +8947,7 @@ type ReconciliationRunEntry struct {
 
 func (x *ReconciliationRunEntry) Reset() {
 	*x = ReconciliationRunEntry{}
-	mi := &file_portfolio_service_proto_msgTypes[126]
+	mi := &file_portfolio_service_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9551,7 +8959,7 @@ func (x *ReconciliationRunEntry) String() string {
 func (*ReconciliationRunEntry) ProtoMessage() {}
 
 func (x *ReconciliationRunEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[126]
+	mi := &file_portfolio_service_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9564,7 +8972,7 @@ func (x *ReconciliationRunEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReconciliationRunEntry.ProtoReflect.Descriptor instead.
 func (*ReconciliationRunEntry) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{126}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *ReconciliationRunEntry) GetTime() *timestamppb.Timestamp {
@@ -9688,7 +9096,7 @@ type FieldDiffEntry struct {
 
 func (x *FieldDiffEntry) Reset() {
 	*x = FieldDiffEntry{}
-	mi := &file_portfolio_service_proto_msgTypes[127]
+	mi := &file_portfolio_service_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9700,7 +9108,7 @@ func (x *FieldDiffEntry) String() string {
 func (*FieldDiffEntry) ProtoMessage() {}
 
 func (x *FieldDiffEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[127]
+	mi := &file_portfolio_service_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9713,7 +9121,7 @@ func (x *FieldDiffEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldDiffEntry.ProtoReflect.Descriptor instead.
 func (*FieldDiffEntry) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{127}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *FieldDiffEntry) GetField() string {
@@ -9787,7 +9195,7 @@ type NotificationPlan struct {
 
 func (x *NotificationPlan) Reset() {
 	*x = NotificationPlan{}
-	mi := &file_portfolio_service_proto_msgTypes[128]
+	mi := &file_portfolio_service_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9799,7 +9207,7 @@ func (x *NotificationPlan) String() string {
 func (*NotificationPlan) ProtoMessage() {}
 
 func (x *NotificationPlan) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[128]
+	mi := &file_portfolio_service_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9812,7 +9220,7 @@ func (x *NotificationPlan) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationPlan.ProtoReflect.Descriptor instead.
 func (*NotificationPlan) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{128}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *NotificationPlan) GetPlanCode() string {
@@ -9876,7 +9284,7 @@ type NotificationPreferences struct {
 
 func (x *NotificationPreferences) Reset() {
 	*x = NotificationPreferences{}
-	mi := &file_portfolio_service_proto_msgTypes[129]
+	mi := &file_portfolio_service_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9888,7 +9296,7 @@ func (x *NotificationPreferences) String() string {
 func (*NotificationPreferences) ProtoMessage() {}
 
 func (x *NotificationPreferences) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[129]
+	mi := &file_portfolio_service_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9901,7 +9309,7 @@ func (x *NotificationPreferences) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationPreferences.ProtoReflect.Descriptor instead.
 func (*NotificationPreferences) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{129}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *NotificationPreferences) GetSystemEnabled() bool {
@@ -9948,7 +9356,7 @@ type NotificationChannel struct {
 
 func (x *NotificationChannel) Reset() {
 	*x = NotificationChannel{}
-	mi := &file_portfolio_service_proto_msgTypes[130]
+	mi := &file_portfolio_service_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9960,7 +9368,7 @@ func (x *NotificationChannel) String() string {
 func (*NotificationChannel) ProtoMessage() {}
 
 func (x *NotificationChannel) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[130]
+	mi := &file_portfolio_service_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9973,7 +9381,7 @@ func (x *NotificationChannel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationChannel.ProtoReflect.Descriptor instead.
 func (*NotificationChannel) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{130}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *NotificationChannel) GetChannel() string {
@@ -10041,7 +9449,7 @@ type GetNotificationSettingsRequest struct {
 
 func (x *GetNotificationSettingsRequest) Reset() {
 	*x = GetNotificationSettingsRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[131]
+	mi := &file_portfolio_service_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10053,7 +9461,7 @@ func (x *GetNotificationSettingsRequest) String() string {
 func (*GetNotificationSettingsRequest) ProtoMessage() {}
 
 func (x *GetNotificationSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[131]
+	mi := &file_portfolio_service_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10066,7 +9474,7 @@ func (x *GetNotificationSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNotificationSettingsRequest.ProtoReflect.Descriptor instead.
 func (*GetNotificationSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{131}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *GetNotificationSettingsRequest) GetUserId() int64 {
@@ -10088,7 +9496,7 @@ type GetNotificationSettingsResponse struct {
 
 func (x *GetNotificationSettingsResponse) Reset() {
 	*x = GetNotificationSettingsResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[132]
+	mi := &file_portfolio_service_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10100,7 +9508,7 @@ func (x *GetNotificationSettingsResponse) String() string {
 func (*GetNotificationSettingsResponse) ProtoMessage() {}
 
 func (x *GetNotificationSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[132]
+	mi := &file_portfolio_service_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10113,7 +9521,7 @@ func (x *GetNotificationSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNotificationSettingsResponse.ProtoReflect.Descriptor instead.
 func (*GetNotificationSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{132}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *GetNotificationSettingsResponse) GetPreferences() *NotificationPreferences {
@@ -10154,7 +9562,7 @@ type UpdateNotificationPreferencesRequest struct {
 
 func (x *UpdateNotificationPreferencesRequest) Reset() {
 	*x = UpdateNotificationPreferencesRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[133]
+	mi := &file_portfolio_service_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10166,7 +9574,7 @@ func (x *UpdateNotificationPreferencesRequest) String() string {
 func (*UpdateNotificationPreferencesRequest) ProtoMessage() {}
 
 func (x *UpdateNotificationPreferencesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[133]
+	mi := &file_portfolio_service_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10179,7 +9587,7 @@ func (x *UpdateNotificationPreferencesRequest) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use UpdateNotificationPreferencesRequest.ProtoReflect.Descriptor instead.
 func (*UpdateNotificationPreferencesRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{133}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *UpdateNotificationPreferencesRequest) GetUserId() int64 {
@@ -10205,7 +9613,7 @@ type UpdateNotificationPreferencesResponse struct {
 
 func (x *UpdateNotificationPreferencesResponse) Reset() {
 	*x = UpdateNotificationPreferencesResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[134]
+	mi := &file_portfolio_service_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10217,7 +9625,7 @@ func (x *UpdateNotificationPreferencesResponse) String() string {
 func (*UpdateNotificationPreferencesResponse) ProtoMessage() {}
 
 func (x *UpdateNotificationPreferencesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[134]
+	mi := &file_portfolio_service_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10230,7 +9638,7 @@ func (x *UpdateNotificationPreferencesResponse) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use UpdateNotificationPreferencesResponse.ProtoReflect.Descriptor instead.
 func (*UpdateNotificationPreferencesResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{134}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *UpdateNotificationPreferencesResponse) GetSettings() *GetNotificationSettingsResponse {
@@ -10250,7 +9658,7 @@ type CreateNotificationBindCodeRequest struct {
 
 func (x *CreateNotificationBindCodeRequest) Reset() {
 	*x = CreateNotificationBindCodeRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[135]
+	mi := &file_portfolio_service_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10262,7 +9670,7 @@ func (x *CreateNotificationBindCodeRequest) String() string {
 func (*CreateNotificationBindCodeRequest) ProtoMessage() {}
 
 func (x *CreateNotificationBindCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[135]
+	mi := &file_portfolio_service_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10275,7 +9683,7 @@ func (x *CreateNotificationBindCodeRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use CreateNotificationBindCodeRequest.ProtoReflect.Descriptor instead.
 func (*CreateNotificationBindCodeRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{135}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *CreateNotificationBindCodeRequest) GetUserId() int64 {
@@ -10303,7 +9711,7 @@ type CreateNotificationBindCodeResponse struct {
 
 func (x *CreateNotificationBindCodeResponse) Reset() {
 	*x = CreateNotificationBindCodeResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[136]
+	mi := &file_portfolio_service_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10315,7 +9723,7 @@ func (x *CreateNotificationBindCodeResponse) String() string {
 func (*CreateNotificationBindCodeResponse) ProtoMessage() {}
 
 func (x *CreateNotificationBindCodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[136]
+	mi := &file_portfolio_service_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10328,7 +9736,7 @@ func (x *CreateNotificationBindCodeResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use CreateNotificationBindCodeResponse.ProtoReflect.Descriptor instead.
 func (*CreateNotificationBindCodeResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{136}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *CreateNotificationBindCodeResponse) GetBindCode() string {
@@ -10362,7 +9770,7 @@ type ConfirmNotificationBindingRequest struct {
 
 func (x *ConfirmNotificationBindingRequest) Reset() {
 	*x = ConfirmNotificationBindingRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[137]
+	mi := &file_portfolio_service_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10374,7 +9782,7 @@ func (x *ConfirmNotificationBindingRequest) String() string {
 func (*ConfirmNotificationBindingRequest) ProtoMessage() {}
 
 func (x *ConfirmNotificationBindingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[137]
+	mi := &file_portfolio_service_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10387,7 +9795,7 @@ func (x *ConfirmNotificationBindingRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ConfirmNotificationBindingRequest.ProtoReflect.Descriptor instead.
 func (*ConfirmNotificationBindingRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{137}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *ConfirmNotificationBindingRequest) GetUserId() int64 {
@@ -10413,7 +9821,7 @@ type ConfirmNotificationBindingResponse struct {
 
 func (x *ConfirmNotificationBindingResponse) Reset() {
 	*x = ConfirmNotificationBindingResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[138]
+	mi := &file_portfolio_service_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10425,7 +9833,7 @@ func (x *ConfirmNotificationBindingResponse) String() string {
 func (*ConfirmNotificationBindingResponse) ProtoMessage() {}
 
 func (x *ConfirmNotificationBindingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[138]
+	mi := &file_portfolio_service_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10438,7 +9846,7 @@ func (x *ConfirmNotificationBindingResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ConfirmNotificationBindingResponse.ProtoReflect.Descriptor instead.
 func (*ConfirmNotificationBindingResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{138}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *ConfirmNotificationBindingResponse) GetSettings() *GetNotificationSettingsResponse {
@@ -10458,7 +9866,7 @@ type UnbindNotificationChannelRequest struct {
 
 func (x *UnbindNotificationChannelRequest) Reset() {
 	*x = UnbindNotificationChannelRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[139]
+	mi := &file_portfolio_service_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10470,7 +9878,7 @@ func (x *UnbindNotificationChannelRequest) String() string {
 func (*UnbindNotificationChannelRequest) ProtoMessage() {}
 
 func (x *UnbindNotificationChannelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[139]
+	mi := &file_portfolio_service_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10483,7 +9891,7 @@ func (x *UnbindNotificationChannelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnbindNotificationChannelRequest.ProtoReflect.Descriptor instead.
 func (*UnbindNotificationChannelRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{139}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *UnbindNotificationChannelRequest) GetUserId() int64 {
@@ -10509,7 +9917,7 @@ type UnbindNotificationChannelResponse struct {
 
 func (x *UnbindNotificationChannelResponse) Reset() {
 	*x = UnbindNotificationChannelResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[140]
+	mi := &file_portfolio_service_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10521,7 +9929,7 @@ func (x *UnbindNotificationChannelResponse) String() string {
 func (*UnbindNotificationChannelResponse) ProtoMessage() {}
 
 func (x *UnbindNotificationChannelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[140]
+	mi := &file_portfolio_service_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10534,7 +9942,7 @@ func (x *UnbindNotificationChannelResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use UnbindNotificationChannelResponse.ProtoReflect.Descriptor instead.
 func (*UnbindNotificationChannelResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{140}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *UnbindNotificationChannelResponse) GetSettings() *GetNotificationSettingsResponse {
@@ -10553,7 +9961,7 @@ type SendTestNotificationRequest struct {
 
 func (x *SendTestNotificationRequest) Reset() {
 	*x = SendTestNotificationRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[141]
+	mi := &file_portfolio_service_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10565,7 +9973,7 @@ func (x *SendTestNotificationRequest) String() string {
 func (*SendTestNotificationRequest) ProtoMessage() {}
 
 func (x *SendTestNotificationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[141]
+	mi := &file_portfolio_service_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10578,7 +9986,7 @@ func (x *SendTestNotificationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendTestNotificationRequest.ProtoReflect.Descriptor instead.
 func (*SendTestNotificationRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{141}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *SendTestNotificationRequest) GetUserId() int64 {
@@ -10598,7 +10006,7 @@ type SendTestNotificationResponse struct {
 
 func (x *SendTestNotificationResponse) Reset() {
 	*x = SendTestNotificationResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[142]
+	mi := &file_portfolio_service_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10610,7 +10018,7 @@ func (x *SendTestNotificationResponse) String() string {
 func (*SendTestNotificationResponse) ProtoMessage() {}
 
 func (x *SendTestNotificationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[142]
+	mi := &file_portfolio_service_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10623,7 +10031,7 @@ func (x *SendTestNotificationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendTestNotificationResponse.ProtoReflect.Descriptor instead.
 func (*SendTestNotificationResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{142}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *SendTestNotificationResponse) GetAccepted() bool {
@@ -10663,7 +10071,7 @@ type FuturesLeveragePreview struct {
 
 func (x *FuturesLeveragePreview) Reset() {
 	*x = FuturesLeveragePreview{}
-	mi := &file_portfolio_service_proto_msgTypes[143]
+	mi := &file_portfolio_service_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10675,7 +10083,7 @@ func (x *FuturesLeveragePreview) String() string {
 func (*FuturesLeveragePreview) ProtoMessage() {}
 
 func (x *FuturesLeveragePreview) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[143]
+	mi := &file_portfolio_service_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10688,7 +10096,7 @@ func (x *FuturesLeveragePreview) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FuturesLeveragePreview.ProtoReflect.Descriptor instead.
 func (*FuturesLeveragePreview) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{143}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *FuturesLeveragePreview) GetVenueId() int64 {
@@ -10797,7 +10205,7 @@ type SessionTargetLeverageFact struct {
 
 func (x *SessionTargetLeverageFact) Reset() {
 	*x = SessionTargetLeverageFact{}
-	mi := &file_portfolio_service_proto_msgTypes[144]
+	mi := &file_portfolio_service_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10809,7 +10217,7 @@ func (x *SessionTargetLeverageFact) String() string {
 func (*SessionTargetLeverageFact) ProtoMessage() {}
 
 func (x *SessionTargetLeverageFact) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[144]
+	mi := &file_portfolio_service_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10822,7 +10230,7 @@ func (x *SessionTargetLeverageFact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionTargetLeverageFact.ProtoReflect.Descriptor instead.
 func (*SessionTargetLeverageFact) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{144}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *SessionTargetLeverageFact) GetSessionId() string {
@@ -10936,7 +10344,7 @@ type FuturesLeverageTargetResult struct {
 
 func (x *FuturesLeverageTargetResult) Reset() {
 	*x = FuturesLeverageTargetResult{}
-	mi := &file_portfolio_service_proto_msgTypes[145]
+	mi := &file_portfolio_service_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10948,7 +10356,7 @@ func (x *FuturesLeverageTargetResult) String() string {
 func (*FuturesLeverageTargetResult) ProtoMessage() {}
 
 func (x *FuturesLeverageTargetResult) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[145]
+	mi := &file_portfolio_service_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10961,7 +10369,7 @@ func (x *FuturesLeverageTargetResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FuturesLeverageTargetResult.ProtoReflect.Descriptor instead.
 func (*FuturesLeverageTargetResult) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{145}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *FuturesLeverageTargetResult) GetVenueId() int64 {
@@ -11074,7 +10482,7 @@ type CommitStrategySessionStartRequest struct {
 
 func (x *CommitStrategySessionStartRequest) Reset() {
 	*x = CommitStrategySessionStartRequest{}
-	mi := &file_portfolio_service_proto_msgTypes[146]
+	mi := &file_portfolio_service_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11086,7 +10494,7 @@ func (x *CommitStrategySessionStartRequest) String() string {
 func (*CommitStrategySessionStartRequest) ProtoMessage() {}
 
 func (x *CommitStrategySessionStartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[146]
+	mi := &file_portfolio_service_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11099,7 +10507,7 @@ func (x *CommitStrategySessionStartRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use CommitStrategySessionStartRequest.ProtoReflect.Descriptor instead.
 func (*CommitStrategySessionStartRequest) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{146}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *CommitStrategySessionStartRequest) GetLaunchOperationId() string {
@@ -11146,7 +10554,7 @@ type CommitStrategySessionStartResponse struct {
 
 func (x *CommitStrategySessionStartResponse) Reset() {
 	*x = CommitStrategySessionStartResponse{}
-	mi := &file_portfolio_service_proto_msgTypes[147]
+	mi := &file_portfolio_service_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11158,7 +10566,7 @@ func (x *CommitStrategySessionStartResponse) String() string {
 func (*CommitStrategySessionStartResponse) ProtoMessage() {}
 
 func (x *CommitStrategySessionStartResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_portfolio_service_proto_msgTypes[147]
+	mi := &file_portfolio_service_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11171,7 +10579,7 @@ func (x *CommitStrategySessionStartResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use CommitStrategySessionStartResponse.ProtoReflect.Descriptor instead.
 func (*CommitStrategySessionStartResponse) Descriptor() ([]byte, []int) {
-	return file_portfolio_service_proto_rawDescGZIP(), []int{147}
+	return file_portfolio_service_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *CommitStrategySessionStartResponse) GetOk() bool {
@@ -11924,69 +11332,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"session_id\x18\t \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vstrategy_id\x18\n" +
 	" \x01(\x03R\n" +
-	"strategyId\"\xca\x02\n" +
-	"\x1bStrategyIndicatorDefinition\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
-	"\vstrategy_id\x18\x02 \x01(\x03R\n" +
-	"strategyId\x12\x1d\n" +
-	"\n" +
-	"stream_key\x18\x03 \x01(\tR\tstreamKey\x12#\n" +
-	"\rindicator_key\x18\x04 \x01(\tR\findicatorKey\x12\x12\n" +
-	"\x04name\x18\x05 \x01(\tR\x04name\x12\x12\n" +
-	"\x04type\x18\x06 \x01(\tR\x04type\x12\x12\n" +
-	"\x04pane\x18\a \x01(\tR\x04pane\x12\x14\n" +
-	"\x05color\x18\b \x01(\tR\x05color\x12\x12\n" +
-	"\x04unit\x18\t \x01(\tR\x04unit\x12 \n" +
-	"\vdescription\x18\n" +
-	" \x01(\tR\vdescription\x12\x1f\n" +
-	"\vconfig_json\x18\v \x01(\tR\n" +
-	"configJson\"\xd6\x02\n" +
-	"\x16StrategyIndicatorChunk\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
-	"\n" +
-	"stream_key\x18\x02 \x01(\tR\tstreamKey\x12#\n" +
-	"\rindicator_key\x18\x03 \x01(\tR\findicatorKey\x12\x1f\n" +
-	"\vchunk_index\x18\x04 \x01(\x05R\n" +
-	"chunkIndex\x12\"\n" +
-	"\rstart_time_ms\x18\x05 \x01(\x03R\vstartTimeMs\x12\x1e\n" +
-	"\vend_time_ms\x18\x06 \x01(\x03R\tendTimeMs\x12\x1f\n" +
-	"\vinterval_ms\x18\a \x01(\x03R\n" +
-	"intervalMs\x12\x14\n" +
-	"\x05count\x18\b \x01(\x05R\x05count\x12\x1f\n" +
-	"\vvalues_json\x18\t \x01(\tR\n" +
-	"valuesJson\x12\x1c\n" +
-	"\tfinalized\x18\n" +
-	" \x01(\bR\tfinalized\"\xe2\x01\n" +
-	"\x1dSaveStrategyIndicatorsRequest\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12K\n" +
-	"\vdefinitions\x18\x02 \x03(\v2).portfolio.v1.StrategyIndicatorDefinitionR\vdefinitions\x12<\n" +
-	"\x06chunks\x18\x03 \x03(\v2$.portfolio.v1.StrategyIndicatorChunkR\x06chunks\x12\x17\n" +
-	"\auser_id\x18d \x01(\x03R\x06userId\"p\n" +
-	"\x1eSaveStrategyIndicatorsResponse\x12+\n" +
-	"\x11definitions_saved\x18\x01 \x01(\x05R\x10definitionsSaved\x12!\n" +
-	"\fchunks_saved\x18\x02 \x01(\x05R\vchunksSaved\"v\n" +
-	"\x1dListStrategyIndicatorsRequest\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
-	"\n" +
-	"stream_key\x18\x02 \x01(\tR\tstreamKey\x12\x17\n" +
-	"\auser_id\x18d \x01(\x03R\x06userId\"m\n" +
-	"\x1eListStrategyIndicatorsResponse\x12K\n" +
-	"\vdefinitions\x18\x01 \x03(\v2).portfolio.v1.StrategyIndicatorDefinitionR\vdefinitions\"\xe6\x01\n" +
-	"\"ListStrategyIndicatorChunksRequest\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
-	"\n" +
-	"stream_key\x18\x02 \x01(\tR\tstreamKey\x12%\n" +
-	"\x0eindicator_keys\x18\x03 \x03(\tR\rindicatorKeys\x12\"\n" +
-	"\rstart_time_ms\x18\x04 \x01(\x03R\vstartTimeMs\x12\x1e\n" +
-	"\vend_time_ms\x18\x05 \x01(\x03R\tendTimeMs\x12\x17\n" +
-	"\auser_id\x18d \x01(\x03R\x06userId\"c\n" +
-	"#ListStrategyIndicatorChunksResponse\x12<\n" +
-	"\x06chunks\x18\x01 \x03(\v2$.portfolio.v1.StrategyIndicatorChunkR\x06chunks\"7\n" +
+	"strategyId\"7\n" +
 	"\x10NullableDoubleV2\x12\x19\n" +
 	"\x05value\x18\x01 \x01(\x01H\x00R\x05value\x88\x01\x01B\b\n" +
 	"\x06_value\"\xe9\x01\n" +
@@ -12256,7 +11602,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x16confirmed_target_facts\x18\x03 \x03(\v2'.portfolio.v1.SessionTargetLeverageFactR\x14confirmedTargetFacts\x12P\n" +
 	"\x0etarget_results\x18\x04 \x03(\v2).portfolio.v1.FuturesLeverageTargetResultR\rtargetResults\x12'\n" +
 	"\x0frollback_failed\x18\x05 \x01(\bR\x0erollbackFailed\x12\x12\n" +
-	"\x04code\x18\x06 \x01(\tR\x04code2\xba+\n" +
+	"\x04code\x18\x06 \x01(\tR\x04code2\xcb(\n" +
 	"\x10PortfolioService\x12O\n" +
 	"\n" +
 	"CreateUser\x12\x1f.portfolio.v1.CreateUserRequest\x1a .portfolio.v1.CreateUserResponse\x12g\n" +
@@ -12299,10 +11645,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x1eMarkRuntimeSessionsRecoverable\x123.portfolio.v1.MarkRuntimeSessionsRecoverableRequest\x1a4.portfolio.v1.MarkRuntimeSessionsRecoverableResponse\x12m\n" +
 	"\x14ListSessionSnapshots\x12).portfolio.v1.ListSessionSnapshotsRequest\x1a*.portfolio.v1.ListSessionSnapshotsResponse\x12s\n" +
 	"\x16ListReconciliationRuns\x12+.portfolio.v1.ListReconciliationRunsRequest\x1a,.portfolio.v1.ListReconciliationRunsResponse\x12\x8e\x01\n" +
-	"\x1fGetSessionReconciliationSummary\x124.portfolio.v1.GetSessionReconciliationSummaryRequest\x1a5.portfolio.v1.GetSessionReconciliationSummaryResponse\x12s\n" +
-	"\x16SaveStrategyIndicators\x12+.portfolio.v1.SaveStrategyIndicatorsRequest\x1a,.portfolio.v1.SaveStrategyIndicatorsResponse\x12s\n" +
-	"\x16ListStrategyIndicators\x12+.portfolio.v1.ListStrategyIndicatorsRequest\x1a,.portfolio.v1.ListStrategyIndicatorsResponse\x12\x82\x01\n" +
-	"\x1bListStrategyIndicatorChunks\x120.portfolio.v1.ListStrategyIndicatorChunksRequest\x1a1.portfolio.v1.ListStrategyIndicatorChunksResponse\x12y\n" +
+	"\x1fGetSessionReconciliationSummary\x124.portfolio.v1.GetSessionReconciliationSummaryRequest\x1a5.portfolio.v1.GetSessionReconciliationSummaryResponse\x12y\n" +
 	"\x18SaveStrategyIndicatorsV2\x12-.portfolio.v1.SaveStrategyIndicatorsV2Request\x1a..portfolio.v1.SaveStrategyIndicatorsV2Response\x12\x94\x01\n" +
 	"!FinalizeStrategyIndicatorChunksV2\x126.portfolio.v1.FinalizeStrategyIndicatorChunksV2Request\x1a7.portfolio.v1.FinalizeStrategyIndicatorChunksV2Response\x12y\n" +
 	"\x18ListStrategyIndicatorsV2\x12-.portfolio.v1.ListStrategyIndicatorsV2Request\x1a..portfolio.v1.ListStrategyIndicatorsV2Response\x12\x88\x01\n" +
@@ -12326,7 +11669,7 @@ func file_portfolio_service_proto_rawDescGZIP() []byte {
 	return file_portfolio_service_proto_rawDescData
 }
 
-var file_portfolio_service_proto_msgTypes = make([]protoimpl.MessageInfo, 148)
+var file_portfolio_service_proto_msgTypes = make([]protoimpl.MessageInfo, 140)
 var file_portfolio_service_proto_goTypes = []any{
 	(*User)(nil),                                      // 0: portfolio.v1.User
 	(*GetUserRequest)(nil),                            // 1: portfolio.v1.GetUserRequest
@@ -12429,68 +11772,60 @@ var file_portfolio_service_proto_goTypes = []any{
 	(*ListSessionSnapshotsRequest)(nil),               // 98: portfolio.v1.ListSessionSnapshotsRequest
 	(*ListSessionSnapshotsResponse)(nil),              // 99: portfolio.v1.ListSessionSnapshotsResponse
 	(*SnapshotEntry)(nil),                             // 100: portfolio.v1.SnapshotEntry
-	(*StrategyIndicatorDefinition)(nil),               // 101: portfolio.v1.StrategyIndicatorDefinition
-	(*StrategyIndicatorChunk)(nil),                    // 102: portfolio.v1.StrategyIndicatorChunk
-	(*SaveStrategyIndicatorsRequest)(nil),             // 103: portfolio.v1.SaveStrategyIndicatorsRequest
-	(*SaveStrategyIndicatorsResponse)(nil),            // 104: portfolio.v1.SaveStrategyIndicatorsResponse
-	(*ListStrategyIndicatorsRequest)(nil),             // 105: portfolio.v1.ListStrategyIndicatorsRequest
-	(*ListStrategyIndicatorsResponse)(nil),            // 106: portfolio.v1.ListStrategyIndicatorsResponse
-	(*ListStrategyIndicatorChunksRequest)(nil),        // 107: portfolio.v1.ListStrategyIndicatorChunksRequest
-	(*ListStrategyIndicatorChunksResponse)(nil),       // 108: portfolio.v1.ListStrategyIndicatorChunksResponse
-	(*NullableDoubleV2)(nil),                          // 109: portfolio.v1.NullableDoubleV2
-	(*StrategyIndicatorMarkerV2)(nil),                 // 110: portfolio.v1.StrategyIndicatorMarkerV2
-	(*StrategyIndicatorDefinitionV2)(nil),             // 111: portfolio.v1.StrategyIndicatorDefinitionV2
-	(*StrategyIndicatorChunkV2)(nil),                  // 112: portfolio.v1.StrategyIndicatorChunkV2
-	(*StrategyIndicatorChunkFinalizationV2)(nil),      // 113: portfolio.v1.StrategyIndicatorChunkFinalizationV2
-	(*SaveStrategyIndicatorsV2Request)(nil),           // 114: portfolio.v1.SaveStrategyIndicatorsV2Request
-	(*SaveStrategyIndicatorsV2Response)(nil),          // 115: portfolio.v1.SaveStrategyIndicatorsV2Response
-	(*FinalizeStrategyIndicatorChunksV2Request)(nil),  // 116: portfolio.v1.FinalizeStrategyIndicatorChunksV2Request
-	(*FinalizeStrategyIndicatorChunksV2Response)(nil), // 117: portfolio.v1.FinalizeStrategyIndicatorChunksV2Response
-	(*ListStrategyIndicatorsV2Request)(nil),           // 118: portfolio.v1.ListStrategyIndicatorsV2Request
-	(*ListStrategyIndicatorsV2Response)(nil),          // 119: portfolio.v1.ListStrategyIndicatorsV2Response
-	(*ListStrategyIndicatorChunksV2Request)(nil),      // 120: portfolio.v1.ListStrategyIndicatorChunksV2Request
-	(*ListStrategyIndicatorChunksV2Response)(nil),     // 121: portfolio.v1.ListStrategyIndicatorChunksV2Response
-	(*ListReconciliationRunsRequest)(nil),             // 122: portfolio.v1.ListReconciliationRunsRequest
-	(*ListReconciliationRunsResponse)(nil),            // 123: portfolio.v1.ListReconciliationRunsResponse
-	(*GetSessionReconciliationSummaryRequest)(nil),    // 124: portfolio.v1.GetSessionReconciliationSummaryRequest
-	(*GetSessionReconciliationSummaryResponse)(nil),   // 125: portfolio.v1.GetSessionReconciliationSummaryResponse
-	(*ReconciliationRunEntry)(nil),                    // 126: portfolio.v1.ReconciliationRunEntry
-	(*FieldDiffEntry)(nil),                            // 127: portfolio.v1.FieldDiffEntry
-	(*NotificationPlan)(nil),                          // 128: portfolio.v1.NotificationPlan
-	(*NotificationPreferences)(nil),                   // 129: portfolio.v1.NotificationPreferences
-	(*NotificationChannel)(nil),                       // 130: portfolio.v1.NotificationChannel
-	(*GetNotificationSettingsRequest)(nil),            // 131: portfolio.v1.GetNotificationSettingsRequest
-	(*GetNotificationSettingsResponse)(nil),           // 132: portfolio.v1.GetNotificationSettingsResponse
-	(*UpdateNotificationPreferencesRequest)(nil),      // 133: portfolio.v1.UpdateNotificationPreferencesRequest
-	(*UpdateNotificationPreferencesResponse)(nil),     // 134: portfolio.v1.UpdateNotificationPreferencesResponse
-	(*CreateNotificationBindCodeRequest)(nil),         // 135: portfolio.v1.CreateNotificationBindCodeRequest
-	(*CreateNotificationBindCodeResponse)(nil),        // 136: portfolio.v1.CreateNotificationBindCodeResponse
-	(*ConfirmNotificationBindingRequest)(nil),         // 137: portfolio.v1.ConfirmNotificationBindingRequest
-	(*ConfirmNotificationBindingResponse)(nil),        // 138: portfolio.v1.ConfirmNotificationBindingResponse
-	(*UnbindNotificationChannelRequest)(nil),          // 139: portfolio.v1.UnbindNotificationChannelRequest
-	(*UnbindNotificationChannelResponse)(nil),         // 140: portfolio.v1.UnbindNotificationChannelResponse
-	(*SendTestNotificationRequest)(nil),               // 141: portfolio.v1.SendTestNotificationRequest
-	(*SendTestNotificationResponse)(nil),              // 142: portfolio.v1.SendTestNotificationResponse
-	(*FuturesLeveragePreview)(nil),                    // 143: portfolio.v1.FuturesLeveragePreview
-	(*SessionTargetLeverageFact)(nil),                 // 144: portfolio.v1.SessionTargetLeverageFact
-	(*FuturesLeverageTargetResult)(nil),               // 145: portfolio.v1.FuturesLeverageTargetResult
-	(*CommitStrategySessionStartRequest)(nil),         // 146: portfolio.v1.CommitStrategySessionStartRequest
-	(*CommitStrategySessionStartResponse)(nil),        // 147: portfolio.v1.CommitStrategySessionStartResponse
-	(*timestamppb.Timestamp)(nil),                     // 148: google.protobuf.Timestamp
+	(*NullableDoubleV2)(nil),                          // 101: portfolio.v1.NullableDoubleV2
+	(*StrategyIndicatorMarkerV2)(nil),                 // 102: portfolio.v1.StrategyIndicatorMarkerV2
+	(*StrategyIndicatorDefinitionV2)(nil),             // 103: portfolio.v1.StrategyIndicatorDefinitionV2
+	(*StrategyIndicatorChunkV2)(nil),                  // 104: portfolio.v1.StrategyIndicatorChunkV2
+	(*StrategyIndicatorChunkFinalizationV2)(nil),      // 105: portfolio.v1.StrategyIndicatorChunkFinalizationV2
+	(*SaveStrategyIndicatorsV2Request)(nil),           // 106: portfolio.v1.SaveStrategyIndicatorsV2Request
+	(*SaveStrategyIndicatorsV2Response)(nil),          // 107: portfolio.v1.SaveStrategyIndicatorsV2Response
+	(*FinalizeStrategyIndicatorChunksV2Request)(nil),  // 108: portfolio.v1.FinalizeStrategyIndicatorChunksV2Request
+	(*FinalizeStrategyIndicatorChunksV2Response)(nil), // 109: portfolio.v1.FinalizeStrategyIndicatorChunksV2Response
+	(*ListStrategyIndicatorsV2Request)(nil),           // 110: portfolio.v1.ListStrategyIndicatorsV2Request
+	(*ListStrategyIndicatorsV2Response)(nil),          // 111: portfolio.v1.ListStrategyIndicatorsV2Response
+	(*ListStrategyIndicatorChunksV2Request)(nil),      // 112: portfolio.v1.ListStrategyIndicatorChunksV2Request
+	(*ListStrategyIndicatorChunksV2Response)(nil),     // 113: portfolio.v1.ListStrategyIndicatorChunksV2Response
+	(*ListReconciliationRunsRequest)(nil),             // 114: portfolio.v1.ListReconciliationRunsRequest
+	(*ListReconciliationRunsResponse)(nil),            // 115: portfolio.v1.ListReconciliationRunsResponse
+	(*GetSessionReconciliationSummaryRequest)(nil),    // 116: portfolio.v1.GetSessionReconciliationSummaryRequest
+	(*GetSessionReconciliationSummaryResponse)(nil),   // 117: portfolio.v1.GetSessionReconciliationSummaryResponse
+	(*ReconciliationRunEntry)(nil),                    // 118: portfolio.v1.ReconciliationRunEntry
+	(*FieldDiffEntry)(nil),                            // 119: portfolio.v1.FieldDiffEntry
+	(*NotificationPlan)(nil),                          // 120: portfolio.v1.NotificationPlan
+	(*NotificationPreferences)(nil),                   // 121: portfolio.v1.NotificationPreferences
+	(*NotificationChannel)(nil),                       // 122: portfolio.v1.NotificationChannel
+	(*GetNotificationSettingsRequest)(nil),            // 123: portfolio.v1.GetNotificationSettingsRequest
+	(*GetNotificationSettingsResponse)(nil),           // 124: portfolio.v1.GetNotificationSettingsResponse
+	(*UpdateNotificationPreferencesRequest)(nil),      // 125: portfolio.v1.UpdateNotificationPreferencesRequest
+	(*UpdateNotificationPreferencesResponse)(nil),     // 126: portfolio.v1.UpdateNotificationPreferencesResponse
+	(*CreateNotificationBindCodeRequest)(nil),         // 127: portfolio.v1.CreateNotificationBindCodeRequest
+	(*CreateNotificationBindCodeResponse)(nil),        // 128: portfolio.v1.CreateNotificationBindCodeResponse
+	(*ConfirmNotificationBindingRequest)(nil),         // 129: portfolio.v1.ConfirmNotificationBindingRequest
+	(*ConfirmNotificationBindingResponse)(nil),        // 130: portfolio.v1.ConfirmNotificationBindingResponse
+	(*UnbindNotificationChannelRequest)(nil),          // 131: portfolio.v1.UnbindNotificationChannelRequest
+	(*UnbindNotificationChannelResponse)(nil),         // 132: portfolio.v1.UnbindNotificationChannelResponse
+	(*SendTestNotificationRequest)(nil),               // 133: portfolio.v1.SendTestNotificationRequest
+	(*SendTestNotificationResponse)(nil),              // 134: portfolio.v1.SendTestNotificationResponse
+	(*FuturesLeveragePreview)(nil),                    // 135: portfolio.v1.FuturesLeveragePreview
+	(*SessionTargetLeverageFact)(nil),                 // 136: portfolio.v1.SessionTargetLeverageFact
+	(*FuturesLeverageTargetResult)(nil),               // 137: portfolio.v1.FuturesLeverageTargetResult
+	(*CommitStrategySessionStartRequest)(nil),         // 138: portfolio.v1.CommitStrategySessionStartRequest
+	(*CommitStrategySessionStartResponse)(nil),        // 139: portfolio.v1.CommitStrategySessionStartResponse
+	(*timestamppb.Timestamp)(nil),                     // 140: google.protobuf.Timestamp
 }
 var file_portfolio_service_proto_depIdxs = []int32{
-	148, // 0: portfolio.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	140, // 0: portfolio.v1.User.created_at:type_name -> google.protobuf.Timestamp
 	0,   // 1: portfolio.v1.GetUserResponse.user:type_name -> portfolio.v1.User
 	0,   // 2: portfolio.v1.CreateUserResponse.user:type_name -> portfolio.v1.User
 	0,   // 3: portfolio.v1.VerifyUserPasswordResponse.user:type_name -> portfolio.v1.User
 	13,  // 4: portfolio.v1.ListPortfoliosResponse.portfolios:type_name -> portfolio.v1.PortfolioRegistryEntry
 	13,  // 5: portfolio.v1.GetPortfolioResponse.portfolio:type_name -> portfolio.v1.PortfolioRegistryEntry
-	148, // 6: portfolio.v1.CreatePortfolioResponse.created_at:type_name -> google.protobuf.Timestamp
-	148, // 7: portfolio.v1.PortfolioRegistryEntry.created_at:type_name -> google.protobuf.Timestamp
-	148, // 8: portfolio.v1.VenueEntry.created_at:type_name -> google.protobuf.Timestamp
-	148, // 9: portfolio.v1.VenueEntry.updated_at:type_name -> google.protobuf.Timestamp
-	148, // 10: portfolio.v1.VenueEntry.last_used_at:type_name -> google.protobuf.Timestamp
-	148, // 11: portfolio.v1.VenueEntry.archived_at:type_name -> google.protobuf.Timestamp
+	140, // 6: portfolio.v1.CreatePortfolioResponse.created_at:type_name -> google.protobuf.Timestamp
+	140, // 7: portfolio.v1.PortfolioRegistryEntry.created_at:type_name -> google.protobuf.Timestamp
+	140, // 8: portfolio.v1.VenueEntry.created_at:type_name -> google.protobuf.Timestamp
+	140, // 9: portfolio.v1.VenueEntry.updated_at:type_name -> google.protobuf.Timestamp
+	140, // 10: portfolio.v1.VenueEntry.last_used_at:type_name -> google.protobuf.Timestamp
+	140, // 11: portfolio.v1.VenueEntry.archived_at:type_name -> google.protobuf.Timestamp
 	48,  // 12: portfolio.v1.CreateVenueRequest.futures:type_name -> portfolio.v1.FuturesWallet
 	52,  // 13: portfolio.v1.CreateVenueRequest.spot:type_name -> portfolio.v1.SpotWallet
 	14,  // 14: portfolio.v1.CreateVenueResponse.venue:type_name -> portfolio.v1.VenueEntry
@@ -12505,20 +11840,20 @@ var file_portfolio_service_proto_depIdxs = []int32{
 	31,  // 23: portfolio.v1.PreflightStrategySessionResponse.issues:type_name -> portfolio.v1.PreflightIssue
 	14,  // 24: portfolio.v1.PreflightStrategySessionResponse.resolved_venues:type_name -> portfolio.v1.VenueEntry
 	58,  // 25: portfolio.v1.PreflightStrategySessionResponse.spot_risk_snapshots:type_name -> portfolio.v1.SpotRiskFactSnapshot
-	143, // 26: portfolio.v1.PreflightStrategySessionResponse.futures_leverage_previews:type_name -> portfolio.v1.FuturesLeveragePreview
+	135, // 26: portfolio.v1.PreflightStrategySessionResponse.futures_leverage_previews:type_name -> portfolio.v1.FuturesLeveragePreview
 	34,  // 27: portfolio.v1.GetProductCapabilitiesResponse.capabilities:type_name -> portfolio.v1.ProductCapabilityState
 	30,  // 28: portfolio.v1.GetPortfolioSnapshotRequest.required_symbols:type_name -> portfolio.v1.RequiredSymbol
 	43,  // 29: portfolio.v1.GetPortfolioSnapshotResponse.snapshot:type_name -> portfolio.v1.PortfolioSnapshot
-	148, // 30: portfolio.v1.UpdatePortfolioSnapshotRequest.snapshot_time:type_name -> google.protobuf.Timestamp
+	140, // 30: portfolio.v1.UpdatePortfolioSnapshotRequest.snapshot_time:type_name -> google.protobuf.Timestamp
 	43,  // 31: portfolio.v1.UpdatePortfolioSnapshotResponse.snapshot:type_name -> portfolio.v1.PortfolioSnapshot
 	48,  // 32: portfolio.v1.UpdatePortfolioWalletStateRequest.futures:type_name -> portfolio.v1.FuturesWallet
 	52,  // 33: portfolio.v1.UpdatePortfolioWalletStateRequest.spot:type_name -> portfolio.v1.SpotWallet
-	148, // 34: portfolio.v1.UpdatePortfolioWalletStateRequest.snapshot_time:type_name -> google.protobuf.Timestamp
+	140, // 34: portfolio.v1.UpdatePortfolioWalletStateRequest.snapshot_time:type_name -> google.protobuf.Timestamp
 	47,  // 35: portfolio.v1.UpdatePortfolioWalletStateResponse.wallet:type_name -> portfolio.v1.PortfolioWalletState
-	148, // 36: portfolio.v1.PortfolioSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	140, // 36: portfolio.v1.PortfolioSnapshot.updated_at:type_name -> google.protobuf.Timestamp
 	44,  // 37: portfolio.v1.PortfolioSnapshot.venues:type_name -> portfolio.v1.VenueSnapshot
 	47,  // 38: portfolio.v1.PortfolioSnapshot.wallet:type_name -> portfolio.v1.PortfolioWalletState
-	148, // 39: portfolio.v1.VenueSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	140, // 39: portfolio.v1.VenueSnapshot.updated_at:type_name -> google.protobuf.Timestamp
 	45,  // 40: portfolio.v1.VenueSnapshot.balances:type_name -> portfolio.v1.BalanceEntry
 	46,  // 41: portfolio.v1.VenueSnapshot.positions:type_name -> portfolio.v1.PositionEntry
 	47,  // 42: portfolio.v1.VenueSnapshot.wallet:type_name -> portfolio.v1.PortfolioWalletState
@@ -12527,178 +11862,168 @@ var file_portfolio_service_proto_depIdxs = []int32{
 	58,  // 45: portfolio.v1.VenueSnapshot.spot_risk_snapshot:type_name -> portfolio.v1.SpotRiskFactSnapshot
 	48,  // 46: portfolio.v1.PortfolioWalletState.futures:type_name -> portfolio.v1.FuturesWallet
 	52,  // 47: portfolio.v1.PortfolioWalletState.spot:type_name -> portfolio.v1.SpotWallet
-	148, // 48: portfolio.v1.PortfolioWalletState.updated_at:type_name -> google.protobuf.Timestamp
+	140, // 48: portfolio.v1.PortfolioWalletState.updated_at:type_name -> google.protobuf.Timestamp
 	49,  // 49: portfolio.v1.FuturesWallet.positions:type_name -> portfolio.v1.FuturesPosition
 	50,  // 50: portfolio.v1.FuturesWallet.risk_metadata:type_name -> portfolio.v1.FuturesRiskMetadata
 	51,  // 51: portfolio.v1.FuturesRiskMetadata.brackets:type_name -> portfolio.v1.FuturesRiskBracket
 	53,  // 52: portfolio.v1.SpotWallet.assets:type_name -> portfolio.v1.SpotAsset
 	54,  // 53: portfolio.v1.SpotSymbolMetadata.permission_sets:type_name -> portfolio.v1.SpotSymbolPermissionSet
 	56,  // 54: portfolio.v1.SpotSymbolMetadata.filters:type_name -> portfolio.v1.SpotSymbolFilter
-	148, // 55: portfolio.v1.SpotRiskFactSnapshot.captured_at:type_name -> google.protobuf.Timestamp
+	140, // 55: portfolio.v1.SpotRiskFactSnapshot.captured_at:type_name -> google.protobuf.Timestamp
 	55,  // 56: portfolio.v1.SpotRiskFactSnapshot.metadata:type_name -> portfolio.v1.SpotSymbolMetadata
 	56,  // 57: portfolio.v1.SpotRiskFactSnapshot.exchange_filters:type_name -> portfolio.v1.SpotSymbolFilter
 	56,  // 58: portfolio.v1.SpotRiskFactSnapshot.symbol_filters:type_name -> portfolio.v1.SpotSymbolFilter
 	57,  // 59: portfolio.v1.SpotRiskFactSnapshot.asset_filters:type_name -> portfolio.v1.SpotAssetFilter
 	60,  // 60: portfolio.v1.ListSymbolsResponse.entries:type_name -> portfolio.v1.SymbolCatalogEntry
-	148, // 61: portfolio.v1.StrategyEntry.created_at:type_name -> google.protobuf.Timestamp
+	140, // 61: portfolio.v1.StrategyEntry.created_at:type_name -> google.protobuf.Timestamp
 	63,  // 62: portfolio.v1.CreateStrategyResponse.strategy:type_name -> portfolio.v1.StrategyEntry
 	63,  // 63: portfolio.v1.ListStrategiesResponse.strategies:type_name -> portfolio.v1.StrategyEntry
 	63,  // 64: portfolio.v1.GetStrategyResponse.strategy:type_name -> portfolio.v1.StrategyEntry
 	63,  // 65: portfolio.v1.PortfolioStrategyEntry.strategy:type_name -> portfolio.v1.StrategyEntry
-	148, // 66: portfolio.v1.PortfolioStrategyEntry.mounted_at:type_name -> google.protobuf.Timestamp
+	140, // 66: portfolio.v1.PortfolioStrategyEntry.mounted_at:type_name -> google.protobuf.Timestamp
 	81,  // 67: portfolio.v1.ListPortfolioStrategiesResponse.entries:type_name -> portfolio.v1.PortfolioStrategyEntry
-	148, // 68: portfolio.v1.StrategySessionEntry.started_at:type_name -> google.protobuf.Timestamp
-	148, // 69: portfolio.v1.StrategySessionEntry.completed_at:type_name -> google.protobuf.Timestamp
-	148, // 70: portfolio.v1.StrategySessionEntry.created_at:type_name -> google.protobuf.Timestamp
-	144, // 71: portfolio.v1.StrategySessionEntry.target_leverage_facts:type_name -> portfolio.v1.SessionTargetLeverageFact
+	140, // 68: portfolio.v1.StrategySessionEntry.started_at:type_name -> google.protobuf.Timestamp
+	140, // 69: portfolio.v1.StrategySessionEntry.completed_at:type_name -> google.protobuf.Timestamp
+	140, // 70: portfolio.v1.StrategySessionEntry.created_at:type_name -> google.protobuf.Timestamp
+	136, // 71: portfolio.v1.StrategySessionEntry.target_leverage_facts:type_name -> portfolio.v1.SessionTargetLeverageFact
 	85,  // 72: portfolio.v1.GetSessionResponse.session:type_name -> portfolio.v1.StrategySessionEntry
 	85,  // 73: portfolio.v1.ListSessionsResponse.sessions:type_name -> portfolio.v1.StrategySessionEntry
 	85,  // 74: portfolio.v1.ListRunningSessionsResponse.sessions:type_name -> portfolio.v1.StrategySessionEntry
 	100, // 75: portfolio.v1.ListSessionSnapshotsResponse.items:type_name -> portfolio.v1.SnapshotEntry
-	148, // 76: portfolio.v1.SnapshotEntry.time:type_name -> google.protobuf.Timestamp
-	101, // 77: portfolio.v1.SaveStrategyIndicatorsRequest.definitions:type_name -> portfolio.v1.StrategyIndicatorDefinition
-	102, // 78: portfolio.v1.SaveStrategyIndicatorsRequest.chunks:type_name -> portfolio.v1.StrategyIndicatorChunk
-	101, // 79: portfolio.v1.ListStrategyIndicatorsResponse.definitions:type_name -> portfolio.v1.StrategyIndicatorDefinition
-	102, // 80: portfolio.v1.ListStrategyIndicatorChunksResponse.chunks:type_name -> portfolio.v1.StrategyIndicatorChunk
-	109, // 81: portfolio.v1.StrategyIndicatorChunkV2.scalar_values:type_name -> portfolio.v1.NullableDoubleV2
-	110, // 82: portfolio.v1.StrategyIndicatorChunkV2.markers:type_name -> portfolio.v1.StrategyIndicatorMarkerV2
-	111, // 83: portfolio.v1.SaveStrategyIndicatorsV2Request.definitions:type_name -> portfolio.v1.StrategyIndicatorDefinitionV2
-	112, // 84: portfolio.v1.SaveStrategyIndicatorsV2Request.chunks:type_name -> portfolio.v1.StrategyIndicatorChunkV2
-	113, // 85: portfolio.v1.FinalizeStrategyIndicatorChunksV2Request.chunks:type_name -> portfolio.v1.StrategyIndicatorChunkFinalizationV2
-	111, // 86: portfolio.v1.ListStrategyIndicatorsV2Response.definitions:type_name -> portfolio.v1.StrategyIndicatorDefinitionV2
-	112, // 87: portfolio.v1.ListStrategyIndicatorChunksV2Response.chunks:type_name -> portfolio.v1.StrategyIndicatorChunkV2
-	126, // 88: portfolio.v1.ListReconciliationRunsResponse.items:type_name -> portfolio.v1.ReconciliationRunEntry
-	148, // 89: portfolio.v1.ReconciliationRunEntry.time:type_name -> google.protobuf.Timestamp
-	127, // 90: portfolio.v1.ReconciliationRunEntry.field_diffs:type_name -> portfolio.v1.FieldDiffEntry
-	127, // 91: portfolio.v1.ReconciliationRunEntry.advisory_diffs:type_name -> portfolio.v1.FieldDiffEntry
-	148, // 92: portfolio.v1.NotificationChannel.bound_at:type_name -> google.protobuf.Timestamp
-	148, // 93: portfolio.v1.NotificationChannel.last_delivery_at:type_name -> google.protobuf.Timestamp
-	129, // 94: portfolio.v1.GetNotificationSettingsResponse.preferences:type_name -> portfolio.v1.NotificationPreferences
-	128, // 95: portfolio.v1.GetNotificationSettingsResponse.plan:type_name -> portfolio.v1.NotificationPlan
-	130, // 96: portfolio.v1.GetNotificationSettingsResponse.telegram:type_name -> portfolio.v1.NotificationChannel
-	129, // 97: portfolio.v1.UpdateNotificationPreferencesRequest.preferences:type_name -> portfolio.v1.NotificationPreferences
-	132, // 98: portfolio.v1.UpdateNotificationPreferencesResponse.settings:type_name -> portfolio.v1.GetNotificationSettingsResponse
-	148, // 99: portfolio.v1.CreateNotificationBindCodeResponse.expires_at:type_name -> google.protobuf.Timestamp
-	132, // 100: portfolio.v1.ConfirmNotificationBindingResponse.settings:type_name -> portfolio.v1.GetNotificationSettingsResponse
-	132, // 101: portfolio.v1.UnbindNotificationChannelResponse.settings:type_name -> portfolio.v1.GetNotificationSettingsResponse
-	132, // 102: portfolio.v1.SendTestNotificationResponse.settings:type_name -> portfolio.v1.GetNotificationSettingsResponse
-	148, // 103: portfolio.v1.SessionTargetLeverageFact.confirmed_at:type_name -> google.protobuf.Timestamp
-	148, // 104: portfolio.v1.SessionTargetLeverageFact.created_at:type_name -> google.protobuf.Timestamp
-	86,  // 105: portfolio.v1.CommitStrategySessionStartRequest.session:type_name -> portfolio.v1.SaveSessionRequest
-	29,  // 106: portfolio.v1.CommitStrategySessionStartRequest.required_routes:type_name -> portfolio.v1.RequiredRoute
-	30,  // 107: portfolio.v1.CommitStrategySessionStartRequest.required_symbols:type_name -> portfolio.v1.RequiredSymbol
-	31,  // 108: portfolio.v1.CommitStrategySessionStartResponse.issues:type_name -> portfolio.v1.PreflightIssue
-	144, // 109: portfolio.v1.CommitStrategySessionStartResponse.confirmed_target_facts:type_name -> portfolio.v1.SessionTargetLeverageFact
-	145, // 110: portfolio.v1.CommitStrategySessionStartResponse.target_results:type_name -> portfolio.v1.FuturesLeverageTargetResult
-	3,   // 111: portfolio.v1.PortfolioService.CreateUser:input_type -> portfolio.v1.CreateUserRequest
-	5,   // 112: portfolio.v1.PortfolioService.VerifyUserPassword:input_type -> portfolio.v1.VerifyUserPasswordRequest
-	1,   // 113: portfolio.v1.PortfolioService.GetUser:input_type -> portfolio.v1.GetUserRequest
-	11,  // 114: portfolio.v1.PortfolioService.CreatePortfolio:input_type -> portfolio.v1.CreatePortfolioRequest
-	7,   // 115: portfolio.v1.PortfolioService.ListPortfolios:input_type -> portfolio.v1.ListPortfoliosRequest
-	9,   // 116: portfolio.v1.PortfolioService.GetPortfolio:input_type -> portfolio.v1.GetPortfolioRequest
-	15,  // 117: portfolio.v1.PortfolioService.CreateVenue:input_type -> portfolio.v1.CreateVenueRequest
-	17,  // 118: portfolio.v1.PortfolioService.ListVenues:input_type -> portfolio.v1.ListVenuesRequest
-	19,  // 119: portfolio.v1.PortfolioService.GetVenue:input_type -> portfolio.v1.GetVenueRequest
-	21,  // 120: portfolio.v1.PortfolioService.GetVenueOnlineInfo:input_type -> portfolio.v1.GetVenueOnlineInfoRequest
-	23,  // 121: portfolio.v1.PortfolioService.BindVenue:input_type -> portfolio.v1.BindVenueRequest
-	25,  // 122: portfolio.v1.PortfolioService.ReleaseVenue:input_type -> portfolio.v1.ReleaseVenueRequest
-	27,  // 123: portfolio.v1.PortfolioService.ArchiveVenue:input_type -> portfolio.v1.ArchiveVenueRequest
-	32,  // 124: portfolio.v1.PortfolioService.PreflightStrategySession:input_type -> portfolio.v1.PreflightStrategySessionRequest
-	146, // 125: portfolio.v1.PortfolioService.CommitStrategySessionStart:input_type -> portfolio.v1.CommitStrategySessionStartRequest
-	35,  // 126: portfolio.v1.PortfolioService.GetProductCapabilities:input_type -> portfolio.v1.GetProductCapabilitiesRequest
-	37,  // 127: portfolio.v1.PortfolioService.GetPortfolioSnapshot:input_type -> portfolio.v1.GetPortfolioSnapshotRequest
-	39,  // 128: portfolio.v1.PortfolioService.UpdatePortfolioSnapshot:input_type -> portfolio.v1.UpdatePortfolioSnapshotRequest
-	41,  // 129: portfolio.v1.PortfolioService.UpdatePortfolioWalletState:input_type -> portfolio.v1.UpdatePortfolioWalletStateRequest
-	61,  // 130: portfolio.v1.PortfolioService.ListSymbols:input_type -> portfolio.v1.ListSymbolsRequest
-	64,  // 131: portfolio.v1.PortfolioService.CreateStrategy:input_type -> portfolio.v1.CreateStrategyRequest
-	66,  // 132: portfolio.v1.PortfolioService.ListStrategies:input_type -> portfolio.v1.ListStrategiesRequest
-	68,  // 133: portfolio.v1.PortfolioService.GetStrategy:input_type -> portfolio.v1.GetStrategyRequest
-	70,  // 134: portfolio.v1.PortfolioService.ArchiveStrategy:input_type -> portfolio.v1.ArchiveStrategyRequest
-	72,  // 135: portfolio.v1.PortfolioService.MountStrategy:input_type -> portfolio.v1.MountStrategyRequest
-	74,  // 136: portfolio.v1.PortfolioService.UnmountStrategy:input_type -> portfolio.v1.UnmountStrategyRequest
-	76,  // 137: portfolio.v1.PortfolioService.ActivateStrategy:input_type -> portfolio.v1.ActivateStrategyRequest
-	78,  // 138: portfolio.v1.PortfolioService.DeactivateStrategy:input_type -> portfolio.v1.DeactivateStrategyRequest
-	80,  // 139: portfolio.v1.PortfolioService.ListPortfolioStrategies:input_type -> portfolio.v1.ListPortfolioStrategiesRequest
-	83,  // 140: portfolio.v1.PortfolioService.GetActiveStrategy:input_type -> portfolio.v1.GetActiveStrategyRequest
-	86,  // 141: portfolio.v1.PortfolioService.SaveSession:input_type -> portfolio.v1.SaveSessionRequest
-	88,  // 142: portfolio.v1.PortfolioService.UpdateSession:input_type -> portfolio.v1.UpdateSessionRequest
-	90,  // 143: portfolio.v1.PortfolioService.GetSession:input_type -> portfolio.v1.GetSessionRequest
-	92,  // 144: portfolio.v1.PortfolioService.ListSessions:input_type -> portfolio.v1.ListSessionsRequest
-	94,  // 145: portfolio.v1.PortfolioService.ListRunningSessions:input_type -> portfolio.v1.ListRunningSessionsRequest
-	96,  // 146: portfolio.v1.PortfolioService.MarkRuntimeSessionsRecoverable:input_type -> portfolio.v1.MarkRuntimeSessionsRecoverableRequest
-	98,  // 147: portfolio.v1.PortfolioService.ListSessionSnapshots:input_type -> portfolio.v1.ListSessionSnapshotsRequest
-	122, // 148: portfolio.v1.PortfolioService.ListReconciliationRuns:input_type -> portfolio.v1.ListReconciliationRunsRequest
-	124, // 149: portfolio.v1.PortfolioService.GetSessionReconciliationSummary:input_type -> portfolio.v1.GetSessionReconciliationSummaryRequest
-	103, // 150: portfolio.v1.PortfolioService.SaveStrategyIndicators:input_type -> portfolio.v1.SaveStrategyIndicatorsRequest
-	105, // 151: portfolio.v1.PortfolioService.ListStrategyIndicators:input_type -> portfolio.v1.ListStrategyIndicatorsRequest
-	107, // 152: portfolio.v1.PortfolioService.ListStrategyIndicatorChunks:input_type -> portfolio.v1.ListStrategyIndicatorChunksRequest
-	114, // 153: portfolio.v1.PortfolioService.SaveStrategyIndicatorsV2:input_type -> portfolio.v1.SaveStrategyIndicatorsV2Request
-	116, // 154: portfolio.v1.PortfolioService.FinalizeStrategyIndicatorChunksV2:input_type -> portfolio.v1.FinalizeStrategyIndicatorChunksV2Request
-	118, // 155: portfolio.v1.PortfolioService.ListStrategyIndicatorsV2:input_type -> portfolio.v1.ListStrategyIndicatorsV2Request
-	120, // 156: portfolio.v1.PortfolioService.ListStrategyIndicatorChunksV2:input_type -> portfolio.v1.ListStrategyIndicatorChunksV2Request
-	131, // 157: portfolio.v1.PortfolioService.GetNotificationSettings:input_type -> portfolio.v1.GetNotificationSettingsRequest
-	133, // 158: portfolio.v1.PortfolioService.UpdateNotificationPreferences:input_type -> portfolio.v1.UpdateNotificationPreferencesRequest
-	135, // 159: portfolio.v1.PortfolioService.CreateNotificationBindCode:input_type -> portfolio.v1.CreateNotificationBindCodeRequest
-	137, // 160: portfolio.v1.PortfolioService.ConfirmNotificationBinding:input_type -> portfolio.v1.ConfirmNotificationBindingRequest
-	139, // 161: portfolio.v1.PortfolioService.UnbindNotificationChannel:input_type -> portfolio.v1.UnbindNotificationChannelRequest
-	141, // 162: portfolio.v1.PortfolioService.SendTestNotification:input_type -> portfolio.v1.SendTestNotificationRequest
-	4,   // 163: portfolio.v1.PortfolioService.CreateUser:output_type -> portfolio.v1.CreateUserResponse
-	6,   // 164: portfolio.v1.PortfolioService.VerifyUserPassword:output_type -> portfolio.v1.VerifyUserPasswordResponse
-	2,   // 165: portfolio.v1.PortfolioService.GetUser:output_type -> portfolio.v1.GetUserResponse
-	12,  // 166: portfolio.v1.PortfolioService.CreatePortfolio:output_type -> portfolio.v1.CreatePortfolioResponse
-	8,   // 167: portfolio.v1.PortfolioService.ListPortfolios:output_type -> portfolio.v1.ListPortfoliosResponse
-	10,  // 168: portfolio.v1.PortfolioService.GetPortfolio:output_type -> portfolio.v1.GetPortfolioResponse
-	16,  // 169: portfolio.v1.PortfolioService.CreateVenue:output_type -> portfolio.v1.CreateVenueResponse
-	18,  // 170: portfolio.v1.PortfolioService.ListVenues:output_type -> portfolio.v1.ListVenuesResponse
-	20,  // 171: portfolio.v1.PortfolioService.GetVenue:output_type -> portfolio.v1.GetVenueResponse
-	22,  // 172: portfolio.v1.PortfolioService.GetVenueOnlineInfo:output_type -> portfolio.v1.GetVenueOnlineInfoResponse
-	24,  // 173: portfolio.v1.PortfolioService.BindVenue:output_type -> portfolio.v1.BindVenueResponse
-	26,  // 174: portfolio.v1.PortfolioService.ReleaseVenue:output_type -> portfolio.v1.ReleaseVenueResponse
-	28,  // 175: portfolio.v1.PortfolioService.ArchiveVenue:output_type -> portfolio.v1.ArchiveVenueResponse
-	33,  // 176: portfolio.v1.PortfolioService.PreflightStrategySession:output_type -> portfolio.v1.PreflightStrategySessionResponse
-	147, // 177: portfolio.v1.PortfolioService.CommitStrategySessionStart:output_type -> portfolio.v1.CommitStrategySessionStartResponse
-	36,  // 178: portfolio.v1.PortfolioService.GetProductCapabilities:output_type -> portfolio.v1.GetProductCapabilitiesResponse
-	38,  // 179: portfolio.v1.PortfolioService.GetPortfolioSnapshot:output_type -> portfolio.v1.GetPortfolioSnapshotResponse
-	40,  // 180: portfolio.v1.PortfolioService.UpdatePortfolioSnapshot:output_type -> portfolio.v1.UpdatePortfolioSnapshotResponse
-	42,  // 181: portfolio.v1.PortfolioService.UpdatePortfolioWalletState:output_type -> portfolio.v1.UpdatePortfolioWalletStateResponse
-	62,  // 182: portfolio.v1.PortfolioService.ListSymbols:output_type -> portfolio.v1.ListSymbolsResponse
-	65,  // 183: portfolio.v1.PortfolioService.CreateStrategy:output_type -> portfolio.v1.CreateStrategyResponse
-	67,  // 184: portfolio.v1.PortfolioService.ListStrategies:output_type -> portfolio.v1.ListStrategiesResponse
-	69,  // 185: portfolio.v1.PortfolioService.GetStrategy:output_type -> portfolio.v1.GetStrategyResponse
-	71,  // 186: portfolio.v1.PortfolioService.ArchiveStrategy:output_type -> portfolio.v1.ArchiveStrategyResponse
-	73,  // 187: portfolio.v1.PortfolioService.MountStrategy:output_type -> portfolio.v1.MountStrategyResponse
-	75,  // 188: portfolio.v1.PortfolioService.UnmountStrategy:output_type -> portfolio.v1.UnmountStrategyResponse
-	77,  // 189: portfolio.v1.PortfolioService.ActivateStrategy:output_type -> portfolio.v1.ActivateStrategyResponse
-	79,  // 190: portfolio.v1.PortfolioService.DeactivateStrategy:output_type -> portfolio.v1.DeactivateStrategyResponse
-	82,  // 191: portfolio.v1.PortfolioService.ListPortfolioStrategies:output_type -> portfolio.v1.ListPortfolioStrategiesResponse
-	84,  // 192: portfolio.v1.PortfolioService.GetActiveStrategy:output_type -> portfolio.v1.GetActiveStrategyResponse
-	87,  // 193: portfolio.v1.PortfolioService.SaveSession:output_type -> portfolio.v1.SaveSessionResponse
-	89,  // 194: portfolio.v1.PortfolioService.UpdateSession:output_type -> portfolio.v1.UpdateSessionResponse
-	91,  // 195: portfolio.v1.PortfolioService.GetSession:output_type -> portfolio.v1.GetSessionResponse
-	93,  // 196: portfolio.v1.PortfolioService.ListSessions:output_type -> portfolio.v1.ListSessionsResponse
-	95,  // 197: portfolio.v1.PortfolioService.ListRunningSessions:output_type -> portfolio.v1.ListRunningSessionsResponse
-	97,  // 198: portfolio.v1.PortfolioService.MarkRuntimeSessionsRecoverable:output_type -> portfolio.v1.MarkRuntimeSessionsRecoverableResponse
-	99,  // 199: portfolio.v1.PortfolioService.ListSessionSnapshots:output_type -> portfolio.v1.ListSessionSnapshotsResponse
-	123, // 200: portfolio.v1.PortfolioService.ListReconciliationRuns:output_type -> portfolio.v1.ListReconciliationRunsResponse
-	125, // 201: portfolio.v1.PortfolioService.GetSessionReconciliationSummary:output_type -> portfolio.v1.GetSessionReconciliationSummaryResponse
-	104, // 202: portfolio.v1.PortfolioService.SaveStrategyIndicators:output_type -> portfolio.v1.SaveStrategyIndicatorsResponse
-	106, // 203: portfolio.v1.PortfolioService.ListStrategyIndicators:output_type -> portfolio.v1.ListStrategyIndicatorsResponse
-	108, // 204: portfolio.v1.PortfolioService.ListStrategyIndicatorChunks:output_type -> portfolio.v1.ListStrategyIndicatorChunksResponse
-	115, // 205: portfolio.v1.PortfolioService.SaveStrategyIndicatorsV2:output_type -> portfolio.v1.SaveStrategyIndicatorsV2Response
-	117, // 206: portfolio.v1.PortfolioService.FinalizeStrategyIndicatorChunksV2:output_type -> portfolio.v1.FinalizeStrategyIndicatorChunksV2Response
-	119, // 207: portfolio.v1.PortfolioService.ListStrategyIndicatorsV2:output_type -> portfolio.v1.ListStrategyIndicatorsV2Response
-	121, // 208: portfolio.v1.PortfolioService.ListStrategyIndicatorChunksV2:output_type -> portfolio.v1.ListStrategyIndicatorChunksV2Response
-	132, // 209: portfolio.v1.PortfolioService.GetNotificationSettings:output_type -> portfolio.v1.GetNotificationSettingsResponse
-	134, // 210: portfolio.v1.PortfolioService.UpdateNotificationPreferences:output_type -> portfolio.v1.UpdateNotificationPreferencesResponse
-	136, // 211: portfolio.v1.PortfolioService.CreateNotificationBindCode:output_type -> portfolio.v1.CreateNotificationBindCodeResponse
-	138, // 212: portfolio.v1.PortfolioService.ConfirmNotificationBinding:output_type -> portfolio.v1.ConfirmNotificationBindingResponse
-	140, // 213: portfolio.v1.PortfolioService.UnbindNotificationChannel:output_type -> portfolio.v1.UnbindNotificationChannelResponse
-	142, // 214: portfolio.v1.PortfolioService.SendTestNotification:output_type -> portfolio.v1.SendTestNotificationResponse
-	163, // [163:215] is the sub-list for method output_type
-	111, // [111:163] is the sub-list for method input_type
-	111, // [111:111] is the sub-list for extension type_name
-	111, // [111:111] is the sub-list for extension extendee
-	0,   // [0:111] is the sub-list for field type_name
+	140, // 76: portfolio.v1.SnapshotEntry.time:type_name -> google.protobuf.Timestamp
+	101, // 77: portfolio.v1.StrategyIndicatorChunkV2.scalar_values:type_name -> portfolio.v1.NullableDoubleV2
+	102, // 78: portfolio.v1.StrategyIndicatorChunkV2.markers:type_name -> portfolio.v1.StrategyIndicatorMarkerV2
+	103, // 79: portfolio.v1.SaveStrategyIndicatorsV2Request.definitions:type_name -> portfolio.v1.StrategyIndicatorDefinitionV2
+	104, // 80: portfolio.v1.SaveStrategyIndicatorsV2Request.chunks:type_name -> portfolio.v1.StrategyIndicatorChunkV2
+	105, // 81: portfolio.v1.FinalizeStrategyIndicatorChunksV2Request.chunks:type_name -> portfolio.v1.StrategyIndicatorChunkFinalizationV2
+	103, // 82: portfolio.v1.ListStrategyIndicatorsV2Response.definitions:type_name -> portfolio.v1.StrategyIndicatorDefinitionV2
+	104, // 83: portfolio.v1.ListStrategyIndicatorChunksV2Response.chunks:type_name -> portfolio.v1.StrategyIndicatorChunkV2
+	118, // 84: portfolio.v1.ListReconciliationRunsResponse.items:type_name -> portfolio.v1.ReconciliationRunEntry
+	140, // 85: portfolio.v1.ReconciliationRunEntry.time:type_name -> google.protobuf.Timestamp
+	119, // 86: portfolio.v1.ReconciliationRunEntry.field_diffs:type_name -> portfolio.v1.FieldDiffEntry
+	119, // 87: portfolio.v1.ReconciliationRunEntry.advisory_diffs:type_name -> portfolio.v1.FieldDiffEntry
+	140, // 88: portfolio.v1.NotificationChannel.bound_at:type_name -> google.protobuf.Timestamp
+	140, // 89: portfolio.v1.NotificationChannel.last_delivery_at:type_name -> google.protobuf.Timestamp
+	121, // 90: portfolio.v1.GetNotificationSettingsResponse.preferences:type_name -> portfolio.v1.NotificationPreferences
+	120, // 91: portfolio.v1.GetNotificationSettingsResponse.plan:type_name -> portfolio.v1.NotificationPlan
+	122, // 92: portfolio.v1.GetNotificationSettingsResponse.telegram:type_name -> portfolio.v1.NotificationChannel
+	121, // 93: portfolio.v1.UpdateNotificationPreferencesRequest.preferences:type_name -> portfolio.v1.NotificationPreferences
+	124, // 94: portfolio.v1.UpdateNotificationPreferencesResponse.settings:type_name -> portfolio.v1.GetNotificationSettingsResponse
+	140, // 95: portfolio.v1.CreateNotificationBindCodeResponse.expires_at:type_name -> google.protobuf.Timestamp
+	124, // 96: portfolio.v1.ConfirmNotificationBindingResponse.settings:type_name -> portfolio.v1.GetNotificationSettingsResponse
+	124, // 97: portfolio.v1.UnbindNotificationChannelResponse.settings:type_name -> portfolio.v1.GetNotificationSettingsResponse
+	124, // 98: portfolio.v1.SendTestNotificationResponse.settings:type_name -> portfolio.v1.GetNotificationSettingsResponse
+	140, // 99: portfolio.v1.SessionTargetLeverageFact.confirmed_at:type_name -> google.protobuf.Timestamp
+	140, // 100: portfolio.v1.SessionTargetLeverageFact.created_at:type_name -> google.protobuf.Timestamp
+	86,  // 101: portfolio.v1.CommitStrategySessionStartRequest.session:type_name -> portfolio.v1.SaveSessionRequest
+	29,  // 102: portfolio.v1.CommitStrategySessionStartRequest.required_routes:type_name -> portfolio.v1.RequiredRoute
+	30,  // 103: portfolio.v1.CommitStrategySessionStartRequest.required_symbols:type_name -> portfolio.v1.RequiredSymbol
+	31,  // 104: portfolio.v1.CommitStrategySessionStartResponse.issues:type_name -> portfolio.v1.PreflightIssue
+	136, // 105: portfolio.v1.CommitStrategySessionStartResponse.confirmed_target_facts:type_name -> portfolio.v1.SessionTargetLeverageFact
+	137, // 106: portfolio.v1.CommitStrategySessionStartResponse.target_results:type_name -> portfolio.v1.FuturesLeverageTargetResult
+	3,   // 107: portfolio.v1.PortfolioService.CreateUser:input_type -> portfolio.v1.CreateUserRequest
+	5,   // 108: portfolio.v1.PortfolioService.VerifyUserPassword:input_type -> portfolio.v1.VerifyUserPasswordRequest
+	1,   // 109: portfolio.v1.PortfolioService.GetUser:input_type -> portfolio.v1.GetUserRequest
+	11,  // 110: portfolio.v1.PortfolioService.CreatePortfolio:input_type -> portfolio.v1.CreatePortfolioRequest
+	7,   // 111: portfolio.v1.PortfolioService.ListPortfolios:input_type -> portfolio.v1.ListPortfoliosRequest
+	9,   // 112: portfolio.v1.PortfolioService.GetPortfolio:input_type -> portfolio.v1.GetPortfolioRequest
+	15,  // 113: portfolio.v1.PortfolioService.CreateVenue:input_type -> portfolio.v1.CreateVenueRequest
+	17,  // 114: portfolio.v1.PortfolioService.ListVenues:input_type -> portfolio.v1.ListVenuesRequest
+	19,  // 115: portfolio.v1.PortfolioService.GetVenue:input_type -> portfolio.v1.GetVenueRequest
+	21,  // 116: portfolio.v1.PortfolioService.GetVenueOnlineInfo:input_type -> portfolio.v1.GetVenueOnlineInfoRequest
+	23,  // 117: portfolio.v1.PortfolioService.BindVenue:input_type -> portfolio.v1.BindVenueRequest
+	25,  // 118: portfolio.v1.PortfolioService.ReleaseVenue:input_type -> portfolio.v1.ReleaseVenueRequest
+	27,  // 119: portfolio.v1.PortfolioService.ArchiveVenue:input_type -> portfolio.v1.ArchiveVenueRequest
+	32,  // 120: portfolio.v1.PortfolioService.PreflightStrategySession:input_type -> portfolio.v1.PreflightStrategySessionRequest
+	138, // 121: portfolio.v1.PortfolioService.CommitStrategySessionStart:input_type -> portfolio.v1.CommitStrategySessionStartRequest
+	35,  // 122: portfolio.v1.PortfolioService.GetProductCapabilities:input_type -> portfolio.v1.GetProductCapabilitiesRequest
+	37,  // 123: portfolio.v1.PortfolioService.GetPortfolioSnapshot:input_type -> portfolio.v1.GetPortfolioSnapshotRequest
+	39,  // 124: portfolio.v1.PortfolioService.UpdatePortfolioSnapshot:input_type -> portfolio.v1.UpdatePortfolioSnapshotRequest
+	41,  // 125: portfolio.v1.PortfolioService.UpdatePortfolioWalletState:input_type -> portfolio.v1.UpdatePortfolioWalletStateRequest
+	61,  // 126: portfolio.v1.PortfolioService.ListSymbols:input_type -> portfolio.v1.ListSymbolsRequest
+	64,  // 127: portfolio.v1.PortfolioService.CreateStrategy:input_type -> portfolio.v1.CreateStrategyRequest
+	66,  // 128: portfolio.v1.PortfolioService.ListStrategies:input_type -> portfolio.v1.ListStrategiesRequest
+	68,  // 129: portfolio.v1.PortfolioService.GetStrategy:input_type -> portfolio.v1.GetStrategyRequest
+	70,  // 130: portfolio.v1.PortfolioService.ArchiveStrategy:input_type -> portfolio.v1.ArchiveStrategyRequest
+	72,  // 131: portfolio.v1.PortfolioService.MountStrategy:input_type -> portfolio.v1.MountStrategyRequest
+	74,  // 132: portfolio.v1.PortfolioService.UnmountStrategy:input_type -> portfolio.v1.UnmountStrategyRequest
+	76,  // 133: portfolio.v1.PortfolioService.ActivateStrategy:input_type -> portfolio.v1.ActivateStrategyRequest
+	78,  // 134: portfolio.v1.PortfolioService.DeactivateStrategy:input_type -> portfolio.v1.DeactivateStrategyRequest
+	80,  // 135: portfolio.v1.PortfolioService.ListPortfolioStrategies:input_type -> portfolio.v1.ListPortfolioStrategiesRequest
+	83,  // 136: portfolio.v1.PortfolioService.GetActiveStrategy:input_type -> portfolio.v1.GetActiveStrategyRequest
+	86,  // 137: portfolio.v1.PortfolioService.SaveSession:input_type -> portfolio.v1.SaveSessionRequest
+	88,  // 138: portfolio.v1.PortfolioService.UpdateSession:input_type -> portfolio.v1.UpdateSessionRequest
+	90,  // 139: portfolio.v1.PortfolioService.GetSession:input_type -> portfolio.v1.GetSessionRequest
+	92,  // 140: portfolio.v1.PortfolioService.ListSessions:input_type -> portfolio.v1.ListSessionsRequest
+	94,  // 141: portfolio.v1.PortfolioService.ListRunningSessions:input_type -> portfolio.v1.ListRunningSessionsRequest
+	96,  // 142: portfolio.v1.PortfolioService.MarkRuntimeSessionsRecoverable:input_type -> portfolio.v1.MarkRuntimeSessionsRecoverableRequest
+	98,  // 143: portfolio.v1.PortfolioService.ListSessionSnapshots:input_type -> portfolio.v1.ListSessionSnapshotsRequest
+	114, // 144: portfolio.v1.PortfolioService.ListReconciliationRuns:input_type -> portfolio.v1.ListReconciliationRunsRequest
+	116, // 145: portfolio.v1.PortfolioService.GetSessionReconciliationSummary:input_type -> portfolio.v1.GetSessionReconciliationSummaryRequest
+	106, // 146: portfolio.v1.PortfolioService.SaveStrategyIndicatorsV2:input_type -> portfolio.v1.SaveStrategyIndicatorsV2Request
+	108, // 147: portfolio.v1.PortfolioService.FinalizeStrategyIndicatorChunksV2:input_type -> portfolio.v1.FinalizeStrategyIndicatorChunksV2Request
+	110, // 148: portfolio.v1.PortfolioService.ListStrategyIndicatorsV2:input_type -> portfolio.v1.ListStrategyIndicatorsV2Request
+	112, // 149: portfolio.v1.PortfolioService.ListStrategyIndicatorChunksV2:input_type -> portfolio.v1.ListStrategyIndicatorChunksV2Request
+	123, // 150: portfolio.v1.PortfolioService.GetNotificationSettings:input_type -> portfolio.v1.GetNotificationSettingsRequest
+	125, // 151: portfolio.v1.PortfolioService.UpdateNotificationPreferences:input_type -> portfolio.v1.UpdateNotificationPreferencesRequest
+	127, // 152: portfolio.v1.PortfolioService.CreateNotificationBindCode:input_type -> portfolio.v1.CreateNotificationBindCodeRequest
+	129, // 153: portfolio.v1.PortfolioService.ConfirmNotificationBinding:input_type -> portfolio.v1.ConfirmNotificationBindingRequest
+	131, // 154: portfolio.v1.PortfolioService.UnbindNotificationChannel:input_type -> portfolio.v1.UnbindNotificationChannelRequest
+	133, // 155: portfolio.v1.PortfolioService.SendTestNotification:input_type -> portfolio.v1.SendTestNotificationRequest
+	4,   // 156: portfolio.v1.PortfolioService.CreateUser:output_type -> portfolio.v1.CreateUserResponse
+	6,   // 157: portfolio.v1.PortfolioService.VerifyUserPassword:output_type -> portfolio.v1.VerifyUserPasswordResponse
+	2,   // 158: portfolio.v1.PortfolioService.GetUser:output_type -> portfolio.v1.GetUserResponse
+	12,  // 159: portfolio.v1.PortfolioService.CreatePortfolio:output_type -> portfolio.v1.CreatePortfolioResponse
+	8,   // 160: portfolio.v1.PortfolioService.ListPortfolios:output_type -> portfolio.v1.ListPortfoliosResponse
+	10,  // 161: portfolio.v1.PortfolioService.GetPortfolio:output_type -> portfolio.v1.GetPortfolioResponse
+	16,  // 162: portfolio.v1.PortfolioService.CreateVenue:output_type -> portfolio.v1.CreateVenueResponse
+	18,  // 163: portfolio.v1.PortfolioService.ListVenues:output_type -> portfolio.v1.ListVenuesResponse
+	20,  // 164: portfolio.v1.PortfolioService.GetVenue:output_type -> portfolio.v1.GetVenueResponse
+	22,  // 165: portfolio.v1.PortfolioService.GetVenueOnlineInfo:output_type -> portfolio.v1.GetVenueOnlineInfoResponse
+	24,  // 166: portfolio.v1.PortfolioService.BindVenue:output_type -> portfolio.v1.BindVenueResponse
+	26,  // 167: portfolio.v1.PortfolioService.ReleaseVenue:output_type -> portfolio.v1.ReleaseVenueResponse
+	28,  // 168: portfolio.v1.PortfolioService.ArchiveVenue:output_type -> portfolio.v1.ArchiveVenueResponse
+	33,  // 169: portfolio.v1.PortfolioService.PreflightStrategySession:output_type -> portfolio.v1.PreflightStrategySessionResponse
+	139, // 170: portfolio.v1.PortfolioService.CommitStrategySessionStart:output_type -> portfolio.v1.CommitStrategySessionStartResponse
+	36,  // 171: portfolio.v1.PortfolioService.GetProductCapabilities:output_type -> portfolio.v1.GetProductCapabilitiesResponse
+	38,  // 172: portfolio.v1.PortfolioService.GetPortfolioSnapshot:output_type -> portfolio.v1.GetPortfolioSnapshotResponse
+	40,  // 173: portfolio.v1.PortfolioService.UpdatePortfolioSnapshot:output_type -> portfolio.v1.UpdatePortfolioSnapshotResponse
+	42,  // 174: portfolio.v1.PortfolioService.UpdatePortfolioWalletState:output_type -> portfolio.v1.UpdatePortfolioWalletStateResponse
+	62,  // 175: portfolio.v1.PortfolioService.ListSymbols:output_type -> portfolio.v1.ListSymbolsResponse
+	65,  // 176: portfolio.v1.PortfolioService.CreateStrategy:output_type -> portfolio.v1.CreateStrategyResponse
+	67,  // 177: portfolio.v1.PortfolioService.ListStrategies:output_type -> portfolio.v1.ListStrategiesResponse
+	69,  // 178: portfolio.v1.PortfolioService.GetStrategy:output_type -> portfolio.v1.GetStrategyResponse
+	71,  // 179: portfolio.v1.PortfolioService.ArchiveStrategy:output_type -> portfolio.v1.ArchiveStrategyResponse
+	73,  // 180: portfolio.v1.PortfolioService.MountStrategy:output_type -> portfolio.v1.MountStrategyResponse
+	75,  // 181: portfolio.v1.PortfolioService.UnmountStrategy:output_type -> portfolio.v1.UnmountStrategyResponse
+	77,  // 182: portfolio.v1.PortfolioService.ActivateStrategy:output_type -> portfolio.v1.ActivateStrategyResponse
+	79,  // 183: portfolio.v1.PortfolioService.DeactivateStrategy:output_type -> portfolio.v1.DeactivateStrategyResponse
+	82,  // 184: portfolio.v1.PortfolioService.ListPortfolioStrategies:output_type -> portfolio.v1.ListPortfolioStrategiesResponse
+	84,  // 185: portfolio.v1.PortfolioService.GetActiveStrategy:output_type -> portfolio.v1.GetActiveStrategyResponse
+	87,  // 186: portfolio.v1.PortfolioService.SaveSession:output_type -> portfolio.v1.SaveSessionResponse
+	89,  // 187: portfolio.v1.PortfolioService.UpdateSession:output_type -> portfolio.v1.UpdateSessionResponse
+	91,  // 188: portfolio.v1.PortfolioService.GetSession:output_type -> portfolio.v1.GetSessionResponse
+	93,  // 189: portfolio.v1.PortfolioService.ListSessions:output_type -> portfolio.v1.ListSessionsResponse
+	95,  // 190: portfolio.v1.PortfolioService.ListRunningSessions:output_type -> portfolio.v1.ListRunningSessionsResponse
+	97,  // 191: portfolio.v1.PortfolioService.MarkRuntimeSessionsRecoverable:output_type -> portfolio.v1.MarkRuntimeSessionsRecoverableResponse
+	99,  // 192: portfolio.v1.PortfolioService.ListSessionSnapshots:output_type -> portfolio.v1.ListSessionSnapshotsResponse
+	115, // 193: portfolio.v1.PortfolioService.ListReconciliationRuns:output_type -> portfolio.v1.ListReconciliationRunsResponse
+	117, // 194: portfolio.v1.PortfolioService.GetSessionReconciliationSummary:output_type -> portfolio.v1.GetSessionReconciliationSummaryResponse
+	107, // 195: portfolio.v1.PortfolioService.SaveStrategyIndicatorsV2:output_type -> portfolio.v1.SaveStrategyIndicatorsV2Response
+	109, // 196: portfolio.v1.PortfolioService.FinalizeStrategyIndicatorChunksV2:output_type -> portfolio.v1.FinalizeStrategyIndicatorChunksV2Response
+	111, // 197: portfolio.v1.PortfolioService.ListStrategyIndicatorsV2:output_type -> portfolio.v1.ListStrategyIndicatorsV2Response
+	113, // 198: portfolio.v1.PortfolioService.ListStrategyIndicatorChunksV2:output_type -> portfolio.v1.ListStrategyIndicatorChunksV2Response
+	124, // 199: portfolio.v1.PortfolioService.GetNotificationSettings:output_type -> portfolio.v1.GetNotificationSettingsResponse
+	126, // 200: portfolio.v1.PortfolioService.UpdateNotificationPreferences:output_type -> portfolio.v1.UpdateNotificationPreferencesResponse
+	128, // 201: portfolio.v1.PortfolioService.CreateNotificationBindCode:output_type -> portfolio.v1.CreateNotificationBindCodeResponse
+	130, // 202: portfolio.v1.PortfolioService.ConfirmNotificationBinding:output_type -> portfolio.v1.ConfirmNotificationBindingResponse
+	132, // 203: portfolio.v1.PortfolioService.UnbindNotificationChannel:output_type -> portfolio.v1.UnbindNotificationChannelResponse
+	134, // 204: portfolio.v1.PortfolioService.SendTestNotification:output_type -> portfolio.v1.SendTestNotificationResponse
+	156, // [156:205] is the sub-list for method output_type
+	107, // [107:156] is the sub-list for method input_type
+	107, // [107:107] is the sub-list for extension type_name
+	107, // [107:107] is the sub-list for extension extendee
+	0,   // [0:107] is the sub-list for field type_name
 }
 
 func init() { file_portfolio_service_proto_init() }
@@ -12709,19 +12034,19 @@ func file_portfolio_service_proto_init() {
 	file_portfolio_service_proto_msgTypes[49].OneofWrappers = []any{}
 	file_portfolio_service_proto_msgTypes[53].OneofWrappers = []any{}
 	file_portfolio_service_proto_msgTypes[88].OneofWrappers = []any{}
-	file_portfolio_service_proto_msgTypes[109].OneofWrappers = []any{}
-	file_portfolio_service_proto_msgTypes[110].OneofWrappers = []any{}
-	file_portfolio_service_proto_msgTypes[129].OneofWrappers = []any{}
-	file_portfolio_service_proto_msgTypes[143].OneofWrappers = []any{}
-	file_portfolio_service_proto_msgTypes[144].OneofWrappers = []any{}
-	file_portfolio_service_proto_msgTypes[145].OneofWrappers = []any{}
+	file_portfolio_service_proto_msgTypes[101].OneofWrappers = []any{}
+	file_portfolio_service_proto_msgTypes[102].OneofWrappers = []any{}
+	file_portfolio_service_proto_msgTypes[121].OneofWrappers = []any{}
+	file_portfolio_service_proto_msgTypes[135].OneofWrappers = []any{}
+	file_portfolio_service_proto_msgTypes[136].OneofWrappers = []any{}
+	file_portfolio_service_proto_msgTypes[137].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_portfolio_service_proto_rawDesc), len(file_portfolio_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   148,
+			NumMessages:   140,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

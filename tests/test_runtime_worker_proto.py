@@ -1,5 +1,6 @@
 import pytest
 from google.protobuf.any_pb2 import Any as ProtoAny
+from google.protobuf import descriptor_pb2
 
 from strategy_service.gen import runtime_worker_pb2 as pb2
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
@@ -60,11 +61,22 @@ def test_indicator_v2_frame_carries_sequence_scalar_and_typed_markers():
     assert frame.samples[1].markers[0].HasField("price")
 
 
-def test_worker_frame_keeps_v1_tag_during_additive_v2_gate():
+def test_worker_frame_reserves_removed_v1_tag_and_name():
     fields = pb2.WorkerFrame.DESCRIPTOR.fields_by_name
 
-    assert fields["indicator_frame"].number == 15
+    assert "indicator_frame" not in fields
     assert fields["indicator_frame_v2"].number == 21
+    assert not hasattr(pb2, "IndicatorValue")
+    assert not hasattr(pb2, "IndicatorFrame")
+
+    file_proto = descriptor_pb2.FileDescriptorProto.FromString(
+        pb2.DESCRIPTOR.serialized_pb
+    )
+    worker_frame = next(
+        message for message in file_proto.message_type if message.name == "WorkerFrame"
+    )
+    assert any(item.start <= 15 < item.end for item in worker_frame.reserved_range)
+    assert "indicator_frame" in worker_frame.reserved_name
 
 
 def test_dependency_error_fields_survive_worker_progress():

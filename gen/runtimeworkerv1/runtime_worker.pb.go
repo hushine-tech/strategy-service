@@ -33,7 +33,6 @@ type WorkerFrame struct {
 	//	*WorkerFrame_Progress
 	//	*WorkerFrame_PlatformCall
 	//	*WorkerFrame_PlatformCallResult
-	//	*WorkerFrame_IndicatorFrame
 	//	*WorkerFrame_Notification
 	//	*WorkerFrame_WalletSnapshot
 	//	*WorkerFrame_FinalStatus
@@ -134,15 +133,6 @@ func (x *WorkerFrame) GetPlatformCallResult() *PlatformCallResult {
 	return nil
 }
 
-func (x *WorkerFrame) GetIndicatorFrame() *IndicatorFrame {
-	if x != nil {
-		if x, ok := x.Payload.(*WorkerFrame_IndicatorFrame); ok {
-			return x.IndicatorFrame
-		}
-	}
-	return nil
-}
-
 func (x *WorkerFrame) GetNotification() *NotificationEvent {
 	if x != nil {
 		if x, ok := x.Payload.(*WorkerFrame_Notification); ok {
@@ -221,10 +211,6 @@ type WorkerFrame_PlatformCallResult struct {
 	PlatformCallResult *PlatformCallResult `protobuf:"bytes,14,opt,name=platform_call_result,json=platformCallResult,proto3,oneof"`
 }
 
-type WorkerFrame_IndicatorFrame struct {
-	IndicatorFrame *IndicatorFrame `protobuf:"bytes,15,opt,name=indicator_frame,json=indicatorFrame,proto3,oneof"`
-}
-
 type WorkerFrame_Notification struct {
 	Notification *NotificationEvent `protobuf:"bytes,16,opt,name=notification,proto3,oneof"`
 }
@@ -258,8 +244,6 @@ func (*WorkerFrame_Progress) isWorkerFrame_Payload() {}
 func (*WorkerFrame_PlatformCall) isWorkerFrame_Payload() {}
 
 func (*WorkerFrame_PlatformCallResult) isWorkerFrame_Payload() {}
-
-func (*WorkerFrame_IndicatorFrame) isWorkerFrame_Payload() {}
 
 func (*WorkerFrame_Notification) isWorkerFrame_Payload() {}
 
@@ -1163,74 +1147,6 @@ func (x *PlatformCallResult) GetDependencyError() *strategyv1.RuntimeDependencyE
 	return nil
 }
 
-type IndicatorValue struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	IndicatorKey  string                 `protobuf:"bytes,1,opt,name=indicator_key,json=indicatorKey,proto3" json:"indicator_key,omitempty"`
-	Value         float64                `protobuf:"fixed64,2,opt,name=value,proto3" json:"value,omitempty"`
-	HasValue      bool                   `protobuf:"varint,3,opt,name=has_value,json=hasValue,proto3" json:"has_value,omitempty"`
-	MarkerJson    string                 `protobuf:"bytes,4,opt,name=marker_json,json=markerJson,proto3" json:"marker_json,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *IndicatorValue) Reset() {
-	*x = IndicatorValue{}
-	mi := &file_runtime_worker_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *IndicatorValue) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*IndicatorValue) ProtoMessage() {}
-
-func (x *IndicatorValue) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use IndicatorValue.ProtoReflect.Descriptor instead.
-func (*IndicatorValue) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *IndicatorValue) GetIndicatorKey() string {
-	if x != nil {
-		return x.IndicatorKey
-	}
-	return ""
-}
-
-func (x *IndicatorValue) GetValue() float64 {
-	if x != nil {
-		return x.Value
-	}
-	return 0
-}
-
-func (x *IndicatorValue) GetHasValue() bool {
-	if x != nil {
-		return x.HasValue
-	}
-	return false
-}
-
-func (x *IndicatorValue) GetMarkerJson() string {
-	if x != nil {
-		return x.MarkerJson
-	}
-	return ""
-}
-
 type IndicatorDefinition struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	IndicatorKey  string                 `protobuf:"bytes,1,opt,name=indicator_key,json=indicatorKey,proto3" json:"indicator_key,omitempty"`
@@ -1247,7 +1163,7 @@ type IndicatorDefinition struct {
 
 func (x *IndicatorDefinition) Reset() {
 	*x = IndicatorDefinition{}
-	mi := &file_runtime_worker_proto_msgTypes[13]
+	mi := &file_runtime_worker_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1259,7 +1175,7 @@ func (x *IndicatorDefinition) String() string {
 func (*IndicatorDefinition) ProtoMessage() {}
 
 func (x *IndicatorDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[13]
+	mi := &file_runtime_worker_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1272,7 +1188,7 @@ func (x *IndicatorDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndicatorDefinition.ProtoReflect.Descriptor instead.
 func (*IndicatorDefinition) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{13}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *IndicatorDefinition) GetIndicatorKey() string {
@@ -1331,106 +1247,6 @@ func (x *IndicatorDefinition) GetConfigJson() string {
 	return ""
 }
 
-type IndicatorFrame struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	StreamKey     string                 `protobuf:"bytes,2,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`
-	MarketTimeMs  int64                  `protobuf:"varint,3,opt,name=market_time_ms,json=marketTimeMs,proto3" json:"market_time_ms,omitempty"`
-	IntervalMs    int64                  `protobuf:"varint,4,opt,name=interval_ms,json=intervalMs,proto3" json:"interval_ms,omitempty"`
-	Values        []*IndicatorValue      `protobuf:"bytes,5,rep,name=values,proto3" json:"values,omitempty"`
-	UserId        int64                  `protobuf:"varint,6,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	StrategyId    int64                  `protobuf:"varint,7,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
-	Definitions   []*IndicatorDefinition `protobuf:"bytes,8,rep,name=definitions,proto3" json:"definitions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *IndicatorFrame) Reset() {
-	*x = IndicatorFrame{}
-	mi := &file_runtime_worker_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *IndicatorFrame) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*IndicatorFrame) ProtoMessage() {}
-
-func (x *IndicatorFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use IndicatorFrame.ProtoReflect.Descriptor instead.
-func (*IndicatorFrame) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *IndicatorFrame) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *IndicatorFrame) GetStreamKey() string {
-	if x != nil {
-		return x.StreamKey
-	}
-	return ""
-}
-
-func (x *IndicatorFrame) GetMarketTimeMs() int64 {
-	if x != nil {
-		return x.MarketTimeMs
-	}
-	return 0
-}
-
-func (x *IndicatorFrame) GetIntervalMs() int64 {
-	if x != nil {
-		return x.IntervalMs
-	}
-	return 0
-}
-
-func (x *IndicatorFrame) GetValues() []*IndicatorValue {
-	if x != nil {
-		return x.Values
-	}
-	return nil
-}
-
-func (x *IndicatorFrame) GetUserId() int64 {
-	if x != nil {
-		return x.UserId
-	}
-	return 0
-}
-
-func (x *IndicatorFrame) GetStrategyId() int64 {
-	if x != nil {
-		return x.StrategyId
-	}
-	return 0
-}
-
-func (x *IndicatorFrame) GetDefinitions() []*IndicatorDefinition {
-	if x != nil {
-		return x.Definitions
-	}
-	return nil
-}
-
 type IndicatorMarkerV2 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
@@ -1444,7 +1260,7 @@ type IndicatorMarkerV2 struct {
 
 func (x *IndicatorMarkerV2) Reset() {
 	*x = IndicatorMarkerV2{}
-	mi := &file_runtime_worker_proto_msgTypes[15]
+	mi := &file_runtime_worker_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1456,7 +1272,7 @@ func (x *IndicatorMarkerV2) String() string {
 func (*IndicatorMarkerV2) ProtoMessage() {}
 
 func (x *IndicatorMarkerV2) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[15]
+	mi := &file_runtime_worker_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1469,7 +1285,7 @@ func (x *IndicatorMarkerV2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndicatorMarkerV2.ProtoReflect.Descriptor instead.
 func (*IndicatorMarkerV2) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{15}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *IndicatorMarkerV2) GetText() string {
@@ -1518,7 +1334,7 @@ type IndicatorSampleV2 struct {
 
 func (x *IndicatorSampleV2) Reset() {
 	*x = IndicatorSampleV2{}
-	mi := &file_runtime_worker_proto_msgTypes[16]
+	mi := &file_runtime_worker_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1530,7 +1346,7 @@ func (x *IndicatorSampleV2) String() string {
 func (*IndicatorSampleV2) ProtoMessage() {}
 
 func (x *IndicatorSampleV2) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[16]
+	mi := &file_runtime_worker_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1543,7 +1359,7 @@ func (x *IndicatorSampleV2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndicatorSampleV2.ProtoReflect.Descriptor instead.
 func (*IndicatorSampleV2) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{16}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *IndicatorSampleV2) GetIndicatorKey() string {
@@ -1584,7 +1400,7 @@ type IndicatorFrameV2 struct {
 
 func (x *IndicatorFrameV2) Reset() {
 	*x = IndicatorFrameV2{}
-	mi := &file_runtime_worker_proto_msgTypes[17]
+	mi := &file_runtime_worker_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1596,7 +1412,7 @@ func (x *IndicatorFrameV2) String() string {
 func (*IndicatorFrameV2) ProtoMessage() {}
 
 func (x *IndicatorFrameV2) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[17]
+	mi := &file_runtime_worker_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1609,7 +1425,7 @@ func (x *IndicatorFrameV2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndicatorFrameV2.ProtoReflect.Descriptor instead.
 func (*IndicatorFrameV2) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{17}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *IndicatorFrameV2) GetSessionId() string {
@@ -1688,7 +1504,7 @@ type NotificationEvent struct {
 
 func (x *NotificationEvent) Reset() {
 	*x = NotificationEvent{}
-	mi := &file_runtime_worker_proto_msgTypes[18]
+	mi := &file_runtime_worker_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1700,7 +1516,7 @@ func (x *NotificationEvent) String() string {
 func (*NotificationEvent) ProtoMessage() {}
 
 func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[18]
+	mi := &file_runtime_worker_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1713,7 +1529,7 @@ func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationEvent.ProtoReflect.Descriptor instead.
 func (*NotificationEvent) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{18}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *NotificationEvent) GetSessionId() string {
@@ -1762,7 +1578,7 @@ type WalletSnapshot struct {
 
 func (x *WalletSnapshot) Reset() {
 	*x = WalletSnapshot{}
-	mi := &file_runtime_worker_proto_msgTypes[19]
+	mi := &file_runtime_worker_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1774,7 +1590,7 @@ func (x *WalletSnapshot) String() string {
 func (*WalletSnapshot) ProtoMessage() {}
 
 func (x *WalletSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[19]
+	mi := &file_runtime_worker_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1787,7 +1603,7 @@ func (x *WalletSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WalletSnapshot.ProtoReflect.Descriptor instead.
 func (*WalletSnapshot) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{19}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *WalletSnapshot) GetSessionId() string {
@@ -1825,7 +1641,7 @@ type FinalStatus struct {
 
 func (x *FinalStatus) Reset() {
 	*x = FinalStatus{}
-	mi := &file_runtime_worker_proto_msgTypes[20]
+	mi := &file_runtime_worker_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1837,7 +1653,7 @@ func (x *FinalStatus) String() string {
 func (*FinalStatus) ProtoMessage() {}
 
 func (x *FinalStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[20]
+	mi := &file_runtime_worker_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1850,7 +1666,7 @@ func (x *FinalStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalStatus.ProtoReflect.Descriptor instead.
 func (*FinalStatus) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{20}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *FinalStatus) GetSessionId() string {
@@ -1908,7 +1724,7 @@ type WorkerError struct {
 
 func (x *WorkerError) Reset() {
 	*x = WorkerError{}
-	mi := &file_runtime_worker_proto_msgTypes[21]
+	mi := &file_runtime_worker_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1920,7 +1736,7 @@ func (x *WorkerError) String() string {
 func (*WorkerError) ProtoMessage() {}
 
 func (x *WorkerError) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[21]
+	mi := &file_runtime_worker_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1933,7 +1749,7 @@ func (x *WorkerError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerError.ProtoReflect.Descriptor instead.
 func (*WorkerError) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{21}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *WorkerError) GetSessionId() string {
@@ -1983,7 +1799,7 @@ type LogEvent struct {
 
 func (x *LogEvent) Reset() {
 	*x = LogEvent{}
-	mi := &file_runtime_worker_proto_msgTypes[22]
+	mi := &file_runtime_worker_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1995,7 +1811,7 @@ func (x *LogEvent) String() string {
 func (*LogEvent) ProtoMessage() {}
 
 func (x *LogEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[22]
+	mi := &file_runtime_worker_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2008,7 +1824,7 @@ func (x *LogEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEvent.ProtoReflect.Descriptor instead.
 func (*LogEvent) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{22}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *LogEvent) GetSessionId() string {
@@ -2049,7 +1865,7 @@ type AgentError struct {
 
 func (x *AgentError) Reset() {
 	*x = AgentError{}
-	mi := &file_runtime_worker_proto_msgTypes[23]
+	mi := &file_runtime_worker_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2061,7 +1877,7 @@ func (x *AgentError) String() string {
 func (*AgentError) ProtoMessage() {}
 
 func (x *AgentError) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_worker_proto_msgTypes[23]
+	mi := &file_runtime_worker_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2074,7 +1890,7 @@ func (x *AgentError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentError.ProtoReflect.Descriptor instead.
 func (*AgentError) Descriptor() ([]byte, []int) {
-	return file_runtime_worker_proto_rawDescGZIP(), []int{23}
+	return file_runtime_worker_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AgentError) GetCode() string {
@@ -2095,7 +1911,7 @@ var File_runtime_worker_proto protoreflect.FileDescriptor
 
 const file_runtime_worker_proto_rawDesc = "" +
 	"\n" +
-	"\x14runtime_worker.proto\x12\x11runtime.worker.v1\x1a\x19google/protobuf/any.proto\x1a\x16strategy_service.proto\"\x97\a\n" +
+	"\x14runtime_worker.proto\x12\x11runtime.worker.v1\x1a\x19google/protobuf/any.proto\x1a\x16strategy_service.proto\"\xe0\x06\n" +
 	"\vWorkerFrame\x12\x19\n" +
 	"\bframe_id\x18\x01 \x01(\tR\aframeId\x126\n" +
 	"\x05hello\x18\n" +
@@ -2103,15 +1919,14 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\theartbeat\x18\v \x01(\v2\".runtime.worker.v1.WorkerHeartbeatH\x00R\theartbeat\x12@\n" +
 	"\bprogress\x18\f \x01(\v2\".runtime.worker.v1.SessionProgressH\x00R\bprogress\x12F\n" +
 	"\rplatform_call\x18\r \x01(\v2\x1f.runtime.worker.v1.PlatformCallH\x00R\fplatformCall\x12Y\n" +
-	"\x14platform_call_result\x18\x0e \x01(\v2%.runtime.worker.v1.PlatformCallResultH\x00R\x12platformCallResult\x12L\n" +
-	"\x0findicator_frame\x18\x0f \x01(\v2!.runtime.worker.v1.IndicatorFrameH\x00R\x0eindicatorFrame\x12J\n" +
+	"\x14platform_call_result\x18\x0e \x01(\v2%.runtime.worker.v1.PlatformCallResultH\x00R\x12platformCallResult\x12J\n" +
 	"\fnotification\x18\x10 \x01(\v2$.runtime.worker.v1.NotificationEventH\x00R\fnotification\x12L\n" +
 	"\x0fwallet_snapshot\x18\x11 \x01(\v2!.runtime.worker.v1.WalletSnapshotH\x00R\x0ewalletSnapshot\x12C\n" +
 	"\ffinal_status\x18\x12 \x01(\v2\x1e.runtime.worker.v1.FinalStatusH\x00R\vfinalStatus\x12C\n" +
 	"\fworker_error\x18\x13 \x01(\v2\x1e.runtime.worker.v1.WorkerErrorH\x00R\vworkerError\x12:\n" +
 	"\tlog_event\x18\x14 \x01(\v2\x1b.runtime.worker.v1.LogEventH\x00R\blogEvent\x12S\n" +
 	"\x12indicator_frame_v2\x18\x15 \x01(\v2#.runtime.worker.v1.IndicatorFrameV2H\x00R\x10indicatorFrameV2B\t\n" +
-	"\apayload\"\xa9\x05\n" +
+	"\apayloadJ\x04\b\x0f\x10\x10R\x0findicator_frame\"\xa9\x05\n" +
 	"\n" +
 	"AgentFrame\x12\x19\n" +
 	"\bframe_id\x18\x01 \x01(\tR\aframeId\x12\x19\n" +
@@ -2189,13 +2004,7 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x120\n" +
 	"\bresponse\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\bresponse\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12N\n" +
-	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\x89\x01\n" +
-	"\x0eIndicatorValue\x12#\n" +
-	"\rindicator_key\x18\x01 \x01(\tR\findicatorKey\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value\x12\x1b\n" +
-	"\thas_value\x18\x03 \x01(\bR\bhasValue\x12\x1f\n" +
-	"\vmarker_json\x18\x04 \x01(\tR\n" +
-	"markerJson\"\xe3\x01\n" +
+	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\xe3\x01\n" +
 	"\x13IndicatorDefinition\x12#\n" +
 	"\rindicator_key\x18\x01 \x01(\tR\findicatorKey\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -2205,20 +2014,7 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\x04unit\x18\x06 \x01(\tR\x04unit\x12 \n" +
 	"\vdescription\x18\a \x01(\tR\vdescription\x12\x1f\n" +
 	"\vconfig_json\x18\b \x01(\tR\n" +
-	"configJson\"\xd4\x02\n" +
-	"\x0eIndicatorFrame\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
-	"\n" +
-	"stream_key\x18\x02 \x01(\tR\tstreamKey\x12$\n" +
-	"\x0emarket_time_ms\x18\x03 \x01(\x03R\fmarketTimeMs\x12\x1f\n" +
-	"\vinterval_ms\x18\x04 \x01(\x03R\n" +
-	"intervalMs\x129\n" +
-	"\x06values\x18\x05 \x03(\v2!.runtime.worker.v1.IndicatorValueR\x06values\x12\x17\n" +
-	"\auser_id\x18\x06 \x01(\x03R\x06userId\x12\x1f\n" +
-	"\vstrategy_id\x18\a \x01(\x03R\n" +
-	"strategyId\x12H\n" +
-	"\vdefinitions\x18\b \x03(\v2&.runtime.worker.v1.IndicatorDefinitionR\vdefinitions\"\x94\x01\n" +
+	"configJson\"\x94\x01\n" +
 	"\x11IndicatorMarkerV2\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x19\n" +
 	"\x05price\x18\x02 \x01(\x01H\x00R\x05price\x88\x01\x01\x12\x14\n" +
@@ -2302,7 +2098,7 @@ func file_runtime_worker_proto_rawDescGZIP() []byte {
 	return file_runtime_worker_proto_rawDescData
 }
 
-var file_runtime_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_runtime_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_runtime_worker_proto_goTypes = []any{
 	(*WorkerFrame)(nil),                       // 0: runtime.worker.v1.WorkerFrame
 	(*AgentFrame)(nil),                        // 1: runtime.worker.v1.AgentFrame
@@ -2316,21 +2112,19 @@ var file_runtime_worker_proto_goTypes = []any{
 	(*SessionProgress)(nil),                   // 9: runtime.worker.v1.SessionProgress
 	(*PlatformCall)(nil),                      // 10: runtime.worker.v1.PlatformCall
 	(*PlatformCallResult)(nil),                // 11: runtime.worker.v1.PlatformCallResult
-	(*IndicatorValue)(nil),                    // 12: runtime.worker.v1.IndicatorValue
-	(*IndicatorDefinition)(nil),               // 13: runtime.worker.v1.IndicatorDefinition
-	(*IndicatorFrame)(nil),                    // 14: runtime.worker.v1.IndicatorFrame
-	(*IndicatorMarkerV2)(nil),                 // 15: runtime.worker.v1.IndicatorMarkerV2
-	(*IndicatorSampleV2)(nil),                 // 16: runtime.worker.v1.IndicatorSampleV2
-	(*IndicatorFrameV2)(nil),                  // 17: runtime.worker.v1.IndicatorFrameV2
-	(*NotificationEvent)(nil),                 // 18: runtime.worker.v1.NotificationEvent
-	(*WalletSnapshot)(nil),                    // 19: runtime.worker.v1.WalletSnapshot
-	(*FinalStatus)(nil),                       // 20: runtime.worker.v1.FinalStatus
-	(*WorkerError)(nil),                       // 21: runtime.worker.v1.WorkerError
-	(*LogEvent)(nil),                          // 22: runtime.worker.v1.LogEvent
-	(*AgentError)(nil),                        // 23: runtime.worker.v1.AgentError
-	nil,                                       // 24: runtime.worker.v1.LogEvent.FieldsEntry
-	(*anypb.Any)(nil),                         // 25: google.protobuf.Any
-	(*strategyv1.RuntimeDependencyError)(nil), // 26: strategy.v1.RuntimeDependencyError
+	(*IndicatorDefinition)(nil),               // 12: runtime.worker.v1.IndicatorDefinition
+	(*IndicatorMarkerV2)(nil),                 // 13: runtime.worker.v1.IndicatorMarkerV2
+	(*IndicatorSampleV2)(nil),                 // 14: runtime.worker.v1.IndicatorSampleV2
+	(*IndicatorFrameV2)(nil),                  // 15: runtime.worker.v1.IndicatorFrameV2
+	(*NotificationEvent)(nil),                 // 16: runtime.worker.v1.NotificationEvent
+	(*WalletSnapshot)(nil),                    // 17: runtime.worker.v1.WalletSnapshot
+	(*FinalStatus)(nil),                       // 18: runtime.worker.v1.FinalStatus
+	(*WorkerError)(nil),                       // 19: runtime.worker.v1.WorkerError
+	(*LogEvent)(nil),                          // 20: runtime.worker.v1.LogEvent
+	(*AgentError)(nil),                        // 21: runtime.worker.v1.AgentError
+	nil,                                       // 22: runtime.worker.v1.LogEvent.FieldsEntry
+	(*anypb.Any)(nil),                         // 23: google.protobuf.Any
+	(*strategyv1.RuntimeDependencyError)(nil), // 24: strategy.v1.RuntimeDependencyError
 }
 var file_runtime_worker_proto_depIdxs = []int32{
 	2,  // 0: runtime.worker.v1.WorkerFrame.hello:type_name -> runtime.worker.v1.WorkerHello
@@ -2338,45 +2132,42 @@ var file_runtime_worker_proto_depIdxs = []int32{
 	9,  // 2: runtime.worker.v1.WorkerFrame.progress:type_name -> runtime.worker.v1.SessionProgress
 	10, // 3: runtime.worker.v1.WorkerFrame.platform_call:type_name -> runtime.worker.v1.PlatformCall
 	11, // 4: runtime.worker.v1.WorkerFrame.platform_call_result:type_name -> runtime.worker.v1.PlatformCallResult
-	14, // 5: runtime.worker.v1.WorkerFrame.indicator_frame:type_name -> runtime.worker.v1.IndicatorFrame
-	18, // 6: runtime.worker.v1.WorkerFrame.notification:type_name -> runtime.worker.v1.NotificationEvent
-	19, // 7: runtime.worker.v1.WorkerFrame.wallet_snapshot:type_name -> runtime.worker.v1.WalletSnapshot
-	20, // 8: runtime.worker.v1.WorkerFrame.final_status:type_name -> runtime.worker.v1.FinalStatus
-	21, // 9: runtime.worker.v1.WorkerFrame.worker_error:type_name -> runtime.worker.v1.WorkerError
-	22, // 10: runtime.worker.v1.WorkerFrame.log_event:type_name -> runtime.worker.v1.LogEvent
-	17, // 11: runtime.worker.v1.WorkerFrame.indicator_frame_v2:type_name -> runtime.worker.v1.IndicatorFrameV2
-	4,  // 12: runtime.worker.v1.AgentFrame.start_session:type_name -> runtime.worker.v1.StartSession
-	5,  // 13: runtime.worker.v1.AgentFrame.market_data_batch:type_name -> runtime.worker.v1.MarketDataBatch
-	6,  // 14: runtime.worker.v1.AgentFrame.order_update_batch:type_name -> runtime.worker.v1.OrderUpdateBatch
-	7,  // 15: runtime.worker.v1.AgentFrame.stop_session:type_name -> runtime.worker.v1.StopSession
-	8,  // 16: runtime.worker.v1.AgentFrame.shutdown_worker:type_name -> runtime.worker.v1.ShutdownWorker
-	10, // 17: runtime.worker.v1.AgentFrame.platform_call:type_name -> runtime.worker.v1.PlatformCall
-	11, // 18: runtime.worker.v1.AgentFrame.platform_call_result:type_name -> runtime.worker.v1.PlatformCallResult
-	23, // 19: runtime.worker.v1.AgentFrame.error:type_name -> runtime.worker.v1.AgentError
-	25, // 20: runtime.worker.v1.StartSession.run_strategy_request:type_name -> google.protobuf.Any
-	25, // 21: runtime.worker.v1.StartSession.session_bootstrap:type_name -> google.protobuf.Any
-	25, // 22: runtime.worker.v1.MarketDataBatch.klines:type_name -> google.protobuf.Any
-	25, // 23: runtime.worker.v1.OrderUpdateBatch.events:type_name -> google.protobuf.Any
-	26, // 24: runtime.worker.v1.SessionProgress.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
-	25, // 25: runtime.worker.v1.PlatformCall.request:type_name -> google.protobuf.Any
-	25, // 26: runtime.worker.v1.PlatformCallResult.response:type_name -> google.protobuf.Any
-	26, // 27: runtime.worker.v1.PlatformCallResult.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
-	12, // 28: runtime.worker.v1.IndicatorFrame.values:type_name -> runtime.worker.v1.IndicatorValue
-	13, // 29: runtime.worker.v1.IndicatorFrame.definitions:type_name -> runtime.worker.v1.IndicatorDefinition
-	15, // 30: runtime.worker.v1.IndicatorSampleV2.markers:type_name -> runtime.worker.v1.IndicatorMarkerV2
-	13, // 31: runtime.worker.v1.IndicatorFrameV2.definitions:type_name -> runtime.worker.v1.IndicatorDefinition
-	16, // 32: runtime.worker.v1.IndicatorFrameV2.samples:type_name -> runtime.worker.v1.IndicatorSampleV2
-	25, // 33: runtime.worker.v1.WalletSnapshot.wallet:type_name -> google.protobuf.Any
-	26, // 34: runtime.worker.v1.FinalStatus.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
-	26, // 35: runtime.worker.v1.WorkerError.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
-	24, // 36: runtime.worker.v1.LogEvent.fields:type_name -> runtime.worker.v1.LogEvent.FieldsEntry
-	0,  // 37: runtime.worker.v1.RuntimeWorkerAgent.Connect:input_type -> runtime.worker.v1.WorkerFrame
-	1,  // 38: runtime.worker.v1.RuntimeWorkerAgent.Connect:output_type -> runtime.worker.v1.AgentFrame
-	38, // [38:39] is the sub-list for method output_type
-	37, // [37:38] is the sub-list for method input_type
-	37, // [37:37] is the sub-list for extension type_name
-	37, // [37:37] is the sub-list for extension extendee
-	0,  // [0:37] is the sub-list for field type_name
+	16, // 5: runtime.worker.v1.WorkerFrame.notification:type_name -> runtime.worker.v1.NotificationEvent
+	17, // 6: runtime.worker.v1.WorkerFrame.wallet_snapshot:type_name -> runtime.worker.v1.WalletSnapshot
+	18, // 7: runtime.worker.v1.WorkerFrame.final_status:type_name -> runtime.worker.v1.FinalStatus
+	19, // 8: runtime.worker.v1.WorkerFrame.worker_error:type_name -> runtime.worker.v1.WorkerError
+	20, // 9: runtime.worker.v1.WorkerFrame.log_event:type_name -> runtime.worker.v1.LogEvent
+	15, // 10: runtime.worker.v1.WorkerFrame.indicator_frame_v2:type_name -> runtime.worker.v1.IndicatorFrameV2
+	4,  // 11: runtime.worker.v1.AgentFrame.start_session:type_name -> runtime.worker.v1.StartSession
+	5,  // 12: runtime.worker.v1.AgentFrame.market_data_batch:type_name -> runtime.worker.v1.MarketDataBatch
+	6,  // 13: runtime.worker.v1.AgentFrame.order_update_batch:type_name -> runtime.worker.v1.OrderUpdateBatch
+	7,  // 14: runtime.worker.v1.AgentFrame.stop_session:type_name -> runtime.worker.v1.StopSession
+	8,  // 15: runtime.worker.v1.AgentFrame.shutdown_worker:type_name -> runtime.worker.v1.ShutdownWorker
+	10, // 16: runtime.worker.v1.AgentFrame.platform_call:type_name -> runtime.worker.v1.PlatformCall
+	11, // 17: runtime.worker.v1.AgentFrame.platform_call_result:type_name -> runtime.worker.v1.PlatformCallResult
+	21, // 18: runtime.worker.v1.AgentFrame.error:type_name -> runtime.worker.v1.AgentError
+	23, // 19: runtime.worker.v1.StartSession.run_strategy_request:type_name -> google.protobuf.Any
+	23, // 20: runtime.worker.v1.StartSession.session_bootstrap:type_name -> google.protobuf.Any
+	23, // 21: runtime.worker.v1.MarketDataBatch.klines:type_name -> google.protobuf.Any
+	23, // 22: runtime.worker.v1.OrderUpdateBatch.events:type_name -> google.protobuf.Any
+	24, // 23: runtime.worker.v1.SessionProgress.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	23, // 24: runtime.worker.v1.PlatformCall.request:type_name -> google.protobuf.Any
+	23, // 25: runtime.worker.v1.PlatformCallResult.response:type_name -> google.protobuf.Any
+	24, // 26: runtime.worker.v1.PlatformCallResult.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	13, // 27: runtime.worker.v1.IndicatorSampleV2.markers:type_name -> runtime.worker.v1.IndicatorMarkerV2
+	12, // 28: runtime.worker.v1.IndicatorFrameV2.definitions:type_name -> runtime.worker.v1.IndicatorDefinition
+	14, // 29: runtime.worker.v1.IndicatorFrameV2.samples:type_name -> runtime.worker.v1.IndicatorSampleV2
+	23, // 30: runtime.worker.v1.WalletSnapshot.wallet:type_name -> google.protobuf.Any
+	24, // 31: runtime.worker.v1.FinalStatus.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	24, // 32: runtime.worker.v1.WorkerError.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	22, // 33: runtime.worker.v1.LogEvent.fields:type_name -> runtime.worker.v1.LogEvent.FieldsEntry
+	0,  // 34: runtime.worker.v1.RuntimeWorkerAgent.Connect:input_type -> runtime.worker.v1.WorkerFrame
+	1,  // 35: runtime.worker.v1.RuntimeWorkerAgent.Connect:output_type -> runtime.worker.v1.AgentFrame
+	35, // [35:36] is the sub-list for method output_type
+	34, // [34:35] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_runtime_worker_proto_init() }
@@ -2390,7 +2181,6 @@ func file_runtime_worker_proto_init() {
 		(*WorkerFrame_Progress)(nil),
 		(*WorkerFrame_PlatformCall)(nil),
 		(*WorkerFrame_PlatformCallResult)(nil),
-		(*WorkerFrame_IndicatorFrame)(nil),
 		(*WorkerFrame_Notification)(nil),
 		(*WorkerFrame_WalletSnapshot)(nil),
 		(*WorkerFrame_FinalStatus)(nil),
@@ -2408,15 +2198,15 @@ func file_runtime_worker_proto_init() {
 		(*AgentFrame_PlatformCallResult)(nil),
 		(*AgentFrame_Error)(nil),
 	}
-	file_runtime_worker_proto_msgTypes[15].OneofWrappers = []any{}
-	file_runtime_worker_proto_msgTypes[16].OneofWrappers = []any{}
+	file_runtime_worker_proto_msgTypes[13].OneofWrappers = []any{}
+	file_runtime_worker_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runtime_worker_proto_rawDesc), len(file_runtime_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

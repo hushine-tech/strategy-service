@@ -15,12 +15,9 @@ import (
 	"time"
 
 	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
-	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
-	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"github.com/hushine-tech/strategy-service/internal/runtimeagent"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestHostedDependencyGateFailsBeforeAnyRuntimeReadiness(t *testing.T) {
@@ -122,33 +119,6 @@ func bootstrapTestFacts(source string) runtimeagent.EmbeddedRuntimeFacts {
 		StrategyServiceCommit: strings.Repeat("b", 40), StrategyLibraryCommit: strings.Repeat("c", 40),
 		ImageBuildId: strings.Repeat("b", 12) + "-" + strings.Repeat("c", 12) + "-" + strings.Repeat("d", 12) + "-1.0.0-executor",
 	}}
-}
-
-func TestRunAgentStartsIndicatorSyncLoopWithProcessContext(t *testing.T) {
-	invoker := &syncLoopPlatformInvoker{called: make(chan struct{}, 1)}
-	agent := runtimeagent.NewAgent(runtimeagent.AgentConfig{
-		PlatformInvoker: invoker, IndicatorFlushInterval: time.Millisecond,
-	})
-	err := agent.HandleWorkerFrame(context.Background(), "sess-1", &rwv1.WorkerFrame{
-		Payload: &rwv1.WorkerFrame_IndicatorFrame{IndicatorFrame: &rwv1.IndicatorFrame{
-			SessionId: "sess-1", StreamKey: "futures:TESTUSDT:1m", MarketTimeMs: 1000,
-			Values: []*rwv1.IndicatorValue{{IndicatorKey: "alpha", Value: 1, HasValue: true}},
-		}},
-	}, nil)
-	if err != nil {
-		t.Fatalf("HandleWorkerFrame: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	startAgentBackgroundLoops(ctx, agent, func(context.Context) error {
-		return nil
-	})
-	select {
-	case <-invoker.called:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for indicator sync loop")
-	}
-	cancel()
 }
 
 func TestRunAfterRuntimeAuthenticationDoesNotStartEarly(t *testing.T) {
@@ -333,20 +303,6 @@ func TestCoordinateRuntimeLifecycleRetriesUnsafeShutdownBeforeCancellation(
 	}) {
 		t.Fatalf("lifecycle events = %v", got)
 	}
-}
-
-type syncLoopPlatformInvoker struct {
-	called chan struct{}
-}
-
-func (i *syncLoopPlatformInvoker) InvokePlatformAny(_ context.Context, method string, _ *anypb.Any, _ time.Duration) (*anypb.Any, error) {
-	if method == "portfolio.SaveStrategyIndicators" {
-		select {
-		case i.called <- struct{}{}:
-		default:
-		}
-	}
-	return anypb.New(&portfoliov1.SaveStrategyIndicatorsResponse{})
 }
 
 func TestRuntimeIdentityFromConfigBuildsBareIdentity(t *testing.T) {

@@ -747,6 +747,57 @@ def test_validate_strategy_source_shapes_resolved_target_leverage_facts():
     ]
 
 
+def test_validate_strategy_source_shapes_oversized_leverage_as_declaration_issue(
+    monkeypatch,
+):
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", bound_user_id=7, runtime_id="rt-1",
+        restore_running_sessions=False,
+    )
+    context = _FakeContext()
+    monkeypatch.setattr(
+        grpc_server,
+        "prepare_strategy",
+        lambda _source: SimpleNamespace(
+            declarations=SimpleNamespace(
+                inputs=(),
+                order_targets=(
+                    SimpleNamespace(
+                        exchange="binance",
+                        market="perpetual_futures",
+                        symbol="BTCUSDT",
+                        effective_leverage=2**40,
+                        leverage_source="strategy_default",
+                    ),
+                ),
+            ),
+        ),
+    )
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        return None\n"
+    )
+
+    response = servicer.ValidateStrategySource(
+        pb2.ValidateStrategySourceRequest(
+            source=source,
+            user_id=7,
+            runtime_id="rt-1",
+            include_declarations=True,
+        ),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is False
+    assert len(response.issues) == 1
+    assert response.issues[0].code == "STRATEGY_TARGET_LEVERAGE_INVALID"
+    assert "uint32" in response.issues[0].message
+
+
 def test_validate_strategy_source_does_not_execute_source_without_declaration_opt_in():
     servicer = StrategyServiceServicer(
         "", "", {}, "", bound_user_id=7, runtime_id="rt-1",
@@ -3227,7 +3278,7 @@ def test_run_session_finalizer_client_failure_log_is_fixed(monkeypatch, caplog) 
     assert "Traceback" not in caplog.text
 
 
-def test_indicator_collection_failure_logs_are_fixed_and_redacted(monkeypatch, caplog) -> None:
+def test_declared_indicators_require_agent_sink_without_portfolio_writer(monkeypatch) -> None:
     definition = IndicatorDefinition(
         key="alpha",
         name="Alpha",
@@ -3235,108 +3286,34 @@ def test_indicator_collection_failure_logs_are_fixed_and_redacted(monkeypatch, c
         pane="strategy",
     )
     state = SessionState(environment=1, user_id=17, strategy_id=202)
-
-    def make_servicer_and_strategy():
-        servicer = StrategyServiceServicer(
-            "acct:1",
-            "order:1",
-            {},
-            "127.0.0.1:9092",
-            restore_running_sessions=False,
-        )
-        strategy = SimpleNamespace(
-            indicator_definitions=[definition],
-            on_indicator_frame=None,
-        )
-        return servicer, strategy, SimpleNamespace(strategies={"active": strategy})
-
-    client_servicer, _client_strategy, client_engine = make_servicer_and_strategy()
-
-    def unavailable_client():
-        raise RuntimeError("indicator-client-log-canary")
-
-    monkeypatch.setattr(client_servicer, "_portfolio_client", unavailable_client)
-
-    sink_servicer, sink_strategy, sink_engine = make_servicer_and_strategy()
-    monkeypatch.setattr(sink_servicer, "_portfolio_client", lambda: object())
-
-    def failing_sink(**_kwargs):
-        raise RuntimeError("indicator-sink-log-canary")
-
-    sink_servicer._indicator_frame_sink = failing_sink
-
-    missing_save_servicer, missing_save_strategy, missing_save_engine = (
-        make_servicer_and_strategy()
+    servicer = StrategyServiceServicer(
+        "acct:1",
+        "order:1",
+        {},
+        "127.0.0.1:9092",
+        restore_running_sessions=False,
     )
-    monkeypatch.setattr(missing_save_servicer, "_portfolio_client", lambda: object())
+    strategy = SimpleNamespace(
+        indicator_definitions=[definition],
+        on_indicator_frame=None,
+    )
+    portfolio_writer_calls = 0
 
-    save_servicer, save_strategy, save_engine = make_servicer_and_strategy()
+    def forbidden_portfolio_writer():
+        nonlocal portfolio_writer_calls
+        portfolio_writer_calls += 1
+        return object()
 
-    class FailingSaveClient:
-        @staticmethod
-        def save_strategy_indicators(**_kwargs):
-            raise RuntimeError("indicator-save-log-canary")
+    monkeypatch.setattr(servicer, "_portfolio_client", forbidden_portfolio_writer)
 
-    monkeypatch.setattr(save_servicer, "_portfolio_client", FailingSaveClient)
-
-    with caplog.at_level("WARNING"):
-        client_servicer._install_indicator_collection(
-            "indicator-log-session",
+    with pytest.raises(RuntimeError, match="^RUNTIME_INDICATOR_SINK_REQUIRED$"):
+        servicer._install_indicator_collection(
+            "indicator-sink-required",
             state,
-            client_engine,
-        )
-        sink_servicer._install_indicator_collection(
-            "indicator-log-session",
-            state,
-            sink_engine,
-        )
-        with pytest.raises(RuntimeError, match="indicator-sink-log-canary"):
-            sink_strategy.on_indicator_frame(
-                "indicator-stream-key-log-canary",
-                0,
-                1,
-                1,
-                IndicatorFrame(values={"alpha": 1.0}),
-            )
-        missing_save_servicer._install_indicator_collection(
-            "indicator-log-session",
-            state,
-            missing_save_engine,
-        )
-        missing_save_strategy.on_indicator_frame(
-            "indicator-stream-key-log-canary",
-            0,
-            1,
-            1,
-            IndicatorFrame(values={"alpha": 1.0}),
-        )
-        save_servicer._install_indicator_collection(
-            "indicator-log-session",
-            state,
-            save_engine,
-        )
-        save_strategy.on_indicator_frame(
-            "indicator-stream-key-log-canary",
-            0,
-            1,
-            1,
-            IndicatorFrame(values={"alpha": 1.0}),
+            SimpleNamespace(strategies={"active": strategy}),
         )
 
-    assert [record.getMessage() for record in caplog.records] == [
-        "STRATEGY_INDICATOR_CLIENT_UNAVAILABLE session=indicator-log-session strategy_id=202",
-        "STRATEGY_INDICATOR_SAVE_UNAVAILABLE session=indicator-log-session strategy_id=202",
-        "STRATEGY_INDICATOR_SAVE_FAILED session=indicator-log-session strategy_id=202",
-    ]
-    assert all(record.exc_info is None for record in caplog.records)
-    for canary in (
-        "indicator-client-log-canary",
-        "indicator-sink-log-canary",
-        "indicator-save-log-canary",
-        "indicator-stream-key-log-canary",
-        "Traceback",
-    ):
-        assert canary not in caplog.text
+    assert portfolio_writer_calls == 0
 
 
 def test_agent_indicator_sink_uses_v2_sequence_and_retries_first_definitions(monkeypatch):
@@ -8793,118 +8770,6 @@ def test_proxy_only_backtest_reads_paged_data_without_runtime_dataset_delivery()
         "start_after_time_ms": 0,
         "end_time_ms": 60_000 * 2881,
     }]
-
-
-def test_proxy_only_backtest_flushes_custom_indicator_chunks():
-    from market_data.models import MarketKline
-    from strategy_service.inputs import StrategyInput
-    from strategy_service.service import StrategyEngine
-
-    class FakeMarketDataClient:
-        def fetch_backtest_page(self, **kwargs):
-            start_after = int(kwargs["start_after_time_ms"])
-            rows = [
-                MarketKline(
-                    symbol="ETHUSDT",
-                    interval="1m",
-                    open_time=60_000,
-                    close_time=119_999,
-                    open=1.0,
-                    high=2.0,
-                    low=0.5,
-                    close=10.0,
-                    volume=10.0,
-                    timestamp=60_000,
-                    market="futures",
-                ),
-                MarketKline(
-                    symbol="ETHUSDT",
-                    interval="1m",
-                    open_time=120_000,
-                    close_time=179_999,
-                    open=10.0,
-                    high=12.0,
-                    low=9.5,
-                    close=11.0,
-                    volume=11.0,
-                    timestamp=120_000,
-                    market="futures",
-                ),
-            ]
-            rows = [row for row in rows if row.open_time > start_after]
-            return SimpleNamespace(
-                stream_key="binance/futures/kline/ETHUSDT/1m",
-                klines=rows,
-                next_cursor_time_ms=rows[-1].open_time if rows else start_after,
-                has_more=False,
-            )
-
-    class FakePortfolioClient:
-        def __init__(self) -> None:
-            self.indicator_saves = []
-
-        def save_strategy_indicators(self, **kwargs):
-            self.indicator_saves.append(kwargs)
-            return (len(kwargs.get("definitions") or []), len(kwargs.get("chunks") or []))
-
-    class FakeProxy:
-        def __init__(self) -> None:
-            self.marketdata = FakeMarketDataClient()
-            self.portfolio = FakePortfolioClient()
-
-        def marketdata_client(self):
-            return self.marketdata
-
-        def portfolio_client(self):
-            return self.portfolio
-
-    route_wallet = make_backtest_wallet()
-    wallet = PortfolioWalletRuntime(
-        portfolio_id=505,
-        allowed_routes={("binance", "perpetual_futures")},
-        wallets={("binance", "perpetual_futures", 11): route_wallet},
-    )
-    strategy_code = (
-        "class MyStrategy:\n"
-        "    INPUTS = [{\"exchange\": \"binance\", \"market\": \"perpetual_futures\", \"symbol\": \"ETHUSDT\", \"interval\": \"1m\"}]\n"
-        "    ORDER_TARGETS = []\n"
-        "    INDICATORS = {\"alpha_score\": {\"type\": \"line\", \"pane\": \"strategy\"}}\n"
-        "    def on_market_data(self, data, wallet):\n"
-        "        self.indicators.set(\"alpha_score\", data.price)\n"
-        "        return None\n"
-    )
-    engine = StrategyEngine()
-    engine.create_strategy(
-        "u1",
-        _prepare_strategy_code_for_test("<db:indicator_backtest>", strategy_code),
-        wallet,
-        session_id="sess-indicators",
-    )
-
-    proxy = FakeProxy()
-    servicer = StrategyServiceServicer(
-        "",
-        "",
-        {},
-        "",
-        platform_access_mode=grpc_server.PLATFORM_ACCESS_PROXY_ONLY,
-        platform_proxy=proxy,
-        restore_running_sessions=False,
-    )
-    state = SessionState(environment=0)
-
-    servicer._run_backtest(
-        "sess-indicators",
-        state,
-        engine,
-        SimpleNamespace(start_time_ms=60_000, end_time_ms=180_000, user_id=6),
-        [StrategyInput(exchange="binance", market="perpetual_futures", symbol="ETHUSDT", interval="1m")],
-    )
-
-    chunk_saves = [call for call in proxy.portfolio.indicator_saves if call.get("chunks")]
-    assert state.status == "finished"
-    assert proxy.portfolio.indicator_saves[0]["definitions"][0].stream_key == "binance:perpetual_futures:ETHUSDT:1m"
-    assert chunk_saves[-1]["chunks"][0].values_json["values"] == [10.0, 11.0]
 
 
 def test_proxy_only_mode2_live_uses_runtime_delivery_not_fetch_klines():

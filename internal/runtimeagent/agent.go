@@ -2526,17 +2526,6 @@ func (a *Agent) handleWorkerFrameForGeneration(
 			default:
 			}
 		}
-	case *rwv1.WorkerFrame_IndicatorFrame:
-		if generation != nil && strings.TrimSpace(frame.GetIndicatorFrame().GetSessionId()) != strings.TrimSpace(workerSessionID) {
-			return fmt.Errorf("indicator frame session_id does not match authenticated generation")
-		}
-		if generation != nil {
-			if !generation.admit("indicator") {
-				return fmt.Errorf("worker generation is closing: %s", workerSessionID)
-			}
-			defer generation.completePlatformCall()
-		}
-		return a.indicatorSync.ReceiveFrame(frame.GetIndicatorFrame())
 	case *rwv1.WorkerFrame_IndicatorFrameV2:
 		indicatorFrame := frame.GetIndicatorFrameV2()
 		if generation == nil {

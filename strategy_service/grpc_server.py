@@ -29,7 +29,6 @@ except Exception:  # noqa: BLE001
 from strategy_service.gen import strategy_service_pb2 as pb2
 from strategy_service.gen import strategy_service_pb2_grpc as pb2_grpc
 
-from strategy_service.indicators import IndicatorChunkBuffer
 from strategy_service.notification import StrategyNotifier
 from strategy_service.service import StrategyEngine
 from strategy_service.session import (
@@ -901,11 +900,16 @@ def _session_leverage_compatibility(
 def _strategy_order_target_binding(
     target: StrategyOrderTarget,
 ) -> pb2.StrategyOrderTargetBinding:
+    effective_leverage = int(target.effective_leverage or 0)
+    if effective_leverage < 0 or effective_leverage > (1 << 32) - 1:
+        raise StrategyDeclarationError(
+            "effective leverage must fit protobuf uint32"
+        )
     return pb2.StrategyOrderTargetBinding(
         exchange=target.exchange,
         market=target.market,
         symbol=target.symbol,
-        effective_leverage=int(target.effective_leverage or 0),
+        effective_leverage=effective_leverage,
         leverage_source=str(target.leverage_source or ""),
     )
 
@@ -1654,10 +1658,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     )
                     for item in declarations.inputs
                 ]
-                declared_order_targets = [
-                    _strategy_order_target_binding(item)
-                    for item in declarations.order_targets
-                ]
+                try:
+                    declared_order_targets = [
+                        _strategy_order_target_binding(item)
+                        for item in declarations.order_targets
+                    ]
+                except StrategyDeclarationError as error:
+                    ok = False
+                    declared_order_targets = []
+                    issues.append(
+                        pb2.StrategyValidationIssueProto(
+                            code="STRATEGY_TARGET_LEVERAGE_INVALID",
+                            message=str(error),
+                        )
+                    )
         return pb2.ValidateStrategySourceResponse(
             ok=ok,
             issues=issues,
@@ -3384,83 +3398,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 strategy.on_indicator_frame = on_frame
             return lambda: None
 
-        try:
-            portfolio_client = self._portfolio_client()
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "STRATEGY_INDICATOR_CLIENT_UNAVAILABLE session=%s strategy_id=%s",
-                session_id,
-                int(getattr(state, "strategy_id", 0) or 0),
-            )
-            return lambda: None
-
-        flushers: list[Callable[[], None]] = []
-
-        def save_payload(*, definitions: list[Any] | None = None, chunks: list[Any] | None = None) -> None:
-            if not definitions and not chunks:
-                return
-            save = getattr(portfolio_client, "save_strategy_indicators", None)
-            if not callable(save):
-                logger.warning(
-                    "STRATEGY_INDICATOR_SAVE_UNAVAILABLE session=%s strategy_id=%s",
-                    session_id,
-                    int(getattr(state, "strategy_id", 0) or 0),
-                )
-                return
-            try:
-                save(
-                    session_id=session_id,
-                    user_id=user_id,
-                    definitions=definitions or [],
-                    chunks=chunks or [],
-                )
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "STRATEGY_INDICATOR_SAVE_FAILED session=%s strategy_id=%s",
-                    session_id,
-                    int(getattr(state, "strategy_id", 0) or 0),
-                )
-
-        for strategy in strategies:
-            definitions = list(getattr(strategy, "indicator_definitions", []) or [])
-            buffer = IndicatorChunkBuffer(definitions)
-            definition_streams_saved: set[str] = set()
-
-            def on_frame(
-                stream_key: str,
-                stream_sequence: int,
-                market_time_ms: int,
-                interval_ms: int,
-                frame,
-                *,
-                definitions=definitions,
-                buffer=buffer,
-                definition_streams_saved=definition_streams_saved,
-            ) -> None:
-                del stream_sequence
-                if stream_key not in definition_streams_saved:
-                    save_payload(
-                        definitions=[replace(definition, stream_key=stream_key) for definition in definitions],
-                    )
-                    definition_streams_saved.add(stream_key)
-                chunks = buffer.record_bar(stream_key, market_time_ms, interval_ms, frame)
-                if chunks:
-                    save_payload(chunks=chunks)
-
-            strategy.on_indicator_frame = on_frame
-
-            def flush(*, buffer=buffer) -> None:
-                chunks = buffer.flush_open()
-                if chunks:
-                    save_payload(chunks=chunks)
-
-            flushers.append(flush)
-
-        def flush_all() -> None:
-            for flush in flushers:
-                flush()
-
-        return flush_all
+        raise RuntimeError("RUNTIME_INDICATOR_SINK_REQUIRED")
 
     def _run_backtest(
         self,

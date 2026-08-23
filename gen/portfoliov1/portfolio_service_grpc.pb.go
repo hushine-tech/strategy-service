@@ -58,9 +58,6 @@ const (
 	PortfolioService_ListSessionSnapshots_FullMethodName              = "/portfolio.v1.PortfolioService/ListSessionSnapshots"
 	PortfolioService_ListReconciliationRuns_FullMethodName            = "/portfolio.v1.PortfolioService/ListReconciliationRuns"
 	PortfolioService_GetSessionReconciliationSummary_FullMethodName   = "/portfolio.v1.PortfolioService/GetSessionReconciliationSummary"
-	PortfolioService_SaveStrategyIndicators_FullMethodName            = "/portfolio.v1.PortfolioService/SaveStrategyIndicators"
-	PortfolioService_ListStrategyIndicators_FullMethodName            = "/portfolio.v1.PortfolioService/ListStrategyIndicators"
-	PortfolioService_ListStrategyIndicatorChunks_FullMethodName       = "/portfolio.v1.PortfolioService/ListStrategyIndicatorChunks"
 	PortfolioService_SaveStrategyIndicatorsV2_FullMethodName          = "/portfolio.v1.PortfolioService/SaveStrategyIndicatorsV2"
 	PortfolioService_FinalizeStrategyIndicatorChunksV2_FullMethodName = "/portfolio.v1.PortfolioService/FinalizeStrategyIndicatorChunksV2"
 	PortfolioService_ListStrategyIndicatorsV2_FullMethodName          = "/portfolio.v1.PortfolioService/ListStrategyIndicatorsV2"
@@ -160,12 +157,6 @@ type PortfolioServiceClient interface {
 	// session 维度的 reconciliation 聚合（总数 / hard fail / soft fail）。
 	// SessionDetailPage 用它驱动顶部 tile，而不是依赖当前页计数。
 	GetSessionReconciliationSummary(ctx context.Context, in *GetSessionReconciliationSummaryRequest, opts ...grpc.CallOption) (*GetSessionReconciliationSummaryResponse, error)
-	// 保存 strategy runtime 输出的 session 级自定义指标声明和 chunk 数据。
-	SaveStrategyIndicators(ctx context.Context, in *SaveStrategyIndicatorsRequest, opts ...grpc.CallOption) (*SaveStrategyIndicatorsResponse, error)
-	// 列出 session 自定义指标声明。
-	ListStrategyIndicators(ctx context.Context, in *ListStrategyIndicatorsRequest, opts ...grpc.CallOption) (*ListStrategyIndicatorsResponse, error)
-	// 按时间窗口列出 session 自定义指标 chunk。
-	ListStrategyIndicatorChunks(ctx context.Context, in *ListStrategyIndicatorChunksRequest, opts ...grpc.CallOption) (*ListStrategyIndicatorChunksResponse, error)
 	// 保存 typed V2 指标声明和未封块的 revision。
 	SaveStrategyIndicatorsV2(ctx context.Context, in *SaveStrategyIndicatorsV2Request, opts ...grpc.CallOption) (*SaveStrategyIndicatorsV2Response, error)
 	// 使用 expected_revision 显式封块；已封块数据不可再更新。
@@ -586,36 +577,6 @@ func (c *portfolioServiceClient) GetSessionReconciliationSummary(ctx context.Con
 	return out, nil
 }
 
-func (c *portfolioServiceClient) SaveStrategyIndicators(ctx context.Context, in *SaveStrategyIndicatorsRequest, opts ...grpc.CallOption) (*SaveStrategyIndicatorsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SaveStrategyIndicatorsResponse)
-	err := c.cc.Invoke(ctx, PortfolioService_SaveStrategyIndicators_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *portfolioServiceClient) ListStrategyIndicators(ctx context.Context, in *ListStrategyIndicatorsRequest, opts ...grpc.CallOption) (*ListStrategyIndicatorsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListStrategyIndicatorsResponse)
-	err := c.cc.Invoke(ctx, PortfolioService_ListStrategyIndicators_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *portfolioServiceClient) ListStrategyIndicatorChunks(ctx context.Context, in *ListStrategyIndicatorChunksRequest, opts ...grpc.CallOption) (*ListStrategyIndicatorChunksResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListStrategyIndicatorChunksResponse)
-	err := c.cc.Invoke(ctx, PortfolioService_ListStrategyIndicatorChunks_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *portfolioServiceClient) SaveStrategyIndicatorsV2(ctx context.Context, in *SaveStrategyIndicatorsV2Request, opts ...grpc.CallOption) (*SaveStrategyIndicatorsV2Response, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SaveStrategyIndicatorsV2Response)
@@ -803,12 +764,6 @@ type PortfolioServiceServer interface {
 	// session 维度的 reconciliation 聚合（总数 / hard fail / soft fail）。
 	// SessionDetailPage 用它驱动顶部 tile，而不是依赖当前页计数。
 	GetSessionReconciliationSummary(context.Context, *GetSessionReconciliationSummaryRequest) (*GetSessionReconciliationSummaryResponse, error)
-	// 保存 strategy runtime 输出的 session 级自定义指标声明和 chunk 数据。
-	SaveStrategyIndicators(context.Context, *SaveStrategyIndicatorsRequest) (*SaveStrategyIndicatorsResponse, error)
-	// 列出 session 自定义指标声明。
-	ListStrategyIndicators(context.Context, *ListStrategyIndicatorsRequest) (*ListStrategyIndicatorsResponse, error)
-	// 按时间窗口列出 session 自定义指标 chunk。
-	ListStrategyIndicatorChunks(context.Context, *ListStrategyIndicatorChunksRequest) (*ListStrategyIndicatorChunksResponse, error)
 	// 保存 typed V2 指标声明和未封块的 revision。
 	SaveStrategyIndicatorsV2(context.Context, *SaveStrategyIndicatorsV2Request) (*SaveStrategyIndicatorsV2Response, error)
 	// 使用 expected_revision 显式封块；已封块数据不可再更新。
@@ -955,15 +910,6 @@ func (UnimplementedPortfolioServiceServer) ListReconciliationRuns(context.Contex
 }
 func (UnimplementedPortfolioServiceServer) GetSessionReconciliationSummary(context.Context, *GetSessionReconciliationSummaryRequest) (*GetSessionReconciliationSummaryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSessionReconciliationSummary not implemented")
-}
-func (UnimplementedPortfolioServiceServer) SaveStrategyIndicators(context.Context, *SaveStrategyIndicatorsRequest) (*SaveStrategyIndicatorsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SaveStrategyIndicators not implemented")
-}
-func (UnimplementedPortfolioServiceServer) ListStrategyIndicators(context.Context, *ListStrategyIndicatorsRequest) (*ListStrategyIndicatorsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListStrategyIndicators not implemented")
-}
-func (UnimplementedPortfolioServiceServer) ListStrategyIndicatorChunks(context.Context, *ListStrategyIndicatorChunksRequest) (*ListStrategyIndicatorChunksResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListStrategyIndicatorChunks not implemented")
 }
 func (UnimplementedPortfolioServiceServer) SaveStrategyIndicatorsV2(context.Context, *SaveStrategyIndicatorsV2Request) (*SaveStrategyIndicatorsV2Response, error) {
 	return nil, status.Error(codes.Unimplemented, "method SaveStrategyIndicatorsV2 not implemented")
@@ -1718,60 +1664,6 @@ func _PortfolioService_GetSessionReconciliationSummary_Handler(srv interface{}, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PortfolioService_SaveStrategyIndicators_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SaveStrategyIndicatorsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PortfolioServiceServer).SaveStrategyIndicators(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PortfolioService_SaveStrategyIndicators_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PortfolioServiceServer).SaveStrategyIndicators(ctx, req.(*SaveStrategyIndicatorsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PortfolioService_ListStrategyIndicators_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListStrategyIndicatorsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PortfolioServiceServer).ListStrategyIndicators(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PortfolioService_ListStrategyIndicators_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PortfolioServiceServer).ListStrategyIndicators(ctx, req.(*ListStrategyIndicatorsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PortfolioService_ListStrategyIndicatorChunks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListStrategyIndicatorChunksRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PortfolioServiceServer).ListStrategyIndicatorChunks(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PortfolioService_ListStrategyIndicatorChunks_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PortfolioServiceServer).ListStrategyIndicatorChunks(ctx, req.(*ListStrategyIndicatorChunksRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _PortfolioService_SaveStrategyIndicatorsV2_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SaveStrategyIndicatorsV2Request)
 	if err := dec(in); err != nil {
@@ -2114,18 +2006,6 @@ var PortfolioService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSessionReconciliationSummary",
 			Handler:    _PortfolioService_GetSessionReconciliationSummary_Handler,
-		},
-		{
-			MethodName: "SaveStrategyIndicators",
-			Handler:    _PortfolioService_SaveStrategyIndicators_Handler,
-		},
-		{
-			MethodName: "ListStrategyIndicators",
-			Handler:    _PortfolioService_ListStrategyIndicators_Handler,
-		},
-		{
-			MethodName: "ListStrategyIndicatorChunks",
-			Handler:    _PortfolioService_ListStrategyIndicatorChunks_Handler,
 		},
 		{
 			MethodName: "SaveStrategyIndicatorsV2",

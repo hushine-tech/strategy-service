@@ -9,7 +9,6 @@ back over RuntimeChannel to control-panel-service.
 from __future__ import annotations
 
 import logging
-import json
 import threading
 import traceback
 import uuid
@@ -42,7 +41,6 @@ PORTFOLIO_PREFLIGHT_STRATEGY_SESSION = "portfolio.PreflightStrategySession"
 PORTFOLIO_COMMIT_STRATEGY_SESSION_START = "portfolio.CommitStrategySessionStart"
 PORTFOLIO_GET_ACTIVE_STRATEGY = "portfolio.GetActiveStrategy"
 PORTFOLIO_SAVE_SESSION = "portfolio.SaveSession"
-PORTFOLIO_SAVE_STRATEGY_INDICATORS = "portfolio.SaveStrategyIndicators"
 PORTFOLIO_UPDATE_SESSION = "portfolio.UpdateSession"
 ORDER_PLACE = "order.PlaceOrder"
 ORDER_RESOLVE_ATTEMPT = "order.ResolveOrderAttempt"
@@ -364,53 +362,6 @@ class ProxyPortfolioClient:
             initial_status=str(initial_status or ""),
         )
         self._proxy.invoke(PORTFOLIO_SAVE_SESSION, req, portfolio_service_pb2.SaveSessionResponse)
-
-    def save_strategy_indicators(
-        self,
-        *,
-        session_id: str,
-        user_id: int = 0,
-        definitions: list[Any] | None = None,
-        chunks: list[Any] | None = None,
-    ) -> tuple[int, int]:
-        from strategy_service.gen import portfolio_service_pb2
-
-        req = portfolio_service_pb2.SaveStrategyIndicatorsRequest(
-            session_id=str(session_id or ""),
-            user_id=int(user_id or 0),
-        )
-        for definition in definitions or []:
-            req.definitions.add(
-                session_id=str(session_id or ""),
-                strategy_id=int(getattr(definition, "strategy_id", 0) or 0),
-                stream_key=str(getattr(definition, "stream_key", "") or ""),
-                indicator_key=str(getattr(definition, "key", "") or getattr(definition, "indicator_key", "") or ""),
-                name=str(getattr(definition, "name", "") or ""),
-                type=str(getattr(definition, "type", "") or ""),
-                pane=str(getattr(definition, "pane", "") or ""),
-                color=str(getattr(definition, "color", "") or ""),
-                unit=str(getattr(definition, "unit", "") or ""),
-                description=str(getattr(definition, "description", "") or ""),
-                config_json=json.dumps(getattr(definition, "config", {}) or {}, separators=(",", ":")),
-            )
-        for chunk in chunks or []:
-            req.chunks.add(
-                session_id=str(session_id or ""),
-                stream_key=str(getattr(chunk, "stream_key", "") or ""),
-                indicator_key=str(getattr(chunk, "indicator_key", "") or ""),
-                chunk_index=int(getattr(chunk, "chunk_index", 0) or 0),
-                start_time_ms=int(getattr(chunk, "start_time_ms", 0) or 0),
-                end_time_ms=int(getattr(chunk, "end_time_ms", 0) or 0),
-                interval_ms=int(getattr(chunk, "interval_ms", 0) or 0),
-                count=int(getattr(chunk, "count", 0) or 0),
-                values_json=json.dumps(getattr(chunk, "values_json", {}) or {}, separators=(",", ":")),
-            )
-        resp = self._proxy.invoke(
-            PORTFOLIO_SAVE_STRATEGY_INDICATORS,
-            req,
-            portfolio_service_pb2.SaveStrategyIndicatorsResponse,
-        )
-        return int(resp.definitions_saved), int(resp.chunks_saved)
 
     def update_session(
         self,

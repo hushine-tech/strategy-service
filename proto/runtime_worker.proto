@@ -15,13 +15,14 @@ service RuntimeWorkerAgent {
 
 message WorkerFrame {
   string frame_id = 1;
+  reserved 15;
+  reserved "indicator_frame";
   oneof payload {
     WorkerHello hello = 10;
     WorkerHeartbeat heartbeat = 11;
     SessionProgress progress = 12;
     PlatformCall platform_call = 13;
     PlatformCallResult platform_call_result = 14;
-    IndicatorFrame indicator_frame = 15;
     NotificationEvent notification = 16;
     WalletSnapshot wallet_snapshot = 17;
     FinalStatus final_status = 18;
@@ -118,13 +119,6 @@ message PlatformCallResult {
   strategy.v1.RuntimeDependencyError dependency_error = 5;
 }
 
-message IndicatorValue {
-  string indicator_key = 1;
-  double value = 2;
-  bool has_value = 3;
-  string marker_json = 4;
-}
-
 message IndicatorDefinition {
   string indicator_key = 1;
   string name = 2;
@@ -134,17 +128,6 @@ message IndicatorDefinition {
   string unit = 6;
   string description = 7;
   string config_json = 8;
-}
-
-message IndicatorFrame {
-  string session_id = 1;
-  string stream_key = 2;
-  int64 market_time_ms = 3;
-  int64 interval_ms = 4;
-  repeated IndicatorValue values = 5;
-  int64 user_id = 6;
-  int64 strategy_id = 7;
-  repeated IndicatorDefinition definitions = 8;
 }
 
 message IndicatorMarkerV2 {

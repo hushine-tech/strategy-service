@@ -194,22 +194,15 @@ def test_worker_dependency_fields_and_indicator_evolution_are_exact():
 
     frame = _message(worker_pb2, "WorkerFrame")
     fields = frame.fields_by_name
-    if "indicator_frame_v2" not in fields:
-        assert fields["indicator_frame"].number == 15
-    elif "indicator_frame" in fields:
-        hello = _message(worker_pb2, "WorkerHello")
-        assert hello.fields_by_name["protocol_version"].number == 5
-        assert worker_pb2.WorkerHello(protocol_version=2).protocol_version == 2
-        assert fields["indicator_frame"].number == 15
-        assert fields["indicator_frame_v2"].number == 21
-        assert not _descriptor_reserves("WorkerFrame", 15)
-    else:
-        hello = _message(worker_pb2, "WorkerHello")
-        assert hello.fields_by_name["protocol_version"].number == 5
-        assert worker_pb2.WorkerHello(protocol_version=2).protocol_version == 2
-        assert fields["indicator_frame_v2"].number == 21
-        assert _descriptor_reserves("WorkerFrame", 15)
-        assert _descriptor_reserves_name("WorkerFrame", "indicator_frame")
+    hello = _message(worker_pb2, "WorkerHello")
+    assert hello.fields_by_name["protocol_version"].number == 5
+    assert worker_pb2.WorkerHello(protocol_version=2).protocol_version == 2
+    assert "indicator_frame" not in fields
+    assert fields["indicator_frame_v2"].number == 21
+    assert _descriptor_reserves("WorkerFrame", 15)
+    assert _descriptor_reserves_name("WorkerFrame", "indicator_frame")
+    assert "IndicatorValue" not in worker_pb2.DESCRIPTOR.message_types_by_name
+    assert "IndicatorFrame" not in worker_pb2.DESCRIPTOR.message_types_by_name
 
     final_fields = _message(worker_pb2, "FinalStatus").fields_by_name
     if "reconciliation_run_id" in final_fields:

@@ -5,13 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from strategy_service import platform_proxy
 from strategy_service.gen import portfolio_service_pb2, marketdata_service_pb2, order_service_pb2
 from strategy_service.platform_proxy import (
     PORTFOLIO_COMMIT_STRATEGY_SESSION_START,
     PORTFOLIO_PREFLIGHT_STRATEGY_SESSION,
     PORTFOLIO_GET_PORTFOLIO,
     PORTFOLIO_SAVE_SESSION,
-    PORTFOLIO_SAVE_STRATEGY_INDICATORS,
     PORTFOLIO_UPDATE_WALLET_STATE,
     PORTFOLIO_UPDATE_SESSION,
     LOGS_EMIT,
@@ -24,7 +24,6 @@ from strategy_service.platform_proxy import (
     RuntimeChannelLogHandler,
     RuntimeChannelPlatformProxy,
 )
-from strategy_service.indicators import IndicatorChunk, IndicatorDefinition
 from strategy_service.inputs import StrategyOrderTarget
 from strategy_service.types import OrderDecision
 
@@ -87,51 +86,9 @@ def test_proxy_portfolio_client_strict_update_propagates_transport_error():
         )
 
 
-def test_proxy_portfolio_client_sends_strategy_indicators_over_runtime_channel():
-    runtime = _FakeRuntimeChannel()
-    runtime.responses[PORTFOLIO_SAVE_STRATEGY_INDICATORS] = portfolio_service_pb2.SaveStrategyIndicatorsResponse(
-        definitions_saved=1,
-        chunks_saved=1,
-    )
-    proxy = RuntimeChannelPlatformProxy(runtime)
-
-    saved = proxy.portfolio_client().save_strategy_indicators(
-        session_id="sess-1",
-        user_id=6,
-        definitions=[
-            IndicatorDefinition(
-                key="alpha_score",
-                name="Alpha Score",
-                type="line",
-                pane="strategy",
-                stream_key="binance:perpetual_futures:ETHUSDT:1m",
-                color="#2563eb",
-                config={"line_width": 2},
-            )
-        ],
-        chunks=[
-            IndicatorChunk(
-                stream_key="binance:perpetual_futures:ETHUSDT:1m",
-                indicator_key="alpha_score",
-                chunk_index=0,
-                start_time_ms=1_780_000_000_000,
-                end_time_ms=1_780_000_060_000,
-                interval_ms=60_000,
-                count=2,
-                values_json={"values": [0.12, 0.15], "times": None},
-            )
-        ],
-    )
-
-    method, req = runtime.calls[-1]
-    assert saved == (1, 1)
-    assert method == PORTFOLIO_SAVE_STRATEGY_INDICATORS
-    assert req.session_id == "sess-1"
-    assert req.user_id == 6
-    assert req.definitions[0].stream_key == "binance:perpetual_futures:ETHUSDT:1m"
-    assert req.definitions[0].indicator_key == "alpha_score"
-    assert req.definitions[0].config_json == '{"line_width":2}'
-    assert req.chunks[0].values_json == '{"values":[0.12,0.15],"times":null}'
+def test_indicator_v1_platform_proxy_is_removed():
+    assert not hasattr(platform_proxy, "PORTFOLIO_SAVE_STRATEGY_INDICATORS")
+    assert not hasattr(platform_proxy.ProxyPortfolioClient, "save_strategy_indicators")
 
 
 def test_proxy_portfolio_client_fetches_portfolio_snapshot_over_runtime_channel():
