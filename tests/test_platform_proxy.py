@@ -7,6 +7,7 @@ import pytest
 
 from strategy_service.gen import portfolio_service_pb2, marketdata_service_pb2, order_service_pb2
 from strategy_service.platform_proxy import (
+    PORTFOLIO_COMMIT_STRATEGY_SESSION_START,
     PORTFOLIO_PREFLIGHT_STRATEGY_SESSION,
     PORTFOLIO_GET_PORTFOLIO,
     PORTFOLIO_SAVE_SESSION,
@@ -231,7 +232,6 @@ def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_ch
         ],
         session_id="preflight-session-1",
         strategy_id=9,
-        leverage=1,
     )
 
     method, req = runtime.calls[-1]
@@ -239,12 +239,128 @@ def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_ch
     assert resp.ok is True
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 9
-    assert req.leverage == 1
+    assert req.leverage == 0
     symbols = {item.symbol: item for item in req.required_symbols}
     assert symbols["BTCUSDT"].effective_leverage == 3
     assert symbols["BTCUSDT"].leverage_source == "strategy_default"
     assert symbols["ETHUSDT"].effective_leverage == 0
     assert symbols["ETHUSDT"].leverage_source == ""
+
+
+def test_proxy_portfolio_client_preflight_never_serializes_deprecated_global_leverage():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[PORTFOLIO_PREFLIGHT_STRATEGY_SESSION] = (
+        portfolio_service_pb2.PreflightStrategySessionResponse(ok=True)
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    proxy.portfolio_client().preflight_strategy_session(
+        portfolio_id=7,
+        user_id=3,
+        leverage=99,
+    )
+
+    _, request = runtime.calls[-1]
+    assert request.leverage == 0
+
+
+def test_proxy_portfolio_client_commit_strategy_session_start_preserves_typed_contract_and_deadline():
+    runtime = _FakeRuntimeChannel()
+    expected = portfolio_service_pb2.CommitStrategySessionStartResponse(
+        ok=False,
+        issues=[
+            portfolio_service_pb2.PreflightIssue(
+                code="LEVERAGE_SET_FAILED",
+                message="exchange rejected leverage",
+                exchange=1,
+                market=2,
+                symbol="BTCUSDT",
+                venue_id=41,
+                retryable=False,
+                source="exchange",
+            )
+        ],
+        confirmed_target_facts=[
+            portfolio_service_pb2.SessionTargetLeverageFact(
+                session_id="sess-proxy-commit-1",
+                venue_id=41,
+                exchange=1,
+                environment=1,
+                market=2,
+                symbol="ETHUSDT",
+                effective_leverage=3,
+                leverage_source="order_target",
+                previous_leverage=2,
+                confirmed_leverage=3,
+            )
+        ],
+        target_results=[
+            portfolio_service_pb2.FuturesLeverageTargetResult(
+                venue_id=41,
+                exchange=1,
+                market=2,
+                symbol="BTCUSDT",
+                effective_leverage=5,
+                leverage_source="strategy_default",
+                previous_leverage=2,
+                current_leverage=2,
+                confirmed_leverage=5,
+                change_required=True,
+                status="rolled_back",
+                error_code="LEVERAGE_SET_FAILED",
+                error_message="exchange rejected leverage",
+                retryable=False,
+            )
+        ],
+        rollback_failed=True,
+        code="LEVERAGE_ROLLBACK_FAILED",
+    )
+    runtime.responses[PORTFOLIO_COMMIT_STRATEGY_SESSION_START] = expected
+    request = portfolio_service_pb2.CommitStrategySessionStartRequest(
+        launch_operation_id="launch-proxy-commit-1",
+        session=portfolio_service_pb2.SaveSessionRequest(
+            session_id="sess-proxy-commit-1",
+            portfolio_id=7,
+            strategy_id=9,
+            environment=1,
+            interval="5m",
+            start_time_ms=1000,
+            end_time_ms=2000,
+            runtime_id="runtime-1",
+            runtime_source="self_hosted",
+            runtime_name="desk",
+            session_type="live",
+            runtime_version="v2",
+            session_name="momentum",
+            initial_status="pending",
+            user_id=3,
+        ),
+        required_routes=[portfolio_service_pb2.RequiredRoute(exchange=1, market=2)],
+        required_symbols=[
+            portfolio_service_pb2.RequiredSymbol(
+                exchange=1,
+                market=2,
+                symbol="BTCUSDT",
+                order_target=True,
+                required_order_types=["MARKET", "LIMIT"],
+                effective_leverage=5,
+                leverage_source="strategy_default",
+            )
+        ],
+    )
+    request_bytes = request.SerializeToString()
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    response = proxy.portfolio_client().commit_strategy_session_start(
+        request,
+        timeout_seconds=19.25,
+    )
+
+    method, forwarded = runtime.calls[-1]
+    assert method == "portfolio.CommitStrategySessionStart"
+    assert forwarded.SerializeToString() == request_bytes
+    assert runtime.timeouts[-1] == 19.25
+    assert response.SerializeToString() == expected.SerializeToString()
 
 
 def test_proxy_order_client_places_order_without_direct_stub():

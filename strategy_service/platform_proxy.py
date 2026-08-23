@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 PORTFOLIO_GET_PORTFOLIO = "portfolio.GetPortfolioSnapshot"
 PORTFOLIO_UPDATE_WALLET_STATE = "portfolio.UpdatePortfolioWalletState"
 PORTFOLIO_PREFLIGHT_STRATEGY_SESSION = "portfolio.PreflightStrategySession"
+PORTFOLIO_COMMIT_STRATEGY_SESSION_START = "portfolio.CommitStrategySessionStart"
 PORTFOLIO_GET_ACTIVE_STRATEGY = "portfolio.GetActiveStrategy"
 PORTFOLIO_SAVE_SESSION = "portfolio.SaveSession"
 PORTFOLIO_SAVE_STRATEGY_INDICATORS = "portfolio.SaveStrategyIndicators"
@@ -223,6 +224,7 @@ class ProxyPortfolioClient:
         strategy_id: int = 0,
         leverage: float = 0.0,
     ):
+        del leverage  # Deprecated scalar is compatibility-only and never preflight authority.
         try:
             from strategy_service.gen import portfolio_service_pb2
 
@@ -231,7 +233,6 @@ class ProxyPortfolioClient:
                 user_id=int(user_id),
                 session_id=str(session_id or ""),
                 strategy_id=int(strategy_id),
-                leverage=float(leverage or 0.0),
                 required_routes=[
                     portfolio_service_pb2.RequiredRoute(
                         exchange=_exchange_enum(exchange),
@@ -259,6 +260,17 @@ class ProxyPortfolioClient:
                 exc_info=True,
             )
             return None
+
+    def commit_strategy_session_start(self, request: Any, *, timeout_seconds: float = 60.0):
+        """Relay one typed strategy launch commit over RuntimeChannel."""
+        from strategy_service.gen import portfolio_service_pb2
+
+        return self._proxy.invoke(
+            PORTFOLIO_COMMIT_STRATEGY_SESSION_START,
+            request,
+            portfolio_service_pb2.CommitStrategySessionStartResponse,
+            timeout_seconds=float(timeout_seconds),
+        )
 
     def get_active_strategy(self, portfolio_id: int):
         try:

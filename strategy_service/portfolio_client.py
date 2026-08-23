@@ -141,6 +141,7 @@ class PortfolioClient:
         leverage: float = 0.0,
     ):
         """Validate venue route/symbol availability before strategy runtime creation."""
+        del leverage  # Deprecated scalar is compatibility-only and never preflight authority.
         if not self._stub:
             return None
         try:
@@ -151,7 +152,6 @@ class PortfolioClient:
                 user_id=int(user_id),
                 session_id=str(session_id or ""),
                 strategy_id=int(strategy_id),
-                leverage=float(leverage or 0.0),
                 required_routes=[
                     portfolio_service_pb2.RequiredRoute(
                         exchange=_exchange_enum(exchange),
@@ -175,6 +175,15 @@ class PortfolioClient:
                 exc_info=True,
             )
             return None
+
+    def commit_strategy_session_start(self, request: Any, *, timeout_seconds: float = 60.0):
+        """Commit one typed strategy launch through core-service."""
+        if not self._stub:
+            raise RuntimeError("PortfolioClient is not connected")
+        return self._stub.CommitStrategySessionStart(
+            request,
+            timeout=float(timeout_seconds),
+        )
 
     def get_active_strategy(self, portfolio_id: int):
         """Fetch the active strategy for an portfolio. Returns proto GetActiveStrategyResponse or None."""
