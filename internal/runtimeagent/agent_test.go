@@ -701,32 +701,39 @@ func preparedStrategyStart(sessionID, operationID string) *strategyv1.PreparedRu
 }
 
 type strategyStartPlatform struct {
-	mu                 sync.Mutex
-	recorder           *strategyStartRecorder
-	commitOK           bool
-	commitErr          error
-	getErr             error
-	noDurableCommit    bool
-	updateFailures     int
-	admissionActive    bool
-	beforeUpdate       func(*portfoliov1.UpdateSessionRequest) error
-	mutateCommitted    func(*portfoliov1.StrategySessionEntry)
-	omitConfirmedFacts bool
-	rollbackFailed     bool
-	commit             *portfoliov1.CommitStrategySessionStartRequest
-	committedSession   *portfoliov1.StrategySessionEntry
-	updates            []*portfoliov1.UpdateSessionRequest
-	restartSession     *portfoliov1.StrategySessionEntry
+	mu                          sync.Mutex
+	recorder                    *strategyStartRecorder
+	commitOK                    bool
+	commitErr                   error
+	getErr                      error
+	noDurableCommit             bool
+	updateFailures              int
+	loseRunningAck              bool
+	loseRunningAckAfterDeadline bool
+	blockUnguardedFailed        bool
+	unguardedFailedAttempts     int
+	admissionActive             bool
+	beforeUpdate                func(*portfoliov1.UpdateSessionRequest) error
+	mutateCommitted             func(*portfoliov1.StrategySessionEntry)
+	omitConfirmedFacts          bool
+	rollbackFailed              bool
+	commit                      *portfoliov1.CommitStrategySessionStartRequest
+	committedSession            *portfoliov1.StrategySessionEntry
+	updates                     []*portfoliov1.UpdateSessionRequest
+	restartSession              *portfoliov1.StrategySessionEntry
 }
 
 func (p *strategyStartPlatform) InvokePlatformAny(
-	_ context.Context,
+	ctx context.Context,
 	method string,
 	request *anypb.Any,
 	_ time.Duration,
 ) (*anypb.Any, error) {
 	switch method {
 	case "portfolio.GetSession":
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var get portfoliov1.GetSessionRequest
 		if err := request.UnmarshalTo(&get); err != nil {
 			return nil, err
@@ -799,6 +806,12 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 		}
 		p.mu.Lock()
 		p.updates = append(p.updates, proto.Clone(&update).(*portfoliov1.UpdateSessionRequest))
+		if p.blockUnguardedFailed && update.GetStatus() == "failed" &&
+			update.GetExpectedStatus() == "" {
+			p.unguardedFailedAttempts++
+			p.mu.Unlock()
+			return nil, errors.New("FailedPrecondition: unguarded startup failure blocked")
+		}
 		if p.updateFailures > 0 {
 			p.updateFailures--
 			p.mu.Unlock()
@@ -812,6 +825,15 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 			}
 			p.committedSession.Status = update.GetStatus()
 			p.committedSession.Error = update.GetError()
+			if p.loseRunningAck && update.GetStatus() == "running" {
+				p.loseRunningAck = false
+				waitForDeadline := p.loseRunningAckAfterDeadline
+				p.mu.Unlock()
+				if waitForDeadline {
+					<-ctx.Done()
+				}
+				return nil, errors.New("Unavailable: running acknowledgement lost")
+			}
 			if isTerminalRetryStatus(strings.ToLower(strings.TrimSpace(update.GetStatus()))) {
 				p.admissionActive = false
 			}
@@ -938,6 +960,92 @@ func TestAgentRunStrategyStartupTimeoutLetsInflightRunningPublicationWin(t *test
 	agent.mu.Unlock()
 	if generation == nil || !generation.admit("post-start-probe") {
 		t.Fatal("accepted running generation did not reopen admission")
+	}
+	generation.completePlatformCall()
+}
+
+func TestAgentRunStrategyReconcilesAcceptedRunningAfterTransportError(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	platform := &strategyStartPlatform{
+		recorder: recorder, commitOK: true, loseRunningAck: true,
+		loseRunningAckAfterDeadline: true, blockUnguardedFailed: true,
+	}
+	starter := &strategyStartWorkerStarter{recorder: recorder, suppressFinalProgress: true}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+		WorkerSender: sender, PlatformInvoker: platform,
+		StartTimeout: time.Second, RequestTimeout: 50 * time.Millisecond,
+	})
+	starter.agent = agent
+	sender.agent = agent
+	starter.onFinalStart = func(sessionID string) {
+		go func() {
+			running, err := anypb.New(&portfoliov1.UpdateSessionRequest{
+				SessionId: sessionID, Status: "running", RuntimeId: "rt-1",
+				ExpectedStatus: "pending",
+			})
+			if err != nil {
+				t.Errorf("pack running update: %v", err)
+				return
+			}
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_PlatformCall{PlatformCall: &rwv1.PlatformCall{
+					CallId: "running-ack-lost", Method: "portfolio.UpdateSession",
+					Request: running, TimeoutMs: 50,
+				}}}, func(frame *rwv1.AgentFrame) error {
+				result := frame.GetPlatformCallResult()
+				if result == nil || !result.GetOk() {
+					failed, packErr := anypb.New(&portfoliov1.UpdateSessionRequest{
+						SessionId: sessionID, Status: "failed", RuntimeId: "rt-1",
+					})
+					if packErr != nil {
+						return packErr
+					}
+					_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+						Payload: &rwv1.WorkerFrame_PlatformCall{PlatformCall: &rwv1.PlatformCall{
+							CallId: "unguarded-failed", Method: "portfolio.UpdateSession",
+							Request: failed, TimeoutMs: 1000,
+						}}}, func(*rwv1.AgentFrame) error { return nil })
+					return agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+						Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+							SessionId: sessionID, Status: "failed", Error: "running publication ambiguous",
+						}}}, nil)
+				}
+				return agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+					Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+						SessionId: sessionID, Status: "running",
+					}}}, nil)
+			})
+		}()
+	}
+
+	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
+		t.Fatalf("RunStrategy frame = %+v", frame)
+	}
+	platform.mu.Lock()
+	statusValue := platform.committedSession.GetStatus()
+	updates := append([]*portfoliov1.UpdateSessionRequest(nil), platform.updates...)
+	unguardedFailedAttempts := platform.unguardedFailedAttempts
+	platform.mu.Unlock()
+	if statusValue != "running" || unguardedFailedAttempts != 0 || len(updates) != 1 ||
+		updates[0].GetStatus() != "running" || updates[0].GetExpectedStatus() != "pending" {
+		t.Fatalf(
+			"lost running acknowledgement status=%q unguarded_failed=%d updates=%+v",
+			statusValue, unguardedFailedAttempts, updates,
+		)
+	}
+	agent.mu.Lock()
+	var generation *workerGeneration
+	for _, candidate := range agent.generations {
+		generation = candidate
+	}
+	agent.mu.Unlock()
+	if generation == nil || !generation.admit("post-ambiguous-running-probe") {
+		t.Fatal("accepted running generation did not remain admitted")
 	}
 	generation.completePlatformCall()
 }

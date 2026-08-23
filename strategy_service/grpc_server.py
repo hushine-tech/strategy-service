@@ -1528,7 +1528,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         *,
         expected_status: str = "",
     ) -> bool:
-        result = acct_client.update_session(
+        update_args = dict(
             session_id=session_id,
             status="running",
             bars_processed=state.bars_processed,
@@ -1536,6 +1536,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             runtime_id=state.runtime_id,
             expected_status=expected_status,
         )
+        if expected_status:
+            update_args["strict"] = True
+        result = acct_client.update_session(**update_args)
         return result is True
 
     def ValidateStrategySource(self, request, context):
@@ -2597,6 +2600,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 expected_status="pending" if new_protocol_start else "",
             )
         except BaseException:
+            if new_protocol_start:
+                return self._abort_persisted_startup(
+                    session_id=session_id,
+                    state=state,
+                    environment=environment,
+                    context=context,
+                    error="running session publication is ambiguous",
+                    status_code=grpc.StatusCode.UNAVAILABLE,
+                    detail="running session publication is ambiguous",
+                )
             running_persisted = False
         if not running_persisted:
             return self._abort_persisted_startup(
@@ -2668,17 +2681,18 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             startup.abort.set()
             self._bounded_join_startup_thread(state)
         state.force_failed(error)
-        terminal_confirmed = False
-        try:
-            terminal_result = self._persist_session_status(
-                session_id,
-                state,
-                fallback_patch=True,
-                force_core_update=True,
-            )
-            terminal_confirmed = terminal_result is True
-        except BaseException:
-            logger.error("STRATEGY_STARTUP_TERMINAL_PERSIST_FAILED session=%s", session_id)
+        terminal_confirmed = bool(self._require_session_bootstrap)
+        if not terminal_confirmed:
+            try:
+                terminal_result = self._persist_session_status(
+                    session_id,
+                    state,
+                    fallback_patch=True,
+                    force_core_update=True,
+                )
+                terminal_confirmed = terminal_result is True
+            except BaseException:
+                logger.error("STRATEGY_STARTUP_TERMINAL_PERSIST_FAILED session=%s", session_id)
 
         release_confirmed = True
         if environment == 1:
@@ -2709,16 +2723,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             startup.abort.set()
             self._bounded_join_startup_thread(state)
         state.fail_running_publication(error)
-        terminal_confirmed = False
-        try:
-            terminal_confirmed = self._persist_session_status(
-                session_id,
-                state,
-                fallback_patch=True,
-                force_core_update=True,
-            ) is True
-        except BaseException:
-            logger.error("STRATEGY_PUBLICATION_TERMINAL_PERSIST_FAILED session=%s", session_id)
+        terminal_confirmed = bool(self._require_session_bootstrap)
+        if not terminal_confirmed:
+            try:
+                terminal_confirmed = self._persist_session_status(
+                    session_id,
+                    state,
+                    fallback_patch=True,
+                    force_core_update=True,
+                ) is True
+            except BaseException:
+                logger.error("STRATEGY_PUBLICATION_TERMINAL_PERSIST_FAILED session=%s", session_id)
         release_confirmed = True
         if state.environment == 1:
             try:

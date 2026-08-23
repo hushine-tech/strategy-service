@@ -72,6 +72,21 @@ def test_proxy_portfolio_client_sends_pending_status_cas():
     assert req.expected_status == "pending"
 
 
+def test_proxy_portfolio_client_strict_update_propagates_transport_error():
+    runtime = _FakeRuntimeChannel()
+    runtime.errors[PORTFOLIO_UPDATE_SESSION] = RuntimeError("response lost")
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    with pytest.raises(RuntimeError, match="response lost"):
+        proxy.portfolio_client().update_session(
+            session_id="sess-1",
+            status="running",
+            runtime_id="runtime-1",
+            expected_status="pending",
+            strict=True,
+        )
+
+
 def test_proxy_portfolio_client_sends_strategy_indicators_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
     runtime.responses[PORTFOLIO_SAVE_STRATEGY_INDICATORS] = portfolio_service_pb2.SaveStrategyIndicatorsResponse(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from strategy_service.inputs import StrategyOrderTarget
 from strategy_service.portfolio_client import PortfolioClient
 from strategy_service.gen import portfolio_service_pb2
@@ -70,6 +72,24 @@ def test_portfolio_client_update_session_sends_runtime_guard():
     assert req.status == "running"
     assert req.runtime_id == "rt-1"
     assert req.expected_status == "pending"
+
+
+def test_portfolio_client_strict_update_propagates_transport_error():
+    class FailingStub:
+        def UpdateSession(self, _req):
+            raise RuntimeError("response lost")
+
+    client = PortfolioClient("")
+    client._stub = FailingStub()
+
+    with pytest.raises(RuntimeError, match="response lost"):
+        client.update_session(
+            "sess-1",
+            "running",
+            runtime_id="rt-1",
+            expected_status="pending",
+            strict=True,
+        )
 
 
 def test_portfolio_client_list_running_sessions_filters_by_runtime():

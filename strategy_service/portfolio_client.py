@@ -286,6 +286,7 @@ class PortfolioClient:
         error: str = "",
         runtime_id: str = "",
         expected_status: str = "",
+        strict: bool = False,
     ) -> bool:
         """Update session status in core-service. Returns True on success."""
         if not self._stub:
@@ -302,6 +303,8 @@ class PortfolioClient:
             return True
         except Exception:
             logger.warning("UpdateSession failed for session=%s", session_id, exc_info=True)
+            if strict:
+                raise
             return False
 
     def list_running_sessions(self, runtime_id: str = ""):

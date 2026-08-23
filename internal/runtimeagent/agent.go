@@ -2687,8 +2687,83 @@ func (a *Agent) invokeWorkerPlatformCallForGeneration(
 		boundedCall.TimeoutMs = timeout.Milliseconds()
 	}
 	result := a.invokeWorkerPlatformCall(lifecycleCtx, boundedCall)
+	if result != nil && !result.GetOk() {
+		reconcileTimeout := timeout
+		if reconcileTimeout > 500*time.Millisecond {
+			reconcileTimeout = 500 * time.Millisecond
+		}
+		reconcileCtx, cancelReconcile := context.WithTimeout(
+			context.Background(),
+			reconcileTimeout,
+		)
+		result = a.reconcileAmbiguousRunningPublication(
+			reconcileCtx,
+			generation,
+			boundedCall,
+			result,
+		)
+		cancelReconcile()
+	}
 	generation.completePlatformCall()
 	return result
+}
+
+func (a *Agent) reconcileAmbiguousRunningPublication(
+	ctx context.Context,
+	generation *workerGeneration,
+	call *rwv1.PlatformCall,
+	result *rwv1.PlatformCallResult,
+) *rwv1.PlatformCallResult {
+	if generation == nil || call == nil || result == nil || result.GetOk() ||
+		strings.TrimSpace(call.GetMethod()) != "portfolio.UpdateSession" ||
+		call.GetRequest() == nil {
+		return result
+	}
+	var update portfoliov1.UpdateSessionRequest
+	if err := call.GetRequest().UnmarshalTo(&update); err != nil ||
+		strings.TrimSpace(strings.ToLower(update.GetStatus())) != "running" ||
+		strings.TrimSpace(strings.ToLower(update.GetExpectedStatus())) != "pending" ||
+		strings.TrimSpace(update.GetSessionId()) != strings.TrimSpace(generation.sessionID) {
+		return result
+	}
+	generation.mu.Lock()
+	expectedLaunchOperationID := generation.launchOperationID
+	expectedUserID := generation.userID
+	expectedPortfolioID := generation.portfolioID
+	expectedStrategyID := generation.strategyID
+	expectedEnvironment := generation.environment
+	expectedRuntimeID := generation.runtimeID
+	generation.mu.Unlock()
+	if expectedUserID <= 0 {
+		expectedUserID = a.cfg.UserID
+	}
+	var response portfoliov1.GetSessionResponse
+	if err := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
+		SessionId: update.GetSessionId(),
+		UserId:    expectedUserID,
+	}, &response); err != nil {
+		return result
+	}
+	session := response.GetSession()
+	if session == nil || strings.TrimSpace(strings.ToLower(session.GetStatus())) != "running" ||
+		strings.TrimSpace(session.GetSessionId()) != strings.TrimSpace(update.GetSessionId()) ||
+		(expectedUserID > 0 && session.GetUserId() != expectedUserID) ||
+		(expectedPortfolioID > 0 && session.GetPortfolioId() != expectedPortfolioID) ||
+		(expectedStrategyID > 0 && session.GetStrategyId() != expectedStrategyID) ||
+		session.GetEnvironment() != expectedEnvironment ||
+		(expectedRuntimeID != "" && strings.TrimSpace(session.GetRuntimeId()) != expectedRuntimeID) ||
+		(expectedLaunchOperationID != "" && strings.TrimSpace(session.GetLaunchOperationId()) != expectedLaunchOperationID) {
+		return result
+	}
+	packed, err := anypb.New(&portfoliov1.UpdateSessionResponse{})
+	if err != nil {
+		return result
+	}
+	return &rwv1.PlatformCallResult{
+		CallId:   call.GetCallId(),
+		Ok:       true,
+		Response: packed,
+	}
 }
 
 func (a *Agent) HandleRuntimeData(ctx context.Context, frame *cpv1.RuntimeFrame) error {

@@ -420,6 +420,7 @@ class ProxyPortfolioClient:
         error: str = "",
         runtime_id: str = "",
         expected_status: str = "",
+        strict: bool = False,
     ) -> bool:
         try:
             from strategy_service.gen import portfolio_service_pb2
@@ -441,6 +442,8 @@ class ProxyPortfolioClient:
             return True
         except Exception:
             logger.warning("Proxy UpdateSession failed for session=%s", session_id, exc_info=True)
+            if strict:
+                raise
             return False
 
     def list_running_sessions(self, runtime_id: str = ""):
