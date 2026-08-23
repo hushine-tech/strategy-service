@@ -105,6 +105,11 @@ class PortfolioServiceStub:
                 request_serializer=portfolio__service__pb2.PreflightStrategySessionRequest.SerializeToString,
                 response_deserializer=portfolio__service__pb2.PreflightStrategySessionResponse.FromString,
                 _registered_method=True)
+        self.CommitStrategySessionStart = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/CommitStrategySessionStart',
+                request_serializer=portfolio__service__pb2.CommitStrategySessionStartRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.CommitStrategySessionStartResponse.FromString,
+                _registered_method=True)
         self.GetProductCapabilities = channel.unary_unary(
                 '/portfolio.v1.PortfolioService/GetProductCapabilities',
                 request_serializer=portfolio__service__pb2.GetProductCapabilitiesRequest.SerializeToString,
@@ -383,7 +388,18 @@ class PortfolioServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def PreflightStrategySession(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """PreflightStrategySession is strictly read-only. It resolves routes and
+        symbols, reads Spot and Futures account facts, and never acquires target
+        admission, changes exchange configuration, or creates a Session.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CommitStrategySessionStart(self, request, context):
+        """CommitStrategySessionStart owns target admission, Futures leverage
+        apply/readback/rollback, and atomic pending Session creation.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -732,6 +748,11 @@ def add_PortfolioServiceServicer_to_server(servicer, server):
                     servicer.PreflightStrategySession,
                     request_deserializer=portfolio__service__pb2.PreflightStrategySessionRequest.FromString,
                     response_serializer=portfolio__service__pb2.PreflightStrategySessionResponse.SerializeToString,
+            ),
+            'CommitStrategySessionStart': grpc.unary_unary_rpc_method_handler(
+                    servicer.CommitStrategySessionStart,
+                    request_deserializer=portfolio__service__pb2.CommitStrategySessionStartRequest.FromString,
+                    response_serializer=portfolio__service__pb2.CommitStrategySessionStartResponse.SerializeToString,
             ),
             'GetProductCapabilities': grpc.unary_unary_rpc_method_handler(
                     servicer.GetProductCapabilities,
@@ -1298,6 +1319,33 @@ class PortfolioService:
             '/portfolio.v1.PortfolioService/PreflightStrategySession',
             portfolio__service__pb2.PreflightStrategySessionRequest.SerializeToString,
             portfolio__service__pb2.PreflightStrategySessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CommitStrategySessionStart(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/CommitStrategySessionStart',
+            portfolio__service__pb2.CommitStrategySessionStartRequest.SerializeToString,
+            portfolio__service__pb2.CommitStrategySessionStartResponse.FromString,
             options,
             channel_credentials,
             insecure,

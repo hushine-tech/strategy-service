@@ -33,6 +33,7 @@ const (
 	PortfolioService_ReleaseVenue_FullMethodName                      = "/portfolio.v1.PortfolioService/ReleaseVenue"
 	PortfolioService_ArchiveVenue_FullMethodName                      = "/portfolio.v1.PortfolioService/ArchiveVenue"
 	PortfolioService_PreflightStrategySession_FullMethodName          = "/portfolio.v1.PortfolioService/PreflightStrategySession"
+	PortfolioService_CommitStrategySessionStart_FullMethodName        = "/portfolio.v1.PortfolioService/CommitStrategySessionStart"
 	PortfolioService_GetProductCapabilities_FullMethodName            = "/portfolio.v1.PortfolioService/GetProductCapabilities"
 	PortfolioService_GetPortfolioSnapshot_FullMethodName              = "/portfolio.v1.PortfolioService/GetPortfolioSnapshot"
 	PortfolioService_UpdatePortfolioSnapshot_FullMethodName           = "/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot"
@@ -99,7 +100,13 @@ type PortfolioServiceClient interface {
 	BindVenue(ctx context.Context, in *BindVenueRequest, opts ...grpc.CallOption) (*BindVenueResponse, error)
 	ReleaseVenue(ctx context.Context, in *ReleaseVenueRequest, opts ...grpc.CallOption) (*ReleaseVenueResponse, error)
 	ArchiveVenue(ctx context.Context, in *ArchiveVenueRequest, opts ...grpc.CallOption) (*ArchiveVenueResponse, error)
+	// PreflightStrategySession is strictly read-only. It resolves routes and
+	// symbols, reads Spot and Futures account facts, and never acquires target
+	// admission, changes exchange configuration, or creates a Session.
 	PreflightStrategySession(ctx context.Context, in *PreflightStrategySessionRequest, opts ...grpc.CallOption) (*PreflightStrategySessionResponse, error)
+	// CommitStrategySessionStart owns target admission, Futures leverage
+	// apply/readback/rollback, and atomic pending Session creation.
+	CommitStrategySessionStart(ctx context.Context, in *CommitStrategySessionStartRequest, opts ...grpc.CallOption) (*CommitStrategySessionStartResponse, error)
 	GetProductCapabilities(ctx context.Context, in *GetProductCapabilitiesRequest, opts ...grpc.CallOption) (*GetProductCapabilitiesResponse, error)
 	// Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
 	// through the exchange capability registry and returns portfolio-level summary
@@ -323,6 +330,16 @@ func (c *portfolioServiceClient) PreflightStrategySession(ctx context.Context, i
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PreflightStrategySessionResponse)
 	err := c.cc.Invoke(ctx, PortfolioService_PreflightStrategySession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *portfolioServiceClient) CommitStrategySessionStart(ctx context.Context, in *CommitStrategySessionStartRequest, opts ...grpc.CallOption) (*CommitStrategySessionStartResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommitStrategySessionStartResponse)
+	err := c.cc.Invoke(ctx, PortfolioService_CommitStrategySessionStart_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -726,7 +743,13 @@ type PortfolioServiceServer interface {
 	BindVenue(context.Context, *BindVenueRequest) (*BindVenueResponse, error)
 	ReleaseVenue(context.Context, *ReleaseVenueRequest) (*ReleaseVenueResponse, error)
 	ArchiveVenue(context.Context, *ArchiveVenueRequest) (*ArchiveVenueResponse, error)
+	// PreflightStrategySession is strictly read-only. It resolves routes and
+	// symbols, reads Spot and Futures account facts, and never acquires target
+	// admission, changes exchange configuration, or creates a Session.
 	PreflightStrategySession(context.Context, *PreflightStrategySessionRequest) (*PreflightStrategySessionResponse, error)
+	// CommitStrategySessionStart owns target admission, Futures leverage
+	// apply/readback/rollback, and atomic pending Session creation.
+	CommitStrategySessionStart(context.Context, *CommitStrategySessionStartRequest) (*CommitStrategySessionStartResponse, error)
 	GetProductCapabilities(context.Context, *GetProductCapabilitiesRequest) (*GetProductCapabilitiesResponse, error)
 	// Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
 	// through the exchange capability registry and returns portfolio-level summary
@@ -857,6 +880,9 @@ func (UnimplementedPortfolioServiceServer) ArchiveVenue(context.Context, *Archiv
 }
 func (UnimplementedPortfolioServiceServer) PreflightStrategySession(context.Context, *PreflightStrategySessionRequest) (*PreflightStrategySessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PreflightStrategySession not implemented")
+}
+func (UnimplementedPortfolioServiceServer) CommitStrategySessionStart(context.Context, *CommitStrategySessionStartRequest) (*CommitStrategySessionStartResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CommitStrategySessionStart not implemented")
 }
 func (UnimplementedPortfolioServiceServer) GetProductCapabilities(context.Context, *GetProductCapabilitiesRequest) (*GetProductCapabilitiesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetProductCapabilities not implemented")
@@ -1238,6 +1264,24 @@ func _PortfolioService_PreflightStrategySession_Handler(srv interface{}, ctx con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PortfolioServiceServer).PreflightStrategySession(ctx, req.(*PreflightStrategySessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PortfolioService_CommitStrategySessionStart_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitStrategySessionStartRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PortfolioServiceServer).CommitStrategySessionStart(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PortfolioService_CommitStrategySessionStart_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PortfolioServiceServer).CommitStrategySessionStart(ctx, req.(*CommitStrategySessionStartRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1970,6 +2014,10 @@ var PortfolioService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PreflightStrategySession",
 			Handler:    _PortfolioService_PreflightStrategySession_Handler,
+		},
+		{
+			MethodName: "CommitStrategySessionStart",
+			Handler:    _PortfolioService_CommitStrategySessionStart_Handler,
 		},
 		{
 			MethodName: "GetProductCapabilities",

@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StrategyService_RunStrategy_FullMethodName            = "/strategy.v1.StrategyService/RunStrategy"
-	StrategyService_PreviewRunStrategy_FullMethodName     = "/strategy.v1.StrategyService/PreviewRunStrategy"
-	StrategyService_ValidateStrategySource_FullMethodName = "/strategy.v1.StrategyService/ValidateStrategySource"
-	StrategyService_GetStrategyStatus_FullMethodName      = "/strategy.v1.StrategyService/GetStrategyStatus"
-	StrategyService_StopStrategy_FullMethodName           = "/strategy.v1.StrategyService/StopStrategy"
+	StrategyService_RunStrategy_FullMethodName             = "/strategy.v1.StrategyService/RunStrategy"
+	StrategyService_PrepareRunStrategyStart_FullMethodName = "/strategy.v1.StrategyService/PrepareRunStrategyStart"
+	StrategyService_PreviewRunStrategy_FullMethodName      = "/strategy.v1.StrategyService/PreviewRunStrategy"
+	StrategyService_ValidateStrategySource_FullMethodName  = "/strategy.v1.StrategyService/ValidateStrategySource"
+	StrategyService_GetStrategyStatus_FullMethodName       = "/strategy.v1.StrategyService/GetStrategyStatus"
+	StrategyService_StopStrategy_FullMethodName            = "/strategy.v1.StrategyService/StopStrategy"
 )
 
 // StrategyServiceClient is the client API for StrategyService service.
@@ -37,6 +38,10 @@ type StrategyServiceClient interface {
 	//	environment=1 (demo)     -> RuntimeChannel live K-line and order-update frames
 	//	environment=2 (live)     -> RuntimeChannel, rollout-guarded and fail-closed
 	RunStrategy(ctx context.Context, in *RunStrategyRequest, opts ...grpc.CallOption) (*RunStrategyResponse, error)
+	// PrepareRunStrategyStart executes a one-shot, read-only preparation worker.
+	// It resolves an immutable launch manifest but does not create a Session or
+	// execute user strategy callbacks.
+	PrepareRunStrategyStart(ctx context.Context, in *PrepareRunStrategyStartRequest, opts ...grpc.CallOption) (*PreparedRunStrategyStart, error)
 	// PreviewRunStrategy runs the same profile-specific preflight as RunStrategy
 	// but does NOT create a session, persist state, or start a background worker.
 	// Gateway / UI surfaces call this to learn what will happen when the user
@@ -65,6 +70,16 @@ func (c *strategyServiceClient) RunStrategy(ctx context.Context, in *RunStrategy
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunStrategyResponse)
 	err := c.cc.Invoke(ctx, StrategyService_RunStrategy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *strategyServiceClient) PrepareRunStrategyStart(ctx context.Context, in *PrepareRunStrategyStartRequest, opts ...grpc.CallOption) (*PreparedRunStrategyStart, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PreparedRunStrategyStart)
+	err := c.cc.Invoke(ctx, StrategyService_PrepareRunStrategyStart_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +137,10 @@ type StrategyServiceServer interface {
 	//	environment=1 (demo)     -> RuntimeChannel live K-line and order-update frames
 	//	environment=2 (live)     -> RuntimeChannel, rollout-guarded and fail-closed
 	RunStrategy(context.Context, *RunStrategyRequest) (*RunStrategyResponse, error)
+	// PrepareRunStrategyStart executes a one-shot, read-only preparation worker.
+	// It resolves an immutable launch manifest but does not create a Session or
+	// execute user strategy callbacks.
+	PrepareRunStrategyStart(context.Context, *PrepareRunStrategyStartRequest) (*PreparedRunStrategyStart, error)
 	// PreviewRunStrategy runs the same profile-specific preflight as RunStrategy
 	// but does NOT create a session, persist state, or start a background worker.
 	// Gateway / UI surfaces call this to learn what will happen when the user
@@ -148,6 +167,9 @@ type UnimplementedStrategyServiceServer struct{}
 
 func (UnimplementedStrategyServiceServer) RunStrategy(context.Context, *RunStrategyRequest) (*RunStrategyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RunStrategy not implemented")
+}
+func (UnimplementedStrategyServiceServer) PrepareRunStrategyStart(context.Context, *PrepareRunStrategyStartRequest) (*PreparedRunStrategyStart, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareRunStrategyStart not implemented")
 }
 func (UnimplementedStrategyServiceServer) PreviewRunStrategy(context.Context, *PreviewRunStrategyRequest) (*PreviewRunStrategyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PreviewRunStrategy not implemented")
@@ -196,6 +218,24 @@ func _StrategyService_RunStrategy_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(StrategyServiceServer).RunStrategy(ctx, req.(*RunStrategyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StrategyService_PrepareRunStrategyStart_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareRunStrategyStartRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StrategyServiceServer).PrepareRunStrategyStart(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StrategyService_PrepareRunStrategyStart_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StrategyServiceServer).PrepareRunStrategyStart(ctx, req.(*PrepareRunStrategyStartRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -282,6 +322,10 @@ var StrategyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunStrategy",
 			Handler:    _StrategyService_RunStrategy_Handler,
+		},
+		{
+			MethodName: "PrepareRunStrategyStart",
+			Handler:    _StrategyService_PrepareRunStrategyStart_Handler,
 		},
 		{
 			MethodName: "PreviewRunStrategy",

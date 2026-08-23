@@ -39,6 +39,11 @@ class StrategyServiceStub:
                 request_serializer=strategy__service__pb2.RunStrategyRequest.SerializeToString,
                 response_deserializer=strategy__service__pb2.RunStrategyResponse.FromString,
                 _registered_method=True)
+        self.PrepareRunStrategyStart = channel.unary_unary(
+                '/strategy.v1.StrategyService/PrepareRunStrategyStart',
+                request_serializer=strategy__service__pb2.PrepareRunStrategyStartRequest.SerializeToString,
+                response_deserializer=strategy__service__pb2.PreparedRunStrategyStart.FromString,
+                _registered_method=True)
         self.PreviewRunStrategy = channel.unary_unary(
                 '/strategy.v1.StrategyService/PreviewRunStrategy',
                 request_serializer=strategy__service__pb2.PreviewRunStrategyRequest.SerializeToString,
@@ -70,6 +75,15 @@ class StrategyServiceServicer:
         environment=0 (backtest) -> paged historical reads through the platform proxy
         environment=1 (demo)     -> RuntimeChannel live K-line and order-update frames
         environment=2 (live)     -> RuntimeChannel, rollout-guarded and fail-closed
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PrepareRunStrategyStart(self, request, context):
+        """PrepareRunStrategyStart executes a one-shot, read-only preparation worker.
+        It resolves an immutable launch manifest but does not create a Session or
+        execute user strategy callbacks.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -116,6 +130,11 @@ def add_StrategyServiceServicer_to_server(servicer, server):
                     servicer.RunStrategy,
                     request_deserializer=strategy__service__pb2.RunStrategyRequest.FromString,
                     response_serializer=strategy__service__pb2.RunStrategyResponse.SerializeToString,
+            ),
+            'PrepareRunStrategyStart': grpc.unary_unary_rpc_method_handler(
+                    servicer.PrepareRunStrategyStart,
+                    request_deserializer=strategy__service__pb2.PrepareRunStrategyStartRequest.FromString,
+                    response_serializer=strategy__service__pb2.PreparedRunStrategyStart.SerializeToString,
             ),
             'PreviewRunStrategy': grpc.unary_unary_rpc_method_handler(
                     servicer.PreviewRunStrategy,
@@ -165,6 +184,33 @@ class StrategyService:
             '/strategy.v1.StrategyService/RunStrategy',
             strategy__service__pb2.RunStrategyRequest.SerializeToString,
             strategy__service__pb2.RunStrategyResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PrepareRunStrategyStart(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/strategy.v1.StrategyService/PrepareRunStrategyStart',
+            strategy__service__pb2.PrepareRunStrategyStartRequest.SerializeToString,
+            strategy__service__pb2.PreparedRunStrategyStart.FromString,
             options,
             channel_credentials,
             insecure,

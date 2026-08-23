@@ -587,8 +587,10 @@ type RunStrategyRequest struct {
 	// Ratio, not percent. 0 means "not provided"; runtime falls back to
 	// strategy declaration or platform default.
 	MaxLossClosePct float64 `protobuf:"fixed64,102,opt,name=max_loss_close_pct,json=maxLossClosePct,proto3" json:"max_loss_close_pct,omitempty"`
-	// Session-level leverage used by runtime/order risk checks.
-	// 0 means "not provided"; runtime falls back to platform default 1x.
+	// Deprecated session-wide leverage retained for wire compatibility. Target
+	// leverage is strategy-owned and this value is ignored.
+	//
+	// Deprecated: Marked as deprecated in strategy_service.proto.
 	Leverage      float64 `protobuf:"fixed64,103,opt,name=leverage,proto3" json:"leverage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -680,6 +682,7 @@ func (x *RunStrategyRequest) GetMaxLossClosePct() float64 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in strategy_service.proto.
 func (x *RunStrategyRequest) GetLeverage() float64 {
 	if x != nil {
 		return x.Leverage
@@ -688,10 +691,15 @@ func (x *RunStrategyRequest) GetLeverage() float64 {
 }
 
 type RunStrategyResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState          `protogen:"open.v1"`
+	SessionId      string                          `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Ok             bool                            `protobuf:"varint,2,opt,name=ok,proto3" json:"ok,omitempty"`
+	Failures       []*PreflightFailureProto        `protobuf:"bytes,3,rep,name=failures,proto3" json:"failures,omitempty"`
+	TargetResults  []*StrategyLeverageTargetResult `protobuf:"bytes,4,rep,name=target_results,json=targetResults,proto3" json:"target_results,omitempty"`
+	Code           string                          `protobuf:"bytes,5,opt,name=code,proto3" json:"code,omitempty"`
+	RollbackFailed bool                            `protobuf:"varint,6,opt,name=rollback_failed,json=rollbackFailed,proto3" json:"rollback_failed,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RunStrategyResponse) Reset() {
@@ -729,6 +737,41 @@ func (x *RunStrategyResponse) GetSessionId() string {
 		return x.SessionId
 	}
 	return ""
+}
+
+func (x *RunStrategyResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *RunStrategyResponse) GetFailures() []*PreflightFailureProto {
+	if x != nil {
+		return x.Failures
+	}
+	return nil
+}
+
+func (x *RunStrategyResponse) GetTargetResults() []*StrategyLeverageTargetResult {
+	if x != nil {
+		return x.TargetResults
+	}
+	return nil
+}
+
+func (x *RunStrategyResponse) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+func (x *RunStrategyResponse) GetRollbackFailed() bool {
+	if x != nil {
+		return x.RollbackFailed
+	}
+	return false
 }
 
 type GetStrategyStatusRequest struct {
@@ -1106,8 +1149,10 @@ type PreviewRunStrategyRequest struct {
 	// Ratio, not percent. 0 means "not provided"; runtime falls back to
 	// strategy declaration or platform default.
 	MaxLossClosePct float64 `protobuf:"fixed64,102,opt,name=max_loss_close_pct,json=maxLossClosePct,proto3" json:"max_loss_close_pct,omitempty"`
-	// Session-level leverage preview. 0 means "not provided"; runtime falls
-	// back to platform default 1x.
+	// Deprecated session-wide preview input retained for wire compatibility.
+	// Target leverage is strategy-owned and this value is ignored.
+	//
+	// Deprecated: Marked as deprecated in strategy_service.proto.
 	Leverage      float64 `protobuf:"fixed64,103,opt,name=leverage,proto3" json:"leverage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1192,6 +1237,7 @@ func (x *PreviewRunStrategyRequest) GetMaxLossClosePct() float64 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in strategy_service.proto.
 func (x *PreviewRunStrategyRequest) GetLeverage() float64 {
 	if x != nil {
 		return x.Leverage
@@ -1525,10 +1571,15 @@ type RiskControls struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	MaxLossClosePct    float64                `protobuf:"fixed64,1,opt,name=max_loss_close_pct,json=maxLossClosePct,proto3" json:"max_loss_close_pct,omitempty"`
 	MaxLossCloseSource string                 `protobuf:"bytes,2,opt,name=max_loss_close_source,json=maxLossCloseSource,proto3" json:"max_loss_close_source,omitempty"` // strategy / request_default / platform_default
-	Leverage           float64                `protobuf:"fixed64,3,opt,name=leverage,proto3" json:"leverage,omitempty"`
-	LeverageSource     string                 `protobuf:"bytes,4,opt,name=leverage_source,json=leverageSource,proto3" json:"leverage_source,omitempty"` // request_default / platform_default
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Deprecated session-wide compatibility fields. New code consumes the
+	// effective/source facts on each StrategyOrderTargetBinding.
+	//
+	// Deprecated: Marked as deprecated in strategy_service.proto.
+	Leverage float64 `protobuf:"fixed64,3,opt,name=leverage,proto3" json:"leverage,omitempty"`
+	// Deprecated: Marked as deprecated in strategy_service.proto.
+	LeverageSource string `protobuf:"bytes,4,opt,name=leverage_source,json=leverageSource,proto3" json:"leverage_source,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RiskControls) Reset() {
@@ -1575,6 +1626,7 @@ func (x *RiskControls) GetMaxLossCloseSource() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in strategy_service.proto.
 func (x *RiskControls) GetLeverage() float64 {
 	if x != nil {
 		return x.Leverage
@@ -1582,6 +1634,7 @@ func (x *RiskControls) GetLeverage() float64 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in strategy_service.proto.
 func (x *RiskControls) GetLeverageSource() string {
 	if x != nil {
 		return x.LeverageSource
@@ -1590,12 +1643,22 @@ func (x *RiskControls) GetLeverageSource() string {
 }
 
 type StrategyOrderTargetBinding struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Exchange      string                 `protobuf:"bytes,1,opt,name=exchange,proto3" json:"exchange,omitempty"`
-	Market        string                 `protobuf:"bytes,2,opt,name=market,proto3" json:"market,omitempty"`
-	Symbol        string                 `protobuf:"bytes,3,opt,name=symbol,proto3" json:"symbol,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Exchange          string                 `protobuf:"bytes,1,opt,name=exchange,proto3" json:"exchange,omitempty"`
+	Market            string                 `protobuf:"bytes,2,opt,name=market,proto3" json:"market,omitempty"`
+	Symbol            string                 `protobuf:"bytes,3,opt,name=symbol,proto3" json:"symbol,omitempty"`
+	EffectiveLeverage uint32                 `protobuf:"varint,4,opt,name=effective_leverage,json=effectiveLeverage,proto3" json:"effective_leverage,omitempty"`
+	// order_target / strategy_default / platform_default.
+	LeverageSource string `protobuf:"bytes,5,opt,name=leverage_source,json=leverageSource,proto3" json:"leverage_source,omitempty"`
+	// Read-only preview value; absent when not applicable or unavailable.
+	CurrentLeverage *uint32 `protobuf:"varint,6,opt,name=current_leverage,json=currentLeverage,proto3,oneof" json:"current_leverage,omitempty"`
+	ChangeRequired  bool    `protobuf:"varint,7,opt,name=change_required,json=changeRequired,proto3" json:"change_required,omitempty"`
+	VenueId         int64   `protobuf:"varint,8,opt,name=venue_id,json=venueId,proto3" json:"venue_id,omitempty"`
+	// Preview status: unchanged, change_required, read_failed, unsupported,
+	// not_applicable, or unknown.
+	LeverageStatus string `protobuf:"bytes,9,opt,name=leverage_status,json=leverageStatus,proto3" json:"leverage_status,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StrategyOrderTargetBinding) Reset() {
@@ -1645,6 +1708,48 @@ func (x *StrategyOrderTargetBinding) GetMarket() string {
 func (x *StrategyOrderTargetBinding) GetSymbol() string {
 	if x != nil {
 		return x.Symbol
+	}
+	return ""
+}
+
+func (x *StrategyOrderTargetBinding) GetEffectiveLeverage() uint32 {
+	if x != nil {
+		return x.EffectiveLeverage
+	}
+	return 0
+}
+
+func (x *StrategyOrderTargetBinding) GetLeverageSource() string {
+	if x != nil {
+		return x.LeverageSource
+	}
+	return ""
+}
+
+func (x *StrategyOrderTargetBinding) GetCurrentLeverage() uint32 {
+	if x != nil && x.CurrentLeverage != nil {
+		return *x.CurrentLeverage
+	}
+	return 0
+}
+
+func (x *StrategyOrderTargetBinding) GetChangeRequired() bool {
+	if x != nil {
+		return x.ChangeRequired
+	}
+	return false
+}
+
+func (x *StrategyOrderTargetBinding) GetVenueId() int64 {
+	if x != nil {
+		return x.VenueId
+	}
+	return 0
+}
+
+func (x *StrategyOrderTargetBinding) GetLeverageStatus() string {
+	if x != nil {
+		return x.LeverageStatus
 	}
 	return ""
 }
@@ -1785,6 +1890,780 @@ func (x *LiveStreamBinding) GetInterval() string {
 	return ""
 }
 
+type PrepareRunStrategyStartRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	RunRequest        *RunStrategyRequest    `protobuf:"bytes,1,opt,name=run_request,json=runRequest,proto3" json:"run_request,omitempty"`
+	SessionId         string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	LaunchOperationId string                 `protobuf:"bytes,3,opt,name=launch_operation_id,json=launchOperationId,proto3" json:"launch_operation_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *PrepareRunStrategyStartRequest) Reset() {
+	*x = PrepareRunStrategyStartRequest{}
+	mi := &file_strategy_service_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareRunStrategyStartRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareRunStrategyStartRequest) ProtoMessage() {}
+
+func (x *PrepareRunStrategyStartRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_strategy_service_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareRunStrategyStartRequest.ProtoReflect.Descriptor instead.
+func (*PrepareRunStrategyStartRequest) Descriptor() ([]byte, []int) {
+	return file_strategy_service_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *PrepareRunStrategyStartRequest) GetRunRequest() *RunStrategyRequest {
+	if x != nil {
+		return x.RunRequest
+	}
+	return nil
+}
+
+func (x *PrepareRunStrategyStartRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *PrepareRunStrategyStartRequest) GetLaunchOperationId() string {
+	if x != nil {
+		return x.LaunchOperationId
+	}
+	return ""
+}
+
+// Canonical pending Session metadata. The runtime-agent can map this directly
+// to portfolio.v1.SaveSessionRequest without reloading or parsing Python.
+type StrategySessionMetadata struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SessionId      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	PortfolioId    int64                  `protobuf:"varint,2,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
+	StrategyId     int64                  `protobuf:"varint,3,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
+	Environment    int32                  `protobuf:"varint,4,opt,name=environment,proto3" json:"environment,omitempty"`
+	Interval       string                 `protobuf:"bytes,5,opt,name=interval,proto3" json:"interval,omitempty"`
+	StartTimeMs    int64                  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"`
+	EndTimeMs      int64                  `protobuf:"varint,7,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
+	UserId         int64                  `protobuf:"varint,8,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RuntimeId      string                 `protobuf:"bytes,9,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	RuntimeSource  string                 `protobuf:"bytes,10,opt,name=runtime_source,json=runtimeSource,proto3" json:"runtime_source,omitempty"`
+	RuntimeName    string                 `protobuf:"bytes,11,opt,name=runtime_name,json=runtimeName,proto3" json:"runtime_name,omitempty"`
+	SessionType    string                 `protobuf:"bytes,12,opt,name=session_type,json=sessionType,proto3" json:"session_type,omitempty"`
+	RuntimeVersion string                 `protobuf:"bytes,13,opt,name=runtime_version,json=runtimeVersion,proto3" json:"runtime_version,omitempty"`
+	SessionName    string                 `protobuf:"bytes,14,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	InitialStatus  string                 `protobuf:"bytes,15,opt,name=initial_status,json=initialStatus,proto3" json:"initial_status,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *StrategySessionMetadata) Reset() {
+	*x = StrategySessionMetadata{}
+	mi := &file_strategy_service_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StrategySessionMetadata) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StrategySessionMetadata) ProtoMessage() {}
+
+func (x *StrategySessionMetadata) ProtoReflect() protoreflect.Message {
+	mi := &file_strategy_service_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StrategySessionMetadata.ProtoReflect.Descriptor instead.
+func (*StrategySessionMetadata) Descriptor() ([]byte, []int) {
+	return file_strategy_service_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *StrategySessionMetadata) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *StrategySessionMetadata) GetPortfolioId() int64 {
+	if x != nil {
+		return x.PortfolioId
+	}
+	return 0
+}
+
+func (x *StrategySessionMetadata) GetStrategyId() int64 {
+	if x != nil {
+		return x.StrategyId
+	}
+	return 0
+}
+
+func (x *StrategySessionMetadata) GetEnvironment() int32 {
+	if x != nil {
+		return x.Environment
+	}
+	return 0
+}
+
+func (x *StrategySessionMetadata) GetInterval() string {
+	if x != nil {
+		return x.Interval
+	}
+	return ""
+}
+
+func (x *StrategySessionMetadata) GetStartTimeMs() int64 {
+	if x != nil {
+		return x.StartTimeMs
+	}
+	return 0
+}
+
+func (x *StrategySessionMetadata) GetEndTimeMs() int64 {
+	if x != nil {
+		return x.EndTimeMs
+	}
+	return 0
+}
+
+func (x *StrategySessionMetadata) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *StrategySessionMetadata) GetRuntimeId() string {
+	if x != nil {
+		return x.RuntimeId
+	}
+	return ""
+}
+
+func (x *StrategySessionMetadata) GetRuntimeSource() string {
+	if x != nil {
+		return x.RuntimeSource
+	}
+	return ""
+}
+
+func (x *StrategySessionMetadata) GetRuntimeName() string {
+	if x != nil {
+		return x.RuntimeName
+	}
+	return ""
+}
+
+func (x *StrategySessionMetadata) GetSessionType() string {
+	if x != nil {
+		return x.SessionType
+	}
+	return ""
+}
+
+func (x *StrategySessionMetadata) GetRuntimeVersion() string {
+	if x != nil {
+		return x.RuntimeVersion
+	}
+	return ""
+}
+
+func (x *StrategySessionMetadata) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *StrategySessionMetadata) GetInitialStatus() string {
+	if x != nil {
+		return x.InitialStatus
+	}
+	return ""
+}
+
+type StrategyRequiredSymbolBinding struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Exchange           string                 `protobuf:"bytes,1,opt,name=exchange,proto3" json:"exchange,omitempty"`
+	Market             string                 `protobuf:"bytes,2,opt,name=market,proto3" json:"market,omitempty"`
+	Symbol             string                 `protobuf:"bytes,3,opt,name=symbol,proto3" json:"symbol,omitempty"`
+	OrderTarget        bool                   `protobuf:"varint,4,opt,name=order_target,json=orderTarget,proto3" json:"order_target,omitempty"`
+	RequiredOrderTypes []string               `protobuf:"bytes,5,rep,name=required_order_types,json=requiredOrderTypes,proto3" json:"required_order_types,omitempty"`
+	EffectiveLeverage  uint32                 `protobuf:"varint,6,opt,name=effective_leverage,json=effectiveLeverage,proto3" json:"effective_leverage,omitempty"`
+	LeverageSource     string                 `protobuf:"bytes,7,opt,name=leverage_source,json=leverageSource,proto3" json:"leverage_source,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *StrategyRequiredSymbolBinding) Reset() {
+	*x = StrategyRequiredSymbolBinding{}
+	mi := &file_strategy_service_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StrategyRequiredSymbolBinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StrategyRequiredSymbolBinding) ProtoMessage() {}
+
+func (x *StrategyRequiredSymbolBinding) ProtoReflect() protoreflect.Message {
+	mi := &file_strategy_service_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StrategyRequiredSymbolBinding.ProtoReflect.Descriptor instead.
+func (*StrategyRequiredSymbolBinding) Descriptor() ([]byte, []int) {
+	return file_strategy_service_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *StrategyRequiredSymbolBinding) GetExchange() string {
+	if x != nil {
+		return x.Exchange
+	}
+	return ""
+}
+
+func (x *StrategyRequiredSymbolBinding) GetMarket() string {
+	if x != nil {
+		return x.Market
+	}
+	return ""
+}
+
+func (x *StrategyRequiredSymbolBinding) GetSymbol() string {
+	if x != nil {
+		return x.Symbol
+	}
+	return ""
+}
+
+func (x *StrategyRequiredSymbolBinding) GetOrderTarget() bool {
+	if x != nil {
+		return x.OrderTarget
+	}
+	return false
+}
+
+func (x *StrategyRequiredSymbolBinding) GetRequiredOrderTypes() []string {
+	if x != nil {
+		return x.RequiredOrderTypes
+	}
+	return nil
+}
+
+func (x *StrategyRequiredSymbolBinding) GetEffectiveLeverage() uint32 {
+	if x != nil {
+		return x.EffectiveLeverage
+	}
+	return 0
+}
+
+func (x *StrategyRequiredSymbolBinding) GetLeverageSource() string {
+	if x != nil {
+		return x.LeverageSource
+	}
+	return ""
+}
+
+// Complete immutable output of one-shot preparation. It contains every fact
+// needed to construct portfolio.v1.CommitStrategySessionStartRequest without
+// parsing strategy source or recomputing target leverage.
+type PreparedRunStrategyStart struct {
+	state                protoimpl.MessageState           `protogen:"open.v1"`
+	Ok                   bool                             `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Session              *StrategySessionMetadata         `protobuf:"bytes,2,opt,name=session,proto3" json:"session,omitempty"`
+	LaunchOperationId    string                           `protobuf:"bytes,3,opt,name=launch_operation_id,json=launchOperationId,proto3" json:"launch_operation_id,omitempty"`
+	StrategySourceSha256 string                           `protobuf:"bytes,4,opt,name=strategy_source_sha256,json=strategySourceSha256,proto3" json:"strategy_source_sha256,omitempty"`
+	DeclaredInputs       []*StrategyInputDeclaration      `protobuf:"bytes,5,rep,name=declared_inputs,json=declaredInputs,proto3" json:"declared_inputs,omitempty"`
+	DeclaredOrderTargets []*StrategyOrderTargetBinding    `protobuf:"bytes,6,rep,name=declared_order_targets,json=declaredOrderTargets,proto3" json:"declared_order_targets,omitempty"`
+	RequiredRoutes       []*StrategyRouteBinding          `protobuf:"bytes,7,rep,name=required_routes,json=requiredRoutes,proto3" json:"required_routes,omitempty"`
+	RequiredSymbols      []*StrategyRequiredSymbolBinding `protobuf:"bytes,8,rep,name=required_symbols,json=requiredSymbols,proto3" json:"required_symbols,omitempty"`
+	Preflight            *PreviewRunStrategyResponse      `protobuf:"bytes,9,opt,name=preflight,proto3" json:"preflight,omitempty"`
+	RiskControls         *RiskControls                    `protobuf:"bytes,10,opt,name=risk_controls,json=riskControls,proto3" json:"risk_controls,omitempty"`
+	Failures             []*PreflightFailureProto         `protobuf:"bytes,11,rep,name=failures,proto3" json:"failures,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *PreparedRunStrategyStart) Reset() {
+	*x = PreparedRunStrategyStart{}
+	mi := &file_strategy_service_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PreparedRunStrategyStart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PreparedRunStrategyStart) ProtoMessage() {}
+
+func (x *PreparedRunStrategyStart) ProtoReflect() protoreflect.Message {
+	mi := &file_strategy_service_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PreparedRunStrategyStart.ProtoReflect.Descriptor instead.
+func (*PreparedRunStrategyStart) Descriptor() ([]byte, []int) {
+	return file_strategy_service_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *PreparedRunStrategyStart) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *PreparedRunStrategyStart) GetSession() *StrategySessionMetadata {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+func (x *PreparedRunStrategyStart) GetLaunchOperationId() string {
+	if x != nil {
+		return x.LaunchOperationId
+	}
+	return ""
+}
+
+func (x *PreparedRunStrategyStart) GetStrategySourceSha256() string {
+	if x != nil {
+		return x.StrategySourceSha256
+	}
+	return ""
+}
+
+func (x *PreparedRunStrategyStart) GetDeclaredInputs() []*StrategyInputDeclaration {
+	if x != nil {
+		return x.DeclaredInputs
+	}
+	return nil
+}
+
+func (x *PreparedRunStrategyStart) GetDeclaredOrderTargets() []*StrategyOrderTargetBinding {
+	if x != nil {
+		return x.DeclaredOrderTargets
+	}
+	return nil
+}
+
+func (x *PreparedRunStrategyStart) GetRequiredRoutes() []*StrategyRouteBinding {
+	if x != nil {
+		return x.RequiredRoutes
+	}
+	return nil
+}
+
+func (x *PreparedRunStrategyStart) GetRequiredSymbols() []*StrategyRequiredSymbolBinding {
+	if x != nil {
+		return x.RequiredSymbols
+	}
+	return nil
+}
+
+func (x *PreparedRunStrategyStart) GetPreflight() *PreviewRunStrategyResponse {
+	if x != nil {
+		return x.Preflight
+	}
+	return nil
+}
+
+func (x *PreparedRunStrategyStart) GetRiskControls() *RiskControls {
+	if x != nil {
+		return x.RiskControls
+	}
+	return nil
+}
+
+func (x *PreparedRunStrategyStart) GetFailures() []*PreflightFailureProto {
+	if x != nil {
+		return x.Failures
+	}
+	return nil
+}
+
+// Confirmed target fact safe for a final strategy worker. It deliberately has
+// no credential material, fingerprint, Venue secret, or platform endpoint.
+type StrategySessionTargetLeverageFact struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	VenueId           int64                  `protobuf:"varint,1,opt,name=venue_id,json=venueId,proto3" json:"venue_id,omitempty"`
+	Exchange          string                 `protobuf:"bytes,2,opt,name=exchange,proto3" json:"exchange,omitempty"`
+	Environment       int32                  `protobuf:"varint,3,opt,name=environment,proto3" json:"environment,omitempty"`
+	Market            string                 `protobuf:"bytes,4,opt,name=market,proto3" json:"market,omitempty"`
+	Symbol            string                 `protobuf:"bytes,5,opt,name=symbol,proto3" json:"symbol,omitempty"`
+	EffectiveLeverage uint32                 `protobuf:"varint,6,opt,name=effective_leverage,json=effectiveLeverage,proto3" json:"effective_leverage,omitempty"`
+	LeverageSource    string                 `protobuf:"bytes,7,opt,name=leverage_source,json=leverageSource,proto3" json:"leverage_source,omitempty"`
+	PreviousLeverage  *uint32                `protobuf:"varint,8,opt,name=previous_leverage,json=previousLeverage,proto3,oneof" json:"previous_leverage,omitempty"`
+	ConfirmedLeverage uint32                 `protobuf:"varint,9,opt,name=confirmed_leverage,json=confirmedLeverage,proto3" json:"confirmed_leverage,omitempty"`
+	ConfirmedAtUnixMs int64                  `protobuf:"varint,10,opt,name=confirmed_at_unix_ms,json=confirmedAtUnixMs,proto3" json:"confirmed_at_unix_ms,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *StrategySessionTargetLeverageFact) Reset() {
+	*x = StrategySessionTargetLeverageFact{}
+	mi := &file_strategy_service_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StrategySessionTargetLeverageFact) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StrategySessionTargetLeverageFact) ProtoMessage() {}
+
+func (x *StrategySessionTargetLeverageFact) ProtoReflect() protoreflect.Message {
+	mi := &file_strategy_service_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StrategySessionTargetLeverageFact.ProtoReflect.Descriptor instead.
+func (*StrategySessionTargetLeverageFact) Descriptor() ([]byte, []int) {
+	return file_strategy_service_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *StrategySessionTargetLeverageFact) GetVenueId() int64 {
+	if x != nil {
+		return x.VenueId
+	}
+	return 0
+}
+
+func (x *StrategySessionTargetLeverageFact) GetExchange() string {
+	if x != nil {
+		return x.Exchange
+	}
+	return ""
+}
+
+func (x *StrategySessionTargetLeverageFact) GetEnvironment() int32 {
+	if x != nil {
+		return x.Environment
+	}
+	return 0
+}
+
+func (x *StrategySessionTargetLeverageFact) GetMarket() string {
+	if x != nil {
+		return x.Market
+	}
+	return ""
+}
+
+func (x *StrategySessionTargetLeverageFact) GetSymbol() string {
+	if x != nil {
+		return x.Symbol
+	}
+	return ""
+}
+
+func (x *StrategySessionTargetLeverageFact) GetEffectiveLeverage() uint32 {
+	if x != nil {
+		return x.EffectiveLeverage
+	}
+	return 0
+}
+
+func (x *StrategySessionTargetLeverageFact) GetLeverageSource() string {
+	if x != nil {
+		return x.LeverageSource
+	}
+	return ""
+}
+
+func (x *StrategySessionTargetLeverageFact) GetPreviousLeverage() uint32 {
+	if x != nil && x.PreviousLeverage != nil {
+		return *x.PreviousLeverage
+	}
+	return 0
+}
+
+func (x *StrategySessionTargetLeverageFact) GetConfirmedLeverage() uint32 {
+	if x != nil {
+		return x.ConfirmedLeverage
+	}
+	return 0
+}
+
+func (x *StrategySessionTargetLeverageFact) GetConfirmedAtUnixMs() int64 {
+	if x != nil {
+		return x.ConfirmedAtUnixMs
+	}
+	return 0
+}
+
+type StrategySessionBootstrap struct {
+	state                protoimpl.MessageState               `protogen:"open.v1"`
+	SessionId            string                               `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	LaunchOperationId    string                               `protobuf:"bytes,2,opt,name=launch_operation_id,json=launchOperationId,proto3" json:"launch_operation_id,omitempty"`
+	StrategySourceSha256 string                               `protobuf:"bytes,3,opt,name=strategy_source_sha256,json=strategySourceSha256,proto3" json:"strategy_source_sha256,omitempty"`
+	ConfirmedTargetFacts []*StrategySessionTargetLeverageFact `protobuf:"bytes,4,rep,name=confirmed_target_facts,json=confirmedTargetFacts,proto3" json:"confirmed_target_facts,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *StrategySessionBootstrap) Reset() {
+	*x = StrategySessionBootstrap{}
+	mi := &file_strategy_service_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StrategySessionBootstrap) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StrategySessionBootstrap) ProtoMessage() {}
+
+func (x *StrategySessionBootstrap) ProtoReflect() protoreflect.Message {
+	mi := &file_strategy_service_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StrategySessionBootstrap.ProtoReflect.Descriptor instead.
+func (*StrategySessionBootstrap) Descriptor() ([]byte, []int) {
+	return file_strategy_service_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *StrategySessionBootstrap) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *StrategySessionBootstrap) GetLaunchOperationId() string {
+	if x != nil {
+		return x.LaunchOperationId
+	}
+	return ""
+}
+
+func (x *StrategySessionBootstrap) GetStrategySourceSha256() string {
+	if x != nil {
+		return x.StrategySourceSha256
+	}
+	return ""
+}
+
+func (x *StrategySessionBootstrap) GetConfirmedTargetFacts() []*StrategySessionTargetLeverageFact {
+	if x != nil {
+		return x.ConfirmedTargetFacts
+	}
+	return nil
+}
+
+// Structured terminal result for a leverage target. status is one of:
+// unchanged, confirmed, set_failed, confirm_failed, rolled_back,
+// rollback_failed, unknown.
+type StrategyLeverageTargetResult struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	VenueId           int64                  `protobuf:"varint,1,opt,name=venue_id,json=venueId,proto3" json:"venue_id,omitempty"`
+	Exchange          int32                  `protobuf:"varint,2,opt,name=exchange,proto3" json:"exchange,omitempty"`
+	Market            int32                  `protobuf:"varint,3,opt,name=market,proto3" json:"market,omitempty"`
+	Symbol            string                 `protobuf:"bytes,4,opt,name=symbol,proto3" json:"symbol,omitempty"`
+	EffectiveLeverage uint32                 `protobuf:"varint,5,opt,name=effective_leverage,json=effectiveLeverage,proto3" json:"effective_leverage,omitempty"`
+	LeverageSource    string                 `protobuf:"bytes,6,opt,name=leverage_source,json=leverageSource,proto3" json:"leverage_source,omitempty"`
+	PreviousLeverage  *uint32                `protobuf:"varint,7,opt,name=previous_leverage,json=previousLeverage,proto3,oneof" json:"previous_leverage,omitempty"`
+	CurrentLeverage   *uint32                `protobuf:"varint,8,opt,name=current_leverage,json=currentLeverage,proto3,oneof" json:"current_leverage,omitempty"`
+	ConfirmedLeverage *uint32                `protobuf:"varint,9,opt,name=confirmed_leverage,json=confirmedLeverage,proto3,oneof" json:"confirmed_leverage,omitempty"`
+	ChangeRequired    bool                   `protobuf:"varint,10,opt,name=change_required,json=changeRequired,proto3" json:"change_required,omitempty"`
+	Status            string                 `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
+	ErrorCode         string                 `protobuf:"bytes,12,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage      string                 `protobuf:"bytes,13,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	Retryable         bool                   `protobuf:"varint,14,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *StrategyLeverageTargetResult) Reset() {
+	*x = StrategyLeverageTargetResult{}
+	mi := &file_strategy_service_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StrategyLeverageTargetResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StrategyLeverageTargetResult) ProtoMessage() {}
+
+func (x *StrategyLeverageTargetResult) ProtoReflect() protoreflect.Message {
+	mi := &file_strategy_service_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StrategyLeverageTargetResult.ProtoReflect.Descriptor instead.
+func (*StrategyLeverageTargetResult) Descriptor() ([]byte, []int) {
+	return file_strategy_service_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *StrategyLeverageTargetResult) GetVenueId() int64 {
+	if x != nil {
+		return x.VenueId
+	}
+	return 0
+}
+
+func (x *StrategyLeverageTargetResult) GetExchange() int32 {
+	if x != nil {
+		return x.Exchange
+	}
+	return 0
+}
+
+func (x *StrategyLeverageTargetResult) GetMarket() int32 {
+	if x != nil {
+		return x.Market
+	}
+	return 0
+}
+
+func (x *StrategyLeverageTargetResult) GetSymbol() string {
+	if x != nil {
+		return x.Symbol
+	}
+	return ""
+}
+
+func (x *StrategyLeverageTargetResult) GetEffectiveLeverage() uint32 {
+	if x != nil {
+		return x.EffectiveLeverage
+	}
+	return 0
+}
+
+func (x *StrategyLeverageTargetResult) GetLeverageSource() string {
+	if x != nil {
+		return x.LeverageSource
+	}
+	return ""
+}
+
+func (x *StrategyLeverageTargetResult) GetPreviousLeverage() uint32 {
+	if x != nil && x.PreviousLeverage != nil {
+		return *x.PreviousLeverage
+	}
+	return 0
+}
+
+func (x *StrategyLeverageTargetResult) GetCurrentLeverage() uint32 {
+	if x != nil && x.CurrentLeverage != nil {
+		return *x.CurrentLeverage
+	}
+	return 0
+}
+
+func (x *StrategyLeverageTargetResult) GetConfirmedLeverage() uint32 {
+	if x != nil && x.ConfirmedLeverage != nil {
+		return *x.ConfirmedLeverage
+	}
+	return 0
+}
+
+func (x *StrategyLeverageTargetResult) GetChangeRequired() bool {
+	if x != nil {
+		return x.ChangeRequired
+	}
+	return false
+}
+
+func (x *StrategyLeverageTargetResult) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *StrategyLeverageTargetResult) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *StrategyLeverageTargetResult) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *StrategyLeverageTargetResult) GetRetryable() bool {
+	if x != nil {
+		return x.Retryable
+	}
+	return false
+}
+
 var File_strategy_service_proto protoreflect.FileDescriptor
 
 const file_strategy_service_proto_rawDesc = "" +
@@ -1831,7 +2710,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06issues\x18\x02 \x03(\v2).strategy.v1.StrategyValidationIssueProtoR\x06issues\x12N\n" +
 	"\x0fruntime_profile\x18\x03 \x01(\v2%.strategy.v1.RuntimeDependencyProfileR\x0eruntimeProfile\x12N\n" +
 	"\x0fdeclared_inputs\x18\x04 \x03(\v2%.strategy.v1.StrategyInputDeclarationR\x0edeclaredInputs\x12]\n" +
-	"\x16declared_order_targets\x18\x05 \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\"\xde\x02\n" +
+	"\x16declared_order_targets\x18\x05 \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\"\xe2\x02\n" +
 	"\x12RunStrategyRequest\x12!\n" +
 	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12#\n" +
 	"\rstrategy_path\x18\x02 \x01(\tR\fstrategyPath\x12\x1a\n" +
@@ -1841,11 +2720,16 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\auser_id\x18d \x01(\x03R\x06userId\x12\x1d\n" +
 	"\n" +
 	"runtime_id\x18e \x01(\tR\truntimeId\x12+\n" +
-	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\x12\x1a\n" +
-	"\bleverage\x18g \x01(\x01R\bleverageJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x06symbolR\vsymbol_type\"4\n" +
+	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\x12\x1e\n" +
+	"\bleverage\x18g \x01(\x01B\x02\x18\x01R\bleverageJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x06symbolR\vsymbol_type\"\x93\x02\n" +
 	"\x13RunStrategyResponse\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"q\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x0e\n" +
+	"\x02ok\x18\x02 \x01(\bR\x02ok\x12>\n" +
+	"\bfailures\x18\x03 \x03(\v2\".strategy.v1.PreflightFailureProtoR\bfailures\x12P\n" +
+	"\x0etarget_results\x18\x04 \x03(\v2).strategy.v1.StrategyLeverageTargetResultR\rtargetResults\x12\x12\n" +
+	"\x04code\x18\x05 \x01(\tR\x04code\x12'\n" +
+	"\x0frollback_failed\x18\x06 \x01(\bR\x0erollbackFailed\"q\n" +
 	"\x18GetStrategyStatusRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
@@ -1878,7 +2762,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06symbol\x18\x03 \x01(\tR\x06symbol\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x12\n" +
 	"\x04code\x18\x05 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x06 \x01(\tR\amessage\"\xa8\x02\n" +
+	"\amessage\x18\x06 \x01(\tR\amessage\"\xac\x02\n" +
 	"\x19PreviewRunStrategyRequest\x12!\n" +
 	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12#\n" +
 	"\rstrategy_path\x18\x02 \x01(\tR\fstrategyPath\x12\"\n" +
@@ -1887,8 +2771,8 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\auser_id\x18d \x01(\x03R\x06userId\x12\x1d\n" +
 	"\n" +
 	"runtime_id\x18e \x01(\tR\truntimeId\x12+\n" +
-	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\x12\x1a\n" +
-	"\bleverage\x18g \x01(\x01R\bleverage\"_\n" +
+	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\x12\x1e\n" +
+	"\bleverage\x18g \x01(\x01B\x02\x18\x01R\bleverage\"_\n" +
 	"\x11PreflightInputKey\x12\x16\n" +
 	"\x06market\x18\x01 \x01(\tR\x06market\x12\x16\n" +
 	"\x06symbol\x18\x02 \x01(\tR\x06symbol\x12\x1a\n" +
@@ -1917,16 +2801,23 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x0fdeclared_inputs\x18\x06 \x03(\v2\x1e.strategy.v1.LiveStreamBindingR\x0edeclaredInputs\x12]\n" +
 	"\x16declared_order_targets\x18\a \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\x12J\n" +
 	"\x0frequired_routes\x18\b \x03(\v2!.strategy.v1.StrategyRouteBindingR\x0erequiredRoutes\x12>\n" +
-	"\rrisk_controls\x18\t \x01(\v2\x19.strategy.v1.RiskControlsR\friskControls\"\xb3\x01\n" +
+	"\rrisk_controls\x18\t \x01(\v2\x19.strategy.v1.RiskControlsR\friskControls\"\xbb\x01\n" +
 	"\fRiskControls\x12+\n" +
 	"\x12max_loss_close_pct\x18\x01 \x01(\x01R\x0fmaxLossClosePct\x121\n" +
-	"\x15max_loss_close_source\x18\x02 \x01(\tR\x12maxLossCloseSource\x12\x1a\n" +
-	"\bleverage\x18\x03 \x01(\x01R\bleverage\x12'\n" +
-	"\x0fleverage_source\x18\x04 \x01(\tR\x0eleverageSource\"h\n" +
+	"\x15max_loss_close_source\x18\x02 \x01(\tR\x12maxLossCloseSource\x12\x1e\n" +
+	"\bleverage\x18\x03 \x01(\x01B\x02\x18\x01R\bleverage\x12+\n" +
+	"\x0fleverage_source\x18\x04 \x01(\tB\x02\x18\x01R\x0eleverageSource\"\xf2\x02\n" +
 	"\x1aStrategyOrderTargetBinding\x12\x1a\n" +
 	"\bexchange\x18\x01 \x01(\tR\bexchange\x12\x16\n" +
 	"\x06market\x18\x02 \x01(\tR\x06market\x12\x16\n" +
-	"\x06symbol\x18\x03 \x01(\tR\x06symbol\"J\n" +
+	"\x06symbol\x18\x03 \x01(\tR\x06symbol\x12-\n" +
+	"\x12effective_leverage\x18\x04 \x01(\rR\x11effectiveLeverage\x12'\n" +
+	"\x0fleverage_source\x18\x05 \x01(\tR\x0eleverageSource\x12.\n" +
+	"\x10current_leverage\x18\x06 \x01(\rH\x00R\x0fcurrentLeverage\x88\x01\x01\x12'\n" +
+	"\x0fchange_required\x18\a \x01(\bR\x0echangeRequired\x12\x19\n" +
+	"\bvenue_id\x18\b \x01(\x03R\avenueId\x12'\n" +
+	"\x0fleverage_status\x18\t \x01(\tR\x0eleverageStatusB\x13\n" +
+	"\x11_current_leverage\"J\n" +
 	"\x14StrategyRouteBinding\x12\x1a\n" +
 	"\bexchange\x18\x01 \x01(\tR\bexchange\x12\x16\n" +
 	"\x06market\x18\x02 \x01(\tR\x06market\"\xac\x01\n" +
@@ -1936,16 +2827,103 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06market\x18\x03 \x01(\tR\x06market\x12\x12\n" +
 	"\x04kind\x18\x04 \x01(\tR\x04kind\x12\x16\n" +
 	"\x06symbol\x18\x05 \x01(\tR\x06symbol\x12\x1a\n" +
-	"\binterval\x18\x06 \x01(\tR\binterval*\x9e\x01\n" +
+	"\binterval\x18\x06 \x01(\tR\binterval\"\xb1\x01\n" +
+	"\x1ePrepareRunStrategyStartRequest\x12@\n" +
+	"\vrun_request\x18\x01 \x01(\v2\x1f.strategy.v1.RunStrategyRequestR\n" +
+	"runRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12.\n" +
+	"\x13launch_operation_id\x18\x03 \x01(\tR\x11launchOperationId\"\x96\x04\n" +
+	"\x17StrategySessionMetadata\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
+	"\fportfolio_id\x18\x02 \x01(\x03R\vportfolioId\x12\x1f\n" +
+	"\vstrategy_id\x18\x03 \x01(\x03R\n" +
+	"strategyId\x12 \n" +
+	"\venvironment\x18\x04 \x01(\x05R\venvironment\x12\x1a\n" +
+	"\binterval\x18\x05 \x01(\tR\binterval\x12\"\n" +
+	"\rstart_time_ms\x18\x06 \x01(\x03R\vstartTimeMs\x12\x1e\n" +
+	"\vend_time_ms\x18\a \x01(\x03R\tendTimeMs\x12\x17\n" +
+	"\auser_id\x18\b \x01(\x03R\x06userId\x12\x1d\n" +
+	"\n" +
+	"runtime_id\x18\t \x01(\tR\truntimeId\x12%\n" +
+	"\x0eruntime_source\x18\n" +
+	" \x01(\tR\rruntimeSource\x12!\n" +
+	"\fruntime_name\x18\v \x01(\tR\vruntimeName\x12!\n" +
+	"\fsession_type\x18\f \x01(\tR\vsessionType\x12'\n" +
+	"\x0fruntime_version\x18\r \x01(\tR\x0eruntimeVersion\x12!\n" +
+	"\fsession_name\x18\x0e \x01(\tR\vsessionName\x12%\n" +
+	"\x0einitial_status\x18\x0f \x01(\tR\rinitialStatus\"\x98\x02\n" +
+	"\x1dStrategyRequiredSymbolBinding\x12\x1a\n" +
+	"\bexchange\x18\x01 \x01(\tR\bexchange\x12\x16\n" +
+	"\x06market\x18\x02 \x01(\tR\x06market\x12\x16\n" +
+	"\x06symbol\x18\x03 \x01(\tR\x06symbol\x12!\n" +
+	"\forder_target\x18\x04 \x01(\bR\vorderTarget\x120\n" +
+	"\x14required_order_types\x18\x05 \x03(\tR\x12requiredOrderTypes\x12-\n" +
+	"\x12effective_leverage\x18\x06 \x01(\rR\x11effectiveLeverage\x12'\n" +
+	"\x0fleverage_source\x18\a \x01(\tR\x0eleverageSource\"\xe9\x05\n" +
+	"\x18PreparedRunStrategyStart\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12>\n" +
+	"\asession\x18\x02 \x01(\v2$.strategy.v1.StrategySessionMetadataR\asession\x12.\n" +
+	"\x13launch_operation_id\x18\x03 \x01(\tR\x11launchOperationId\x124\n" +
+	"\x16strategy_source_sha256\x18\x04 \x01(\tR\x14strategySourceSha256\x12N\n" +
+	"\x0fdeclared_inputs\x18\x05 \x03(\v2%.strategy.v1.StrategyInputDeclarationR\x0edeclaredInputs\x12]\n" +
+	"\x16declared_order_targets\x18\x06 \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\x12J\n" +
+	"\x0frequired_routes\x18\a \x03(\v2!.strategy.v1.StrategyRouteBindingR\x0erequiredRoutes\x12U\n" +
+	"\x10required_symbols\x18\b \x03(\v2*.strategy.v1.StrategyRequiredSymbolBindingR\x0frequiredSymbols\x12E\n" +
+	"\tpreflight\x18\t \x01(\v2'.strategy.v1.PreviewRunStrategyResponseR\tpreflight\x12>\n" +
+	"\rrisk_controls\x18\n" +
+	" \x01(\v2\x19.strategy.v1.RiskControlsR\friskControls\x12>\n" +
+	"\bfailures\x18\v \x03(\v2\".strategy.v1.PreflightFailureProtoR\bfailures\"\xac\x03\n" +
+	"!StrategySessionTargetLeverageFact\x12\x19\n" +
+	"\bvenue_id\x18\x01 \x01(\x03R\avenueId\x12\x1a\n" +
+	"\bexchange\x18\x02 \x01(\tR\bexchange\x12 \n" +
+	"\venvironment\x18\x03 \x01(\x05R\venvironment\x12\x16\n" +
+	"\x06market\x18\x04 \x01(\tR\x06market\x12\x16\n" +
+	"\x06symbol\x18\x05 \x01(\tR\x06symbol\x12-\n" +
+	"\x12effective_leverage\x18\x06 \x01(\rR\x11effectiveLeverage\x12'\n" +
+	"\x0fleverage_source\x18\a \x01(\tR\x0eleverageSource\x120\n" +
+	"\x11previous_leverage\x18\b \x01(\rH\x00R\x10previousLeverage\x88\x01\x01\x12-\n" +
+	"\x12confirmed_leverage\x18\t \x01(\rR\x11confirmedLeverage\x12/\n" +
+	"\x14confirmed_at_unix_ms\x18\n" +
+	" \x01(\x03R\x11confirmedAtUnixMsB\x14\n" +
+	"\x12_previous_leverage\"\x85\x02\n" +
+	"\x18StrategySessionBootstrap\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12.\n" +
+	"\x13launch_operation_id\x18\x02 \x01(\tR\x11launchOperationId\x124\n" +
+	"\x16strategy_source_sha256\x18\x03 \x01(\tR\x14strategySourceSha256\x12d\n" +
+	"\x16confirmed_target_facts\x18\x04 \x03(\v2..strategy.v1.StrategySessionTargetLeverageFactR\x14confirmedTargetFacts\"\xd8\x04\n" +
+	"\x1cStrategyLeverageTargetResult\x12\x19\n" +
+	"\bvenue_id\x18\x01 \x01(\x03R\avenueId\x12\x1a\n" +
+	"\bexchange\x18\x02 \x01(\x05R\bexchange\x12\x16\n" +
+	"\x06market\x18\x03 \x01(\x05R\x06market\x12\x16\n" +
+	"\x06symbol\x18\x04 \x01(\tR\x06symbol\x12-\n" +
+	"\x12effective_leverage\x18\x05 \x01(\rR\x11effectiveLeverage\x12'\n" +
+	"\x0fleverage_source\x18\x06 \x01(\tR\x0eleverageSource\x120\n" +
+	"\x11previous_leverage\x18\a \x01(\rH\x00R\x10previousLeverage\x88\x01\x01\x12.\n" +
+	"\x10current_leverage\x18\b \x01(\rH\x01R\x0fcurrentLeverage\x88\x01\x01\x122\n" +
+	"\x12confirmed_leverage\x18\t \x01(\rH\x02R\x11confirmedLeverage\x88\x01\x01\x12'\n" +
+	"\x0fchange_required\x18\n" +
+	" \x01(\bR\x0echangeRequired\x12\x16\n" +
+	"\x06status\x18\v \x01(\tR\x06status\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\f \x01(\tR\terrorCode\x12#\n" +
+	"\rerror_message\x18\r \x01(\tR\ferrorMessage\x12\x1c\n" +
+	"\tretryable\x18\x0e \x01(\bR\tretryableB\x14\n" +
+	"\x12_previous_leverageB\x13\n" +
+	"\x11_current_leverageB\x15\n" +
+	"\x13_confirmed_leverage*\x9e\x01\n" +
 	"\n" +
 	"StopAction\x12\x1b\n" +
 	"\x17STOP_ACTION_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12STOP_ACTION_CANCEL\x10\x01\x12\x19\n" +
 	"\x15STOP_ACTION_STOP_ONLY\x10\x02\x12(\n" +
 	"$STOP_ACTION_STOP_AND_CLOSE_POSITIONS\x10\x03\x12\x16\n" +
-	"\x12STOP_ACTION_FINISH\x10\x042\xf6\x03\n" +
+	"\x12STOP_ACTION_FINISH\x10\x042\xe5\x04\n" +
 	"\x0fStrategyService\x12P\n" +
-	"\vRunStrategy\x12\x1f.strategy.v1.RunStrategyRequest\x1a .strategy.v1.RunStrategyResponse\x12e\n" +
+	"\vRunStrategy\x12\x1f.strategy.v1.RunStrategyRequest\x1a .strategy.v1.RunStrategyResponse\x12m\n" +
+	"\x17PrepareRunStrategyStart\x12+.strategy.v1.PrepareRunStrategyStartRequest\x1a%.strategy.v1.PreparedRunStrategyStart\x12e\n" +
 	"\x12PreviewRunStrategy\x12&.strategy.v1.PreviewRunStrategyRequest\x1a'.strategy.v1.PreviewRunStrategyResponse\x12q\n" +
 	"\x16ValidateStrategySource\x12*.strategy.v1.ValidateStrategySourceRequest\x1a+.strategy.v1.ValidateStrategySourceResponse\x12b\n" +
 	"\x11GetStrategyStatus\x12%.strategy.v1.GetStrategyStatusRequest\x1a&.strategy.v1.GetStrategyStatusResponse\x12S\n" +
@@ -1964,60 +2942,81 @@ func file_strategy_service_proto_rawDescGZIP() []byte {
 }
 
 var file_strategy_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_strategy_service_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_strategy_service_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_strategy_service_proto_goTypes = []any{
-	(StopAction)(0),                        // 0: strategy.v1.StopAction
-	(*RuntimeDependencyProfile)(nil),       // 1: strategy.v1.RuntimeDependencyProfile
-	(*RuntimeDependencyError)(nil),         // 2: strategy.v1.RuntimeDependencyError
-	(*StrategyValidationIssueProto)(nil),   // 3: strategy.v1.StrategyValidationIssueProto
-	(*ValidateStrategySourceRequest)(nil),  // 4: strategy.v1.ValidateStrategySourceRequest
-	(*StrategyInputDeclaration)(nil),       // 5: strategy.v1.StrategyInputDeclaration
-	(*ValidateStrategySourceResponse)(nil), // 6: strategy.v1.ValidateStrategySourceResponse
-	(*RunStrategyRequest)(nil),             // 7: strategy.v1.RunStrategyRequest
-	(*RunStrategyResponse)(nil),            // 8: strategy.v1.RunStrategyResponse
-	(*GetStrategyStatusRequest)(nil),       // 9: strategy.v1.GetStrategyStatusRequest
-	(*GetStrategyStatusResponse)(nil),      // 10: strategy.v1.GetStrategyStatusResponse
-	(*StopStrategyRequest)(nil),            // 11: strategy.v1.StopStrategyRequest
-	(*StopStrategyResponse)(nil),           // 12: strategy.v1.StopStrategyResponse
-	(*StopTargetResult)(nil),               // 13: strategy.v1.StopTargetResult
-	(*PreviewRunStrategyRequest)(nil),      // 14: strategy.v1.PreviewRunStrategyRequest
-	(*PreflightInputKey)(nil),              // 15: strategy.v1.PreflightInputKey
-	(*PreflightFailureProto)(nil),          // 16: strategy.v1.PreflightFailureProto
-	(*PreviewRunStrategyResponse)(nil),     // 17: strategy.v1.PreviewRunStrategyResponse
-	(*RiskControls)(nil),                   // 18: strategy.v1.RiskControls
-	(*StrategyOrderTargetBinding)(nil),     // 19: strategy.v1.StrategyOrderTargetBinding
-	(*StrategyRouteBinding)(nil),           // 20: strategy.v1.StrategyRouteBinding
-	(*LiveStreamBinding)(nil),              // 21: strategy.v1.LiveStreamBinding
+	(StopAction)(0),                           // 0: strategy.v1.StopAction
+	(*RuntimeDependencyProfile)(nil),          // 1: strategy.v1.RuntimeDependencyProfile
+	(*RuntimeDependencyError)(nil),            // 2: strategy.v1.RuntimeDependencyError
+	(*StrategyValidationIssueProto)(nil),      // 3: strategy.v1.StrategyValidationIssueProto
+	(*ValidateStrategySourceRequest)(nil),     // 4: strategy.v1.ValidateStrategySourceRequest
+	(*StrategyInputDeclaration)(nil),          // 5: strategy.v1.StrategyInputDeclaration
+	(*ValidateStrategySourceResponse)(nil),    // 6: strategy.v1.ValidateStrategySourceResponse
+	(*RunStrategyRequest)(nil),                // 7: strategy.v1.RunStrategyRequest
+	(*RunStrategyResponse)(nil),               // 8: strategy.v1.RunStrategyResponse
+	(*GetStrategyStatusRequest)(nil),          // 9: strategy.v1.GetStrategyStatusRequest
+	(*GetStrategyStatusResponse)(nil),         // 10: strategy.v1.GetStrategyStatusResponse
+	(*StopStrategyRequest)(nil),               // 11: strategy.v1.StopStrategyRequest
+	(*StopStrategyResponse)(nil),              // 12: strategy.v1.StopStrategyResponse
+	(*StopTargetResult)(nil),                  // 13: strategy.v1.StopTargetResult
+	(*PreviewRunStrategyRequest)(nil),         // 14: strategy.v1.PreviewRunStrategyRequest
+	(*PreflightInputKey)(nil),                 // 15: strategy.v1.PreflightInputKey
+	(*PreflightFailureProto)(nil),             // 16: strategy.v1.PreflightFailureProto
+	(*PreviewRunStrategyResponse)(nil),        // 17: strategy.v1.PreviewRunStrategyResponse
+	(*RiskControls)(nil),                      // 18: strategy.v1.RiskControls
+	(*StrategyOrderTargetBinding)(nil),        // 19: strategy.v1.StrategyOrderTargetBinding
+	(*StrategyRouteBinding)(nil),              // 20: strategy.v1.StrategyRouteBinding
+	(*LiveStreamBinding)(nil),                 // 21: strategy.v1.LiveStreamBinding
+	(*PrepareRunStrategyStartRequest)(nil),    // 22: strategy.v1.PrepareRunStrategyStartRequest
+	(*StrategySessionMetadata)(nil),           // 23: strategy.v1.StrategySessionMetadata
+	(*StrategyRequiredSymbolBinding)(nil),     // 24: strategy.v1.StrategyRequiredSymbolBinding
+	(*PreparedRunStrategyStart)(nil),          // 25: strategy.v1.PreparedRunStrategyStart
+	(*StrategySessionTargetLeverageFact)(nil), // 26: strategy.v1.StrategySessionTargetLeverageFact
+	(*StrategySessionBootstrap)(nil),          // 27: strategy.v1.StrategySessionBootstrap
+	(*StrategyLeverageTargetResult)(nil),      // 28: strategy.v1.StrategyLeverageTargetResult
 }
 var file_strategy_service_proto_depIdxs = []int32{
 	3,  // 0: strategy.v1.ValidateStrategySourceResponse.issues:type_name -> strategy.v1.StrategyValidationIssueProto
 	1,  // 1: strategy.v1.ValidateStrategySourceResponse.runtime_profile:type_name -> strategy.v1.RuntimeDependencyProfile
 	5,  // 2: strategy.v1.ValidateStrategySourceResponse.declared_inputs:type_name -> strategy.v1.StrategyInputDeclaration
 	19, // 3: strategy.v1.ValidateStrategySourceResponse.declared_order_targets:type_name -> strategy.v1.StrategyOrderTargetBinding
-	0,  // 4: strategy.v1.StopStrategyRequest.stop_action:type_name -> strategy.v1.StopAction
-	13, // 5: strategy.v1.StopStrategyResponse.target_results:type_name -> strategy.v1.StopTargetResult
-	15, // 6: strategy.v1.PreflightFailureProto.input_key:type_name -> strategy.v1.PreflightInputKey
-	16, // 7: strategy.v1.PreviewRunStrategyResponse.failures:type_name -> strategy.v1.PreflightFailureProto
-	21, // 8: strategy.v1.PreviewRunStrategyResponse.required_streams:type_name -> strategy.v1.LiveStreamBinding
-	21, // 9: strategy.v1.PreviewRunStrategyResponse.declared_inputs:type_name -> strategy.v1.LiveStreamBinding
-	19, // 10: strategy.v1.PreviewRunStrategyResponse.declared_order_targets:type_name -> strategy.v1.StrategyOrderTargetBinding
-	20, // 11: strategy.v1.PreviewRunStrategyResponse.required_routes:type_name -> strategy.v1.StrategyRouteBinding
-	18, // 12: strategy.v1.PreviewRunStrategyResponse.risk_controls:type_name -> strategy.v1.RiskControls
-	7,  // 13: strategy.v1.StrategyService.RunStrategy:input_type -> strategy.v1.RunStrategyRequest
-	14, // 14: strategy.v1.StrategyService.PreviewRunStrategy:input_type -> strategy.v1.PreviewRunStrategyRequest
-	4,  // 15: strategy.v1.StrategyService.ValidateStrategySource:input_type -> strategy.v1.ValidateStrategySourceRequest
-	9,  // 16: strategy.v1.StrategyService.GetStrategyStatus:input_type -> strategy.v1.GetStrategyStatusRequest
-	11, // 17: strategy.v1.StrategyService.StopStrategy:input_type -> strategy.v1.StopStrategyRequest
-	8,  // 18: strategy.v1.StrategyService.RunStrategy:output_type -> strategy.v1.RunStrategyResponse
-	17, // 19: strategy.v1.StrategyService.PreviewRunStrategy:output_type -> strategy.v1.PreviewRunStrategyResponse
-	6,  // 20: strategy.v1.StrategyService.ValidateStrategySource:output_type -> strategy.v1.ValidateStrategySourceResponse
-	10, // 21: strategy.v1.StrategyService.GetStrategyStatus:output_type -> strategy.v1.GetStrategyStatusResponse
-	12, // 22: strategy.v1.StrategyService.StopStrategy:output_type -> strategy.v1.StopStrategyResponse
-	18, // [18:23] is the sub-list for method output_type
-	13, // [13:18] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	16, // 4: strategy.v1.RunStrategyResponse.failures:type_name -> strategy.v1.PreflightFailureProto
+	28, // 5: strategy.v1.RunStrategyResponse.target_results:type_name -> strategy.v1.StrategyLeverageTargetResult
+	0,  // 6: strategy.v1.StopStrategyRequest.stop_action:type_name -> strategy.v1.StopAction
+	13, // 7: strategy.v1.StopStrategyResponse.target_results:type_name -> strategy.v1.StopTargetResult
+	15, // 8: strategy.v1.PreflightFailureProto.input_key:type_name -> strategy.v1.PreflightInputKey
+	16, // 9: strategy.v1.PreviewRunStrategyResponse.failures:type_name -> strategy.v1.PreflightFailureProto
+	21, // 10: strategy.v1.PreviewRunStrategyResponse.required_streams:type_name -> strategy.v1.LiveStreamBinding
+	21, // 11: strategy.v1.PreviewRunStrategyResponse.declared_inputs:type_name -> strategy.v1.LiveStreamBinding
+	19, // 12: strategy.v1.PreviewRunStrategyResponse.declared_order_targets:type_name -> strategy.v1.StrategyOrderTargetBinding
+	20, // 13: strategy.v1.PreviewRunStrategyResponse.required_routes:type_name -> strategy.v1.StrategyRouteBinding
+	18, // 14: strategy.v1.PreviewRunStrategyResponse.risk_controls:type_name -> strategy.v1.RiskControls
+	7,  // 15: strategy.v1.PrepareRunStrategyStartRequest.run_request:type_name -> strategy.v1.RunStrategyRequest
+	23, // 16: strategy.v1.PreparedRunStrategyStart.session:type_name -> strategy.v1.StrategySessionMetadata
+	5,  // 17: strategy.v1.PreparedRunStrategyStart.declared_inputs:type_name -> strategy.v1.StrategyInputDeclaration
+	19, // 18: strategy.v1.PreparedRunStrategyStart.declared_order_targets:type_name -> strategy.v1.StrategyOrderTargetBinding
+	20, // 19: strategy.v1.PreparedRunStrategyStart.required_routes:type_name -> strategy.v1.StrategyRouteBinding
+	24, // 20: strategy.v1.PreparedRunStrategyStart.required_symbols:type_name -> strategy.v1.StrategyRequiredSymbolBinding
+	17, // 21: strategy.v1.PreparedRunStrategyStart.preflight:type_name -> strategy.v1.PreviewRunStrategyResponse
+	18, // 22: strategy.v1.PreparedRunStrategyStart.risk_controls:type_name -> strategy.v1.RiskControls
+	16, // 23: strategy.v1.PreparedRunStrategyStart.failures:type_name -> strategy.v1.PreflightFailureProto
+	26, // 24: strategy.v1.StrategySessionBootstrap.confirmed_target_facts:type_name -> strategy.v1.StrategySessionTargetLeverageFact
+	7,  // 25: strategy.v1.StrategyService.RunStrategy:input_type -> strategy.v1.RunStrategyRequest
+	22, // 26: strategy.v1.StrategyService.PrepareRunStrategyStart:input_type -> strategy.v1.PrepareRunStrategyStartRequest
+	14, // 27: strategy.v1.StrategyService.PreviewRunStrategy:input_type -> strategy.v1.PreviewRunStrategyRequest
+	4,  // 28: strategy.v1.StrategyService.ValidateStrategySource:input_type -> strategy.v1.ValidateStrategySourceRequest
+	9,  // 29: strategy.v1.StrategyService.GetStrategyStatus:input_type -> strategy.v1.GetStrategyStatusRequest
+	11, // 30: strategy.v1.StrategyService.StopStrategy:input_type -> strategy.v1.StopStrategyRequest
+	8,  // 31: strategy.v1.StrategyService.RunStrategy:output_type -> strategy.v1.RunStrategyResponse
+	25, // 32: strategy.v1.StrategyService.PrepareRunStrategyStart:output_type -> strategy.v1.PreparedRunStrategyStart
+	17, // 33: strategy.v1.StrategyService.PreviewRunStrategy:output_type -> strategy.v1.PreviewRunStrategyResponse
+	6,  // 34: strategy.v1.StrategyService.ValidateStrategySource:output_type -> strategy.v1.ValidateStrategySourceResponse
+	10, // 35: strategy.v1.StrategyService.GetStrategyStatus:output_type -> strategy.v1.GetStrategyStatusResponse
+	12, // 36: strategy.v1.StrategyService.StopStrategy:output_type -> strategy.v1.StopStrategyResponse
+	31, // [31:37] is the sub-list for method output_type
+	25, // [25:31] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_strategy_service_proto_init() }
@@ -2025,13 +3024,16 @@ func file_strategy_service_proto_init() {
 	if File_strategy_service_proto != nil {
 		return
 	}
+	file_strategy_service_proto_msgTypes[18].OneofWrappers = []any{}
+	file_strategy_service_proto_msgTypes[25].OneofWrappers = []any{}
+	file_strategy_service_proto_msgTypes[27].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_strategy_service_proto_rawDesc), len(file_strategy_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   21,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
