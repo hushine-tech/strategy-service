@@ -80,6 +80,7 @@ class RouteWallet:
         margin_mode: str = "cross",
         position_mode: str = "one_way",
         leverage: float = 10.0,
+        leverages: dict[str, float] | None = None,
         configured_margin_mode: str = "cross",
     ) -> None:
         self.balance = balance
@@ -88,7 +89,7 @@ class RouteWallet:
             position_mode=position_mode,
             risk_metadata={
                 symbol: SimpleNamespace(
-                    configured_leverage=leverage,
+                    configured_leverage=(leverages or {}).get(symbol, leverage),
                     configured_margin_mode=configured_margin_mode,
                     step_size=step,
                 )
@@ -191,6 +192,9 @@ def test_template_is_validator_accepted_and_declares_three_exact_streams_and_tar
     assert result.ok is True, result.issues
     strategy_type = strategy_class()
 
+    assert strategy_type.LEVERAGE == 10
+    assert not hasattr(strategy_type, "REQUIRED_LEVERAGE")
+    assert "CROSSED" not in TEMPLATE_PATH.read_text(encoding="utf-8")
     assert [item["symbol"] for item in strategy_type.INPUTS] == [
         "ZECUSDT",
         "ETHUSDT",
@@ -206,11 +210,28 @@ def test_template_is_validator_accepted_and_declares_three_exact_streams_and_tar
         "ETHUSDT",
         "BTCUSDT",
     ]
+    assert {
+        item["market"] for item in strategy_type.ORDER_TARGETS
+    } == {Market.PERPETUAL_FUTURES}
     assert set(strategy_type.INDICATORS) == {
         "reference_price",
         "change_bps",
         "trade_signal",
     }
+
+
+def test_only_canonical_cross_margin_facts_are_accepted():
+    strategy_type = strategy_class()
+    strategy = configured_strategy()
+    view = InputView(parse_declared_inputs(strategy_type.INPUTS))
+    route = RouteWallet(margin_mode="CROSS")
+    wallet = PortfolioWallet(route)
+
+    assert feed(strategy, view, wallet, "BTCUSDT", 100000.0) is None
+    assert feed(strategy, view, wallet, "BTCUSDT", 100100.0) is None
+    assert strategy.notify.calls == [
+        ("Multi-Symbol Futures Test", "account must use cross margin mode")
+    ]
 
 
 def test_interleaved_symbols_keep_independent_references_and_emit_correct_orders():
@@ -254,6 +275,25 @@ def test_wallet_balance_one_percent_is_margin_budget_at_ten_x():
 
     assert_market_order(order, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.066")
     assert float(order.qty) * 3003.0 == pytest.approx(198.198)
+
+
+def test_each_symbol_uses_its_declared_and_confirmed_leverage_for_sizing():
+    strategy_type = strategy_class()
+    strategy = configured_strategy()
+    strategy.ORDER_TARGETS = [
+        dict(target, **({"leverage": 5} if target["symbol"] == "BTCUSDT" else {}))
+        for target in strategy_type.ORDER_TARGETS
+    ]
+    view = InputView(parse_declared_inputs(strategy_type.INPUTS))
+    wallet = PortfolioWallet(
+        RouteWallet(leverages={"BTCUSDT": 5.0, "ETHUSDT": 10.0, "ZECUSDT": 10.0})
+    )
+
+    assert feed(strategy, view, wallet, "BTCUSDT", 100000.0) is None
+    order = feed(strategy, view, wallet, "BTCUSDT", 100100.0)
+
+    assert_market_order(order, symbol="BTCUSDT", side=OrderSide.BUY, qty="0.0004")
+    assert strategy.notify.calls == []
 
 
 def test_large_jump_emits_one_order_and_resets_only_that_symbol():
@@ -302,18 +342,66 @@ def test_invalid_account_contract_warns_skips_and_does_not_advance_reference(
     assert warning in strategy.notify.calls[-1][1]
 
 
-def test_symbol_level_isolated_margin_rejects_order_even_when_wallet_says_cross():
+@pytest.mark.parametrize("configured_margin_mode", ["isolated", "CROSSED"])
+def test_noncanonical_symbol_margin_rejects_order_even_when_wallet_says_cross(
+    configured_margin_mode: str,
+):
     strategy_type = strategy_class()
     strategy = configured_strategy()
     view = InputView(parse_declared_inputs(strategy_type.INPUTS))
     wallet = PortfolioWallet(
-        RouteWallet(margin_mode="cross", configured_margin_mode="isolated")
+        RouteWallet(
+            margin_mode="cross",
+            configured_margin_mode=configured_margin_mode,
+        )
     )
 
     assert feed(strategy, view, wallet, "BTCUSDT", 100000.0) is None
     assert feed(strategy, view, wallet, "BTCUSDT", 100100.0) is None
     assert strategy._reference_prices["BTCUSDT"] == 100000.0
     assert "cross" in strategy.notify.calls[-1][1]
+
+
+def test_persistent_account_issue_notifies_once_across_symbols_and_bars():
+    strategy_type = strategy_class()
+    strategy = configured_strategy()
+    view = InputView(parse_declared_inputs(strategy_type.INPUTS))
+    wallet = PortfolioWallet(RouteWallet(margin_mode="isolated"))
+
+    for symbol, initial, triggered in (
+        ("BTCUSDT", 100000.0, 100100.0),
+        ("ETHUSDT", 3000.0, 3003.0),
+        ("ZECUSDT", 50.0, 50.05),
+    ):
+        assert feed(strategy, view, wallet, symbol, initial) is None
+        assert feed(strategy, view, wallet, symbol, triggered) is None
+        assert feed(strategy, view, wallet, symbol, triggered * 1.001) is None
+
+    assert strategy.notify.calls == [
+        ("Multi-Symbol Futures Test", "account must use cross margin mode")
+    ]
+
+
+def test_warning_can_notify_again_after_recovery_then_recurrence():
+    strategy_type = strategy_class()
+    strategy = configured_strategy()
+    view = InputView(parse_declared_inputs(strategy_type.INPUTS))
+    route = RouteWallet(margin_mode="isolated")
+    wallet = PortfolioWallet(route)
+
+    assert feed(strategy, view, wallet, "BTCUSDT", 100000.0) is None
+    assert feed(strategy, view, wallet, "BTCUSDT", 100100.0) is None
+    assert len(strategy.notify.calls) == 1
+
+    route.futures.margin_mode = "cross"
+    assert feed(strategy, view, wallet, "BTCUSDT", 100100.0) is not None
+
+    route.futures.margin_mode = "isolated"
+    assert feed(strategy, view, wallet, "BTCUSDT", 100201.0) is None
+    assert strategy.notify.calls == [
+        ("Multi-Symbol Futures Test", "account must use cross margin mode"),
+        ("Multi-Symbol Futures Test", "account must use cross margin mode"),
+    ]
 
 
 def test_indicator_values_and_marker_describe_the_triggered_callback():
@@ -404,6 +492,44 @@ def test_missing_symbol_metadata_warns_and_preserves_reference():
     assert feed(strategy, view, wallet, "ETHUSDT", 3003.0) is None
     assert strategy._reference_prices["ETHUSDT"] == 3000.0
     assert "risk metadata missing for ETHUSDT" in strategy.notify.calls[-1][1]
+
+
+def test_missing_symbol_metadata_is_deduplicated_until_recovery_and_recurrence():
+    strategy_type = strategy_class()
+    strategy = configured_strategy()
+    view = InputView(parse_declared_inputs(strategy_type.INPUTS))
+    route = RouteWallet()
+    metadata = route.futures.risk_metadata.pop("ETHUSDT")
+    wallet = PortfolioWallet(route)
+
+    assert feed(strategy, view, wallet, "ETHUSDT", 3000.0) is None
+    assert feed(strategy, view, wallet, "ETHUSDT", 3003.0) is None
+    assert feed(strategy, view, wallet, "ETHUSDT", 3006.0) is None
+    assert len(strategy.notify.calls) == 1
+
+    route.futures.risk_metadata["ETHUSDT"] = metadata
+    assert feed(strategy, view, wallet, "ETHUSDT", 3003.0) is not None
+
+    del route.futures.risk_metadata["ETHUSDT"]
+    assert feed(strategy, view, wallet, "ETHUSDT", 3006.1) is None
+    assert [message for _, message in strategy.notify.calls] == [
+        "risk metadata missing for ETHUSDT",
+        "risk metadata missing for ETHUSDT",
+    ]
+
+
+def test_mismatched_symbol_leverage_fails_closed_without_local_fallback():
+    strategy_type = strategy_class()
+    strategy = configured_strategy()
+    view = InputView(parse_declared_inputs(strategy_type.INPUTS))
+    wallet = PortfolioWallet(RouteWallet(leverages={"ETHUSDT": 20.0}))
+
+    assert feed(strategy, view, wallet, "ETHUSDT", 3000.0) is None
+    assert feed(strategy, view, wallet, "ETHUSDT", 3003.0) is None
+    assert strategy._reference_prices["ETHUSDT"] == 3000.0
+    assert strategy.notify.calls == [
+        ("Multi-Symbol Futures Test", "ETHUSDT must be configured at 10x leverage")
+    ]
 
 
 @pytest.mark.parametrize(
