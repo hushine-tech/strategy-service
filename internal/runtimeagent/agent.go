@@ -1155,7 +1155,7 @@ func (a *Agent) reconcileCommittedStartFailure(
 		(expectedLaunchOperationID != "" && strings.TrimSpace(session.GetLaunchOperationId()) != expectedLaunchOperationID) ||
 		(expectedUserID > 0 && session.GetUserId() != expectedUserID) ||
 		(expectedPortfolioID > 0 && session.GetPortfolioId() != expectedPortfolioID) ||
-		(expectedStrategyID > 0 && session.GetStrategyId() != expectedStrategyID) ||
+		session.GetStrategyId() != expectedStrategyID ||
 		session.GetEnvironment() != expectedEnvironment {
 		err := fmt.Errorf("committed startup cleanup reconciliation mismatch")
 		checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
@@ -2749,7 +2749,7 @@ func (a *Agent) reconcileAmbiguousRunningPublication(
 		strings.TrimSpace(session.GetSessionId()) != strings.TrimSpace(update.GetSessionId()) ||
 		(expectedUserID > 0 && session.GetUserId() != expectedUserID) ||
 		(expectedPortfolioID > 0 && session.GetPortfolioId() != expectedPortfolioID) ||
-		(expectedStrategyID > 0 && session.GetStrategyId() != expectedStrategyID) ||
+		session.GetStrategyId() != expectedStrategyID ||
 		session.GetEnvironment() != expectedEnvironment ||
 		(expectedRuntimeID != "" && strings.TrimSpace(session.GetRuntimeId()) != expectedRuntimeID) ||
 		(expectedLaunchOperationID != "" && strings.TrimSpace(session.GetLaunchOperationId()) != expectedLaunchOperationID) {

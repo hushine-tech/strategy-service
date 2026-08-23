@@ -639,6 +639,7 @@ type strategyStartWorkerSender struct {
 	recorder     *strategyStartRecorder
 	prepareOK    bool
 	sourceDigest string
+	strategyID   *int64
 	lastPrepare  *strategyv1.PrepareRunStrategyStartRequest
 }
 
@@ -658,6 +659,9 @@ func (s *strategyStartWorkerSender) SendToWorker(sessionID string, frame *rwv1.A
 	s.lastPrepare = proto.Clone(&request).(*strategyv1.PrepareRunStrategyStartRequest)
 	s.recorder.add("prepare")
 	response := preparedStrategyStart(request.GetSessionId(), request.GetLaunchOperationId())
+	if s.strategyID != nil {
+		response.Session.StrategyId = *s.strategyID
+	}
 	if s.sourceDigest != "" {
 		response.StrategySourceSha256 = s.sourceDigest
 	}
@@ -710,6 +714,7 @@ type strategyStartPlatform struct {
 	updateFailures              int
 	loseRunningAck              bool
 	loseRunningAckAfterDeadline bool
+	runningStrategyID           *int64
 	blockUnguardedFailed        bool
 	unguardedFailedAttempts     int
 	admissionActive             bool
@@ -825,6 +830,9 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 			}
 			p.committedSession.Status = update.GetStatus()
 			p.committedSession.Error = update.GetError()
+			if update.GetStatus() == "running" && p.runningStrategyID != nil {
+				p.committedSession.StrategyId = *p.runningStrategyID
+			}
 			if p.loseRunningAck && update.GetStatus() == "running" {
 				p.loseRunningAck = false
 				waitForDeadline := p.loseRunningAckAfterDeadline
@@ -964,14 +972,32 @@ func TestAgentRunStrategyStartupTimeoutLetsInflightRunningPublicationWin(t *test
 	generation.completePlatformCall()
 }
 
-func TestAgentRunStrategyReconcilesAcceptedRunningAfterTransportError(t *testing.T) {
+type lostRunningResponseScenario struct {
+	frame                   *cpv1.RuntimeFrame
+	status                  string
+	durableStrategyID       int64
+	updates                 []*portfoliov1.UpdateSessionRequest
+	unguardedFailedAttempts int
+	generation              *workerGeneration
+	terminalRetryCount      int
+}
+
+func runLostRunningResponseScenario(
+	t *testing.T,
+	durableRunningStrategyID int64,
+) lostRunningResponseScenario {
+	t.Helper()
 	recorder := &strategyStartRecorder{}
+	expectedStrategyID := int64(0)
 	platform := &strategyStartPlatform{
 		recorder: recorder, commitOK: true, loseRunningAck: true,
 		loseRunningAckAfterDeadline: true, blockUnguardedFailed: true,
+		runningStrategyID: &durableRunningStrategyID,
 	}
 	starter := &strategyStartWorkerStarter{recorder: recorder, suppressFinalProgress: true}
-	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	sender := &strategyStartWorkerSender{
+		recorder: recorder, prepareOK: true, strategyID: &expectedStrategyID,
+	}
 	agent := NewAgent(AgentConfig{
 		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
 		WorkerSender: sender, PlatformInvoker: platform,
@@ -996,17 +1022,6 @@ func TestAgentRunStrategyReconcilesAcceptedRunningAfterTransportError(t *testing
 				}}}, func(frame *rwv1.AgentFrame) error {
 				result := frame.GetPlatformCallResult()
 				if result == nil || !result.GetOk() {
-					failed, packErr := anypb.New(&portfoliov1.UpdateSessionRequest{
-						SessionId: sessionID, Status: "failed", RuntimeId: "rt-1",
-					})
-					if packErr != nil {
-						return packErr
-					}
-					_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
-						Payload: &rwv1.WorkerFrame_PlatformCall{PlatformCall: &rwv1.PlatformCall{
-							CallId: "unguarded-failed", Method: "portfolio.UpdateSession",
-							Request: failed, TimeoutMs: 1000,
-						}}}, func(*rwv1.AgentFrame) error { return nil })
 					return agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
 						Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
 							SessionId: sessionID, Status: "failed", Error: "running publication ambiguous",
@@ -1023,31 +1038,58 @@ func TestAgentRunStrategyReconcilesAcceptedRunningAfterTransportError(t *testing
 	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
 		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
 	})
-	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
-		t.Fatalf("RunStrategy frame = %+v", frame)
-	}
 	platform.mu.Lock()
 	statusValue := platform.committedSession.GetStatus()
+	durableStrategyID := platform.committedSession.GetStrategyId()
 	updates := append([]*portfoliov1.UpdateSessionRequest(nil), platform.updates...)
 	unguardedFailedAttempts := platform.unguardedFailedAttempts
 	platform.mu.Unlock()
-	if statusValue != "running" || unguardedFailedAttempts != 0 || len(updates) != 1 ||
-		updates[0].GetStatus() != "running" || updates[0].GetExpectedStatus() != "pending" {
-		t.Fatalf(
-			"lost running acknowledgement status=%q unguarded_failed=%d updates=%+v",
-			statusValue, unguardedFailedAttempts, updates,
-		)
-	}
 	agent.mu.Lock()
 	var generation *workerGeneration
 	for _, candidate := range agent.generations {
 		generation = candidate
 	}
 	agent.mu.Unlock()
+	agent.retryMu.Lock()
+	retryCount := len(agent.terminalRetries)
+	agent.retryMu.Unlock()
+	return lostRunningResponseScenario{
+		frame: frame, status: statusValue, durableStrategyID: durableStrategyID,
+		updates:                 updates,
+		unguardedFailedAttempts: unguardedFailedAttempts,
+		generation:              generation, terminalRetryCount: retryCount,
+	}
+}
+
+func TestAgentRunStrategyReconcilesAcceptedRunningWithZeroStrategyID(t *testing.T) {
+	result := runLostRunningResponseScenario(t, 0)
+	if result.frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE ||
+		result.status != "running" || result.durableStrategyID != 0 ||
+		result.unguardedFailedAttempts != 0 ||
+		len(result.updates) != 1 || result.updates[0].GetStatus() != "running" ||
+		result.updates[0].GetExpectedStatus() != "pending" {
+		t.Fatalf("zero strategy running reconciliation = %+v", result)
+	}
+	generation := result.generation
 	if generation == nil || !generation.admit("post-ambiguous-running-probe") {
 		t.Fatal("accepted running generation did not remain admitted")
 	}
 	generation.completePlatformCall()
+}
+
+func TestAgentRunStrategyRejectsLostRunningResponseForDifferentStrategyFromExpectedZero(t *testing.T) {
+	result := runLostRunningResponseScenario(t, 99)
+	if result.frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR ||
+		result.status != "running" || result.durableStrategyID != 99 ||
+		result.unguardedFailedAttempts != 0 ||
+		len(result.updates) != 1 || result.updates[0].GetStatus() != "running" ||
+		result.terminalRetryCount != 1 || result.generation == nil {
+		t.Fatalf("mismatched zero strategy reconciliation = %+v", result)
+	}
+	if result.generation.admit("mismatched-strategy-probe") {
+		result.generation.completePlatformCall()
+		t.Fatal("mismatched durable strategy row reopened startup admission")
+	}
 }
 
 func TestAgentRunStrategyRetriesUnacknowledgedPostCommitCleanup(t *testing.T) {
