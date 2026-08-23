@@ -591,9 +591,12 @@ type RunStrategyRequest struct {
 	// leverage is strategy-owned and this value is ignored.
 	//
 	// Deprecated: Marked as deprecated in strategy_service.proto.
-	Leverage      float64 `protobuf:"fixed64,103,opt,name=leverage,proto3" json:"leverage,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Leverage float64 `protobuf:"fixed64,103,opt,name=leverage,proto3" json:"leverage,omitempty"`
+	// Explicit stopped/recoverable predecessor selected for Resume. Empty means
+	// an ordinary start; it is never inferred by the runtime or control plane.
+	ResumeSessionId string `protobuf:"bytes,104,opt,name=resume_session_id,json=resumeSessionId,proto3" json:"resume_session_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RunStrategyRequest) Reset() {
@@ -688,6 +691,13 @@ func (x *RunStrategyRequest) GetLeverage() float64 {
 		return x.Leverage
 	}
 	return 0
+}
+
+func (x *RunStrategyRequest) GetResumeSessionId() string {
+	if x != nil {
+		return x.ResumeSessionId
+	}
+	return ""
 }
 
 type RunStrategyResponse struct {
@@ -2718,7 +2728,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06issues\x18\x02 \x03(\v2).strategy.v1.StrategyValidationIssueProtoR\x06issues\x12N\n" +
 	"\x0fruntime_profile\x18\x03 \x01(\v2%.strategy.v1.RuntimeDependencyProfileR\x0eruntimeProfile\x12N\n" +
 	"\x0fdeclared_inputs\x18\x04 \x03(\v2%.strategy.v1.StrategyInputDeclarationR\x0edeclaredInputs\x12]\n" +
-	"\x16declared_order_targets\x18\x05 \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\"\xe2\x02\n" +
+	"\x16declared_order_targets\x18\x05 \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\"\x8e\x03\n" +
 	"\x12RunStrategyRequest\x12!\n" +
 	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12#\n" +
 	"\rstrategy_path\x18\x02 \x01(\tR\fstrategyPath\x12\x1a\n" +
@@ -2729,7 +2739,8 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\n" +
 	"runtime_id\x18e \x01(\tR\truntimeId\x12+\n" +
 	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\x12\x1e\n" +
-	"\bleverage\x18g \x01(\x01B\x02\x18\x01R\bleverageJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x06symbolR\vsymbol_type\"\x93\x02\n" +
+	"\bleverage\x18g \x01(\x01B\x02\x18\x01R\bleverage\x12*\n" +
+	"\x11resume_session_id\x18h \x01(\tR\x0fresumeSessionIdJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x06symbolR\vsymbol_type\"\x93\x02\n" +
 	"\x13RunStrategyResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x0e\n" +

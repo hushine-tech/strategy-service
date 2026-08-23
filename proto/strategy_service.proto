@@ -108,6 +108,9 @@ message RunStrategyRequest {
   // Deprecated session-wide leverage retained for wire compatibility. Target
   // leverage is strategy-owned and this value is ignored.
   double leverage = 103 [deprecated = true];
+  // Explicit stopped/recoverable predecessor selected for Resume. Empty means
+  // an ordinary start; it is never inferred by the runtime or control plane.
+  string resume_session_id = 104;
 }
 
 message RunStrategyResponse {

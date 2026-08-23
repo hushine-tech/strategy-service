@@ -37,6 +37,7 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 
 	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
 		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1", Interval: "1m",
+		ResumeSessionId: "session-recoverable-source",
 	})
 	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
 		t.Fatalf("RunStrategy frame = %+v", frame)
@@ -61,6 +62,9 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 	}
 	if platform.commit.GetLaunchOperationId() == "" || platform.commit.GetSession().GetLeverage() != 0 {
 		t.Fatalf("commit operation/scalar = %+v", platform.commit)
+	}
+	if platform.commit.GetResumeSessionId() != "session-recoverable-source" {
+		t.Fatalf("commit Resume binding = %q", platform.commit.GetResumeSessionId())
 	}
 	if starter.finalStart == nil || starter.finalStart.GetSessionBootstrap() == nil {
 		t.Fatalf("final StartSession = %+v", starter.finalStart)

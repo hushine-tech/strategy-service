@@ -552,6 +552,7 @@ func (a *Agent) handleRunStrategy(
 		launchOperationID,
 		runtimeID,
 		runReq.GetUserId(),
+		runReq.GetResumeSessionId(),
 	)
 	if err != nil {
 		a.forgetWorkerGeneration(sessionID, generation)
@@ -849,6 +850,7 @@ func commitStrategySessionStartRequest(
 	launchOperationID string,
 	runtimeID string,
 	userID int64,
+	resumeSessionID string,
 ) (*portfoliov1.CommitStrategySessionStartRequest, error) {
 	if prepared == nil || prepared.GetSession() == nil {
 		return nil, fmt.Errorf("prepared strategy start is missing Session metadata")
@@ -870,6 +872,7 @@ func commitStrategySessionStartRequest(
 	}
 	request := &portfoliov1.CommitStrategySessionStartRequest{
 		LaunchOperationId: launchOperationID,
+		ResumeSessionId:   strings.TrimSpace(resumeSessionID),
 		Session: &portfoliov1.SaveSessionRequest{
 			SessionId:      sessionID,
 			PortfolioId:    metadata.GetPortfolioId(),

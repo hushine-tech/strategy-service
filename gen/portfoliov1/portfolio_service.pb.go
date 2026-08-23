@@ -10476,8 +10476,12 @@ type CommitStrategySessionStartRequest struct {
 	Session           *SaveSessionRequest    `protobuf:"bytes,2,opt,name=session,proto3" json:"session,omitempty"`
 	RequiredRoutes    []*RequiredRoute       `protobuf:"bytes,3,rep,name=required_routes,json=requiredRoutes,proto3" json:"required_routes,omitempty"`
 	RequiredSymbols   []*RequiredSymbol      `protobuf:"bytes,4,rep,name=required_symbols,json=requiredSymbols,proto3" json:"required_symbols,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Explicit predecessor selected by the authenticated user for Resume.
+	// Empty means an ordinary start. Core validates ownership/binding before
+	// atomically superseding a recoverable Session and its target admissions.
+	ResumeSessionId string `protobuf:"bytes,5,opt,name=resume_session_id,json=resumeSessionId,proto3" json:"resume_session_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CommitStrategySessionStartRequest) Reset() {
@@ -10536,6 +10540,13 @@ func (x *CommitStrategySessionStartRequest) GetRequiredSymbols() []*RequiredSymb
 		return x.RequiredSymbols
 	}
 	return nil
+}
+
+func (x *CommitStrategySessionStartRequest) GetResumeSessionId() string {
+	if x != nil {
+		return x.ResumeSessionId
+	}
+	return ""
 }
 
 type CommitStrategySessionStartResponse struct {
@@ -11590,12 +11601,13 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\tretryable\x18\x0e \x01(\bR\tretryableB\x14\n" +
 	"\x12_previous_leverageB\x13\n" +
 	"\x11_current_leverageB\x15\n" +
-	"\x13_confirmed_leverage\"\x9e\x02\n" +
+	"\x13_confirmed_leverage\"\xca\x02\n" +
 	"!CommitStrategySessionStartRequest\x12.\n" +
 	"\x13launch_operation_id\x18\x01 \x01(\tR\x11launchOperationId\x12:\n" +
 	"\asession\x18\x02 \x01(\v2 .portfolio.v1.SaveSessionRequestR\asession\x12D\n" +
 	"\x0frequired_routes\x18\x03 \x03(\v2\x1b.portfolio.v1.RequiredRouteR\x0erequiredRoutes\x12G\n" +
-	"\x10required_symbols\x18\x04 \x03(\v2\x1c.portfolio.v1.RequiredSymbolR\x0frequiredSymbols\"\xd8\x02\n" +
+	"\x10required_symbols\x18\x04 \x03(\v2\x1c.portfolio.v1.RequiredSymbolR\x0frequiredSymbols\x12*\n" +
+	"\x11resume_session_id\x18\x05 \x01(\tR\x0fresumeSessionId\"\xd8\x02\n" +
 	"\"CommitStrategySessionStartResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x124\n" +
 	"\x06issues\x18\x02 \x03(\v2\x1c.portfolio.v1.PreflightIssueR\x06issues\x12]\n" +
