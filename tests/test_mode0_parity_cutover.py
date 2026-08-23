@@ -11,9 +11,15 @@ smoke. They MUST continue to pass.
 
 from __future__ import annotations
 
+import socket
+
 import pytest
+from hushine_strategy.replay import ReplayEngine
+from hushine_strategy.wallet import FuturesWallet as OfflineFuturesWallet
+from hushine_strategy.wallet import PortfolioWallet as OfflinePortfolioWallet
 
 from strategy_service.gen import portfolio_service_pb2
+from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
 from strategy_service.wallet import BinanceWalletRuntime
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet_factory import build_wallet_from_portfolio
@@ -207,3 +213,75 @@ def test_mode0_registry_binding_is_binance_runtime():
 
     _populate_runtime_registry()
     assert RUNTIME_REGISTRY[("local", "backtest")] is BinanceWalletRuntime
+
+
+def test_mode0_and_offline_replay_expose_equal_leverage_and_strategy_sizing(monkeypatch):
+    def fail_network(*_args, **_kwargs):
+        raise AssertionError("simulated leverage must not access Binance")
+
+    monkeypatch.setattr(socket, "create_connection", fail_network)
+    declared_targets = parse_order_targets(
+        [
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "BTCUSDT",
+            },
+            {
+                "exchange": "binance",
+                "market": "perpetual_futures",
+                "symbol": "ETHUSDT",
+                "leverage": 10,
+            },
+        ]
+    )
+    resolved_targets = resolve_order_target_leverages(declared_targets, 5)
+
+    hosted_wallet = build_wallet_from_portfolio(
+        proto_to_portfolio_spec(
+            _canonical_mode0(
+                wallet_balance=1000.0,
+                available_balance=1000.0,
+                initial_balance=1000.0,
+            )
+        ),
+        simulated_order_targets=resolved_targets,
+    )
+    offline_futures = OfflineFuturesWallet(initial_balance=1000.0)
+    offline_portfolio = OfflinePortfolioWallet(
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 1): offline_futures},
+    )
+    ReplayEngine(
+        wallet=offline_portfolio,
+        order_targets=declared_targets,
+        strategy_leverage=5,
+    )
+
+    def strategy_qty(wallet, symbol: str, price: float) -> float:
+        metadata = wallet.futures.risk_metadata[symbol]
+        return (
+            wallet.get_wallet_balance()
+            * 0.01
+            * metadata.configured_leverage
+            / price
+        )
+
+    hosted_metadata = {
+        symbol: (metadata.configured_leverage, metadata.leverage_source)
+        for symbol, metadata in hosted_wallet.futures.risk_metadata.items()
+    }
+    offline_metadata = {
+        symbol: (metadata.configured_leverage, metadata.leverage_source)
+        for symbol, metadata in offline_futures.risk_metadata.items()
+    }
+    assert hosted_metadata == offline_metadata == {
+        "BTCUSDT": (5, "strategy_default"),
+        "ETHUSDT": (10, "order_target"),
+    }
+    assert strategy_qty(hosted_wallet, "BTCUSDT", 100.0) == pytest.approx(
+        strategy_qty(offline_futures, "BTCUSDT", 100.0)
+    )
+    assert strategy_qty(hosted_wallet, "ETHUSDT", 200.0) == pytest.approx(
+        strategy_qty(offline_futures, "ETHUSDT", 200.0)
+    )

@@ -9183,6 +9183,120 @@ def test_run_strategy_backtest_allows_empty_wallet_when_data_available(monkeypat
     assert calls["save_session"] == 1
 
 
+def test_run_strategy_backtest_applies_resolved_targets_to_runtime_and_restore_wallets(
+    monkeypatch,
+):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"}]\n'
+        "    LEVERAGE = 5\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, _calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    real_builder = grpc_server.build_portfolio_wallet_from_snapshot
+    target_batches = []
+
+    def recording_builder(*args, **kwargs):
+        target_batches.append(tuple(kwargs.get("simulated_order_targets", ())))
+        return real_builder(*args, **kwargs)
+
+    monkeypatch.setattr(
+        grpc_server,
+        "build_portfolio_wallet_from_snapshot",
+        recording_builder,
+    )
+
+    response = servicer.RunStrategy(
+        SimpleNamespace(
+            portfolio_id=201,
+            user_id=17,
+            runtime_id="rt-test",
+            strategy_path="",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+            max_loss_close_pct=0.0,
+            leverage=99.0,
+        ),
+        _FakeContext(),
+    )
+
+    assert response.session_id
+    assert len(target_batches) == 2
+    assert [
+        (target.symbol, target.effective_leverage, target.leverage_source)
+        for target in target_batches[0]
+    ] == [("BTCUSDT", 5, "strategy_default")]
+    assert target_batches[1] == target_batches[0]
+
+
+def test_preview_backtest_applies_resolved_targets_but_demo_does_not(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "leverage": 7}]\n'
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    real_builder = grpc_server.build_portfolio_wallet_from_snapshot
+
+    for environment, expected_batches in ((0, 1), (1, 0)):
+        servicer, _calls = _build_servicer_with_faked_preflight_deps(
+            monkeypatch=monkeypatch,
+            environment=environment,
+            strategy_code=source,
+        )
+        monkeypatch.setattr(
+            servicer,
+            "_run_profile_preflight",
+            lambda **_kwargs: grpc_server.PreflightResult(
+                profile=(
+                    grpc_server.RuntimeSourceProfile.BACKTEST
+                    if environment == 0
+                    else grpc_server.RuntimeSourceProfile.DEMO
+                )
+            ),
+        )
+        target_batches = []
+
+        def recording_builder(*args, **kwargs):
+            batch = tuple(kwargs.get("simulated_order_targets", ()))
+            if batch:
+                target_batches.append(batch)
+            return real_builder(*args, **kwargs)
+
+        monkeypatch.setattr(
+            grpc_server,
+            "build_portfolio_wallet_from_snapshot",
+            recording_builder,
+        )
+        response = servicer.PreviewRunStrategy(
+            SimpleNamespace(
+                portfolio_id=301,
+                user_id=17,
+                strategy_path="",
+                start_time_ms=1,
+                end_time_ms=2,
+            ),
+            _FakeContext(),
+        )
+
+        assert response.ok is True
+        assert len(target_batches) == expected_batches
+        if target_batches:
+            target = target_batches[0][0]
+            assert (target.symbol, target.effective_leverage, target.leverage_source) == (
+                "BTCUSDT",
+                7,
+                "order_target",
+            )
+
+
 def test_run_strategy_backtest_rejects_when_historical_data_missing(monkeypatch):
     """Scenario: Missing historical data blocks startup.
 

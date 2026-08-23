@@ -1883,6 +1883,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             wallet = build_portfolio_wallet_from_snapshot(
                 snapshot,
                 allowed_routes=required_routes,
+                simulated_order_targets=(order_targets if environment == 0 else ()),
             )
             initial_margin_balance = _target_close_margin_balance(
                 wallet,
@@ -2191,6 +2192,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             wallet = build_portfolio_wallet_from_snapshot(
                 snapshot,
                 allowed_routes=required_routes,
+                simulated_order_targets=(
+                    declarations.order_targets if environment == 0 else ()
+                ),
             )
             if preflight_responses:
                 attach_spot_risk_snapshots(
@@ -2202,6 +2206,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 backtest_restore_wallet = build_portfolio_wallet_from_snapshot(
                     snapshot,
                     allowed_routes=required_routes,
+                    simulated_order_targets=declarations.order_targets,
                 )
                 if preflight_responses:
                     attach_spot_risk_snapshots(
@@ -5070,6 +5075,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             build_portfolio_wallet_from_snapshot(
                 snapshot,
                 allowed_routes=required_routes,
+                simulated_order_targets=(
+                    declarations.order_targets if environment == 0 else ()
+                ),
             )
         except Exception as e:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)

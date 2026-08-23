@@ -195,7 +195,49 @@ def _validate_exchange_leverage_contract(portfolio: CanonicalPortfolioState) -> 
         )
 
 
-def build_wallet_from_portfolio(portfolio: dict[str, Any] | CanonicalPortfolioState):
+def install_simulated_target_leverages(
+    runtime: Any,
+    order_targets: Any,
+    *,
+    exchange: str = "binance",
+    market: str = "perpetual_futures",
+) -> Any:
+    """Install already-resolved target facts on an in-memory Backtest wallet."""
+    if int(getattr(runtime, "environment_code", -1)) != 0:
+        return runtime
+    futures = getattr(runtime, "futures", None)
+    install = getattr(futures, "install_simulated_target_leverage", None)
+    if not callable(install):
+        raise ValueError("Backtest Futures wallet cannot accept target leverage facts")
+    expected_exchange = str(exchange or "").strip().lower()
+    expected_market = str(market or "").strip().lower()
+    for target in order_targets or ():
+        target_market = str(getattr(target, "market", "") or "").strip().lower()
+        if target_market == "spot":
+            continue
+        if (
+            str(getattr(target, "exchange", "") or "").strip().lower()
+            != expected_exchange
+            or target_market != expected_market
+        ):
+            continue
+        install(
+            getattr(target, "symbol", ""),
+            configured_leverage=int(
+                getattr(target, "effective_leverage", 0) or 0
+            ),
+            leverage_source=str(
+                getattr(target, "leverage_source", "") or ""
+            ),
+        )
+    return runtime
+
+
+def build_wallet_from_portfolio(
+    portfolio: dict[str, Any] | CanonicalPortfolioState,
+    *,
+    simulated_order_targets: Any = (),
+):
     """Build the appropriate wallet runtime.
 
     - ``dict`` input is normalized to canonical backtest state first
@@ -237,4 +279,5 @@ def build_wallet_from_portfolio(portfolio: dict[str, Any] | CanonicalPortfolioSt
             )
         _validate_exchange_leverage_contract(portfolio)
 
-    return runtime_cls.from_canonical(portfolio)
+    runtime = runtime_cls.from_canonical(portfolio)
+    return install_simulated_target_leverages(runtime, simulated_order_targets)

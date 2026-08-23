@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Iterable
 
 from strategy_service.inputs import _normalize_exchange, _normalize_market
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.canonical import SpotSymbolFilter, SpotSymbolMetadata
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from strategy_service.wallet_factory import install_simulated_target_leverages
 
 
 _EXCHANGE_LABELS = {
@@ -211,12 +212,25 @@ def _futures_wallet_has_content(futures: Any) -> bool:
 def build_portfolio_wallet_from_snapshot(
     snapshot: Any,
     allowed_routes: set[tuple[str, str]],
+    *,
+    simulated_order_targets: Iterable[Any] = (),
 ) -> PortfolioWalletRuntime:
     """Convert a core ``PortfolioSnapshot`` into a routed portfolio runtime."""
     normalized_allowed_routes = {
         _validate_route(exchange, market)
         for exchange, market in allowed_routes
     }
+    simulated_futures_targets: dict[tuple[str, str], list[Any]] = {}
+    for target in simulated_order_targets:
+        route = _validate_route(
+            getattr(target, "exchange", ""),
+            getattr(target, "market", ""),
+        )
+        if route[1] == "spot":
+            continue
+        if route[1] != "perpetual_futures":
+            raise ValueError(f"unsupported simulated target market: {route[1]}")
+        simulated_futures_targets.setdefault(route, []).append(target)
     wallets: dict[tuple[str, str, int], Any] = {}
     for venue in getattr(snapshot, "venues", []) or []:
         exchange, market = _venue_route(venue)
@@ -227,10 +241,17 @@ def build_portfolio_wallet_from_snapshot(
             raise ValueError(f"unsupported portfolio wallet exchange: {exchange}")
         if market not in {"spot", "perpetual_futures"}:
             raise ValueError(f"unsupported portfolio wallet market: {market}")
-        wallets[(exchange, market, venue_id)] = _build_binance_wallet_from_venue_snapshot(
+        runtime = _build_binance_wallet_from_venue_snapshot(
             venue,
             market=market,
         )
+        install_simulated_target_leverages(
+            runtime,
+            simulated_futures_targets.get((exchange, market), ()),
+            exchange=exchange,
+            market=market,
+        )
+        wallets[(exchange, market, venue_id)] = runtime
 
     return PortfolioWalletRuntime(
         portfolio_id=int(getattr(snapshot, "portfolio_id", 0) or 0),

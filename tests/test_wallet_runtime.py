@@ -7,6 +7,7 @@ import pytest
 
 from strategy_service.portfolio_client import _serialize_future_wallet
 from strategy_service.gen import portfolio_service_pb2
+from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
 from strategy_service.wallet import BinanceWalletRuntime
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet_factory import (
@@ -221,6 +222,43 @@ def test_build_wallet_from_http_backtest_dict_uses_binance_runtime_after_c2a():
     assert isinstance(wallet, BinanceWalletRuntime)
     assert wallet.environment_code == 0
     assert ("BTCUSDT", 0) in wallet.futures.positions
+
+
+def test_http_backtest_wallet_installs_resolved_target_leverage_metadata():
+    targets = resolve_order_target_leverages(
+        parse_order_targets(
+            [
+                {"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"},
+                {
+                    "exchange": "binance",
+                    "market": "perpetual_futures",
+                    "symbol": "ETHUSDT",
+                    "leverage": 10,
+                },
+            ]
+        ),
+        5,
+    )
+
+    wallet = build_wallet_from_portfolio(
+        {
+            "futures": {
+                "margin_mode": "cross",
+                "position_mode": "one_way",
+                "initial_balance": 1000.0,
+            },
+            "spot": {"free": 0.0, "locked": 0.0, "assets": {}},
+        },
+        simulated_order_targets=targets,
+    )
+
+    assert {
+        symbol: (metadata.configured_leverage, metadata.leverage_source)
+        for symbol, metadata in wallet.futures.risk_metadata.items()
+    } == {
+        "BTCUSDT": (5, "strategy_default"),
+        "ETHUSDT": (10, "order_target"),
+    }
 
 
 def test_binance_parity_runtime_preserves_flat_isolated_seed_balances_on_mode0():

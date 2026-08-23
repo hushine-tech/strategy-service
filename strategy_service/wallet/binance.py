@@ -24,6 +24,13 @@ __all__ = [
 ]
 
 
+@dataclass(slots=True)
+class SimulatedFuturesRiskMetadata(CanonicalFuturesRiskMetadata):
+    """Backtest-only target leverage layered over canonical symbol facts."""
+
+    leverage_source: str = ""
+
+
 _QTY_EPS = 1e-12
 _ACTIVE_ORDER_STATUSES = {"NEW", "PARTIALLY_FILLED"}
 _TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELED", "EXPIRED"}
@@ -339,6 +346,43 @@ class BinanceFuturesBook:
 
     def _resolve_metadata(self, symbol: str) -> CanonicalFuturesRiskMetadata | None:
         return self.risk_metadata.get(norm_symbol(symbol))
+
+    def install_simulated_target_leverage(
+        self,
+        symbol: str,
+        *,
+        configured_leverage: int,
+        leverage_source: str,
+    ) -> None:
+        leverage = int(configured_leverage)
+        source = str(leverage_source or "").strip()
+        if leverage <= 0 or source not in {
+            "order_target",
+            "strategy_default",
+            "platform_default",
+        }:
+            raise ValueError("resolved Futures target leverage facts are invalid")
+        key = norm_symbol(symbol)
+        existing = self.risk_metadata.get(key)
+        metadata = SimulatedFuturesRiskMetadata(
+            symbol=key,
+            configured_leverage=float(leverage),
+            configured_margin_mode=(
+                str(existing.configured_margin_mode or "")
+                if existing is not None
+                else self.margin_mode
+            ),
+            price_precision=int(existing.price_precision) if existing is not None else 0,
+            quantity_precision=int(existing.quantity_precision) if existing is not None else 0,
+            tick_size=float(existing.tick_size) if existing is not None else 0.0,
+            step_size=float(existing.step_size) if existing is not None else 0.0,
+            brackets=list(existing.brackets) if existing is not None else [],
+            leverage_source=source,
+        )
+        self.risk_metadata[key] = metadata
+        for (_position_symbol, _direction), position in self._get_positions_for_symbol(key):
+            position.leverage = float(leverage)
+            position._refresh_derived_fields()
 
     def _position_key_from_order(self, symbol: str, position_side: str, side: str) -> int:
         if self.position_mode != "hedge":

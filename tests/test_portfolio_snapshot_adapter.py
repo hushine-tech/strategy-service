@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import socket
 from types import SimpleNamespace
 
 import pytest
 
 from strategy_service.gen import portfolio_service_pb2
+from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
 from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.portfolio_adapter import (
     attach_spot_risk_snapshots,
@@ -54,6 +56,7 @@ def _position(
 
 def _futures_wallet(
     *,
+    environment: int = 1,
     wallet_balance: float = 1000.0,
     available_balance: float = 800.0,
     margin_balance: float = 1025.0,
@@ -61,7 +64,7 @@ def _futures_wallet(
     risk_metadata=None,
 ):
     return portfolio_service_pb2.PortfolioWalletState(
-        environment=1,
+        environment=environment,
         futures=portfolio_service_pb2.FuturesWallet(
             margin_mode="cross",
             position_mode="one_way",
@@ -74,6 +77,109 @@ def _futures_wallet(
             risk_metadata=list(risk_metadata or []),
         ),
     )
+
+
+def test_backtest_installs_resolved_target_leverage_without_exchange_side_effects(monkeypatch):
+    def fail_network(*_args, **_kwargs):
+        raise AssertionError("simulated Backtest leverage must not access Binance")
+
+    monkeypatch.setattr(socket, "create_connection", fail_network)
+    existing = portfolio_service_pb2.FuturesRiskMetadata(
+        symbol="BTCUSDT",
+        configured_leverage=20,
+        configured_margin_mode="cross",
+        step_size=0.001,
+        brackets=[
+            portfolio_service_pb2.FuturesRiskBracket(
+                bracket=1,
+                notional_cap=50_000,
+                initial_leverage=20,
+                maint_margin_ratio=0.004,
+            )
+        ],
+    )
+    snapshot = _snapshot(
+        _venue(
+            venue_id=11,
+            market=MARKET_PERPETUAL_FUTURES,
+            wallet=_futures_wallet(
+                environment=0,
+                risk_metadata=[existing],
+                positions=[_futures_position(symbol="BTCUSDT", leverage=20)],
+            ),
+        )
+    )
+    targets = resolve_order_target_leverages(
+        parse_order_targets(
+            [
+                {"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"},
+                {
+                    "exchange": "binance",
+                    "market": "perpetual_futures",
+                    "symbol": "ETHUSDT",
+                    "leverage": 10,
+                },
+                {"exchange": "binance", "market": "perpetual_futures", "symbol": "ZECUSDT"},
+                {"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"},
+            ]
+        ),
+        5,
+    )
+
+    routed = build_portfolio_wallet_from_snapshot(
+        snapshot,
+        allowed_routes={("binance", "perpetual_futures")},
+        simulated_order_targets=targets,
+    )
+
+    futures = routed.get("binance", "perpetual_futures").futures
+    assert {
+        symbol: (metadata.configured_leverage, metadata.leverage_source)
+        for symbol, metadata in futures.risk_metadata.items()
+    } == {
+        "BTCUSDT": (5, "strategy_default"),
+        "ETHUSDT": (10, "order_target"),
+        "ZECUSDT": (5, "strategy_default"),
+    }
+    assert futures.risk_metadata["BTCUSDT"].configured_margin_mode == "cross"
+    assert futures.risk_metadata["BTCUSDT"].step_size == pytest.approx(0.001)
+    assert futures.risk_metadata["BTCUSDT"].brackets[0].notional_cap == pytest.approx(50_000)
+    assert futures.positions[("BTCUSDT", 0)].leverage == pytest.approx(5)
+
+
+def test_demo_wallet_ignores_simulated_target_leverage_overlay():
+    snapshot = _snapshot(
+        _venue(
+            venue_id=11,
+            market=MARKET_PERPETUAL_FUTURES,
+            wallet=_futures_wallet(
+                environment=1,
+                risk_metadata=[
+                    portfolio_service_pb2.FuturesRiskMetadata(
+                        symbol="BTCUSDT",
+                        configured_leverage=20,
+                        configured_margin_mode="cross",
+                    )
+                ],
+            ),
+        )
+    )
+    targets = resolve_order_target_leverages(
+        parse_order_targets(
+            [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT"}]
+        ),
+        5,
+    )
+
+    routed = build_portfolio_wallet_from_snapshot(
+        snapshot,
+        allowed_routes={("binance", "perpetual_futures")},
+        simulated_order_targets=targets,
+    )
+
+    metadata = routed.get("binance", "perpetual_futures").futures.risk_metadata["BTCUSDT"]
+    assert metadata.configured_leverage == pytest.approx(20)
+    assert not hasattr(metadata, "leverage_source")
 
 
 def _spot_wallet(*, free: float = 90.0, locked: float = 10.0, assets=None):
