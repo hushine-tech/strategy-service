@@ -456,6 +456,207 @@ class _TargetLeverageCapabilityError(Exception):
     pass
 
 
+class _SessionBootstrapError(Exception):
+    pass
+
+
+def _target_key(exchange: Any, market: Any, symbol: Any) -> tuple[str, str, str]:
+    try:
+        return (
+            _normalize_exchange(exchange),
+            _normalize_market(market),
+            str(symbol or "").strip().upper(),
+        )
+    except (StrategyDeclarationError, ValueError) as exc:
+        raise _SessionBootstrapError("bootstrap target route is invalid") from exc
+
+
+def _wallet_configured_leverage(route_wallet: Any, symbol: str) -> float:
+    futures = getattr(route_wallet, "futures", None)
+    metadata = getattr(futures, "risk_metadata", {}) or {}
+    if isinstance(metadata, dict):
+        item = metadata.get(symbol)
+    else:
+        item = next(
+            (
+                entry
+                for entry in metadata
+                if str(getattr(entry, "symbol", "") or "").strip().upper() == symbol
+            ),
+            None,
+        )
+    return float(getattr(item, "configured_leverage", 0.0) or 0.0)
+
+
+def _validated_confirmed_target_map(
+    *,
+    bootstrap: Any,
+    prepared_strategy: PreparedStrategy,
+    environment: int,
+    wallet: Any,
+) -> dict[tuple[str, str, str], tuple[int, str, int]]:
+    if bootstrap is None:
+        raise _SessionBootstrapError("strategy Session bootstrap is required")
+    prepared_digest = str(
+        getattr(
+            getattr(getattr(prepared_strategy, "gated_source", None), "resolved", None),
+            "source_sha256",
+            "",
+        )
+        or ""
+    ).strip().lower()
+    bootstrap_digest = str(
+        getattr(bootstrap, "strategy_source_sha256", "") or ""
+    ).strip().lower()
+    if not prepared_digest or prepared_digest != bootstrap_digest:
+        raise _SessionBootstrapError("strategy source digest mismatch")
+
+    declared: dict[tuple[str, str, str], tuple[int, str]] = {}
+    for target in getattr(
+        getattr(prepared_strategy, "declarations", None),
+        "order_targets",
+        (),
+    ):
+        market = str(getattr(target, "market", "") or "").strip().lower()
+        if market not in {"perpetual_futures", "delivery_futures"}:
+            continue
+        key = _target_key(
+            getattr(target, "exchange", ""),
+            market,
+            getattr(target, "symbol", ""),
+        )
+        declared[key] = (
+            int(getattr(target, "effective_leverage", 0) or 0),
+            str(getattr(target, "leverage_source", "") or "").strip(),
+        )
+
+    confirmed: dict[tuple[str, str, str], tuple[int, str, int]] = {}
+    venues: dict[tuple[str, str, str], int] = {}
+    for fact in getattr(bootstrap, "confirmed_target_facts", ()) or ():
+        key = _target_key(
+            getattr(fact, "exchange", ""),
+            getattr(fact, "market", ""),
+            getattr(fact, "symbol", ""),
+        )
+        if key in confirmed:
+            raise _SessionBootstrapError("confirmed target set mismatch")
+        if int(getattr(fact, "environment", -1)) != int(environment):
+            raise _SessionBootstrapError("confirmed target environment mismatch")
+        effective = int(getattr(fact, "effective_leverage", 0) or 0)
+        source = str(getattr(fact, "leverage_source", "") or "").strip()
+        confirmed_leverage = int(getattr(fact, "confirmed_leverage", 0) or 0)
+        declared_fact = declared.get(key)
+        if declared_fact is not None and effective != declared_fact[0]:
+            raise _SessionBootstrapError("confirmed target effective leverage mismatch")
+        if declared_fact is not None and source != declared_fact[1]:
+            raise _SessionBootstrapError("confirmed target leverage source mismatch")
+        if confirmed_leverage != effective:
+            raise _SessionBootstrapError("confirmed leverage mismatch")
+        venue_id = int(getattr(fact, "venue_id", 0) or 0)
+        if venue_id <= 0:
+            raise _SessionBootstrapError("confirmed target venue is invalid")
+        confirmed[key] = (effective, source, confirmed_leverage)
+        venues[key] = venue_id
+
+    if set(confirmed) != set(declared):
+        raise _SessionBootstrapError("confirmed target set mismatch")
+    for key, (declared_effective, declared_source) in declared.items():
+        effective, source, confirmed_leverage = confirmed[key]
+        if effective != declared_effective:
+            raise _SessionBootstrapError("confirmed target effective leverage mismatch")
+        if source != declared_source:
+            raise _SessionBootstrapError("confirmed target leverage source mismatch")
+        route_wallet = getattr(wallet, "wallets", {}).get((*key[:2], venues[key]))
+        if route_wallet is None:
+            raise _SessionBootstrapError("confirmed target wallet venue mismatch")
+        wallet_environment = int(
+            getattr(route_wallet, "environment_code", environment)
+        )
+        if wallet_environment != int(environment):
+            raise _SessionBootstrapError("confirmed target wallet environment mismatch")
+        configured = _wallet_configured_leverage(route_wallet, key[2])
+        if configured != float(confirmed_leverage):
+            raise _SessionBootstrapError("confirmed target wallet risk metadata mismatch")
+    return confirmed
+
+
+def _preview_response_from_preflight(
+    *,
+    profile: RuntimeSourceProfile,
+    preflight: PreflightResult,
+    declared_inputs: list[StrategyInput] | None = None,
+    order_targets: list[StrategyOrderTarget] | None = None,
+    required_routes: set[tuple[str, str]] | None = None,
+    risk_controls: _EffectiveRiskControls | None = None,
+) -> pb2.PreviewRunStrategyResponse:
+    effective = risk_controls or _EffectiveRiskControls(
+        DEFAULT_MAX_LOSS_CLOSE_PCT,
+        "platform_default",
+    )
+    failures = []
+    for failure in preflight.failures:
+        kwargs: dict[str, Any] = {
+            "kind": failure.kind.value,
+            "reason": failure.reason,
+            "code": failure.code,
+            "exchange": failure.exchange,
+            "market": failure.market,
+            "symbol": failure.symbol,
+            "venue_id": failure.venue_id,
+            "filter_type": failure.filter_type,
+            "environment": failure.environment,
+            "retryable": failure.retryable,
+            "source": failure.source,
+        }
+        if failure.input_key is not None:
+            market, symbol, interval = failure.input_key
+            kwargs["input_key"] = pb2.PreflightInputKey(
+                market=market,
+                symbol=symbol,
+                interval=interval,
+            )
+        failures.append(pb2.PreflightFailureProto(**kwargs))
+    return pb2.PreviewRunStrategyResponse(
+        profile=profile.value,
+        supported=profile in SUPPORTED_PROFILES,
+        ok=preflight.ok,
+        failures=failures,
+        required_streams=[
+            pb2.LiveStreamBinding(
+                stream_id=binding.stream_id,
+                exchange=binding.exchange,
+                market=binding.market,
+                kind=binding.kind,
+                symbol=binding.symbol,
+                interval=binding.interval,
+            )
+            for binding in preflight.required_streams
+        ],
+        declared_inputs=[
+            pb2.LiveStreamBinding(
+                exchange=item.exchange,
+                market=item.market,
+                kind="kline",
+                symbol=item.symbol,
+                interval=item.interval,
+            )
+            for item in (declared_inputs or [])
+        ],
+        declared_order_targets=[
+            _strategy_order_target_binding(target)
+            for target in (order_targets or [])
+        ],
+        required_routes=[
+            pb2.StrategyRouteBinding(exchange=exchange, market=market)
+            for exchange, market in sorted(required_routes or set())
+        ],
+        risk_controls=pb2.RiskControls(
+            max_loss_close_pct=effective.max_loss_close_pct,
+            max_loss_close_source=effective.max_loss_close_source,
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class _PortfolioPreflightIssue:
     code: str
@@ -911,6 +1112,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         notification_client: Any | None = None,
         agent_managed_final_status: bool = False,
         start_session_id: str = "",
+        session_bootstrap: Any | None = None,
+        require_session_bootstrap: bool = False,
     ) -> None:
         self._portfolio_addr = portfolio_service_addr
         self._market_data_addr = market_data_control_panel_addr
@@ -933,6 +1136,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._notification_client = notification_client
         self._agent_managed_final_status = bool(agent_managed_final_status)
         self._start_session_id = str(start_session_id or "")
+        self._session_bootstrap = session_bootstrap
+        self._require_session_bootstrap = bool(require_session_bootstrap)
         self._runtime_data_source = None
         self._indicator_frame_sink: Callable[..., None] | None = None
         self._preflight_enabled = bool(self._market_data_policy.get("preflight_enabled", True))
@@ -1444,7 +1649,360 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             declared_order_targets=declared_order_targets,
         )
 
+    def PrepareRunStrategyStart(self, request, context):
+        run_request = getattr(request, "run_request", None)
+        if run_request is None:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("run_request is required")
+            return pb2.PreparedRunStrategyStart()
+        session_id = str(getattr(request, "session_id", "") or "").strip()
+        launch_operation_id = str(
+            getattr(request, "launch_operation_id", "") or ""
+        ).strip()
+        try:
+            self._sessions._validate_session_id(session_id)
+        except SessionRegistrationError:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("invalid canonical session_id")
+            return pb2.PreparedRunStrategyStart()
+        if not launch_operation_id:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("launch_operation_id is required")
+            return pb2.PreparedRunStrategyStart()
+
+        user_id = int(getattr(run_request, "user_id", 0) or 0)
+        portfolio_id = int(getattr(run_request, "portfolio_id", 0) or 0)
+        if user_id <= 0 or portfolio_id <= 0:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("user_id and portfolio_id are required")
+            return pb2.PreparedRunStrategyStart()
+        if not self._enforce_user_binding(user_id, context):
+            return pb2.PreparedRunStrategyStart()
+        if not self._enforce_request_runtime(run_request, context):
+            return pb2.PreparedRunStrategyStart()
+        if not self._require_platform_proxy(context, "PrepareRunStrategyStart"):
+            return pb2.PreparedRunStrategyStart()
+
+        acct_client = self._portfolio_client()
+        snapshot = _get_portfolio_snapshot(acct_client, portfolio_id, user_id)
+        if snapshot is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(
+                f"portfolio {portfolio_id} not found or core-service unreachable"
+            )
+            return pb2.PreparedRunStrategyStart()
+        environment = _portfolio_snapshot_environment(snapshot)
+        profile = resolve_profile(environment)
+
+        def _failure_result(preflight: PreflightResult):
+            preview = _preview_response_from_preflight(
+                profile=profile,
+                preflight=preflight,
+            )
+            return pb2.PreparedRunStrategyStart(
+                ok=False,
+                launch_operation_id=launch_operation_id,
+                preflight=preview,
+                failures=preview.failures,
+            )
+
+        profile_gate = check_profile_supported(profile)
+        if not profile_gate.ok:
+            return _failure_result(profile_gate)
+        if not self._require_market_data_execution_path(
+            context,
+            "PrepareRunStrategyStart",
+            profile,
+        ):
+            return pb2.PreparedRunStrategyStart()
+
+        strategy_id = 0
+        strategy_code: str | None = None
+        strategy_name = ""
+        strategy_version = ""
+        strategy_path = str(getattr(run_request, "strategy_path", "") or "")
+        active = acct_client.get_active_strategy(portfolio_id)
+        if active is not None and int(getattr(active, "strategy_id", 0) or 0) != 0:
+            strategy_id = int(getattr(active, "strategy_id", 0) or 0)
+            strategy_code = active.code
+            strategy_name = str(getattr(active, "name", "") or "")
+            strategy_version = str(getattr(active, "version", "") or "")
+            strategy_path = f"<db:{strategy_name}@{strategy_version}>"
+        elif not strategy_path:
+            return pb2.PreparedRunStrategyStart(
+                ok=False,
+                launch_operation_id=launch_operation_id,
+                failures=[
+                    pb2.PreflightFailureProto(
+                        kind="declaration",
+                        code="ACTIVE_STRATEGY_REQUIRED",
+                        reason="portfolio has no active strategy; mount and activate one first",
+                    )
+                ],
+            )
+        try:
+            strategy_path, strategy_code, strategy_hot_reload = (
+                self._debug_strategy_source_for_db_code(
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                    strategy_name=strategy_name,
+                    strategy_version=strategy_version,
+                    strategy_path=strategy_path,
+                    strategy_code=strategy_code,
+                )
+            )
+        except DebugStrategySourceError:
+            return pb2.PreparedRunStrategyStart(
+                ok=False,
+                launch_operation_id=launch_operation_id,
+                failures=[
+                    pb2.PreflightFailureProto(
+                        kind="declaration",
+                        code="STRATEGY_SOURCE_UNAVAILABLE",
+                        reason="failed to materialize bare debug strategy source",
+                    )
+                ],
+            )
+        except BaseException:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("strategy source materialization failed")
+            return pb2.PreparedRunStrategyStart()
+
+        prepared_strategy = _prepare_gated_strategy_for_rpc(
+            strategy_path=strategy_path,
+            strategy_code=strategy_code,
+            hot_reload=strategy_hot_reload,
+            context=context,
+            operation="PrepareRunStrategyStart",
+        )
+        if prepared_strategy is None:
+            if getattr(context, "code", grpc.StatusCode.OK) is grpc.StatusCode.FAILED_PRECONDITION:
+                context.set_code(grpc.StatusCode.OK)
+                return pb2.PreparedRunStrategyStart(
+                    ok=False,
+                    launch_operation_id=launch_operation_id,
+                    failures=[
+                        pb2.PreflightFailureProto(
+                            kind="declaration",
+                            code="STRATEGY_PREPARATION_FAILED",
+                            reason="strategy preparation failed",
+                        )
+                    ],
+                )
+            return pb2.PreparedRunStrategyStart()
+        declarations = prepared_strategy.declarations
+        try:
+            effective_risk = _effective_risk_controls_from_request(
+                declarations,
+                getattr(run_request, "max_loss_close_pct", 0.0),
+            )
+        except StrategyDeclarationError:
+            return pb2.PreparedRunStrategyStart(
+                ok=False,
+                launch_operation_id=launch_operation_id,
+                failures=[
+                    pb2.PreflightFailureProto(
+                        kind="declaration",
+                        code="STRATEGY_RISK_CONTROL_INVALID",
+                        reason="strategy risk control invalid",
+                    )
+                ],
+            )
+
+        declared_inputs = list(declarations.inputs)
+        order_targets = list(declarations.order_targets)
+        required_routes = set(declarations.required_routes)
+        required_symbols = {
+            (entry.exchange, entry.market, entry.symbol)
+            for entry in declared_inputs
+        } | set(declarations.order_target_keys)
+        portfolio_preflight = self._run_portfolio_preflight(
+            acct_client=acct_client,
+            portfolio_id=portfolio_id,
+            user_id=user_id,
+            required_routes=required_routes,
+            required_symbols=required_symbols,
+            order_targets=order_targets,
+            session_id=session_id,
+            strategy_id=strategy_id,
+            leverage=0.0,
+            environment=environment,
+        )
+        if portfolio_preflight is not None:
+            return _failure_result(
+                PreflightResult(
+                    profile=profile,
+                    failures=[
+                        PreflightFailure(
+                            kind=PreflightFailureKind.PORTFOLIO,
+                            reason=issue.message,
+                            code=issue.code,
+                            exchange=issue.exchange,
+                            market=issue.market,
+                            symbol=issue.symbol,
+                            venue_id=issue.venue_id,
+                            filter_type=issue.filter_type,
+                            environment=issue.environment,
+                            retryable=issue.retryable,
+                            source=issue.source,
+                        )
+                        for issue in portfolio_preflight
+                    ],
+                )
+            )
+        snapshot = _get_portfolio_snapshot(
+            acct_client,
+            portfolio_id,
+            user_id,
+            required_symbols=required_symbols,
+        )
+        if snapshot is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(
+                f"portfolio {portfolio_id} not found or core-service unreachable"
+            )
+            return pb2.PreparedRunStrategyStart()
+        try:
+            wallet = build_portfolio_wallet_from_snapshot(
+                snapshot,
+                allowed_routes=required_routes,
+            )
+            initial_margin_balance = _target_close_margin_balance(
+                wallet,
+                set(declarations.order_target_keys),
+            )
+        except Exception:
+            return pb2.PreparedRunStrategyStart(
+                ok=False,
+                launch_operation_id=launch_operation_id,
+                failures=[
+                    pb2.PreflightFailureProto(
+                        kind="portfolio",
+                        code="PORTFOLIO_WALLET_INVALID",
+                        reason="portfolio wallet could not be prepared",
+                    )
+                ],
+            )
+        if initial_margin_balance <= 0.0:
+            return pb2.PreparedRunStrategyStart(
+                ok=False,
+                launch_operation_id=launch_operation_id,
+                failures=[
+                    pb2.PreflightFailureProto(
+                        kind="portfolio",
+                        code="INITIAL_MARGIN_BALANCE_INVALID",
+                        reason="initial margin_balance must be positive",
+                    )
+                ],
+            )
+
+        preflight = self._run_profile_preflight(
+            profile=profile,
+            declared_inputs=declared_inputs,
+            marketdata_client=self._marketdata_client(),
+            start_ms=int(getattr(run_request, "start_time_ms", 0) or 0),
+            end_ms=int(getattr(run_request, "end_time_ms", 0) or 0),
+            require_readiness=self._preflight_enabled,
+        )
+        preview = _preview_response_from_preflight(
+            profile=profile,
+            preflight=preflight,
+            declared_inputs=declared_inputs,
+            order_targets=order_targets,
+            required_routes=required_routes,
+            risk_controls=effective_risk,
+        )
+        if not preflight.ok:
+            return pb2.PreparedRunStrategyStart(
+                ok=False,
+                launch_operation_id=launch_operation_id,
+                preflight=preview,
+                failures=preview.failures,
+            )
+
+        runtime_id, runtime_source, runtime_name = self._runtime_binding_for_request(
+            run_request
+        )
+        if not runtime_id:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details("runtime_id is required to start a strategy session")
+            return pb2.PreparedRunStrategyStart()
+        target_by_key = {
+            (target.exchange, target.market, target.symbol): target
+            for target in order_targets
+        }
+        required_symbol_messages = []
+        for exchange, market, symbol in sorted(required_symbols):
+            target = target_by_key.get((exchange, market, symbol))
+            required_symbol_messages.append(
+                pb2.StrategyRequiredSymbolBinding(
+                    exchange=exchange,
+                    market=market,
+                    symbol=symbol,
+                    order_target=target is not None,
+                    required_order_types=["MARKET", "LIMIT"] if target is not None else [],
+                    effective_leverage=int(
+                        getattr(target, "effective_leverage", 0) or 0
+                    ),
+                    leverage_source=str(
+                        getattr(target, "leverage_source", "") or ""
+                    ),
+                )
+            )
+        runtime_profile = current_runtime_profile()
+        return pb2.PreparedRunStrategyStart(
+            ok=True,
+            session=pb2.StrategySessionMetadata(
+                session_id=session_id,
+                portfolio_id=portfolio_id,
+                strategy_id=strategy_id,
+                environment=environment,
+                interval=str(getattr(run_request, "interval", "") or "1m"),
+                start_time_ms=int(getattr(run_request, "start_time_ms", 0) or 0),
+                end_time_ms=int(getattr(run_request, "end_time_ms", 0) or 0),
+                user_id=user_id,
+                runtime_id=runtime_id,
+                runtime_source=runtime_source,
+                runtime_name=runtime_name,
+                session_type=profile.value,
+                runtime_version=runtime_profile.version,
+                session_name=strategy_name,
+                initial_status="pending",
+            ),
+            launch_operation_id=launch_operation_id,
+            strategy_source_sha256=prepared_strategy.gated_source.resolved.source_sha256,
+            declared_inputs=[
+                pb2.StrategyInputDeclaration(
+                    stream_id=str(item.stream_id),
+                    exchange=item.exchange,
+                    market=item.market,
+                    kind=item.kind,
+                    symbol=item.symbol,
+                    interval=item.interval,
+                )
+                for item in declared_inputs
+            ],
+            declared_order_targets=[
+                _strategy_order_target_binding(item) for item in order_targets
+            ],
+            required_routes=[
+                pb2.StrategyRouteBinding(exchange=exchange, market=market)
+                for exchange, market in sorted(required_routes)
+            ],
+            required_symbols=required_symbol_messages,
+            preflight=preview,
+            risk_controls=pb2.RiskControls(
+                max_loss_close_pct=effective_risk.max_loss_close_pct,
+                max_loss_close_source=effective_risk.max_loss_close_source,
+            ),
+        )
+
     def RunStrategy(self, request, context):
+        new_protocol_start = bool(self._require_session_bootstrap)
+        if new_protocol_start and self._session_bootstrap is None:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details("strategy Session bootstrap is required")
+            return pb2.RunStrategyResponse()
         user_id = int(request.user_id)
         if user_id <= 0:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -1546,14 +2104,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy risk control invalid: {e}")
             return pb2.RunStrategyResponse()
-        try:
-            session_leverage = _session_leverage_compatibility(
-                list(declarations.order_targets)
+        if new_protocol_start:
+            session_leverage = _SessionLeverageCompatibility(
+                leverage=DEFAULT_SESSION_LEVERAGE,
+                leverage_source="platform_default",
             )
-        except _TargetLeverageCapabilityError as e:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(str(e))
-            return pb2.RunStrategyResponse()
+        else:
+            try:
+                session_leverage = _session_leverage_compatibility(
+                    list(declarations.order_targets)
+                )
+            except _TargetLeverageCapabilityError as e:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(str(e))
+                return pb2.RunStrategyResponse()
         declared_inputs = list(declarations.inputs)
         required_routes = set(declarations.required_routes)
         required_symbols = {
@@ -1568,19 +2132,21 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return pb2.RunStrategyResponse()
 
         preflight_responses: list[Any] = []
-        portfolio_preflight = self._run_portfolio_preflight(
-            acct_client=acct_client,
-            portfolio_id=portfolio_id,
-            user_id=user_id,
-            required_routes=required_routes,
-            required_symbols=required_symbols,
-            order_targets=list(declarations.order_targets),
-            session_id=preflight_session_id,
-            strategy_id=strategy_id,
-            leverage=session_leverage.leverage,
-            response_sink=preflight_responses,
-            environment=environment,
-        )
+        portfolio_preflight = None
+        if not new_protocol_start:
+            portfolio_preflight = self._run_portfolio_preflight(
+                acct_client=acct_client,
+                portfolio_id=portfolio_id,
+                user_id=user_id,
+                required_routes=required_routes,
+                required_symbols=required_symbols,
+                order_targets=list(declarations.order_targets),
+                session_id=preflight_session_id,
+                strategy_id=strategy_id,
+                leverage=session_leverage.leverage,
+                response_sink=preflight_responses,
+                environment=environment,
+            )
         if portfolio_preflight is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             try:
@@ -1629,6 +2195,22 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(f"failed to build wallet: {e}")
             return pb2.RunStrategyResponse()
+        confirmed_target_facts: dict[
+            tuple[str, str, str],
+            tuple[int, str, int],
+        ] = {}
+        if new_protocol_start:
+            try:
+                confirmed_target_facts = _validated_confirmed_target_map(
+                    bootstrap=self._session_bootstrap,
+                    prepared_strategy=prepared_strategy,
+                    environment=environment,
+                    wallet=wallet,
+                )
+            except _SessionBootstrapError as exc:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(f"strategy Session bootstrap validation failed: {exc}")
+                return pb2.RunStrategyResponse()
         try:
             initial_margin_balance = _target_close_margin_balance(
                 wallet,
@@ -1704,6 +2286,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             max_loss_close_source=effective_risk.max_loss_close_source,
             leverage=session_leverage.leverage,
             leverage_source=session_leverage.leverage_source,
+            target_leverage_facts=confirmed_target_facts,
             initial_margin_balance=initial_margin_balance,
         )
 
@@ -1919,28 +2502,29 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details("strategy worker startup failed")
             return pb2.RunStrategyResponse()
 
-        if not self._persist_session_or_set_error(
-            acct_client,
-            context,
-            session_id=session_id,
-            portfolio_id=portfolio_id,
-            strategy_id=strategy_id,
-            environment=environment,
-            interval=request.interval or "1m",
-            start_time_ms=request.start_time_ms,
-            end_time_ms=request.end_time_ms,
-            runtime_id=runtime_id,
-            runtime_source=runtime_source,
-            runtime_name=runtime_name,
-            leverage=session_leverage.leverage,
-            initial_status="pending",
-        ):
-            self._fail_unpersisted_startup(
+        if not new_protocol_start:
+            if not self._persist_session_or_set_error(
+                acct_client,
+                context,
                 session_id=session_id,
-                state=state,
-                startup=startup,
-            )
-            return pb2.RunStrategyResponse()
+                portfolio_id=portfolio_id,
+                strategy_id=strategy_id,
+                environment=environment,
+                interval=request.interval or "1m",
+                start_time_ms=request.start_time_ms,
+                end_time_ms=request.end_time_ms,
+                runtime_id=runtime_id,
+                runtime_source=runtime_source,
+                runtime_name=runtime_name,
+                leverage=session_leverage.leverage,
+                initial_status="pending",
+            ):
+                self._fail_unpersisted_startup(
+                    session_id=session_id,
+                    state=state,
+                    startup=startup,
+                )
+                return pb2.RunStrategyResponse()
 
         # 写 strategy_start 组合快照。启动快照写不进去时直接拒绝启动，
         # 否则 backtest 会继续产生成交但没有钱包/PnL 审计链路。
@@ -2051,7 +2635,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     detail="running publication failed",
                 )
 
-        return pb2.RunStrategyResponse(session_id=session_id)
+        return pb2.RunStrategyResponse(session_id=session_id, ok=True)
 
     def _abort_persisted_startup(
         self,
@@ -4395,14 +4979,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy risk control invalid: {e}")
             return pb2.PreviewRunStrategyResponse()
-        try:
-            session_leverage = _session_leverage_compatibility(
-                list(declarations.order_targets)
-            )
-        except _TargetLeverageCapabilityError as e:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(str(e))
-            return pb2.PreviewRunStrategyResponse()
         declared_inputs = list(declarations.inputs)
         required_routes = set(declarations.required_routes)
         required_symbols = {
@@ -4418,7 +4994,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             required_symbols=required_symbols,
             order_targets=list(declarations.order_targets),
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
-            leverage=session_leverage.leverage,
+            leverage=0.0,
             environment=environment,
         )
         if portfolio_preflight is not None:

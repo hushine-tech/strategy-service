@@ -51,6 +51,160 @@ def _prepare_strategy_code_for_test(path: str, code: str):
     return prepare_strategy(gate.gated_source)
 
 
+def _mixed_leverage_bootstrap() -> pb2.StrategySessionBootstrap:
+    return pb2.StrategySessionBootstrap(
+        session_id="1" * 32,
+        launch_operation_id="launch-1",
+        strategy_source_sha256="a" * 64,
+        confirmed_target_facts=[
+            pb2.StrategySessionTargetLeverageFact(
+                venue_id=22,
+                exchange="binance",
+                environment=1,
+                market="perpetual_futures",
+                symbol="BTCUSDT",
+                effective_leverage=2,
+                leverage_source="order_target",
+                confirmed_leverage=2,
+            ),
+            pb2.StrategySessionTargetLeverageFact(
+                venue_id=22,
+                exchange="binance",
+                environment=1,
+                market="perpetual_futures",
+                symbol="ETHUSDT",
+                effective_leverage=3,
+                leverage_source="strategy_default",
+                confirmed_leverage=3,
+            ),
+        ],
+    )
+
+
+def _mixed_leverage_declarations():
+    return SimpleNamespace(
+        order_targets=(
+            SimpleNamespace(
+                exchange="binance",
+                market="perpetual_futures",
+                symbol="BTCUSDT",
+                effective_leverage=2,
+                leverage_source="order_target",
+            ),
+            SimpleNamespace(
+                exchange="binance",
+                market="perpetual_futures",
+                symbol="ETHUSDT",
+                effective_leverage=3,
+                leverage_source="strategy_default",
+            ),
+        )
+    )
+
+
+def _mixed_leverage_wallet(*, eth_leverage: float = 3.0) -> PortfolioWalletRuntime:
+    return PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={
+            ("binance", "perpetual_futures", 22): SimpleNamespace(
+                environment_code=1,
+                futures=SimpleNamespace(
+                    risk_metadata={
+                        "BTCUSDT": SimpleNamespace(configured_leverage=2.0),
+                        "ETHUSDT": SimpleNamespace(configured_leverage=eth_leverage),
+                    }
+                ),
+            )
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        ("digest", "source digest mismatch"),
+        ("target_set", "target set mismatch"),
+        ("effective", "effective leverage mismatch"),
+        ("source", "leverage source mismatch"),
+        ("venue", "wallet venue mismatch"),
+        ("confirmed", "confirmed leverage mismatch"),
+    ],
+)
+def test_new_session_bootstrap_fails_closed_on_prepared_or_confirmed_fact_mismatch(
+    mutation,
+    error,
+):
+    bootstrap = _mixed_leverage_bootstrap()
+    declarations = _mixed_leverage_declarations()
+    prepared = SimpleNamespace(
+        gated_source=SimpleNamespace(
+            resolved=SimpleNamespace(source_sha256="a" * 64)
+        ),
+        declarations=declarations,
+    )
+    wallet = _mixed_leverage_wallet()
+    if mutation == "digest":
+        prepared.gated_source.resolved.source_sha256 = "b" * 64
+    elif mutation == "target_set":
+        del bootstrap.confirmed_target_facts[-1]
+    elif mutation == "effective":
+        bootstrap.confirmed_target_facts[0].effective_leverage = 9
+    elif mutation == "source":
+        bootstrap.confirmed_target_facts[0].leverage_source = "platform_default"
+    elif mutation == "venue":
+        bootstrap.confirmed_target_facts[0].venue_id = 23
+    elif mutation == "confirmed":
+        bootstrap.confirmed_target_facts[0].confirmed_leverage = 1
+
+    with pytest.raises(grpc_server._SessionBootstrapError, match=error):
+        grpc_server._validated_confirmed_target_map(
+            bootstrap=bootstrap,
+            prepared_strategy=prepared,
+            environment=1,
+            wallet=wallet,
+        )
+
+
+def test_new_session_bootstrap_rejects_wallet_risk_metadata_mismatch():
+    with pytest.raises(
+        grpc_server._SessionBootstrapError,
+        match="wallet risk metadata mismatch",
+    ):
+        grpc_server._validated_confirmed_target_map(
+            bootstrap=_mixed_leverage_bootstrap(),
+            prepared_strategy=SimpleNamespace(
+                gated_source=SimpleNamespace(
+                    resolved=SimpleNamespace(source_sha256="a" * 64)
+                ),
+                declarations=_mixed_leverage_declarations(),
+            ),
+            environment=1,
+            wallet=_mixed_leverage_wallet(eth_leverage=9.0),
+        )
+
+
+def test_new_session_state_uses_mixed_target_map_without_scalar_collapse():
+    state = SessionState(environment=1)
+
+    state.configure_risk_runtime(
+        order_target_keys={
+            ("binance", "perpetual_futures", "BTCUSDT"),
+            ("binance", "perpetual_futures", "ETHUSDT"),
+        },
+        max_loss_close_pct=0.3,
+        max_loss_close_source="platform_default",
+        target_leverage_facts={
+            ("binance", "perpetual_futures", "BTCUSDT"): (2, "order_target", 2),
+            ("binance", "perpetual_futures", "ETHUSDT"): (3, "strategy_default", 3),
+        },
+    )
+
+    assert state.leverage_for_target("binance", "perpetual_futures", "BTCUSDT") == 2
+    assert state.leverage_for_target("binance", "perpetual_futures", "ETHUSDT") == 3
+    assert state.leverage == 1.0
+
+
 class _NoopMarketDataClient:
     def fetch_backtest_page(self, **kwargs):
         return SimpleNamespace(
@@ -6452,6 +6606,52 @@ def _build_servicer_with_faked_preflight_deps(
     return servicer, calls
 
 
+def test_prepare_run_strategy_start_is_read_only_and_never_runs_callbacks(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet):\n"
+        "        raise AssertionError('callback must not run during preparation')\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+
+    class ForbiddenEngine:
+        def __init__(self):
+            raise AssertionError("preparation must not construct the execution engine")
+
+    monkeypatch.setattr(grpc_server, "StrategyEngine", ForbiddenEngine)
+    context = _FakeContext()
+    response = servicer.PrepareRunStrategyStart(
+        pb2.PrepareRunStrategyStartRequest(
+            run_request=pb2.RunStrategyRequest(
+                portfolio_id=701,
+                user_id=17,
+                runtime_id="rt-test",
+                interval="1m",
+                start_time_ms=1,
+                end_time_ms=2,
+            ),
+            session_id="a" * 32,
+            launch_operation_id="launch-1",
+        ),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is True
+    assert response.session.session_id == "a" * 32
+    assert response.strategy_source_sha256
+    assert calls["save_session"] == 0
+    assert calls["thread_created"] == 0
+    assert servicer._sessions.list_ids() == ()
+
+
 class _PublicationContext(_FakeContext):
     def __init__(self, start_session_id: str) -> None:
         super().__init__()
@@ -6521,6 +6721,52 @@ def test_run_uses_canonical_id_and_waits_behind_pending_publication(monkeypatch)
     startup.release.set()
     state.thread.join(timeout=1.0)
     assert not state.thread.is_alive()
+
+
+def test_committed_bootstrap_publishes_running_without_second_save(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    digest = _prepare_strategy_code_for_test("<committed-bootstrap>", source).gated_source.resolved.source_sha256
+    canonical_id = "d" * 32
+    servicer._require_session_bootstrap = True
+    servicer._session_bootstrap = pb2.StrategySessionBootstrap(
+        session_id=canonical_id,
+        launch_operation_id="launch-committed",
+        strategy_source_sha256=digest,
+    )
+    context = _PublicationContext(canonical_id)
+
+    response = servicer.RunStrategy(
+        pb2.RunStrategyRequest(
+            portfolio_id=704,
+            user_id=17,
+            runtime_id="rt-test",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        ),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is True
+    assert response.session_id == canonical_id
+    assert calls["save_session"] == 0
+    assert [item["status"] for item in calls["update_session"]] == ["running"]
+    state = servicer._sessions.get(canonical_id)
+    assert state is not None
+    state.startup_result().release.set()
+    state.thread.join(timeout=1.0)
 
 
 def test_worker_readiness_timeout_discards_without_durable_row(monkeypatch):
@@ -9076,7 +9322,7 @@ def test_preview_run_strategy_portfolio_preflight_does_not_persist_session(monke
     preflight = calls["portfolio_preflight"][0]
     assert preflight.get("session_id", "") == ""
     assert preflight.get("strategy_id", 0) == 42
-    assert preflight["leverage"] == 5
+    assert preflight["leverage"] == 0
     assert len(preflight["order_targets"]) == 1
     target = preflight["order_targets"][0]
     assert (target.exchange, target.market, target.symbol) == (
@@ -9220,10 +9466,10 @@ def test_preview_run_strategy_returns_effective_risk_controls(monkeypatch):
     assert resp.risk_controls.leverage_source == ""
     assert resp.declared_order_targets[0].effective_leverage == 6
     assert resp.declared_order_targets[0].leverage_source == "strategy_default"
-    assert calls["portfolio_preflight"][-1]["leverage"] == 6
+    assert calls["portfolio_preflight"][-1]["leverage"] == 0
 
 
-def test_preview_run_strategy_fails_closed_when_scalar_preflight_cannot_represent_mixed_leverage(
+def test_preview_run_strategy_preserves_mixed_target_leverage_without_scalar_collapse(
     monkeypatch,
 ):
     servicer, calls = _build_servicer_with_faked_preflight_deps(
@@ -9240,6 +9486,14 @@ def test_preview_run_strategy_fails_closed_when_scalar_preflight_cannot_represen
         ),
     )
 
+    monkeypatch.setattr(
+        servicer,
+        "_run_profile_preflight",
+        lambda **_kwargs: grpc_server.PreflightResult(
+            profile=grpc_server.RuntimeSourceProfile.BACKTEST
+        ),
+    )
+
     context = _FakeContext()
     response = servicer.PreviewRunStrategy(
         SimpleNamespace(
@@ -9253,10 +9507,16 @@ def test_preview_run_strategy_fails_closed_when_scalar_preflight_cannot_represen
         context,
     )
 
-    assert response.ok is False
-    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
-    assert context.details.startswith("STRATEGY_TARGET_LEVERAGE_CAPABILITY_UNSUPPORTED:")
-    assert "portfolio_preflight" not in calls
+    assert response.ok is True
+    assert context.code is None
+    assert calls["portfolio_preflight"][-1]["leverage"] == 0
+    assert [
+        (target.symbol, target.effective_leverage, target.leverage_source)
+        for target in calls["portfolio_preflight"][-1]["order_targets"]
+    ] == [
+        ("BTCUSDT", 2, "order_target"),
+        ("ETHUSDT", 3, "order_target"),
+    ]
 
 
 def test_preview_run_strategy_uses_request_risk_default_when_strategy_omits(monkeypatch):

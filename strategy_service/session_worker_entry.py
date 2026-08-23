@@ -25,6 +25,26 @@ logger = logging.getLogger("hushine-session-worker")
 _TERMINAL_STATUSES = {"finished", "completed", "failed", "stopped", "stop_failed", "recoverable"}
 
 
+def _validated_start_bootstrap(start, *, required: bool):
+    packed = getattr(start, "session_bootstrap", None)
+    has_bootstrap = bool(packed is not None and str(getattr(packed, "type_url", "") or ""))
+    if not has_bootstrap:
+        if required:
+            raise RuntimeError("strategy Session bootstrap is required for this protocol start")
+        return None
+    bootstrap = strategy_pb2.StrategySessionBootstrap()
+    if not packed.Unpack(bootstrap):
+        raise RuntimeError("StartSession.session_bootstrap is not a StrategySessionBootstrap")
+    if str(bootstrap.session_id or "").strip() != str(getattr(start, "session_id", "") or "").strip():
+        raise RuntimeError("StrategySessionBootstrap session_id mismatch")
+    if not str(bootstrap.launch_operation_id or "").strip():
+        raise RuntimeError("StrategySessionBootstrap launch_operation_id is required")
+    digest = str(bootstrap.strategy_source_sha256 or "").strip().lower()
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise RuntimeError("StrategySessionBootstrap strategy_source_sha256 is invalid")
+    return bootstrap
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -52,11 +72,22 @@ def main() -> int:
         if start.user_id and not request.user_id:
             request.user_id = start.user_id
 
+        bootstrap_required = os.environ.get(
+            "HUSHINE_STRATEGY_SESSION_BOOTSTRAP_REQUIRED",
+            "",
+        ).strip().lower() in {"1", "true", "yes"}
+        session_bootstrap = _validated_start_bootstrap(
+            start,
+            required=bootstrap_required,
+        )
+
         servicer = _build_servicer(
             client,
             bound_user_id=int(start.user_id or request.user_id or 0),
             runtime_id=runtime_id,
             start_session_id=start.session_id,
+            session_bootstrap=session_bootstrap,
+            require_session_bootstrap=bootstrap_required,
         )
         client.set_agent_platform_call_handler(lambda call: _invoke_servicer_platform_call(servicer, call))
         context = _WorkerContext(start_session_id=start.session_id)
@@ -261,6 +292,8 @@ def _build_servicer(
     bound_user_id: int,
     runtime_id: str,
     start_session_id: str = "",
+    session_bootstrap=None,
+    require_session_bootstrap: bool = False,
 ) -> StrategyServiceServicer:
     platform_proxy = RuntimeChannelPlatformProxy(WorkerRuntimeChannelAdapter(client))
     servicer = StrategyServiceServicer(
@@ -278,6 +311,8 @@ def _build_servicer(
         notification_client=platform_proxy.notification_client(),
         agent_managed_final_status=True,
         start_session_id=start_session_id,
+        session_bootstrap=session_bootstrap,
+        require_session_bootstrap=require_session_bootstrap,
     )
     data_source = WorkerAgentDataSource(client)
     servicer.set_runtime_data_source(data_source)
@@ -315,6 +350,8 @@ def _invoke_servicer_platform_call(
     method = str(getattr(call, "method", "") or "").strip()
     if method == "PreviewRunStrategy":
         request = strategy_pb2.PreviewRunStrategyRequest()
+    elif method == "PrepareRunStrategyStart":
+        request = strategy_pb2.PrepareRunStrategyStartRequest()
     elif method == "ValidateStrategySource":
         request = strategy_pb2.ValidateStrategySourceRequest()
     elif method == "GetStrategyStatus":

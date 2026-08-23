@@ -1,5 +1,9 @@
+import pytest
+from google.protobuf.any_pb2 import Any as ProtoAny
+
 from strategy_service.gen import runtime_worker_pb2 as pb2
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
+from strategy_service import session_worker_entry
 
 
 def _strategy_message(name: str):
@@ -254,3 +258,33 @@ def test_legacy_strategy_leverage_scalars_are_deprecated_in_place():
     source = _strategy_message("RiskControls").fields_by_name["leverage_source"]
     assert source.number == 4
     assert source.GetOptions().deprecated
+
+
+def test_new_protocol_start_requires_typed_bootstrap():
+    start = pb2.StartSession(
+        session_id="1" * 32,
+        run_strategy_request=ProtoAny(),
+    )
+
+    with pytest.raises(RuntimeError, match="bootstrap is required"):
+        session_worker_entry._validated_start_bootstrap(start, required=True)
+
+
+def test_new_protocol_start_rejects_bootstrap_identity_mismatch():
+    bootstrap = strategy_pb2.StrategySessionBootstrap(
+        session_id="2" * 32,
+        launch_operation_id="operation-1",
+        strategy_source_sha256="a" * 64,
+    )
+    packed = ProtoAny()
+    packed.Pack(bootstrap)
+    start = pb2.StartSession(session_id="1" * 32, session_bootstrap=packed)
+
+    with pytest.raises(RuntimeError, match="session_id mismatch"):
+        session_worker_entry._validated_start_bootstrap(start, required=True)
+
+
+def test_legacy_start_without_new_capability_marker_keeps_compatibility_path():
+    start = pb2.StartSession(session_id="legacy-session")
+
+    assert session_worker_entry._validated_start_bootstrap(start, required=False) is None

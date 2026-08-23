@@ -395,6 +395,9 @@ func (a *Agent) handleRunStrategy(
 	if a.cfg.WorkerStarter == nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", "worker starter is not configured")
 	}
+	if a.cfg.PlatformInvoker == nil {
+		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", "platform invoker is not configured")
+	}
 	sessionID, generation, err := a.reserveWorkerGeneration()
 	if err != nil {
 		return runtimeErrorFrame(
@@ -407,11 +410,88 @@ func (a *Agent) handleRunStrategy(
 	if runtimeID == "" {
 		runtimeID = strings.TrimSpace(a.cfg.RuntimeID)
 	}
+	runReq.RuntimeId = runtimeID
+	launchOperationID := mustRandomToken()[:32]
+	prepareRequest := &strategyv1.PrepareRunStrategyStartRequest{
+		RunRequest:        &runReq,
+		SessionId:         sessionID,
+		LaunchOperationId: launchOperationID,
+	}
+	packedPrepareRequest, err := anypb.New(prepareRequest)
+	if err != nil {
+		a.forgetWorkerGeneration(sessionID, generation)
+		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", err.Error())
+	}
+	preparedAny, err := a.invokeOneShotRuntimeUnary(
+		ctx,
+		"PrepareRunStrategyStart",
+		packedPrepareRequest,
+		a.timeoutForFrame(frame),
+	)
+	if err != nil {
+		a.forgetWorkerGeneration(sessionID, generation)
+		return runtimeRequestErrorFrame(frame.GetCorrelationId(), err)
+	}
+	var prepared strategyv1.PreparedRunStrategyStart
+	if err := preparedAny.UnmarshalTo(&prepared); err != nil {
+		a.forgetWorkerGeneration(sessionID, generation)
+		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid PrepareRunStrategyStart response payload")
+	}
+	if !prepared.GetOk() {
+		a.forgetWorkerGeneration(sessionID, generation)
+		return responseFrame(frame.GetCorrelationId(), preparedRunFailure(&prepared))
+	}
+	commitRequest, err := commitStrategySessionStartRequest(
+		&prepared,
+		sessionID,
+		launchOperationID,
+		runtimeID,
+		runReq.GetUserId(),
+	)
+	if err != nil {
+		a.forgetWorkerGeneration(sessionID, generation)
+		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", err.Error())
+	}
+	var commitResponse portfoliov1.CommitStrategySessionStartResponse
+	if err := a.invokePlatformProto(
+		ctx,
+		"portfolio.CommitStrategySessionStart",
+		commitRequest,
+		&commitResponse,
+	); err != nil {
+		a.forgetWorkerGeneration(sessionID, generation)
+		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+	}
+	if !commitResponse.GetOk() {
+		a.forgetWorkerGeneration(sessionID, generation)
+		return responseFrame(frame.GetCorrelationId(), committedRunFailure(&commitResponse))
+	}
+	bootstrap, err := strategySessionBootstrap(
+		&prepared,
+		&commitResponse,
+		sessionID,
+		launchOperationID,
+	)
+	if err != nil {
+		failureErr := a.markCommittedStartFailed(sessionID, generation, err.Error())
+		a.forgetWorkerGeneration(sessionID, generation)
+		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", errors.Join(err, failureErr).Error())
+	}
+	packedBootstrap, err := anypb.New(bootstrap)
+	if err != nil {
+		failureErr := a.markCommittedStartFailed(sessionID, generation, "failed to pack committed session bootstrap")
+		a.forgetWorkerGeneration(sessionID, generation)
+		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", errors.Join(err, failureErr).Error())
+	}
+	generation.mu.Lock()
+	generation.durablePossible = true
+	generation.mu.Unlock()
 	start := &rwv1.StartSession{
 		SessionId:          sessionID,
 		UserId:             runReq.GetUserId(),
 		RuntimeId:          runtimeID,
 		RunStrategyRequest: req.GetRequest(),
+		SessionBootstrap:   packedBootstrap,
 	}
 	pending := &pendingSessionStart{
 		started: make(chan string, 1),
@@ -427,14 +507,31 @@ func (a *Agent) handleRunStrategy(
 		a.mu.Unlock()
 	}()
 
-	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, sessionID, a.workerEnv())
+	finalWorkerEnv := append(
+		a.workerEnv(),
+		"HUSHINE_STRATEGY_SESSION_BOOTSTRAP_REQUIRED=1",
+	)
+	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, sessionID, finalWorkerEnv)
 	if err != nil {
+		failureErr := a.markCommittedStartFailed(
+			sessionID,
+			generation,
+			"final session worker launch failed",
+		)
 		a.forgetWorkerGeneration(sessionID, generation)
-		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", err.Error())
+		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", errors.Join(err, failureErr).Error())
 	}
 	if worker != nil && worker.Spec.Generation > 0 && !generation.bindAuthenticatedGeneration(worker.Spec.Generation) {
-		_ = a.cleanupWorkerGeneration(sessionID, generation, "worker generation identity mismatch")
-		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", "worker generation identity mismatch")
+		failureErr := a.failCommittedWorkerGeneration(
+			sessionID,
+			generation,
+			"worker generation identity mismatch",
+		)
+		return runtimeErrorFrame(
+			frame.GetCorrelationId(),
+			"FailedPrecondition",
+			errors.Join(errors.New("worker generation identity mismatch"), failureErr).Error(),
+		)
 	}
 	a.watchWorkerGeneration(sessionID, generation, worker)
 
@@ -443,36 +540,407 @@ func (a *Agent) handleRunStrategy(
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		_ = a.cleanupWorkerGeneration(sessionID, generation, "runtime request cancelled")
+		_ = a.failCommittedWorkerGeneration(sessionID, generation, "runtime request cancelled")
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Cancelled", ctx.Err().Error())
 	case <-timer.C:
-		_ = a.cleanupWorkerGeneration(sessionID, generation, "session worker start timed out")
+		_ = a.failCommittedWorkerGeneration(sessionID, generation, "session worker start timed out")
 		return runtimeErrorFrame(frame.GetCorrelationId(), "DeadlineExceeded", "session worker did not report started")
 	case <-workerExited:
 		select {
 		case sessionID := <-pending.started:
-			return responseFrame(frame.GetCorrelationId(), &strategyv1.RunStrategyResponse{SessionId: sessionID})
+			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
 		default:
 		}
 		select {
 		case requestErr := <-pending.failed:
-			_ = a.cleanupWorkerGeneration(sessionID, generation, requestErr.Error())
+			_ = a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
 			return runtimeRequestErrorFrame(frame.GetCorrelationId(), requestErr)
 		default:
 		}
-		_ = a.cleanupWorkerGeneration(sessionID, generation, "session worker exited before reporting started")
+		_ = a.failCommittedWorkerGeneration(sessionID, generation, "session worker exited before reporting started")
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", managedWorkerExitError("reporting started", worker.processError()).Error())
 	case requestErr := <-pending.failed:
 		select {
 		case startedSessionID := <-pending.started:
-			return responseFrame(frame.GetCorrelationId(), &strategyv1.RunStrategyResponse{SessionId: startedSessionID})
+			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(startedSessionID, &commitResponse))
 		default:
 		}
-		_ = a.cleanupWorkerGeneration(sessionID, generation, requestErr.Error())
+		_ = a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
 		return runtimeRequestErrorFrame(frame.GetCorrelationId(), requestErr)
 	case startedSessionID := <-pending.started:
-		return responseFrame(frame.GetCorrelationId(), &strategyv1.RunStrategyResponse{SessionId: startedSessionID})
+		return responseFrame(frame.GetCorrelationId(), successfulRunResponse(startedSessionID, &commitResponse))
 	}
+}
+
+func preparedRunFailure(prepared *strategyv1.PreparedRunStrategyStart) *strategyv1.RunStrategyResponse {
+	response := &strategyv1.RunStrategyResponse{Ok: false}
+	if prepared == nil {
+		response.Code = "PREPARATION_FAILED"
+		return response
+	}
+	response.Failures = clonePreflightFailures(prepared.GetFailures())
+	response.Code = firstRunFailureCode(response.GetFailures(), "PREPARATION_FAILED")
+	return response
+}
+
+func committedRunFailure(commit *portfoliov1.CommitStrategySessionStartResponse) *strategyv1.RunStrategyResponse {
+	response := &strategyv1.RunStrategyResponse{Ok: false}
+	if commit == nil {
+		response.Code = "SESSION_START_COMMIT_FAILED"
+		return response
+	}
+	response.Code = strings.TrimSpace(commit.GetCode())
+	if response.Code == "" {
+		response.Code = "SESSION_START_COMMIT_FAILED"
+	}
+	response.RollbackFailed = commit.GetRollbackFailed()
+	for _, issue := range commit.GetIssues() {
+		if issue == nil {
+			continue
+		}
+		response.Failures = append(response.Failures, &strategyv1.PreflightFailureProto{
+			Kind:        "portfolio",
+			Reason:      issue.GetMessage(),
+			Code:        issue.GetCode(),
+			Exchange:    issue.GetExchange(),
+			Market:      issue.GetMarket(),
+			Symbol:      issue.GetSymbol(),
+			VenueId:     issue.GetVenueId(),
+			FilterType:  issue.GetFilterType(),
+			Environment: issue.GetEnvironment(),
+			Retryable:   issue.GetRetryable(),
+			Source:      issue.GetSource(),
+		})
+	}
+	response.TargetResults = strategyTargetResults(commit.GetTargetResults())
+	return response
+}
+
+func successfulRunResponse(
+	sessionID string,
+	commit *portfoliov1.CommitStrategySessionStartResponse,
+) *strategyv1.RunStrategyResponse {
+	response := &strategyv1.RunStrategyResponse{SessionId: sessionID, Ok: true}
+	if commit != nil {
+		response.TargetResults = strategyTargetResults(commit.GetTargetResults())
+	}
+	return response
+}
+
+func clonePreflightFailures(
+	failures []*strategyv1.PreflightFailureProto,
+) []*strategyv1.PreflightFailureProto {
+	cloned := make([]*strategyv1.PreflightFailureProto, 0, len(failures))
+	for _, failure := range failures {
+		if failure == nil {
+			continue
+		}
+		clonedFailure, _ := proto.Clone(failure).(*strategyv1.PreflightFailureProto)
+		cloned = append(cloned, clonedFailure)
+	}
+	return cloned
+}
+
+func firstRunFailureCode(
+	failures []*strategyv1.PreflightFailureProto,
+	fallback string,
+) string {
+	for _, failure := range failures {
+		if code := strings.TrimSpace(failure.GetCode()); code != "" {
+			return code
+		}
+	}
+	return fallback
+}
+
+func strategyTargetResults(
+	results []*portfoliov1.FuturesLeverageTargetResult,
+) []*strategyv1.StrategyLeverageTargetResult {
+	converted := make([]*strategyv1.StrategyLeverageTargetResult, 0, len(results))
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		converted = append(converted, &strategyv1.StrategyLeverageTargetResult{
+			VenueId:           result.GetVenueId(),
+			Exchange:          result.GetExchange(),
+			Market:            result.GetMarket(),
+			Symbol:            result.GetSymbol(),
+			EffectiveLeverage: result.GetEffectiveLeverage(),
+			LeverageSource:    result.GetLeverageSource(),
+			PreviousLeverage:  cloneUint32(result.PreviousLeverage),
+			CurrentLeverage:   cloneUint32(result.CurrentLeverage),
+			ConfirmedLeverage: cloneUint32(result.ConfirmedLeverage),
+			ChangeRequired:    result.GetChangeRequired(),
+			Status:            result.GetStatus(),
+			ErrorCode:         result.GetErrorCode(),
+			ErrorMessage:      result.GetErrorMessage(),
+			Retryable:         result.GetRetryable(),
+		})
+	}
+	return converted
+}
+
+func cloneUint32(value *uint32) *uint32 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func commitStrategySessionStartRequest(
+	prepared *strategyv1.PreparedRunStrategyStart,
+	sessionID string,
+	launchOperationID string,
+	runtimeID string,
+	userID int64,
+) (*portfoliov1.CommitStrategySessionStartRequest, error) {
+	if prepared == nil || prepared.GetSession() == nil {
+		return nil, fmt.Errorf("prepared strategy start is missing Session metadata")
+	}
+	metadata := prepared.GetSession()
+	if strings.TrimSpace(metadata.GetSessionId()) != sessionID ||
+		strings.TrimSpace(prepared.GetLaunchOperationId()) != launchOperationID {
+		return nil, fmt.Errorf("prepared strategy start identity mismatch")
+	}
+	if strings.TrimSpace(metadata.GetRuntimeId()) != runtimeID ||
+		(userID > 0 && metadata.GetUserId() != userID) {
+		return nil, fmt.Errorf("prepared strategy start binding mismatch")
+	}
+	if strings.TrimSpace(metadata.GetInitialStatus()) != "pending" {
+		return nil, fmt.Errorf("prepared strategy start must use pending Session status")
+	}
+	request := &portfoliov1.CommitStrategySessionStartRequest{
+		LaunchOperationId: launchOperationID,
+		Session: &portfoliov1.SaveSessionRequest{
+			SessionId:      sessionID,
+			PortfolioId:    metadata.GetPortfolioId(),
+			StrategyId:     metadata.GetStrategyId(),
+			Environment:    metadata.GetEnvironment(),
+			Interval:       metadata.GetInterval(),
+			StartTimeMs:    metadata.GetStartTimeMs(),
+			EndTimeMs:      metadata.GetEndTimeMs(),
+			RuntimeId:      metadata.GetRuntimeId(),
+			RuntimeSource:  metadata.GetRuntimeSource(),
+			RuntimeName:    metadata.GetRuntimeName(),
+			SessionType:    metadata.GetSessionType(),
+			RuntimeVersion: metadata.GetRuntimeVersion(),
+			SessionName:    metadata.GetSessionName(),
+			InitialStatus:  "pending",
+			UserId:         metadata.GetUserId(),
+		},
+	}
+	for _, route := range prepared.GetRequiredRoutes() {
+		exchange, err := strategyExchangeCode(route.GetExchange())
+		if err != nil {
+			return nil, err
+		}
+		market, err := strategyMarketCode(route.GetMarket())
+		if err != nil {
+			return nil, err
+		}
+		request.RequiredRoutes = append(request.RequiredRoutes, &portfoliov1.RequiredRoute{
+			Exchange: exchange, Market: market,
+		})
+	}
+	for _, symbol := range prepared.GetRequiredSymbols() {
+		exchange, err := strategyExchangeCode(symbol.GetExchange())
+		if err != nil {
+			return nil, err
+		}
+		market, err := strategyMarketCode(symbol.GetMarket())
+		if err != nil {
+			return nil, err
+		}
+		request.RequiredSymbols = append(request.RequiredSymbols, &portfoliov1.RequiredSymbol{
+			Exchange:           exchange,
+			Market:             market,
+			Symbol:             strings.ToUpper(strings.TrimSpace(symbol.GetSymbol())),
+			OrderTarget:        symbol.GetOrderTarget(),
+			RequiredOrderTypes: append([]string(nil), symbol.GetRequiredOrderTypes()...),
+			EffectiveLeverage:  symbol.GetEffectiveLeverage(),
+			LeverageSource:     symbol.GetLeverageSource(),
+		})
+	}
+	return request, nil
+}
+
+func strategySessionBootstrap(
+	prepared *strategyv1.PreparedRunStrategyStart,
+	commit *portfoliov1.CommitStrategySessionStartResponse,
+	sessionID string,
+	launchOperationID string,
+) (*strategyv1.StrategySessionBootstrap, error) {
+	if prepared == nil || commit == nil {
+		return nil, fmt.Errorf("committed strategy start facts are missing")
+	}
+	digest := strings.TrimSpace(prepared.GetStrategySourceSha256())
+	if len(digest) != 64 {
+		return nil, fmt.Errorf("prepared strategy source digest is invalid")
+	}
+	bootstrap := &strategyv1.StrategySessionBootstrap{
+		SessionId:            sessionID,
+		LaunchOperationId:    launchOperationID,
+		StrategySourceSha256: digest,
+	}
+	type targetIntent struct {
+		effective uint32
+		source    string
+	}
+	expected := make(map[string]targetIntent)
+	for _, symbol := range prepared.GetRequiredSymbols() {
+		if symbol == nil || !symbol.GetOrderTarget() {
+			continue
+		}
+		market := strings.ToLower(strings.TrimSpace(symbol.GetMarket()))
+		if market != "perpetual_futures" && market != "delivery_futures" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(symbol.GetExchange())) + "\x00" +
+			market + "\x00" + strings.ToUpper(strings.TrimSpace(symbol.GetSymbol()))
+		if _, duplicate := expected[key]; duplicate {
+			return nil, fmt.Errorf("prepared strategy target set contains duplicates")
+		}
+		expected[key] = targetIntent{
+			effective: symbol.GetEffectiveLeverage(),
+			source:    strings.TrimSpace(symbol.GetLeverageSource()),
+		}
+	}
+	seen := make(map[string]struct{}, len(expected))
+	for _, fact := range commit.GetConfirmedTargetFacts() {
+		if fact == nil || strings.TrimSpace(fact.GetSessionId()) != sessionID {
+			return nil, fmt.Errorf("confirmed target fact Session identity mismatch")
+		}
+		exchange, err := strategyExchangeName(fact.GetExchange())
+		if err != nil {
+			return nil, err
+		}
+		market, err := strategyMarketName(fact.GetMarket())
+		if err != nil {
+			return nil, err
+		}
+		key := exchange + "\x00" + market + "\x00" +
+			strings.ToUpper(strings.TrimSpace(fact.GetSymbol()))
+		intent, exists := expected[key]
+		if !exists {
+			return nil, fmt.Errorf("confirmed target fact set mismatch")
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("confirmed target fact set contains duplicates")
+		}
+		if fact.GetVenueId() <= 0 ||
+			fact.GetEnvironment() != prepared.GetSession().GetEnvironment() {
+			return nil, fmt.Errorf("confirmed target venue or environment mismatch")
+		}
+		if fact.GetEffectiveLeverage() != intent.effective ||
+			strings.TrimSpace(fact.GetLeverageSource()) != intent.source ||
+			fact.GetConfirmedLeverage() != intent.effective {
+			return nil, fmt.Errorf("confirmed target leverage facts mismatch")
+		}
+		seen[key] = struct{}{}
+		confirmedAtMS := int64(0)
+		if fact.GetConfirmedAt() != nil {
+			confirmedAtMS = fact.GetConfirmedAt().AsTime().UnixMilli()
+		}
+		bootstrap.ConfirmedTargetFacts = append(
+			bootstrap.ConfirmedTargetFacts,
+			&strategyv1.StrategySessionTargetLeverageFact{
+				VenueId:           fact.GetVenueId(),
+				Exchange:          exchange,
+				Environment:       fact.GetEnvironment(),
+				Market:            market,
+				Symbol:            strings.ToUpper(strings.TrimSpace(fact.GetSymbol())),
+				EffectiveLeverage: fact.GetEffectiveLeverage(),
+				LeverageSource:    fact.GetLeverageSource(),
+				PreviousLeverage:  cloneUint32(fact.PreviousLeverage),
+				ConfirmedLeverage: fact.GetConfirmedLeverage(),
+				ConfirmedAtUnixMs: confirmedAtMS,
+			},
+		)
+	}
+	if len(seen) != len(expected) {
+		return nil, fmt.Errorf("confirmed target fact set mismatch")
+	}
+	return bootstrap, nil
+}
+
+func strategyExchangeCode(value string) (int32, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "binance":
+		return 1, nil
+	case "okx":
+		return 2, nil
+	default:
+		return 0, fmt.Errorf("unsupported prepared exchange: %q", value)
+	}
+}
+
+func strategyMarketCode(value string) (int32, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "spot":
+		return 1, nil
+	case "perpetual_futures":
+		return 2, nil
+	case "delivery_futures":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("unsupported prepared market: %q", value)
+	}
+}
+
+func strategyExchangeName(value int32) (string, error) {
+	switch value {
+	case 1:
+		return "binance", nil
+	case 2:
+		return "okx", nil
+	default:
+		return "", fmt.Errorf("unsupported confirmed exchange: %d", value)
+	}
+}
+
+func strategyMarketName(value int32) (string, error) {
+	switch value {
+	case 1:
+		return "spot", nil
+	case 2:
+		return "perpetual_futures", nil
+	case 3:
+		return "delivery_futures", nil
+	default:
+		return "", fmt.Errorf("unsupported confirmed market: %d", value)
+	}
+}
+
+func (a *Agent) markCommittedStartFailed(
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) error {
+	timeout := a.cfg.RequestTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	err := a.updateSession(ctx, sessionID, "failed", 0, reason)
+	if err == nil && generation != nil {
+		generation.mu.Lock()
+		generation.terminalAck = true
+		generation.mu.Unlock()
+	}
+	return err
+}
+
+func (a *Agent) failCommittedWorkerGeneration(
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) error {
+	markErr := a.markCommittedStartFailed(sessionID, generation, reason)
+	cleanupErr := a.cleanupWorkerGeneration(sessionID, generation, reason)
+	return errors.Join(markErr, cleanupErr)
 }
 
 func (a *Agent) watchWorkerGeneration(
@@ -1313,6 +1781,42 @@ func (a *Agent) handleOneShotRuntimeUnary(
 	if a.cfg.WorkerStarter == nil {
 		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", "worker starter is not configured")
 	}
+	resp, err := a.invokeOneShotRuntimeUnary(
+		ctx,
+		req.GetMethod(),
+		req.GetRequest(),
+		a.timeoutForFrame(frame),
+	)
+	if err != nil {
+		return runtimeRequestErrorFrame(frame.GetCorrelationId(), err)
+	}
+	switch strings.TrimSpace(req.GetMethod()) {
+	case "PreviewRunStrategy":
+		var previewResp strategyv1.PreviewRunStrategyResponse
+		if err := resp.UnmarshalTo(&previewResp); err != nil {
+			return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid PreviewRunStrategy response payload")
+		}
+	case "ValidateStrategySource":
+		var validateResp strategyv1.ValidateStrategySourceResponse
+		if err := resp.UnmarshalTo(&validateResp); err != nil {
+			return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid ValidateStrategySource response payload")
+		}
+	}
+	return responseAnyFrame(frame.GetCorrelationId(), resp)
+}
+
+func (a *Agent) invokeOneShotRuntimeUnary(
+	ctx context.Context,
+	method string,
+	request *anypb.Any,
+	timeout time.Duration,
+) (*anypb.Any, error) {
+	if request == nil {
+		return nil, fmt.Errorf("runtime request payload is empty")
+	}
+	if a.cfg.WorkerStarter == nil {
+		return nil, fmt.Errorf("worker starter is not configured")
+	}
 	pendingID := "control-" + mustRandomToken()[:16]
 	ready := make(chan struct{}, 1)
 	failed := make(chan *RuntimeRequestError, 1)
@@ -1329,43 +1833,31 @@ func (a *Agent) handleOneShotRuntimeUnary(
 
 	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, pendingID, a.workerEnv())
 	if err != nil {
-		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", err.Error())
+		return nil, err
 	}
 	cleanupRequired := true
 	defer func() {
 		if cleanupRequired {
-			a.cleanupOneShotWorker(pendingID, a.timeoutForFrame(frame))
+			a.cleanupOneShotWorker(pendingID, timeout)
 		}
 	}()
-	if err := a.waitWorkerReady(ctx, ready, failed, worker, a.timeoutForFrame(frame)); err != nil {
-		return runtimeRequestErrorFrame(frame.GetCorrelationId(), err)
+	if err := a.waitWorkerReady(ctx, ready, failed, worker, timeout); err != nil {
+		return nil, err
 	}
-	resp, err := a.invokeWorkerUnary(ctx, pendingID, req.GetMethod(), req.GetRequest(), a.timeoutForFrame(frame))
+	resp, err := a.invokeWorkerUnary(ctx, pendingID, method, request, timeout)
 	if err != nil {
-		return runtimeRequestErrorFrame(frame.GetCorrelationId(), err)
-	}
-	switch strings.TrimSpace(req.GetMethod()) {
-	case "PreviewRunStrategy":
-		var previewResp strategyv1.PreviewRunStrategyResponse
-		if err := resp.UnmarshalTo(&previewResp); err != nil {
-			return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid PreviewRunStrategy response payload")
-		}
-	case "ValidateStrategySource":
-		var validateResp strategyv1.ValidateStrategySourceResponse
-		if err := resp.UnmarshalTo(&validateResp); err != nil {
-			return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "invalid ValidateStrategySource response payload")
-		}
+		return nil, err
 	}
 	if waiter, ok := a.cfg.WorkerStarter.(WorkerExitWaiter); ok {
-		if err := waiter.WaitSessionWorker(ctx, pendingID, a.timeoutForFrame(frame)); err != nil {
-			return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
+		if err := waiter.WaitSessionWorker(ctx, pendingID, timeout); err != nil {
+			return nil, err
 		}
 		a.cleanupSessionState(pendingID, "one-shot worker completed")
 	} else {
-		a.cleanupOneShotWorker(pendingID, a.timeoutForFrame(frame))
+		a.cleanupOneShotWorker(pendingID, timeout)
 	}
 	cleanupRequired = false
-	return responseAnyFrame(frame.GetCorrelationId(), resp)
+	return resp, nil
 }
 
 func (a *Agent) cleanupOneShotWorker(sessionID string, timeout time.Duration) {

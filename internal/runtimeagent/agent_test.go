@@ -22,6 +22,577 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	starter := &strategyStartWorkerStarter{recorder: recorder}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	platform := &strategyStartPlatform{recorder: recorder, commitOK: true}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", RuntimeSource: "bare", RuntimeName: "bare-debug", UserID: 6,
+		WorkerStarter: starter, WorkerStopper: starter, WorkerSender: sender,
+		PlatformInvoker: platform, StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+	starter.agent = agent
+	sender.agent = agent
+
+	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1", Interval: "1m",
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
+		t.Fatalf("RunStrategy frame = %+v", frame)
+	}
+	var response strategyv1.RunStrategyResponse
+	if err := frame.GetResponse().GetResponse().UnmarshalTo(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.GetOk() || response.GetSessionId() == "" {
+		t.Fatalf("RunStrategy response = %+v", &response)
+	}
+	if got := recorder.snapshot(); !slices.Equal(got, []string{
+		"prepare", "commit", "final-worker",
+	}) {
+		t.Fatalf("start events = %v", got)
+	}
+	if starter.finalStarts != 1 || starter.prepareStarts != 1 {
+		t.Fatalf("worker starts prepare=%d final=%d", starter.prepareStarts, starter.finalStarts)
+	}
+	if platform.commit == nil || platform.commit.GetSession().GetSessionId() != response.GetSessionId() {
+		t.Fatalf("commit request = %+v", platform.commit)
+	}
+	if platform.commit.GetLaunchOperationId() == "" || platform.commit.GetSession().GetLeverage() != 0 {
+		t.Fatalf("commit operation/scalar = %+v", platform.commit)
+	}
+	if starter.finalStart == nil || starter.finalStart.GetSessionBootstrap() == nil {
+		t.Fatalf("final StartSession = %+v", starter.finalStart)
+	}
+	var bootstrap strategyv1.StrategySessionBootstrap
+	if err := starter.finalStart.GetSessionBootstrap().UnmarshalTo(&bootstrap); err != nil {
+		t.Fatalf("unpack bootstrap: %v", err)
+	}
+	if bootstrap.GetSessionId() != response.GetSessionId() ||
+		bootstrap.GetLaunchOperationId() != platform.commit.GetLaunchOperationId() ||
+		bootstrap.GetStrategySourceSha256() != strategyStartDigest ||
+		len(bootstrap.GetConfirmedTargetFacts()) != 2 {
+		t.Fatalf("bootstrap = %+v", &bootstrap)
+	}
+	if starter.finalEnv["HUSHINE_STRATEGY_SESSION_BOOTSTRAP_REQUIRED"] != "1" {
+		t.Fatalf("final worker env = %+v", starter.finalEnv)
+	}
+}
+
+func TestAgentRunStrategyExpectedFailuresNeverStartFinalWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		prepareOK    bool
+		commitOK     bool
+		wantCode     string
+		wantRollback bool
+	}{
+		{name: "preparation", prepareOK: false, commitOK: true, wantCode: "PREPARE_REJECTED"},
+		{name: "commit", prepareOK: true, commitOK: false, wantCode: "LEVERAGE_CONFIRM_FAILED", wantRollback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &strategyStartRecorder{}
+			starter := &strategyStartWorkerStarter{recorder: recorder}
+			sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: tc.prepareOK}
+			platform := &strategyStartPlatform{recorder: recorder, commitOK: tc.commitOK, rollbackFailed: tc.wantRollback}
+			agent := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+				WorkerSender: sender, PlatformInvoker: platform,
+				StartTimeout: time.Second, RequestTimeout: time.Second,
+			})
+			starter.agent = agent
+			sender.agent = agent
+
+			frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+				PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+			})
+			if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
+				t.Fatalf("RunStrategy frame = %+v", frame)
+			}
+			var response strategyv1.RunStrategyResponse
+			if err := frame.GetResponse().GetResponse().UnmarshalTo(&response); err != nil {
+				t.Fatal(err)
+			}
+			if response.GetOk() || response.GetSessionId() != "" || response.GetCode() != tc.wantCode {
+				t.Fatalf("response = %+v", &response)
+			}
+			if response.GetRollbackFailed() != tc.wantRollback || len(response.GetFailures()) == 0 {
+				t.Fatalf("structured failure = %+v", &response)
+			}
+			if starter.finalStarts != 0 {
+				t.Fatalf("final worker starts = %d, want 0", starter.finalStarts)
+			}
+		})
+	}
+}
+
+func TestAgentRunStrategyPostCommitLaunchFailureMarksPendingSessionFailed(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		finalError error
+		timeout    bool
+		wantCode   string
+	}{
+		{name: "launch_failure", finalError: errors.New("final worker launch failed"), wantCode: "Internal"},
+		{name: "start_timeout", timeout: true, wantCode: "DeadlineExceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &strategyStartRecorder{}
+			starter := &strategyStartWorkerStarter{
+				recorder: recorder, finalError: tc.finalError, suppressFinalProgress: tc.timeout,
+			}
+			sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+			platform := &strategyStartPlatform{recorder: recorder, commitOK: true}
+			agent := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+				WorkerSender: sender, PlatformInvoker: platform,
+				StartTimeout: 20 * time.Millisecond, RequestTimeout: time.Second,
+			})
+			starter.agent = agent
+			sender.agent = agent
+
+			frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+				PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+			})
+			if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR || frame.GetError().GetCode() != tc.wantCode {
+				t.Fatalf("RunStrategy frame = %+v", frame)
+			}
+			updates := platform.snapshotUpdates()
+			if len(updates) != 1 || updates[0].GetStatus() != "failed" ||
+				updates[0].GetSessionId() != platform.commit.GetSession().GetSessionId() {
+				t.Fatalf("cleanup updates = %+v", updates)
+			}
+			if !strings.Contains(updates[0].GetError(), "worker") {
+				t.Fatalf("cleanup error = %q", updates[0].GetError())
+			}
+		})
+	}
+}
+
+func TestAgentRunStrategyRejectsIncompleteConfirmedFactsBeforeFinalWorker(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	starter := &strategyStartWorkerStarter{recorder: recorder}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	platform := &strategyStartPlatform{
+		recorder: recorder, commitOK: true, omitConfirmedFacts: true,
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+		WorkerSender: sender, PlatformInvoker: platform,
+		StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+	starter.agent = agent
+	sender.agent = agent
+
+	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+	})
+
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR ||
+		frame.GetError().GetCode() != "Internal" {
+		t.Fatalf("RunStrategy frame = %+v", frame)
+	}
+	if starter.finalStarts != 0 {
+		t.Fatalf("final worker starts = %d, want 0", starter.finalStarts)
+	}
+	updates := platform.snapshotUpdates()
+	if len(updates) != 1 || updates[0].GetStatus() != "failed" {
+		t.Fatalf("cleanup updates = %+v", updates)
+	}
+}
+
+func TestAgentRestartSessionPreparesFreshSessionOperationSourceAndTargetFacts(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	starter := &strategyStartWorkerStarter{recorder: recorder}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	platform := &strategyStartPlatform{
+		recorder: recorder, commitOK: true,
+		restartSession: &portfoliov1.StrategySessionEntry{
+			SessionId: "old-session", PortfolioId: 7, StrategyId: 12, Environment: 1,
+			UserId: 6, RuntimeId: "rt-1", Status: "running", Interval: "1m",
+			Leverage: 99,
+			TargetLeverageFacts: []*portfoliov1.SessionTargetLeverageFact{{
+				SessionId: "old-session", VenueId: 22, Exchange: 1, Environment: 1,
+				Market: 2, Symbol: "BTCUSDT", EffectiveLeverage: 9,
+				LeverageSource: "order_target", ConfirmedLeverage: 9,
+			}},
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+		WorkerSender: sender, PlatformInvoker: platform,
+		StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+	starter.agent = agent
+	sender.agent = agent
+
+	result, err := agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "old-session"})
+	if err != nil {
+		t.Fatalf("RestartSession: %v", err)
+	}
+	if result.NewSessionID == "" || result.NewSessionID == "old-session" {
+		t.Fatalf("restart result = %+v", result)
+	}
+	if sender.lastPrepare == nil || sender.lastPrepare.GetSessionId() != result.NewSessionID ||
+		sender.lastPrepare.GetLaunchOperationId() == "" {
+		t.Fatalf("fresh preparation = %+v", sender.lastPrepare)
+	}
+	var bootstrap strategyv1.StrategySessionBootstrap
+	if starter.finalStart == nil ||
+		starter.finalStart.GetSessionBootstrap().UnmarshalTo(&bootstrap) != nil {
+		t.Fatalf("final StartSession = %+v", starter.finalStart)
+	}
+	if bootstrap.GetStrategySourceSha256() != strategyStartDigest ||
+		len(bootstrap.GetConfirmedTargetFacts()) != 2 ||
+		bootstrap.GetConfirmedTargetFacts()[0].GetConfirmedLeverage() == 9 {
+		t.Fatalf("restart reused old bootstrap facts: %+v", &bootstrap)
+	}
+}
+
+const strategyStartDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func runStrategyFrame(t *testing.T, agent *Agent, request *strategyv1.RunStrategyRequest) *cpv1.RuntimeFrame {
+	t.Helper()
+	packed, err := anypb.New(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent.HandleRuntimeRequest(context.Background(), &cpv1.RuntimeFrame{
+		CorrelationId: "corr-strategy-start",
+		Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+			Method: "RunStrategy", Request: packed,
+		}},
+	})
+}
+
+type strategyStartRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+// enableStrategyStartProtocol keeps older worker-lifecycle tests focused on
+// their original final-worker boundary while satisfying the new mandatory
+// prepare/commit protocol before that boundary.
+func enableStrategyStartProtocol(agent *Agent, finalStarter WorkerStarter) {
+	harness := &strategyStartProtocolHarness{
+		agent:            agent,
+		finalStarter:     finalStarter,
+		stopperDelegate:  agent.cfg.WorkerStopper,
+		platformDelegate: agent.cfg.PlatformInvoker,
+		senderDelegate:   agent.cfg.WorkerSender,
+	}
+	agent.cfg.WorkerStarter = harness
+	agent.cfg.WorkerStopper = harness
+	agent.cfg.PlatformInvoker = harness
+	agent.cfg.WorkerSender = harness
+}
+
+type strategyStartProtocolHarness struct {
+	agent            *Agent
+	finalStarter     WorkerStarter
+	stopperDelegate  WorkerStopper
+	platformDelegate PlatformInvoker
+	senderDelegate   WorkerSender
+}
+
+func (h *strategyStartProtocolHarness) StopSessionWorker(
+	ctx context.Context,
+	sessionID string,
+	timeout time.Duration,
+) error {
+	if strings.HasPrefix(sessionID, "control-") {
+		return nil
+	}
+	if h.stopperDelegate != nil {
+		return h.stopperDelegate.StopSessionWorker(ctx, sessionID, timeout)
+	}
+	return nil
+}
+
+func (h *strategyStartProtocolHarness) StartSessionWorker(
+	ctx context.Context,
+	sessionID string,
+	extraEnv []string,
+) (*ManagedWorker, error) {
+	if !strings.HasPrefix(sessionID, "control-") {
+		return h.finalStarter.StartSessionWorker(ctx, sessionID, extraEnv)
+	}
+	go func() {
+		_ = h.agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+				SessionId: sessionID, ProtocolVersion: RuntimeWorkerProtocolVersion,
+			}},
+		}, nil)
+	}()
+	return &ManagedWorker{SessionID: sessionID}, nil
+}
+
+func (h *strategyStartProtocolHarness) SendToWorker(
+	sessionID string,
+	frame *rwv1.AgentFrame,
+) error {
+	call := frame.GetPlatformCall()
+	if call == nil || call.GetMethod() != "PrepareRunStrategyStart" {
+		if h.senderDelegate != nil {
+			return h.senderDelegate.SendToWorker(sessionID, frame)
+		}
+		return nil
+	}
+	var request strategyv1.PrepareRunStrategyStartRequest
+	if err := call.GetRequest().UnmarshalTo(&request); err != nil {
+		return err
+	}
+	runRequest := request.GetRunRequest()
+	response := &strategyv1.PreparedRunStrategyStart{
+		Ok: true, LaunchOperationId: request.GetLaunchOperationId(),
+		StrategySourceSha256: strategyStartDigest,
+		Session: &strategyv1.StrategySessionMetadata{
+			SessionId: request.GetSessionId(), PortfolioId: runRequest.GetPortfolioId(),
+			Environment: 0, Interval: runRequest.GetInterval(),
+			StartTimeMs: runRequest.GetStartTimeMs(), EndTimeMs: runRequest.GetEndTimeMs(),
+			UserId: runRequest.GetUserId(), RuntimeId: runRequest.GetRuntimeId(),
+			InitialStatus: "pending",
+		},
+	}
+	packed, err := anypb.New(response)
+	if err != nil {
+		return err
+	}
+	go func() {
+		_ = h.agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_PlatformCallResult{PlatformCallResult: &rwv1.PlatformCallResult{
+				CallId: call.GetCallId(), Ok: true, Response: packed,
+			}},
+		}, nil)
+	}()
+	return nil
+}
+
+func (h *strategyStartProtocolHarness) InvokePlatformAny(
+	ctx context.Context,
+	method string,
+	request *anypb.Any,
+	timeout time.Duration,
+) (*anypb.Any, error) {
+	if method == "portfolio.CommitStrategySessionStart" {
+		return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{Ok: true})
+	}
+	if h.platformDelegate != nil {
+		return h.platformDelegate.InvokePlatformAny(ctx, method, request, timeout)
+	}
+	if method == "portfolio.UpdateSession" {
+		return anypb.New(&portfoliov1.UpdateSessionResponse{})
+	}
+	return nil, fmt.Errorf("unexpected platform method: %s", method)
+}
+
+func (r *strategyStartRecorder) add(event string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+func (r *strategyStartRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events...)
+}
+
+type strategyStartWorkerStarter struct {
+	agent                 *Agent
+	recorder              *strategyStartRecorder
+	prepareStarts         int
+	finalStarts           int
+	finalError            error
+	suppressFinalProgress bool
+	finalStart            *rwv1.StartSession
+	finalEnv              map[string]string
+}
+
+func (s *strategyStartWorkerStarter) StartSessionWorker(
+	_ context.Context,
+	sessionID string,
+	extraEnv []string,
+) (*ManagedWorker, error) {
+	if strings.HasPrefix(sessionID, "control-") {
+		s.prepareStarts++
+		go func() {
+			_ = s.agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+					SessionId: sessionID, ProtocolVersion: RuntimeWorkerProtocolVersion,
+				}},
+			}, nil)
+		}()
+		return &ManagedWorker{SessionID: sessionID}, nil
+	}
+	s.finalStarts++
+	s.recorder.add("final-worker")
+	if s.finalError != nil {
+		return nil, s.finalError
+	}
+	s.finalEnv = map[string]string{}
+	for _, item := range extraEnv {
+		key, value, found := strings.Cut(item, "=")
+		if found {
+			s.finalEnv[key] = value
+		}
+	}
+	s.agent.mu.Lock()
+	if pending := s.agent.pending[sessionID]; pending != nil {
+		s.finalStart = proto.Clone(pending.start).(*rwv1.StartSession)
+	}
+	s.agent.mu.Unlock()
+	if !s.suppressFinalProgress {
+		go func() {
+			_ = s.agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+					SessionId: sessionID, Status: "running",
+				}},
+			}, nil)
+		}()
+	}
+	return &ManagedWorker{SessionID: sessionID}, nil
+}
+
+func (*strategyStartWorkerStarter) StopSessionWorker(context.Context, string, time.Duration) error {
+	return nil
+}
+
+type strategyStartWorkerSender struct {
+	agent       *Agent
+	recorder    *strategyStartRecorder
+	prepareOK   bool
+	lastPrepare *strategyv1.PrepareRunStrategyStartRequest
+}
+
+func (s *strategyStartWorkerSender) SendToWorker(sessionID string, frame *rwv1.AgentFrame) error {
+	call := frame.GetPlatformCall()
+	if call == nil || call.GetMethod() != "PrepareRunStrategyStart" {
+		return fmt.Errorf("unexpected worker frame: %+v", frame)
+	}
+	var request strategyv1.PrepareRunStrategyStartRequest
+	if err := call.GetRequest().UnmarshalTo(&request); err != nil {
+		return err
+	}
+	if request.GetSessionId() == "" || request.GetLaunchOperationId() == "" ||
+		request.GetRunRequest().GetRuntimeId() != "rt-1" {
+		return fmt.Errorf("invalid preparation request: %+v", &request)
+	}
+	s.lastPrepare = proto.Clone(&request).(*strategyv1.PrepareRunStrategyStartRequest)
+	s.recorder.add("prepare")
+	response := preparedStrategyStart(request.GetSessionId(), request.GetLaunchOperationId())
+	if !s.prepareOK {
+		response = &strategyv1.PreparedRunStrategyStart{
+			Ok: false,
+			Failures: []*strategyv1.PreflightFailureProto{{
+				Kind: "declaration", Code: "PREPARE_REJECTED", Reason: "strategy preparation rejected",
+			}},
+		}
+	}
+	packed, err := anypb.New(response)
+	if err != nil {
+		return err
+	}
+	go func() {
+		_ = s.agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+			Payload: &rwv1.WorkerFrame_PlatformCallResult{PlatformCallResult: &rwv1.PlatformCallResult{
+				CallId: call.GetCallId(), Ok: true, Response: packed,
+			}},
+		}, nil)
+	}()
+	return nil
+}
+
+func preparedStrategyStart(sessionID, operationID string) *strategyv1.PreparedRunStrategyStart {
+	return &strategyv1.PreparedRunStrategyStart{
+		Ok: true, LaunchOperationId: operationID, StrategySourceSha256: strategyStartDigest,
+		Session: &strategyv1.StrategySessionMetadata{
+			SessionId: sessionID, PortfolioId: 7, StrategyId: 12, Environment: 1,
+			Interval: "1m", UserId: 6, RuntimeId: "rt-1", RuntimeSource: "bare",
+			RuntimeName: "bare-debug", SessionType: "demo", RuntimeVersion: "1",
+			SessionName: "strategy", InitialStatus: "pending",
+		},
+		RequiredRoutes: []*strategyv1.StrategyRouteBinding{{Exchange: "binance", Market: "perpetual_futures"}},
+		RequiredSymbols: []*strategyv1.StrategyRequiredSymbolBinding{
+			{Exchange: "binance", Market: "perpetual_futures", Symbol: "BTCUSDT", OrderTarget: true, RequiredOrderTypes: []string{"MARKET", "LIMIT"}, EffectiveLeverage: 2, LeverageSource: "order_target"},
+			{Exchange: "binance", Market: "perpetual_futures", Symbol: "ETHUSDT", OrderTarget: true, RequiredOrderTypes: []string{"MARKET", "LIMIT"}, EffectiveLeverage: 3, LeverageSource: "strategy_default"},
+		},
+	}
+}
+
+type strategyStartPlatform struct {
+	mu                 sync.Mutex
+	recorder           *strategyStartRecorder
+	commitOK           bool
+	omitConfirmedFacts bool
+	rollbackFailed     bool
+	commit             *portfoliov1.CommitStrategySessionStartRequest
+	updates            []*portfoliov1.UpdateSessionRequest
+	restartSession     *portfoliov1.StrategySessionEntry
+}
+
+func (p *strategyStartPlatform) InvokePlatformAny(
+	_ context.Context,
+	method string,
+	request *anypb.Any,
+	_ time.Duration,
+) (*anypb.Any, error) {
+	switch method {
+	case "portfolio.GetSession":
+		if p.restartSession == nil {
+			return nil, errors.New("restart session is not configured")
+		}
+		return anypb.New(&portfoliov1.GetSessionResponse{
+			Session: proto.Clone(p.restartSession).(*portfoliov1.StrategySessionEntry),
+		})
+	case "portfolio.CommitStrategySessionStart":
+		var commit portfoliov1.CommitStrategySessionStartRequest
+		if err := request.UnmarshalTo(&commit); err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		p.commit = proto.Clone(&commit).(*portfoliov1.CommitStrategySessionStartRequest)
+		p.mu.Unlock()
+		p.recorder.add("commit")
+		if !p.commitOK {
+			confirmed := uint32(2)
+			return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{
+				Ok: false, Code: "LEVERAGE_CONFIRM_FAILED", RollbackFailed: p.rollbackFailed,
+				Issues:        []*portfoliov1.PreflightIssue{{Code: "LEVERAGE_CONFIRM_FAILED", Message: "confirmation failed", Exchange: 1, Market: 2, Symbol: "ETHUSDT"}},
+				TargetResults: []*portfoliov1.FuturesLeverageTargetResult{{Symbol: "ETHUSDT", EffectiveLeverage: 3, ConfirmedLeverage: &confirmed, Status: "confirm_failed", ErrorCode: "LEVERAGE_CONFIRM_FAILED"}},
+			})
+		}
+		if p.omitConfirmedFacts {
+			return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{Ok: true})
+		}
+		return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{
+			Ok: true,
+			ConfirmedTargetFacts: []*portfoliov1.SessionTargetLeverageFact{
+				{SessionId: commit.GetSession().GetSessionId(), VenueId: 22, Exchange: 1, Environment: 1, Market: 2, Symbol: "BTCUSDT", EffectiveLeverage: 2, LeverageSource: "order_target", ConfirmedLeverage: 2},
+				{SessionId: commit.GetSession().GetSessionId(), VenueId: 22, Exchange: 1, Environment: 1, Market: 2, Symbol: "ETHUSDT", EffectiveLeverage: 3, LeverageSource: "strategy_default", ConfirmedLeverage: 3},
+			},
+		})
+	case "portfolio.UpdateSession":
+		var update portfoliov1.UpdateSessionRequest
+		if err := request.UnmarshalTo(&update); err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		p.updates = append(p.updates, proto.Clone(&update).(*portfoliov1.UpdateSessionRequest))
+		p.mu.Unlock()
+		return anypb.New(&portfoliov1.UpdateSessionResponse{})
+	default:
+		return nil, fmt.Errorf("unexpected platform method: %s", method)
+	}
+}
+
+func (p *strategyStartPlatform) snapshotUpdates() []*portfoliov1.UpdateSessionRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]*portfoliov1.UpdateSessionRequest(nil), p.updates...)
+}
+
 func TestAgentRunStrategyUsesOneCanonicalSessionIDWithoutAlias(t *testing.T) {
 	starter := &fakeWorkerStarter{}
 	sender := &fakeWorkerSender{}
@@ -31,6 +602,7 @@ func TestAgentRunStrategyUsesOneCanonicalSessionIDWithoutAlias(t *testing.T) {
 		WorkerStarter: starter,
 		WorkerSender:  sender,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	starter.onStart = func(sessionID string) {
 		agent.mu.Lock()
 		startSessionID = agent.pending[sessionID].start.GetSessionId()
@@ -97,6 +669,7 @@ func TestAgentRejectsUnsupportedWorkerProtocolBeforeStartSession(t *testing.T) {
 				StartTimeout:   20 * time.Millisecond,
 				RequestTimeout: 100 * time.Millisecond,
 			})
+			enableStrategyStartProtocol(agent, starter)
 			starter.onStart = func(sessionID string) {
 				_ = agent.HandleWorkerFrame(
 					context.Background(),
@@ -185,6 +758,7 @@ func TestAgentRunStrategyRejectsMismatchedCanonicalSessionID(t *testing.T) {
 	agent := NewAgent(AgentConfig{
 		RuntimeID: "rt-1", WorkerStarter: starter, StartTimeout: time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	starter.onStart = func(sessionID string) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
@@ -1441,6 +2015,7 @@ func TestAgentChildExitAfterRunningReconcilesCanonicalRowRecoverable(
 		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter,
 		PlatformInvoker: platform, StartTimeout: time.Second, RequestTimeout: time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	starter.onStart = func(sessionID string) {
 		go func() {
 			save, _ := anypb.New(&portfoliov1.SaveSessionRequest{SessionId: sessionID})
@@ -1497,6 +2072,7 @@ func TestAgentRunStrategyReturnsWorkerStartFailure(t *testing.T) {
 		StartTimeout:   time.Second,
 		RequestTimeout: time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	starter.onStart = func(pendingSessionID string) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
@@ -1537,6 +2113,7 @@ func TestAgentRunStrategyReturnsWorkerStartFailure(t *testing.T) {
 func TestAgentRunDependencyFailurePreservesTypedDetail(t *testing.T) {
 	starter := &fakeWorkerStarter{}
 	agent := NewAgent(AgentConfig{RuntimeID: "rt-1", WorkerStarter: starter, StartTimeout: time.Second})
+	enableStrategyStartProtocol(agent, starter)
 	detail := &strategyv1.RuntimeDependencyError{
 		Code: "STRATEGY_DEPENDENCY_UNAVAILABLE", Module: "pandas_ta",
 		RuntimeProfile: "platform-python-3.13", RuntimeProfileVersion: "1.0.0", ImageBuildId: "build-1",
@@ -1566,6 +2143,7 @@ func TestAgentRunPrefersAcceptedRunningOverImmediatelyFollowingFailure(t *testin
 		agent := NewAgent(AgentConfig{
 			RuntimeID: "rt-1", WorkerStarter: starter, StartTimeout: time.Second,
 		})
+		enableStrategyStartProtocol(agent, starter)
 		starter.onStart = func(sessionID string) {
 			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
 				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
@@ -1612,6 +2190,7 @@ raise RuntimeError("worker bootstrap failed")
 		StartTimeout:   time.Second,
 		RequestTimeout: time.Second,
 	})
+	enableStrategyStartProtocol(agent, manager)
 	request, err := anypb.New(&strategyv1.RunStrategyRequest{
 		PortfolioId: 1,
 		UserId:      6,
@@ -1668,6 +2247,7 @@ func TestAgentRunStrategyPrefersStartedWhenWorkerAlsoExited(t *testing.T) {
 			StartTimeout:   time.Second,
 			RequestTimeout: time.Second,
 		})
+		enableStrategyStartProtocol(agent, starter)
 		starter.onStart = func(pendingSessionID string) {
 			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
 				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
@@ -3303,6 +3883,7 @@ func TestAgentRestartWaitsForFlushThenForgetsOldSession(t *testing.T) {
 		RuntimeID: "rt-1", UserID: 6, PlatformInvoker: invoker,
 		WorkerStarter: starter, WorkerStopper: stopper, StartTimeout: time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	for _, sessionID := range []string{"sess-old", "sess-new"} {
 		if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame(sessionID)); err != nil {
 			t.Fatalf("ReceiveFrame %s: %v", sessionID, err)
@@ -3411,6 +3992,7 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 		StartTimeout:    time.Second,
 		RequestTimeout:  time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	if err := agent.indicatorSync.ReceiveFrame(agentIndicatorFrame("sess-old")); err != nil {
 		t.Fatalf("ReceiveFrame old indicators: %v", err)
 	}
@@ -3500,6 +4082,7 @@ func TestAgentConcurrentRestartSessionReusesOneReplacementWorker(t *testing.T) {
 		WorkerStarter: starter, WorkerStopper: &fakeWorkerStopper{}, PlatformInvoker: invoker,
 		StartTimeout: time.Second, RequestTimeout: time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	starter.onStart = func(pendingSessionID string) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
@@ -3638,6 +4221,7 @@ func TestAgentRestartSessionRejectsIndicatorAfterFinalizationAdmissionCloses(t *
 		WorkerStarter: starter, WorkerStopper: &fakeWorkerStopper{}, PlatformInvoker: invoker,
 		StartTimeout: time.Second, RequestTimeout: time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	generation := newWorkerGeneration("sess-old", 1)
 	if !generation.bindAuthenticatedGeneration(7) {
 		t.Fatal("failed to bind authenticated generation")
@@ -3896,6 +4480,7 @@ func TestAgentRestartSessionOwnsDisconnectCleanupUntilIndicatorTailIsFinalized(t
 		WorkerStarter: starter, WorkerStopper: stopper, PlatformInvoker: invoker,
 		StartTimeout: time.Second, RequestTimeout: time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	generation := newWorkerGeneration("sess-old", 1)
 	if !generation.bindAuthenticatedGeneration(7) {
 		t.Fatal("failed to bind worker generation")
@@ -3962,6 +4547,7 @@ func TestAgentRestartSessionUsesCachedRunRequestWhenGetSessionIsUnsupported(t *t
 		StartTimeout:    time.Second,
 		RequestTimeout:  time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	cachedRun, err := anypb.New(&strategyv1.RunStrategyRequest{
 		PortfolioId: 7,
 		Interval:    "1m",
@@ -4035,6 +4621,7 @@ func TestAgentRestartSessionPreservesCachedRunRequestOptions(t *testing.T) {
 		StartTimeout:    time.Second,
 		RequestTimeout:  time.Second,
 	})
+	enableStrategyStartProtocol(agent, starter)
 	cachedRun, err := anypb.New(&strategyv1.RunStrategyRequest{
 		PortfolioId:     99,
 		StrategyPath:    "custom.strategy",

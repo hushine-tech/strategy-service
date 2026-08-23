@@ -234,6 +234,9 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 	if oldSessionID == "" {
 		t.Fatal("RunStrategy returned an empty session_id")
 	}
+	if !runResponse.GetOk() {
+		t.Fatalf("RunStrategy returned structured failure: %+v", &runResponse)
+	}
 	oldIdentity, ok := workerManager.Registry().ActiveWorker(oldSessionID)
 	if !ok {
 		t.Fatalf("old worker identity is unavailable: %s", oldSessionID)
@@ -561,6 +564,35 @@ func (s *blockedWorkerControl) platformResponse(
 		return responseFrame(
 			frame.GetCorrelationId(),
 			&portfoliov1.PreflightStrategySessionResponse{Ok: true},
+		)
+	case "portfolio.CommitStrategySessionStart":
+		var request portfoliov1.CommitStrategySessionStartRequest
+		if err := frame.GetRequest().GetRequest().UnmarshalTo(&request); err != nil {
+			return runtimeErrorFrame(frame.GetCorrelationId(), "InvalidArgument", err.Error())
+		}
+		sessionRequest := request.GetSession()
+		if sessionRequest == nil {
+			return runtimeErrorFrame(frame.GetCorrelationId(), "InvalidArgument", "missing session")
+		}
+		s.mu.Lock()
+		s.sessions[sessionRequest.GetSessionId()] = &portfoliov1.StrategySessionEntry{
+			SessionId:     sessionRequest.GetSessionId(),
+			PortfolioId:   sessionRequest.GetPortfolioId(),
+			StrategyId:    sessionRequest.GetStrategyId(),
+			UserId:        6,
+			RuntimeId:     sessionRequest.GetRuntimeId(),
+			RuntimeSource: sessionRequest.GetRuntimeSource(),
+			RuntimeName:   sessionRequest.GetRuntimeName(),
+			Status:        "pending",
+			Interval:      sessionRequest.GetInterval(),
+			StartTimeMs:   sessionRequest.GetStartTimeMs(),
+			EndTimeMs:     sessionRequest.GetEndTimeMs(),
+		}
+		s.events = append(s.events, "CommitStrategySessionStart:"+sessionRequest.GetSessionId())
+		s.mu.Unlock()
+		return responseFrame(
+			frame.GetCorrelationId(),
+			&portfoliov1.CommitStrategySessionStartResponse{Ok: true},
 		)
 	case "portfolio.SaveSession":
 		var request portfoliov1.SaveSessionRequest
