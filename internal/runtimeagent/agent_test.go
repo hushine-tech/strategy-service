@@ -705,28 +705,30 @@ func preparedStrategyStart(sessionID, operationID string) *strategyv1.PreparedRu
 }
 
 type strategyStartPlatform struct {
-	mu                          sync.Mutex
-	recorder                    *strategyStartRecorder
-	commitOK                    bool
-	commitErr                   error
-	getErr                      error
-	noDurableCommit             bool
-	updateFailures              int
-	mutateOnUpdateFailure       func(*portfoliov1.StrategySessionEntry)
-	loseRunningAck              bool
-	loseRunningAckAfterDeadline bool
-	runningStrategyID           *int64
-	blockUnguardedFailed        bool
-	unguardedFailedAttempts     int
-	admissionActive             bool
-	beforeUpdate                func(*portfoliov1.UpdateSessionRequest) error
-	mutateCommitted             func(*portfoliov1.StrategySessionEntry)
-	omitConfirmedFacts          bool
-	rollbackFailed              bool
-	commit                      *portfoliov1.CommitStrategySessionStartRequest
-	committedSession            *portfoliov1.StrategySessionEntry
-	updates                     []*portfoliov1.UpdateSessionRequest
-	restartSession              *portfoliov1.StrategySessionEntry
+	mu                           sync.Mutex
+	recorder                     *strategyStartRecorder
+	commitOK                     bool
+	commitErr                    error
+	getErr                       error
+	noDurableCommit              bool
+	updateFailures               int
+	mutateOnUpdateFailure        func(*portfoliov1.StrategySessionEntry)
+	dropCommittedOnUpdateFailure bool
+	loseRunningAck               bool
+	loseRunningAckAfterDeadline  bool
+	runningStrategyID            *int64
+	blockUnguardedFailed         bool
+	unguardedFailedAttempts      int
+	admissionActive              bool
+	beforeUpdate                 func(*portfoliov1.UpdateSessionRequest) error
+	mutateCommitted              func(*portfoliov1.StrategySessionEntry)
+	omitConfirmedFacts           bool
+	rollbackFailed               bool
+	commit                       *portfoliov1.CommitStrategySessionStartRequest
+	committedSession             *portfoliov1.StrategySessionEntry
+	getRequests                  []*portfoliov1.GetSessionRequest
+	updates                      []*portfoliov1.UpdateSessionRequest
+	restartSession               *portfoliov1.StrategySessionEntry
 }
 
 func (p *strategyStartPlatform) InvokePlatformAny(
@@ -746,16 +748,24 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
+		p.getRequests = append(
+			p.getRequests,
+			proto.Clone(&get).(*portfoliov1.GetSessionRequest),
+		)
 		if p.getErr != nil {
 			return nil, p.getErr
 		}
-		if p.committedSession != nil && p.committedSession.GetSessionId() == get.GetSessionId() {
+		if p.committedSession != nil &&
+			p.committedSession.GetSessionId() == get.GetSessionId() &&
+			p.committedSession.GetUserId() == get.GetUserId() {
 			p.recorder.add("get-session")
 			return anypb.New(&portfoliov1.GetSessionResponse{
 				Session: proto.Clone(p.committedSession).(*portfoliov1.StrategySessionEntry),
 			})
 		}
-		if p.restartSession == nil || p.restartSession.GetSessionId() != get.GetSessionId() {
+		if p.restartSession == nil ||
+			p.restartSession.GetSessionId() != get.GetSessionId() ||
+			p.restartSession.GetUserId() != get.GetUserId() {
 			return nil, errors.New("NotFound: session not found")
 		}
 		return anypb.New(&portfoliov1.GetSessionResponse{
@@ -822,6 +832,9 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 			p.updateFailures--
 			if p.committedSession != nil && p.mutateOnUpdateFailure != nil {
 				p.mutateOnUpdateFailure(p.committedSession)
+			}
+			if p.dropCommittedOnUpdateFailure {
+				p.committedSession = nil
 			}
 			p.mu.Unlock()
 			return nil, errors.New("Unavailable: UpdateSession acknowledgement lost")
@@ -1083,6 +1096,139 @@ func TestAgentRunStrategyStartupCleanupSecondReadRequiresExactRunningBinding(t *
 					"mismatched second-read frame=%+v admitted=%v retries=%d durable=%+v",
 					frame, admitted, retryCount, durable,
 				)
+			}
+		})
+	}
+}
+
+func TestAgentRunStrategyStartupCleanupNotFoundRetainsCommittedOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		mutate        func(*portfoliov1.StrategySessionEntry)
+		dropCommitted bool
+	}{
+		{
+			name: "running_rebound_to_another_user",
+			mutate: func(session *portfoliov1.StrategySessionEntry) {
+				session.Status = "running"
+				session.UserId = 99
+			},
+		},
+		{
+			name:          "committed_row_missing",
+			dropCommitted: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &strategyStartRecorder{}
+			platform := &strategyStartPlatform{
+				recorder: recorder, commitOK: true, updateFailures: 1,
+				mutateOnUpdateFailure:        tc.mutate,
+				dropCommittedOnUpdateFailure: tc.dropCommitted,
+			}
+			starter := &strategyStartWorkerStarter{
+				recorder: recorder, suppressFinalProgress: true,
+			}
+			sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+			agent := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6,
+				WorkerStarter: starter, WorkerStopper: starter,
+				WorkerSender: sender, PlatformInvoker: platform,
+				StartTimeout: 20 * time.Millisecond, RequestTimeout: time.Second,
+				StateRoot: t.TempDir(),
+			})
+			starter.agent = agent
+			sender.agent = agent
+			starter.onFinalStart = func(sessionID string) {
+				if err := receiveIndicatorV2(
+					agent.indicatorSync,
+					indicatorSyncFrameV2(
+						sessionID,
+						"binance:perpetual_futures:BTCUSDT:1m",
+						0,
+						60_000,
+					),
+				); err != nil {
+					t.Fatalf("buffer startup indicator V2: %v", err)
+				}
+			}
+
+			frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+				PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+			})
+			if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+				t.Fatalf("RunStrategy frame = %+v, want error", frame)
+			}
+
+			platform.mu.Lock()
+			sessionID := platform.commit.GetSession().GetSessionId()
+			getRequestsBeforeRetry := append(
+				[]*portfoliov1.GetSessionRequest(nil), platform.getRequests...,
+			)
+			platform.mu.Unlock()
+			agent.mu.Lock()
+			generation := agent.generations[sessionID]
+			agent.mu.Unlock()
+			if generation == nil {
+				t.Fatal("startup generation was not retained after ambiguous second read")
+			}
+			if len(getRequestsBeforeRetry) < 3 {
+				t.Fatalf("GetSession requests before retry = %d, want commit and cleanup reads", len(getRequestsBeforeRetry))
+			}
+
+			retryErr := agent.reconcileCommittedStartFailure(
+				context.Background(), sessionID, generation, "strategy startup timed out",
+			)
+			if retryErr == nil {
+				t.Fatal("ownership-filtered NotFound was treated as successful cleanup")
+			}
+
+			agent.mu.Lock()
+			retainedGeneration := agent.generations[sessionID]
+			agent.mu.Unlock()
+			agent.retryMu.Lock()
+			retryCount := len(agent.terminalRetries)
+			agent.retryMu.Unlock()
+			platform.mu.Lock()
+			updates := append([]*portfoliov1.UpdateSessionRequest(nil), platform.updates...)
+			getRequests := append([]*portfoliov1.GetSessionRequest(nil), platform.getRequests...)
+			var durable *portfoliov1.StrategySessionEntry
+			if platform.committedSession != nil {
+				durable = proto.Clone(platform.committedSession).(*portfoliov1.StrategySessionEntry)
+			}
+			platform.mu.Unlock()
+
+			if retainedGeneration != generation || retryCount != 1 {
+				t.Fatalf("ownership ambiguity generation=%p want=%p retries=%d", retainedGeneration, generation, retryCount)
+			}
+			if generation.admit("ownership-ambiguous-probe") {
+				generation.completePlatformCall()
+				t.Fatal("ownership-ambiguous startup admission reopened")
+			}
+			if agent.indicatorSync.lookupSession(sessionID) == nil {
+				t.Fatal("ownership-ambiguous startup indicator state was forgotten")
+			}
+			if len(updates) != 1 || updates[0].GetStatus() != "failed" ||
+				updates[0].GetExpectedStatus() != "pending" {
+				t.Fatalf("ownership-ambiguous cleanup updates = %+v, want one failed pending CAS", updates)
+			}
+			for _, get := range getRequests {
+				if get.GetUserId() != 6 {
+					t.Fatalf("GetSession user_id = %d, want authenticated user 6", get.GetUserId())
+				}
+			}
+			if tc.dropCommitted {
+				if durable != nil {
+					t.Fatalf("missing-row scenario retained durable Session %+v", durable)
+				}
+			} else {
+				if durable.GetStatus() != "running" || durable.GetUserId() != 99 {
+					t.Fatalf("rebound durable Session mutated: %+v", durable)
+				}
+			}
+			records, err := agent.retryStore.LoadAll()
+			if err != nil || len(records) != 1 {
+				t.Fatalf("persisted startup checkpoints records=%+v err=%v", records, err)
 			}
 		})
 	}
@@ -4650,6 +4796,150 @@ func TestStartupCleanupRetryRetainsMismatchedRunningBinding(t *testing.T) {
 			agent.retryMu.Unlock()
 			if retryCount != 1 {
 				t.Fatalf("mismatched running Session cleanup checkpoints = %d, want 1", retryCount)
+			}
+		})
+	}
+}
+
+func TestPersistedStartupCleanupNotFoundRetainsCheckpointAndIndicators(t *testing.T) {
+	const sessionID = "56565656565656565656565656565656"
+	const launchOperationID = "startup-operation-56"
+	for _, tc := range []struct {
+		name        string
+		withBinding bool
+		reboundUser bool
+	}{
+		{name: "running_rebound_to_another_user", withBinding: true, reboundUser: true},
+		{name: "committed_row_missing", withBinding: true},
+		{name: "pre_binding_checkpoint_missing", withBinding: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stateRoot := t.TempDir()
+			recorder := &strategyStartRecorder{}
+			platform := &strategyStartPlatform{
+				recorder: recorder,
+				committedSession: &portfoliov1.StrategySessionEntry{
+					SessionId: sessionID, UserId: 6, PortfolioId: 7,
+					StrategyId: 12, RuntimeId: "rt-1", Environment: 1,
+					LaunchOperationId: launchOperationID, Status: "pending",
+				},
+			}
+			writer := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6, PlatformInvoker: platform,
+				StateRoot: stateRoot,
+			})
+			if err := receiveIndicatorV2(
+				writer.indicatorSync,
+				indicatorSyncFrameV2(
+					sessionID,
+					"binance:perpetual_futures:BTCUSDT:1m",
+					0,
+					60_000,
+				),
+			); err != nil {
+				t.Fatalf("buffer startup indicator V2: %v", err)
+			}
+			binding := committedStartBinding{
+				SessionID: sessionID, UserID: 6, PortfolioID: 7, StrategyID: 12,
+				RuntimeID: "rt-1", Environment: 1, LaunchOperationID: launchOperationID,
+			}
+			var initial portfoliov1.GetSessionResponse
+			if err := writer.invokePlatformProto(
+				context.Background(), "portfolio.GetSession",
+				&portfoliov1.GetSessionRequest{SessionId: sessionID, UserId: 6},
+				&initial,
+			); err != nil {
+				t.Fatalf("read exact committed pending Session: %v", err)
+			}
+			if initial.GetSession().GetStatus() != "pending" ||
+				validateCommittedStartBinding(initial.GetSession(), binding) != nil {
+				t.Fatalf("initial committed pending Session = %+v", initial.GetSession())
+			}
+
+			generation := newWorkerGeneration(sessionID, 1)
+			generation.launchOperationID = launchOperationID
+			generation.userID = 6
+			generation.portfolioID = 7
+			generation.strategyID = 12
+			generation.runtimeID = "rt-1"
+			generation.environment = 1
+			var checkpointErr error
+			if tc.withBinding {
+				checkpointErr = writer.checkpointCommittedStartFailure(
+					sessionID, generation, "strategy startup timed out",
+				)
+			} else {
+				checkpointErr = writer.checkpointTerminalRetry(
+					TerminalRequest{
+						SessionID: sessionID, Status: "failed",
+						Error: "strategy startup timed out", ExpectedStatus: "pending",
+					},
+					generation.generation,
+					"failed",
+					"strategy startup timed out",
+				)
+			}
+			if checkpointErr != nil {
+				t.Fatalf("checkpoint startup cleanup: %v", checkpointErr)
+			}
+
+			platform.mu.Lock()
+			if tc.reboundUser {
+				platform.committedSession.Status = "running"
+				platform.committedSession.UserId = 99
+			} else {
+				platform.committedSession = nil
+			}
+			platform.mu.Unlock()
+
+			restored := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6, PlatformInvoker: platform,
+				StateRoot: stateRoot,
+			})
+			if err := restored.RetryInitializationError(); err != nil {
+				t.Fatalf("restore startup checkpoint: %v", err)
+			}
+			if restored.indicatorSync.lookupSession(sessionID) == nil {
+				t.Fatal("startup indicator checkpoint was not restored")
+			}
+
+			replayErr := restored.RetryTerminalSessions(context.Background())
+			if replayErr == nil {
+				t.Fatal("persisted ownership-filtered NotFound was treated as successful cleanup")
+			}
+			if restored.indicatorSync.lookupSession(sessionID) == nil {
+				t.Fatal("persisted ownership ambiguity finalized indicator state")
+			}
+			restored.retryMu.Lock()
+			retryCount := len(restored.terminalRetries)
+			restored.retryMu.Unlock()
+			if retryCount != 1 {
+				t.Fatalf("persisted startup cleanup checkpoints = %d, want 1", retryCount)
+			}
+			records, err := restored.retryStore.LoadAll()
+			if err != nil || len(records) != 1 {
+				t.Fatalf("stored startup checkpoints records=%+v err=%v", records, err)
+			}
+			platform.mu.Lock()
+			getRequests := append([]*portfoliov1.GetSessionRequest(nil), platform.getRequests...)
+			updates := append([]*portfoliov1.UpdateSessionRequest(nil), platform.updates...)
+			var durable *portfoliov1.StrategySessionEntry
+			if platform.committedSession != nil {
+				durable = proto.Clone(platform.committedSession).(*portfoliov1.StrategySessionEntry)
+			}
+			platform.mu.Unlock()
+			if len(updates) != 0 {
+				t.Fatalf("persisted ownership ambiguity updates = %+v, want none", updates)
+			}
+			for _, get := range getRequests {
+				if get.GetUserId() != 6 {
+					t.Fatalf("persisted GetSession user_id = %d, want authenticated user 6", get.GetUserId())
+				}
+			}
+			if tc.reboundUser {
+				if durable.GetStatus() != "running" || durable.GetUserId() != 99 {
+					t.Fatalf("persisted rebound durable Session mutated: %+v", durable)
+				}
 			}
 		})
 	}

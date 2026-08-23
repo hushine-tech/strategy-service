@@ -388,9 +388,19 @@ func (a *Agent) replayTerminalSession(
 		return validateCommittedStartBinding(session, *record.CommittedStartBinding)
 	}
 	if record.ExpectedStatus != "" {
+		if record.CommittedStartBinding == nil {
+			// Checkpoints written before the committed binding was persisted
+			// cannot prove ownership after restart. They remain fail-closed and
+			// require operator reconciliation rather than a read or mutation.
+			return fmt.Errorf("terminal retry committed startup binding is unavailable")
+		}
 		if err := readSession(); err != nil {
 			if isExplicitPlatformNotFound(err) {
-				return a.completeTerminalRetry(record)
+				// Startup cleanup is recorded only after a durable committed row
+				// was read back. Core filters this request by user_id, so NotFound
+				// is ownership/absence ambiguity and cannot authorize deleting the
+				// checkpoint or its restored indicator state.
+				return indeterminateCommittedStartNotFound(err)
 			}
 			return err
 		}
@@ -418,6 +428,8 @@ func (a *Agent) replayTerminalSession(
 	if record.ExpectedStatus == "" {
 		if err := readSession(); err != nil {
 			if isExplicitPlatformNotFound(err) {
+				// Preserve the historical absence-is-terminal behavior for legacy
+				// terminal retries that have no committed-start pending binding.
 				return a.completeTerminalRetry(record)
 			}
 			return err

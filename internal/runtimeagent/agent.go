@@ -1129,6 +1129,13 @@ var errCommittedStartAcceptedRunning = errors.New(
 	"committed strategy Session already accepted running",
 )
 
+func indeterminateCommittedStartNotFound(err error) error {
+	return fmt.Errorf(
+		"committed startup cleanup readback is indeterminate: authenticated GetSession NotFound cannot prove durable absence after committed readback: %w",
+		err,
+	)
+}
+
 func (a *Agent) checkpointCommittedStartFailure(
 	sessionID string,
 	generation *workerGeneration,
@@ -1200,14 +1207,12 @@ func (a *Agent) reconcileCommittedStartFailure(
 	}, &response)
 	if err != nil {
 		if isExplicitPlatformNotFound(err) {
-			generation.mu.Lock()
-			generation.durablePossible = false
-			generation.mu.Unlock()
-			_ = a.deleteTerminalRetry(sessionID, generation.generation)
-			if a.forgetWorkerGeneration(sessionID, generation) {
-				a.cleanupSessionState(sessionID, reason)
-			}
-			return nil
+			// Core filters this authenticated read by user_id, so NotFound also
+			// represents an ownership rebound. This start was already committed
+			// and read back exactly; retain its frozen generation and checkpoint
+			// until ownership can be proven by a later read or reconciled by an
+			// operator.
+			err = indeterminateCommittedStartNotFound(err)
 		}
 		checkpointErr := a.checkpointCommittedStartFailure(
 			sessionID, generation, reason,
@@ -1244,11 +1249,13 @@ func (a *Agent) reconcileCommittedStartFailure(
 		if err := a.updateSessionExpected(
 			ctx, sessionID, "failed", int64(session.GetBarsProcessed()), reason, "pending",
 		); err != nil {
+			var readbackErr error
 			var readbackBindingErr error
 			var readback portfoliov1.GetSessionResponse
-			if readErr := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
+			readErr := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
 				SessionId: sessionID, UserId: boundUserID,
-			}, &readback); readErr == nil && readback.GetSession() != nil {
+			}, &readback)
+			if readErr == nil && readback.GetSession() != nil {
 				readbackSession := readback.GetSession()
 				readbackBindingErr = validateCommittedStartBinding(readbackSession, binding)
 				if readbackBindingErr == nil {
@@ -1268,10 +1275,15 @@ func (a *Agent) reconcileCommittedStartFailure(
 						return a.cleanupWorkerGeneration(sessionID, generation, reason)
 					}
 				}
+			} else if isExplicitPlatformNotFound(readErr) {
+				// A failed pending CAS followed by authenticated NotFound cannot
+				// distinguish true absence from a user ownership rebound. Keep the
+				// startup checkpoint and never accept or terminalize that row.
+				readbackErr = indeterminateCommittedStartNotFound(readErr)
 			}
 			checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
 			a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
-			return errors.Join(err, readbackBindingErr, checkpointErr)
+			return errors.Join(err, readbackErr, readbackBindingErr, checkpointErr)
 		}
 		generation.mu.Lock()
 		generation.terminalAck = true
