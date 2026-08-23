@@ -576,17 +576,19 @@ func (s *blockedWorkerControl) platformResponse(
 		}
 		s.mu.Lock()
 		s.sessions[sessionRequest.GetSessionId()] = &portfoliov1.StrategySessionEntry{
-			SessionId:     sessionRequest.GetSessionId(),
-			PortfolioId:   sessionRequest.GetPortfolioId(),
-			StrategyId:    sessionRequest.GetStrategyId(),
-			UserId:        6,
-			RuntimeId:     sessionRequest.GetRuntimeId(),
-			RuntimeSource: sessionRequest.GetRuntimeSource(),
-			RuntimeName:   sessionRequest.GetRuntimeName(),
-			Status:        "pending",
-			Interval:      sessionRequest.GetInterval(),
-			StartTimeMs:   sessionRequest.GetStartTimeMs(),
-			EndTimeMs:     sessionRequest.GetEndTimeMs(),
+			SessionId:         sessionRequest.GetSessionId(),
+			PortfolioId:       sessionRequest.GetPortfolioId(),
+			StrategyId:        sessionRequest.GetStrategyId(),
+			UserId:            6,
+			RuntimeId:         sessionRequest.GetRuntimeId(),
+			RuntimeSource:     sessionRequest.GetRuntimeSource(),
+			RuntimeName:       sessionRequest.GetRuntimeName(),
+			Environment:       sessionRequest.GetEnvironment(),
+			Status:            "pending",
+			Interval:          sessionRequest.GetInterval(),
+			StartTimeMs:       sessionRequest.GetStartTimeMs(),
+			EndTimeMs:         sessionRequest.GetEndTimeMs(),
+			LaunchOperationId: request.GetLaunchOperationId(),
 		}
 		s.events = append(s.events, "CommitStrategySessionStart:"+sessionRequest.GetSessionId())
 		s.mu.Unlock()
@@ -644,6 +646,15 @@ func (s *blockedWorkerControl) platformResponse(
 		}
 		s.mu.Lock()
 		session := s.sessions[request.GetSessionId()]
+		if session != nil && request.GetExpectedStatus() != "" &&
+			session.GetStatus() != request.GetExpectedStatus() {
+			s.mu.Unlock()
+			return runtimeErrorFrame(
+				frame.GetCorrelationId(),
+				"NotFound",
+				"session status changed",
+			)
+		}
 		if session != nil {
 			session.Status = request.GetStatus()
 			session.BarsProcessed = request.GetBarsProcessed()

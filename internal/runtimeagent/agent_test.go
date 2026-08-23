@@ -49,7 +49,7 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 		t.Fatalf("RunStrategy response = %+v", &response)
 	}
 	if got := recorder.snapshot(); !slices.Equal(got, []string{
-		"prepare", "commit", "final-worker",
+		"prepare", "commit", "get-session", "final-worker",
 	}) {
 		t.Fatalf("start events = %v", got)
 	}
@@ -72,11 +72,138 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 	if bootstrap.GetSessionId() != response.GetSessionId() ||
 		bootstrap.GetLaunchOperationId() != platform.commit.GetLaunchOperationId() ||
 		bootstrap.GetStrategySourceSha256() != strategyStartDigest ||
+		bootstrap.GetEnvironment() != 1 ||
 		len(bootstrap.GetConfirmedTargetFacts()) != 2 {
 		t.Fatalf("bootstrap = %+v", &bootstrap)
 	}
 	if starter.finalEnv["HUSHINE_STRATEGY_SESSION_BOOTSTRAP_REQUIRED"] != "1" {
 		t.Fatalf("final worker env = %+v", starter.finalEnv)
+	}
+}
+
+func TestAgentRunStrategyRequiresDurablePendingSessionBeforeFinalWorker(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	starter := &strategyStartWorkerStarter{recorder: recorder}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	platform := &strategyStartPlatform{
+		recorder: recorder, commitOK: true, noDurableCommit: true,
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+		WorkerSender: sender, PlatformInvoker: platform,
+		StartTimeout: time.Second, RequestTimeout: 50 * time.Millisecond,
+	})
+	starter.agent = agent
+	sender.agent = agent
+
+	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+		t.Fatalf("RunStrategy frame = %+v", frame)
+	}
+	if starter.finalStarts != 0 {
+		t.Fatalf("final worker starts = %d, want 0", starter.finalStarts)
+	}
+}
+
+func TestAgentRunStrategyReconcilesAmbiguousCommitFromDurableSession(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	starter := &strategyStartWorkerStarter{recorder: recorder}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	platform := &strategyStartPlatform{
+		recorder: recorder, commitOK: true, commitErr: errors.New("Unavailable: commit response lost"),
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+		WorkerSender: sender, PlatformInvoker: platform,
+		StartTimeout: time.Second, RequestTimeout: time.Second,
+	})
+	starter.agent = agent
+	sender.agent = agent
+
+	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE || starter.finalStarts != 1 {
+		t.Fatalf("RunStrategy frame=%+v final starts=%d", frame, starter.finalStarts)
+	}
+}
+
+func TestAgentRunStrategyRetainsAmbiguousCommitWhenReconciliationUnavailable(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	starter := &strategyStartWorkerStarter{recorder: recorder}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	platform := &strategyStartPlatform{
+		recorder: recorder, commitOK: true,
+		commitErr: errors.New("Unavailable: commit response lost"),
+		getErr:    errors.New("Unavailable: reconciliation unavailable"),
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+		WorkerSender: sender, PlatformInvoker: platform,
+		StartTimeout: time.Second, RequestTimeout: 20 * time.Millisecond,
+		StateRoot: t.TempDir(),
+	})
+	starter.agent = agent
+	sender.agent = agent
+
+	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR || starter.finalStarts != 0 {
+		t.Fatalf("RunStrategy frame=%+v final starts=%d", frame, starter.finalStarts)
+	}
+	agent.mu.Lock()
+	retained := len(agent.generations)
+	agent.mu.Unlock()
+	if retained != 1 {
+		t.Fatalf("ambiguous generations = %d, want 1", retained)
+	}
+	agent.retryMu.Lock()
+	checkpointCount := len(agent.terminalRetries)
+	var checkpoint TerminalRetryRecord
+	for _, record := range agent.terminalRetries {
+		checkpoint = record
+	}
+	agent.retryMu.Unlock()
+	if checkpointCount != 1 || checkpoint.ExpectedStatus != "pending" ||
+		checkpoint.DesiredStatus != "failed" {
+		t.Fatalf("ambiguous commit checkpoint count=%d record=%+v", checkpointCount, checkpoint)
+	}
+}
+
+func TestAgentRunStrategyRejectsNonCanonicalDigestBeforeCommit(t *testing.T) {
+	for _, digest := range []string{
+		strings.Repeat("g", 64),
+		strings.ToUpper(strategyStartDigest),
+		strings.Repeat("a", 63),
+	} {
+		t.Run(digest[:8], func(t *testing.T) {
+			recorder := &strategyStartRecorder{}
+			starter := &strategyStartWorkerStarter{recorder: recorder}
+			sender := &strategyStartWorkerSender{
+				recorder: recorder, prepareOK: true, sourceDigest: digest,
+			}
+			platform := &strategyStartPlatform{recorder: recorder, commitOK: true}
+			agent := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+				WorkerSender: sender, PlatformInvoker: platform,
+				StartTimeout: time.Second, RequestTimeout: time.Second,
+			})
+			starter.agent = agent
+			sender.agent = agent
+
+			frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+				PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+			})
+			if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+				t.Fatalf("RunStrategy frame = %+v", frame)
+			}
+			if platform.commit != nil || starter.finalStarts != 0 {
+				t.Fatalf("commit=%+v final starts=%d", platform.commit, starter.finalStarts)
+			}
+		})
 	}
 }
 
@@ -160,7 +287,8 @@ func TestAgentRunStrategyPostCommitLaunchFailureMarksPendingSessionFailed(t *tes
 			}
 			updates := platform.snapshotUpdates()
 			if len(updates) != 1 || updates[0].GetStatus() != "failed" ||
-				updates[0].GetSessionId() != platform.commit.GetSession().GetSessionId() {
+				updates[0].GetSessionId() != platform.commit.GetSession().GetSessionId() ||
+				updates[0].GetExpectedStatus() != "pending" {
 				t.Fatalf("cleanup updates = %+v", updates)
 			}
 			if !strings.Contains(updates[0].GetError(), "worker") {
@@ -289,11 +417,13 @@ func enableStrategyStartProtocol(agent *Agent, finalStarter WorkerStarter) {
 }
 
 type strategyStartProtocolHarness struct {
+	mu               sync.Mutex
 	agent            *Agent
 	finalStarter     WorkerStarter
 	stopperDelegate  WorkerStopper
 	platformDelegate PlatformInvoker
 	senderDelegate   WorkerSender
+	committedSession *portfoliov1.StrategySessionEntry
 }
 
 func (h *strategyStartProtocolHarness) StopSessionWorker(
@@ -376,13 +506,55 @@ func (h *strategyStartProtocolHarness) InvokePlatformAny(
 	timeout time.Duration,
 ) (*anypb.Any, error) {
 	if method == "portfolio.CommitStrategySessionStart" {
+		var commit portfoliov1.CommitStrategySessionStartRequest
+		if err := request.UnmarshalTo(&commit); err != nil {
+			return nil, err
+		}
+		facts := []*portfoliov1.SessionTargetLeverageFact{}
+		h.mu.Lock()
+		h.committedSession = committedStrategySession(&commit, facts)
+		h.mu.Unlock()
 		return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{Ok: true})
+	}
+	if method == "portfolio.GetSession" {
+		var get portfoliov1.GetSessionRequest
+		if err := request.UnmarshalTo(&get); err != nil {
+			return nil, err
+		}
+		h.mu.Lock()
+		committed := h.committedSession
+		h.mu.Unlock()
+		if committed != nil && committed.GetSessionId() == get.GetSessionId() {
+			return anypb.New(&portfoliov1.GetSessionResponse{
+				Session: proto.Clone(committed).(*portfoliov1.StrategySessionEntry),
+			})
+		}
+	}
+	if method == "portfolio.UpdateSession" {
+		var update portfoliov1.UpdateSessionRequest
+		if err := request.UnmarshalTo(&update); err != nil {
+			return nil, err
+		}
+		var response *anypb.Any
+		var err error
+		if h.platformDelegate != nil {
+			response, err = h.platformDelegate.InvokePlatformAny(ctx, method, request, timeout)
+		} else {
+			response, err = anypb.New(&portfoliov1.UpdateSessionResponse{})
+		}
+		if err != nil {
+			return nil, err
+		}
+		h.mu.Lock()
+		if h.committedSession != nil && h.committedSession.GetSessionId() == update.GetSessionId() {
+			h.committedSession.Status = update.GetStatus()
+			h.committedSession.Error = update.GetError()
+		}
+		h.mu.Unlock()
+		return response, nil
 	}
 	if h.platformDelegate != nil {
 		return h.platformDelegate.InvokePlatformAny(ctx, method, request, timeout)
-	}
-	if method == "portfolio.UpdateSession" {
-		return anypb.New(&portfoliov1.UpdateSessionResponse{})
 	}
 	return nil, fmt.Errorf("unexpected platform method: %s", method)
 }
@@ -406,6 +578,7 @@ type strategyStartWorkerStarter struct {
 	finalStarts           int
 	finalError            error
 	suppressFinalProgress bool
+	onFinalStart          func(string)
 	finalStart            *rwv1.StartSession
 	finalEnv              map[string]string
 }
@@ -443,7 +616,9 @@ func (s *strategyStartWorkerStarter) StartSessionWorker(
 		s.finalStart = proto.Clone(pending.start).(*rwv1.StartSession)
 	}
 	s.agent.mu.Unlock()
-	if !s.suppressFinalProgress {
+	if s.onFinalStart != nil {
+		s.onFinalStart(sessionID)
+	} else if !s.suppressFinalProgress {
 		go func() {
 			_ = s.agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
 				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
@@ -460,10 +635,11 @@ func (*strategyStartWorkerStarter) StopSessionWorker(context.Context, string, ti
 }
 
 type strategyStartWorkerSender struct {
-	agent       *Agent
-	recorder    *strategyStartRecorder
-	prepareOK   bool
-	lastPrepare *strategyv1.PrepareRunStrategyStartRequest
+	agent        *Agent
+	recorder     *strategyStartRecorder
+	prepareOK    bool
+	sourceDigest string
+	lastPrepare  *strategyv1.PrepareRunStrategyStartRequest
 }
 
 func (s *strategyStartWorkerSender) SendToWorker(sessionID string, frame *rwv1.AgentFrame) error {
@@ -482,6 +658,9 @@ func (s *strategyStartWorkerSender) SendToWorker(sessionID string, frame *rwv1.A
 	s.lastPrepare = proto.Clone(&request).(*strategyv1.PrepareRunStrategyStartRequest)
 	s.recorder.add("prepare")
 	response := preparedStrategyStart(request.GetSessionId(), request.GetLaunchOperationId())
+	if s.sourceDigest != "" {
+		response.StrategySourceSha256 = s.sourceDigest
+	}
 	if !s.prepareOK {
 		response = &strategyv1.PreparedRunStrategyStart{
 			Ok: false,
@@ -525,9 +704,17 @@ type strategyStartPlatform struct {
 	mu                 sync.Mutex
 	recorder           *strategyStartRecorder
 	commitOK           bool
+	commitErr          error
+	getErr             error
+	noDurableCommit    bool
+	updateFailures     int
+	admissionActive    bool
+	beforeUpdate       func(*portfoliov1.UpdateSessionRequest) error
+	mutateCommitted    func(*portfoliov1.StrategySessionEntry)
 	omitConfirmedFacts bool
 	rollbackFailed     bool
 	commit             *portfoliov1.CommitStrategySessionStartRequest
+	committedSession   *portfoliov1.StrategySessionEntry
 	updates            []*portfoliov1.UpdateSessionRequest
 	restartSession     *portfoliov1.StrategySessionEntry
 }
@@ -540,8 +727,23 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 ) (*anypb.Any, error) {
 	switch method {
 	case "portfolio.GetSession":
-		if p.restartSession == nil {
-			return nil, errors.New("restart session is not configured")
+		var get portfoliov1.GetSessionRequest
+		if err := request.UnmarshalTo(&get); err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.getErr != nil {
+			return nil, p.getErr
+		}
+		if p.committedSession != nil && p.committedSession.GetSessionId() == get.GetSessionId() {
+			p.recorder.add("get-session")
+			return anypb.New(&portfoliov1.GetSessionResponse{
+				Session: proto.Clone(p.committedSession).(*portfoliov1.StrategySessionEntry),
+			})
+		}
+		if p.restartSession == nil || p.restartSession.GetSessionId() != get.GetSessionId() {
+			return nil, errors.New("NotFound: session not found")
 		}
 		return anypb.New(&portfoliov1.GetSessionResponse{
 			Session: proto.Clone(p.restartSession).(*portfoliov1.StrategySessionEntry),
@@ -551,11 +753,11 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 		if err := request.UnmarshalTo(&commit); err != nil {
 			return nil, err
 		}
-		p.mu.Lock()
-		p.commit = proto.Clone(&commit).(*portfoliov1.CommitStrategySessionStartRequest)
-		p.mu.Unlock()
 		p.recorder.add("commit")
 		if !p.commitOK {
+			p.mu.Lock()
+			p.commit = proto.Clone(&commit).(*portfoliov1.CommitStrategySessionStartRequest)
+			p.mu.Unlock()
 			confirmed := uint32(2)
 			return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{
 				Ok: false, Code: "LEVERAGE_CONFIRM_FAILED", RollbackFailed: p.rollbackFailed,
@@ -563,28 +765,284 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 				TargetResults: []*portfoliov1.FuturesLeverageTargetResult{{Symbol: "ETHUSDT", EffectiveLeverage: 3, ConfirmedLeverage: &confirmed, Status: "confirm_failed", ErrorCode: "LEVERAGE_CONFIRM_FAILED"}},
 			})
 		}
-		if p.omitConfirmedFacts {
-			return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{Ok: true})
-		}
-		return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{
-			Ok: true,
-			ConfirmedTargetFacts: []*portfoliov1.SessionTargetLeverageFact{
+		facts := []*portfoliov1.SessionTargetLeverageFact(nil)
+		if !p.omitConfirmedFacts {
+			facts = []*portfoliov1.SessionTargetLeverageFact{
 				{SessionId: commit.GetSession().GetSessionId(), VenueId: 22, Exchange: 1, Environment: 1, Market: 2, Symbol: "BTCUSDT", EffectiveLeverage: 2, LeverageSource: "order_target", ConfirmedLeverage: 2},
 				{SessionId: commit.GetSession().GetSessionId(), VenueId: 22, Exchange: 1, Environment: 1, Market: 2, Symbol: "ETHUSDT", EffectiveLeverage: 3, LeverageSource: "strategy_default", ConfirmedLeverage: 3},
-			},
-		})
+			}
+		}
+		p.mu.Lock()
+		p.commit = proto.Clone(&commit).(*portfoliov1.CommitStrategySessionStartRequest)
+		if !p.noDurableCommit {
+			p.committedSession = committedStrategySession(&commit, facts)
+			if p.mutateCommitted != nil {
+				p.mutateCommitted(p.committedSession)
+			}
+			p.admissionActive = true
+		}
+		commitErr := p.commitErr
+		p.mu.Unlock()
+		if commitErr != nil {
+			return nil, commitErr
+		}
+		return anypb.New(&portfoliov1.CommitStrategySessionStartResponse{Ok: true, ConfirmedTargetFacts: facts})
 	case "portfolio.UpdateSession":
 		var update portfoliov1.UpdateSessionRequest
 		if err := request.UnmarshalTo(&update); err != nil {
 			return nil, err
 		}
+		if p.beforeUpdate != nil {
+			if err := p.beforeUpdate(&update); err != nil {
+				return nil, err
+			}
+		}
 		p.mu.Lock()
 		p.updates = append(p.updates, proto.Clone(&update).(*portfoliov1.UpdateSessionRequest))
+		if p.updateFailures > 0 {
+			p.updateFailures--
+			p.mu.Unlock()
+			return nil, errors.New("Unavailable: UpdateSession acknowledgement lost")
+		}
+		if p.committedSession != nil && p.committedSession.GetSessionId() == update.GetSessionId() {
+			if update.GetExpectedStatus() != "" &&
+				!strings.EqualFold(update.GetExpectedStatus(), p.committedSession.GetStatus()) {
+				p.mu.Unlock()
+				return nil, errors.New("NotFound: Session CAS did not match")
+			}
+			p.committedSession.Status = update.GetStatus()
+			p.committedSession.Error = update.GetError()
+			if isTerminalRetryStatus(strings.ToLower(strings.TrimSpace(update.GetStatus()))) {
+				p.admissionActive = false
+			}
+		}
 		p.mu.Unlock()
 		return anypb.New(&portfoliov1.UpdateSessionResponse{})
 	default:
 		return nil, fmt.Errorf("unexpected platform method: %s", method)
 	}
+}
+
+func TestAgentRunStrategyRejectsMismatchedDurableSessionBeforeFinalWorker(t *testing.T) {
+	mutations := map[string]func(*portfoliov1.StrategySessionEntry){
+		"status":       func(session *portfoliov1.StrategySessionEntry) { session.Status = "running" },
+		"user":         func(session *portfoliov1.StrategySessionEntry) { session.UserId++ },
+		"portfolio":    func(session *portfoliov1.StrategySessionEntry) { session.PortfolioId++ },
+		"strategy":     func(session *portfoliov1.StrategySessionEntry) { session.StrategyId++ },
+		"runtime":      func(session *portfoliov1.StrategySessionEntry) { session.RuntimeId = "rt-other" },
+		"environment":  func(session *portfoliov1.StrategySessionEntry) { session.Environment = 2 },
+		"launch":       func(session *portfoliov1.StrategySessionEntry) { session.LaunchOperationId = "other" },
+		"target_facts": func(session *portfoliov1.StrategySessionEntry) { session.TargetLeverageFacts = nil },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			recorder := &strategyStartRecorder{}
+			starter := &strategyStartWorkerStarter{recorder: recorder}
+			sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+			platform := &strategyStartPlatform{
+				recorder: recorder, commitOK: true, mutateCommitted: mutate,
+			}
+			agent := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+				WorkerSender: sender, PlatformInvoker: platform,
+				StartTimeout: time.Second, RequestTimeout: 20 * time.Millisecond,
+			})
+			starter.agent = agent
+			sender.agent = agent
+
+			frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+				PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+			})
+			if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR || starter.finalStarts != 0 {
+				t.Fatalf("RunStrategy frame=%+v final starts=%d", frame, starter.finalStarts)
+			}
+		})
+	}
+}
+
+func TestAgentRunStrategyStartupTimeoutLetsInflightRunningPublicationWin(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	runningStarted := make(chan struct{})
+	releaseRunning := make(chan struct{})
+	var runningOnce sync.Once
+	platform := &strategyStartPlatform{
+		recorder: recorder,
+		commitOK: true,
+		beforeUpdate: func(update *portfoliov1.UpdateSessionRequest) error {
+			if update.GetStatus() == "running" {
+				runningOnce.Do(func() { close(runningStarted) })
+				<-releaseRunning
+			}
+			return nil
+		},
+	}
+	starter := &strategyStartWorkerStarter{recorder: recorder, suppressFinalProgress: true}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+		WorkerSender: sender, PlatformInvoker: platform,
+		StartTimeout: 20 * time.Millisecond, RequestTimeout: time.Second,
+	})
+	starter.agent = agent
+	sender.agent = agent
+	starter.onFinalStart = func(sessionID string) {
+		go func() {
+			request, err := anypb.New(&portfoliov1.UpdateSessionRequest{
+				SessionId: sessionID, Status: "running", RuntimeId: "rt-1",
+				ExpectedStatus: "pending",
+			})
+			if err != nil {
+				t.Errorf("pack running update: %v", err)
+				return
+			}
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_PlatformCall{PlatformCall: &rwv1.PlatformCall{
+					CallId: "running-publication", Method: "portfolio.UpdateSession",
+					Request: request, TimeoutMs: 1000,
+				}}}, func(frame *rwv1.AgentFrame) error {
+				if result := frame.GetPlatformCallResult(); result == nil || !result.GetOk() {
+					return fmt.Errorf("running publication failed: %+v", result)
+				}
+				return agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+					Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+						SessionId: sessionID, Status: "running",
+					}}}, nil)
+			})
+		}()
+	}
+	go func() {
+		<-runningStarted
+		time.Sleep(40 * time.Millisecond)
+		close(releaseRunning)
+	}()
+
+	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE {
+		t.Fatalf("RunStrategy frame = %+v", frame)
+	}
+	platform.mu.Lock()
+	statusValue := platform.committedSession.GetStatus()
+	updates := append([]*portfoliov1.UpdateSessionRequest(nil), platform.updates...)
+	platform.mu.Unlock()
+	if statusValue != "running" || len(updates) != 1 ||
+		updates[0].GetStatus() != "running" || updates[0].GetExpectedStatus() != "pending" {
+		t.Fatalf("running race status=%q updates=%+v", statusValue, updates)
+	}
+	agent.mu.Lock()
+	var generation *workerGeneration
+	for _, candidate := range agent.generations {
+		generation = candidate
+	}
+	agent.mu.Unlock()
+	if generation == nil || !generation.admit("post-start-probe") {
+		t.Fatal("accepted running generation did not reopen admission")
+	}
+	generation.completePlatformCall()
+}
+
+func TestAgentRunStrategyRetriesUnacknowledgedPostCommitCleanup(t *testing.T) {
+	recorder := &strategyStartRecorder{}
+	starter := &strategyStartWorkerStarter{
+		recorder: recorder, finalError: errors.New("final worker launch failed"),
+	}
+	sender := &strategyStartWorkerSender{recorder: recorder, prepareOK: true}
+	platform := &strategyStartPlatform{
+		recorder: recorder, commitOK: true, updateFailures: 1,
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
+		WorkerSender: sender, PlatformInvoker: platform,
+		StartTimeout: time.Second, RequestTimeout: 100 * time.Millisecond,
+		StateRoot: t.TempDir(),
+	})
+	starter.agent = agent
+	sender.agent = agent
+
+	frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+	})
+	if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR {
+		t.Fatalf("RunStrategy frame = %+v", frame)
+	}
+	agent.mu.Lock()
+	retained := len(agent.generations)
+	agent.mu.Unlock()
+	if retained != 1 {
+		t.Fatalf("generation count after unacknowledged cleanup = %d, want 1", retained)
+	}
+	agent.retryMu.Lock()
+	checkpointCount := len(agent.terminalRetries)
+	var checkpoint TerminalRetryRecord
+	for _, record := range agent.terminalRetries {
+		checkpoint = record
+	}
+	agent.retryMu.Unlock()
+	if checkpointCount != 1 || checkpoint.ExpectedStatus != "pending" ||
+		checkpoint.DesiredStatus != "failed" {
+		t.Fatalf("startup cleanup checkpoint count=%d record=%+v", checkpointCount, checkpoint)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		agent.mu.Lock()
+		retained = len(agent.generations)
+		agent.mu.Unlock()
+		platform.mu.Lock()
+		admissionActive := platform.admissionActive
+		statusValue := ""
+		if platform.committedSession != nil {
+			statusValue = platform.committedSession.GetStatus()
+		}
+		platform.mu.Unlock()
+		if retained == 0 && !admissionActive && statusValue == "failed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	agent.mu.Lock()
+	retained = len(agent.generations)
+	agent.mu.Unlock()
+	platform.mu.Lock()
+	admissionActive := platform.admissionActive
+	statusValue := platform.committedSession.GetStatus()
+	platform.mu.Unlock()
+	if retained != 0 || admissionActive || statusValue != "failed" {
+		t.Fatalf(
+			"cleanup retry retained=%d admission=%v status=%q updates=%+v",
+			retained, admissionActive, statusValue, platform.snapshotUpdates(),
+		)
+	}
+	agent.retryMu.Lock()
+	retryCount := len(agent.terminalRetries)
+	agent.retryMu.Unlock()
+	if retryCount != 0 {
+		t.Fatalf("terminal retries after acknowledgement = %d", retryCount)
+	}
+}
+
+func committedStrategySession(
+	commit *portfoliov1.CommitStrategySessionStartRequest,
+	facts []*portfoliov1.SessionTargetLeverageFact,
+) *portfoliov1.StrategySessionEntry {
+	session := commit.GetSession()
+	entry := &portfoliov1.StrategySessionEntry{
+		SessionId: session.GetSessionId(), PortfolioId: session.GetPortfolioId(),
+		StrategyId: session.GetStrategyId(), Environment: session.GetEnvironment(),
+		Status: "pending", Interval: session.GetInterval(), UserId: session.GetUserId(),
+		RuntimeId: session.GetRuntimeId(), RuntimeSource: session.GetRuntimeSource(),
+		RuntimeName: session.GetRuntimeName(), SessionType: session.GetSessionType(),
+		RuntimeVersion: session.GetRuntimeVersion(), SessionName: session.GetSessionName(),
+		LaunchOperationId: commit.GetLaunchOperationId(),
+	}
+	for _, fact := range facts {
+		entry.TargetLeverageFacts = append(
+			entry.TargetLeverageFacts,
+			proto.Clone(fact).(*portfoliov1.SessionTargetLeverageFact),
+		)
+	}
+	return entry
 }
 
 func (p *strategyStartPlatform) snapshotUpdates() []*portfoliov1.UpdateSessionRequest {
@@ -2053,7 +2511,7 @@ func TestAgentChildExitAfterRunningReconcilesCanonicalRowRecoverable(
 	deadline := time.Now().Add(time.Second)
 	for {
 		events := platform.snapshotEvents()
-		if len(events) >= 5 &&
+		if len(events) >= 4 &&
 			events[len(events)-1] == "UpdateSession:recoverable" {
 			break
 		}
@@ -3797,6 +4255,52 @@ func TestRetryTerminalSessionsClaimsRecordBeforePlatformReplay(t *testing.T) {
 			"terminal retry max concurrency = %d, want one claimed replay",
 			platform.maximumConcurrent(),
 		)
+	}
+}
+
+func TestStartupCleanupRetryDoesNotFinalizeAcceptedRunningSession(t *testing.T) {
+	const sessionID = "53535353535353535353535353535353"
+	var methods []string
+	platform := &fakePlatformInvoker{
+		onInvoke: func(method string, _ *anypb.Any) (*anypb.Any, error) {
+			methods = append(methods, method)
+			if method != "portfolio.GetSession" {
+				return nil, fmt.Errorf("unexpected startup cleanup method: %s", method)
+			}
+			return anypb.New(&portfoliov1.GetSessionResponse{
+				Session: &portfoliov1.StrategySessionEntry{
+					SessionId: sessionID,
+					UserId:    6,
+					RuntimeId: "rt-1",
+					Status:    "running",
+				},
+			})
+		},
+	}
+	agent := NewAgent(AgentConfig{
+		RuntimeID: "rt-1", UserID: 6, PlatformInvoker: platform,
+		IndicatorRetryInitial: time.Millisecond,
+		IndicatorRetryMax:     2 * time.Millisecond,
+	})
+	bufferAgentIndicator(t, agent, sessionID)
+	record := TerminalRetryRecord{
+		SchemaVersion: indicatorTerminalRetrySchemaVersion,
+		SessionID:     sessionID, Generation: 1, DesiredStatus: "failed",
+		EffectiveStatus: "failed", Reason: "startup timed out",
+		ExpectedStatus: "pending",
+	}
+	agent.terminalRetries[terminalRetryKey(sessionID, 1)] = record
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := agent.RetryTerminalSessions(ctx); err != nil {
+		t.Fatalf("RetryTerminalSessions: %v", err)
+	}
+	if !slices.Equal(methods, []string{"portfolio.GetSession"}) {
+		t.Fatalf("startup cleanup methods = %v, want readback only", methods)
+	}
+	if agent.indicatorSync.lookupSession(sessionID) == nil {
+		t.Fatal("accepted running Session indicator state was finalized")
 	}
 }
 

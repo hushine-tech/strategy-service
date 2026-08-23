@@ -197,6 +197,7 @@ def test_prepare_start_manifest_and_bootstrap_are_typed_and_secret_free():
         "launch_operation_id": 2,
         "strategy_source_sha256": 3,
         "confirmed_target_facts": 4,
+        "environment": 5,
     }
     assert bootstrap.fields_by_name["confirmed_target_facts"].is_repeated
     forbidden = {
@@ -281,6 +282,25 @@ def test_new_protocol_start_rejects_bootstrap_identity_mismatch():
     start = pb2.StartSession(session_id="1" * 32, session_bootstrap=packed)
 
     with pytest.raises(RuntimeError, match="session_id mismatch"):
+        session_worker_entry._validated_start_bootstrap(start, required=True)
+
+
+@pytest.mark.parametrize(
+    "digest",
+    ["A" * 64, "g" * 64, "a" * 63],
+)
+def test_new_protocol_start_rejects_noncanonical_digest(digest):
+    bootstrap = strategy_pb2.StrategySessionBootstrap(
+        session_id="1" * 32,
+        launch_operation_id="operation-1",
+        strategy_source_sha256=digest,
+        environment=0,
+    )
+    packed = ProtoAny()
+    packed.Pack(bootstrap)
+    start = pb2.StartSession(session_id="1" * 32, session_bootstrap=packed)
+
+    with pytest.raises(RuntimeError, match="strategy_source_sha256 is invalid"):
         session_worker_entry._validated_start_bootstrap(start, required=True)
 
 

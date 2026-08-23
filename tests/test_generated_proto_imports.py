@@ -125,6 +125,12 @@ def test_portfolio_commit_and_session_target_fact_contract_is_additive():
         "portfolio.v1.FuturesLeverageTargetResult"
     )
 
+    session = portfolio_pb2.StrategySessionEntry.DESCRIPTOR
+    assert session.fields_by_name["launch_operation_id"].number == 27
+
+    update = portfolio_pb2.UpdateSessionRequest.DESCRIPTOR
+    assert update.fields_by_name["expected_status"].number == 7
+
     result = portfolio_pb2.FuturesLeverageTargetResult.DESCRIPTOR
     assert {field.name: field.number for field in result.fields} == {
         "venue_id": 1,

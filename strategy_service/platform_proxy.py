@@ -419,6 +419,7 @@ class ProxyPortfolioClient:
         bars_processed: int = 0,
         error: str = "",
         runtime_id: str = "",
+        expected_status: str = "",
     ) -> bool:
         try:
             from strategy_service.gen import portfolio_service_pb2
@@ -429,6 +430,7 @@ class ProxyPortfolioClient:
                 bars_processed=int(bars_processed),
                 error=error,
                 runtime_id=str(runtime_id or ""),
+                expected_status=str(expected_status or ""),
             )
             self._proxy.invoke(
                 PORTFOLIO_UPDATE_SESSION,

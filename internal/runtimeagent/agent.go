@@ -121,6 +121,9 @@ type workerGeneration struct {
 	inFlight           int
 	drained            chan struct{}
 	drainOnce          sync.Once
+	startupClosing     bool
+	startupDrained     chan struct{}
+	startupDrainClosed bool
 	durablePossible    bool
 	runningAccepted    bool
 	connected          bool
@@ -133,11 +136,18 @@ type workerGeneration struct {
 	cleanupErr         error
 	authGeneration     uint64
 	protocolFailure    string
+	launchOperationID  string
+	userID             int64
+	portfolioID        int64
+	strategyID         int64
+	environment        int32
+	runtimeID          string
 }
 
 func newWorkerGeneration(sessionID string, generation uint64) *workerGeneration {
 	return &workerGeneration{
 		sessionID: sessionID, generation: generation, drained: make(chan struct{}),
+		startupDrained: make(chan struct{}),
 	}
 }
 
@@ -147,7 +157,7 @@ func (g *workerGeneration) admit(method string) bool {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.closing {
+	if g.closing || g.startupClosing {
 		return false
 	}
 	if strings.TrimSpace(method) == "portfolio.SaveSession" {
@@ -168,7 +178,41 @@ func (g *workerGeneration) completePlatformCall() {
 	if g.closing && g.inFlight == 0 {
 		g.drainOnce.Do(func() { close(g.drained) })
 	}
+	if g.startupClosing && g.inFlight == 0 && !g.startupDrainClosed {
+		close(g.startupDrained)
+		g.startupDrainClosed = true
+	}
 	g.mu.Unlock()
+}
+
+func (g *workerGeneration) freezeStartupAdmission() <-chan struct{} {
+	if g == nil {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.startupClosing = true
+	if g.inFlight == 0 && !g.startupDrainClosed {
+		close(g.startupDrained)
+		g.startupDrainClosed = true
+	}
+	return g.startupDrained
+}
+
+func (g *workerGeneration) resumeStartupAdmission() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing {
+		return
+	}
+	g.startupClosing = false
+	g.startupDrained = make(chan struct{})
+	g.startupDrainClosed = false
 }
 
 func (g *workerGeneration) beginCleanup() (bool, <-chan struct{}) {
@@ -452,40 +496,70 @@ func (a *Agent) handleRunStrategy(
 		a.forgetWorkerGeneration(sessionID, generation)
 		return runtimeErrorFrame(frame.GetCorrelationId(), "FailedPrecondition", err.Error())
 	}
+	generation.mu.Lock()
+	generation.durablePossible = true
+	generation.launchOperationID = launchOperationID
+	generation.userID = commitRequest.GetSession().GetUserId()
+	generation.portfolioID = commitRequest.GetSession().GetPortfolioId()
+	generation.strategyID = commitRequest.GetSession().GetStrategyId()
+	generation.environment = commitRequest.GetSession().GetEnvironment()
+	generation.runtimeID = strings.TrimSpace(commitRequest.GetSession().GetRuntimeId())
+	generation.mu.Unlock()
 	var commitResponse portfoliov1.CommitStrategySessionStartResponse
-	if err := a.invokePlatformProto(
+	commitErr := a.invokePlatformProto(
 		ctx,
 		"portfolio.CommitStrategySessionStart",
 		commitRequest,
 		&commitResponse,
-	); err != nil {
-		a.forgetWorkerGeneration(sessionID, generation)
-		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(err), err.Error())
-	}
-	if !commitResponse.GetOk() {
+	)
+	if commitErr == nil && !commitResponse.GetOk() {
+		generation.mu.Lock()
+		generation.durablePossible = false
+		generation.mu.Unlock()
 		a.forgetWorkerGeneration(sessionID, generation)
 		return responseFrame(frame.GetCorrelationId(), committedRunFailure(&commitResponse))
 	}
+	committedSession, reconciliationErr := a.reconcileCommittedStrategyStart(
+		ctx,
+		commitRequest,
+	)
+	if reconciliationErr != nil {
+		if isExplicitPlatformNotFound(reconciliationErr) {
+			generation.mu.Lock()
+			generation.durablePossible = false
+			generation.mu.Unlock()
+			a.forgetWorkerGeneration(sessionID, generation)
+		} else {
+			checkpointErr := a.checkpointCommittedStartFailure(
+				sessionID,
+				generation,
+				"strategy start commit reconciliation failed",
+			)
+			a.scheduleCommittedStartFailureRetry(
+				sessionID,
+				generation,
+				"strategy start commit reconciliation failed",
+			)
+			reconciliationErr = errors.Join(reconciliationErr, checkpointErr)
+		}
+		combined := errors.Join(commitErr, reconciliationErr)
+		return runtimeErrorFrame(frame.GetCorrelationId(), grpcCodeForError(combined), combined.Error())
+	}
 	bootstrap, err := strategySessionBootstrap(
 		&prepared,
-		&commitResponse,
+		committedSession,
 		sessionID,
 		launchOperationID,
 	)
 	if err != nil {
 		failureErr := a.markCommittedStartFailed(sessionID, generation, err.Error())
-		a.forgetWorkerGeneration(sessionID, generation)
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", errors.Join(err, failureErr).Error())
 	}
 	packedBootstrap, err := anypb.New(bootstrap)
 	if err != nil {
 		failureErr := a.markCommittedStartFailed(sessionID, generation, "failed to pack committed session bootstrap")
-		a.forgetWorkerGeneration(sessionID, generation)
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", errors.Join(err, failureErr).Error())
 	}
-	generation.mu.Lock()
-	generation.durablePossible = true
-	generation.mu.Unlock()
 	start := &rwv1.StartSession{
 		SessionId:          sessionID,
 		UserId:             runReq.GetUserId(),
@@ -518,7 +592,6 @@ func (a *Agent) handleRunStrategy(
 			generation,
 			"final session worker launch failed",
 		)
-		a.forgetWorkerGeneration(sessionID, generation)
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", errors.Join(err, failureErr).Error())
 	}
 	if worker != nil && worker.Spec.Generation > 0 && !generation.bindAuthenticatedGeneration(worker.Spec.Generation) {
@@ -540,10 +613,18 @@ func (a *Agent) handleRunStrategy(
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		_ = a.failCommittedWorkerGeneration(sessionID, generation, "runtime request cancelled")
+		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, "runtime request cancelled")
+		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
+			a.rememberRunRequest(sessionID, req.GetRequest())
+			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
+		}
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Cancelled", ctx.Err().Error())
 	case <-timer.C:
-		_ = a.failCommittedWorkerGeneration(sessionID, generation, "session worker start timed out")
+		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, "session worker start timed out")
+		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
+			a.rememberRunRequest(sessionID, req.GetRequest())
+			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
+		}
 		return runtimeErrorFrame(frame.GetCorrelationId(), "DeadlineExceeded", "session worker did not report started")
 	case <-workerExited:
 		select {
@@ -553,11 +634,19 @@ func (a *Agent) handleRunStrategy(
 		}
 		select {
 		case requestErr := <-pending.failed:
-			_ = a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
+			failureErr := a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
+			if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
+				a.rememberRunRequest(sessionID, req.GetRequest())
+				return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
+			}
 			return runtimeRequestErrorFrame(frame.GetCorrelationId(), requestErr)
 		default:
 		}
-		_ = a.failCommittedWorkerGeneration(sessionID, generation, "session worker exited before reporting started")
+		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, "session worker exited before reporting started")
+		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
+			a.rememberRunRequest(sessionID, req.GetRequest())
+			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
+		}
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", managedWorkerExitError("reporting started", worker.processError()).Error())
 	case requestErr := <-pending.failed:
 		select {
@@ -565,7 +654,11 @@ func (a *Agent) handleRunStrategy(
 			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(startedSessionID, &commitResponse))
 		default:
 		}
-		_ = a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
+		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
+		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
+			a.rememberRunRequest(sessionID, req.GetRequest())
+			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
+		}
 		return runtimeRequestErrorFrame(frame.GetCorrelationId(), requestErr)
 	case startedSessionID := <-pending.started:
 		return responseFrame(frame.GetCorrelationId(), successfulRunResponse(startedSessionID, &commitResponse))
@@ -711,6 +804,9 @@ func commitStrategySessionStartRequest(
 	if strings.TrimSpace(metadata.GetInitialStatus()) != "pending" {
 		return nil, fmt.Errorf("prepared strategy start must use pending Session status")
 	}
+	if !isCanonicalLowerSHA256(prepared.GetStrategySourceSha256()) {
+		return nil, fmt.Errorf("prepared strategy source digest is invalid")
+	}
 	request := &portfoliov1.CommitStrategySessionStartRequest{
 		LaunchOperationId: launchOperationID,
 		Session: &portfoliov1.SaveSessionRequest{
@@ -766,23 +862,69 @@ func commitStrategySessionStartRequest(
 	return request, nil
 }
 
+func isCanonicalLowerSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *Agent) reconcileCommittedStrategyStart(
+	ctx context.Context,
+	commit *portfoliov1.CommitStrategySessionStartRequest,
+) (*portfoliov1.StrategySessionEntry, error) {
+	if commit == nil || commit.GetSession() == nil {
+		return nil, fmt.Errorf("strategy start commit request is missing Session metadata")
+	}
+	expected := commit.GetSession()
+	var response portfoliov1.GetSessionResponse
+	if err := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
+		SessionId: expected.GetSessionId(),
+		UserId:    expected.GetUserId(),
+	}, &response); err != nil {
+		return nil, err
+	}
+	session := response.GetSession()
+	if session == nil {
+		return nil, fmt.Errorf("committed strategy Session readback is missing")
+	}
+	if strings.TrimSpace(session.GetStatus()) != "pending" ||
+		strings.TrimSpace(session.GetSessionId()) != strings.TrimSpace(expected.GetSessionId()) ||
+		session.GetUserId() != expected.GetUserId() ||
+		session.GetPortfolioId() != expected.GetPortfolioId() ||
+		session.GetStrategyId() != expected.GetStrategyId() ||
+		strings.TrimSpace(session.GetRuntimeId()) != strings.TrimSpace(expected.GetRuntimeId()) ||
+		session.GetEnvironment() != expected.GetEnvironment() ||
+		strings.TrimSpace(session.GetLaunchOperationId()) != strings.TrimSpace(commit.GetLaunchOperationId()) {
+		return nil, fmt.Errorf("committed strategy Session readback mismatch")
+	}
+	return session, nil
+}
+
 func strategySessionBootstrap(
 	prepared *strategyv1.PreparedRunStrategyStart,
-	commit *portfoliov1.CommitStrategySessionStartResponse,
+	committedSession *portfoliov1.StrategySessionEntry,
 	sessionID string,
 	launchOperationID string,
 ) (*strategyv1.StrategySessionBootstrap, error) {
-	if prepared == nil || commit == nil {
+	if prepared == nil || committedSession == nil || prepared.GetSession() == nil {
 		return nil, fmt.Errorf("committed strategy start facts are missing")
 	}
-	digest := strings.TrimSpace(prepared.GetStrategySourceSha256())
-	if len(digest) != 64 {
+	digest := prepared.GetStrategySourceSha256()
+	if !isCanonicalLowerSHA256(digest) {
 		return nil, fmt.Errorf("prepared strategy source digest is invalid")
 	}
 	bootstrap := &strategyv1.StrategySessionBootstrap{
 		SessionId:            sessionID,
 		LaunchOperationId:    launchOperationID,
 		StrategySourceSha256: digest,
+		Environment:          committedSession.GetEnvironment(),
 	}
 	type targetIntent struct {
 		effective uint32
@@ -808,7 +950,7 @@ func strategySessionBootstrap(
 		}
 	}
 	seen := make(map[string]struct{}, len(expected))
-	for _, fact := range commit.GetConfirmedTargetFacts() {
+	for _, fact := range committedSession.GetTargetLeverageFacts() {
 		if fact == nil || strings.TrimSpace(fact.GetSessionId()) != sessionID {
 			return nil, fmt.Errorf("confirmed target fact Session identity mismatch")
 		}
@@ -913,24 +1055,167 @@ func strategyMarketName(value int32) (string, error) {
 	}
 }
 
+var errCommittedStartAcceptedRunning = errors.New(
+	"committed strategy Session already accepted running",
+)
+
+func (a *Agent) checkpointCommittedStartFailure(
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) error {
+	if generation == nil {
+		return fmt.Errorf("worker generation is required")
+	}
+	return a.checkpointTerminalRetry(
+		TerminalRequest{
+			SessionID:      sessionID,
+			Status:         "failed",
+			Error:          reason,
+			ExpectedStatus: "pending",
+		},
+		generation.generation,
+		"failed",
+		reason,
+	)
+}
+
 func (a *Agent) markCommittedStartFailed(
 	sessionID string,
 	generation *workerGeneration,
 	reason string,
 ) error {
+	if generation == nil {
+		return fmt.Errorf("worker generation is required")
+	}
 	timeout := a.cfg.RequestTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	err := a.updateSession(ctx, sessionID, "failed", 0, reason)
-	if err == nil && generation != nil {
+	select {
+	case <-generation.freezeStartupAdmission():
+	case <-ctx.Done():
+		err := fmt.Errorf("drain startup platform calls: %w", ctx.Err())
+		checkpointErr := a.checkpointCommittedStartFailure(
+			sessionID, generation, reason,
+		)
+		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+		return errors.Join(err, checkpointErr)
+	}
+	return a.reconcileCommittedStartFailure(ctx, sessionID, generation, reason)
+}
+
+func (a *Agent) reconcileCommittedStartFailure(
+	ctx context.Context,
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) error {
+	generation.mu.Lock()
+	boundUserID := generation.userID
+	generation.mu.Unlock()
+	if boundUserID <= 0 {
+		boundUserID = a.cfg.UserID
+	}
+	var response portfoliov1.GetSessionResponse
+	err := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
+		SessionId: sessionID,
+		UserId:    boundUserID,
+	}, &response)
+	if err != nil {
+		if isExplicitPlatformNotFound(err) {
+			generation.mu.Lock()
+			generation.durablePossible = false
+			generation.mu.Unlock()
+			_ = a.deleteTerminalRetry(sessionID, generation.generation)
+			if a.forgetWorkerGeneration(sessionID, generation) {
+				a.cleanupSessionState(sessionID, reason)
+			}
+			return nil
+		}
+		checkpointErr := a.checkpointCommittedStartFailure(
+			sessionID, generation, reason,
+		)
+		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+		return errors.Join(err, checkpointErr)
+	}
+	session := response.GetSession()
+	generation.mu.Lock()
+	expectedLaunchOperationID := generation.launchOperationID
+	expectedUserID := generation.userID
+	expectedPortfolioID := generation.portfolioID
+	expectedStrategyID := generation.strategyID
+	expectedEnvironment := generation.environment
+	expectedRuntimeID := generation.runtimeID
+	generation.mu.Unlock()
+	if session == nil || strings.TrimSpace(session.GetSessionId()) != sessionID ||
+		(expectedRuntimeID != "" && strings.TrimSpace(session.GetRuntimeId()) != expectedRuntimeID) ||
+		(expectedLaunchOperationID != "" && strings.TrimSpace(session.GetLaunchOperationId()) != expectedLaunchOperationID) ||
+		(expectedUserID > 0 && session.GetUserId() != expectedUserID) ||
+		(expectedPortfolioID > 0 && session.GetPortfolioId() != expectedPortfolioID) ||
+		(expectedStrategyID > 0 && session.GetStrategyId() != expectedStrategyID) ||
+		session.GetEnvironment() != expectedEnvironment {
+		err := fmt.Errorf("committed startup cleanup reconciliation mismatch")
+		checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
+		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+		return errors.Join(err, checkpointErr)
+	}
+	statusValue := strings.ToLower(strings.TrimSpace(session.GetStatus()))
+	switch statusValue {
+	case "running":
+		generation.resumeStartupAdmission()
+		if !generation.acceptRunning() {
+			return fmt.Errorf("accepted running Session belongs to a closing generation")
+		}
+		_ = a.deleteTerminalRetry(sessionID, generation.generation)
+		return errCommittedStartAcceptedRunning
+	case "finished", "stopped", "failed", "stop_failed", "recoverable":
 		generation.mu.Lock()
 		generation.terminalAck = true
 		generation.mu.Unlock()
+		_ = a.deleteTerminalRetry(sessionID, generation.generation)
+		return a.cleanupWorkerGeneration(sessionID, generation, reason)
+	case "pending":
+		if err := a.updateSessionExpected(
+			ctx, sessionID, "failed", int64(session.GetBarsProcessed()), reason, "pending",
+		); err != nil {
+			var readback portfoliov1.GetSessionResponse
+			if readErr := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
+				SessionId: sessionID, UserId: boundUserID,
+			}, &readback); readErr == nil && readback.GetSession() != nil {
+				readStatus := strings.ToLower(strings.TrimSpace(readback.GetSession().GetStatus()))
+				if readStatus == "running" {
+					generation.resumeStartupAdmission()
+					if generation.acceptRunning() {
+						_ = a.deleteTerminalRetry(sessionID, generation.generation)
+						return errCommittedStartAcceptedRunning
+					}
+				}
+				if isTerminalRetryStatus(readStatus) {
+					generation.mu.Lock()
+					generation.terminalAck = true
+					generation.mu.Unlock()
+					_ = a.deleteTerminalRetry(sessionID, generation.generation)
+					return a.cleanupWorkerGeneration(sessionID, generation, reason)
+				}
+			}
+			checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
+			a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+			return errors.Join(err, checkpointErr)
+		}
+		generation.mu.Lock()
+		generation.terminalAck = true
+		generation.mu.Unlock()
+		_ = a.deleteTerminalRetry(sessionID, generation.generation)
+		return a.cleanupWorkerGeneration(sessionID, generation, reason)
+	default:
+		err := fmt.Errorf("cannot reconcile committed startup from status %q", session.GetStatus())
+		checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
+		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+		return errors.Join(err, checkpointErr)
 	}
-	return err
 }
 
 func (a *Agent) failCommittedWorkerGeneration(
@@ -938,9 +1223,35 @@ func (a *Agent) failCommittedWorkerGeneration(
 	generation *workerGeneration,
 	reason string,
 ) error {
-	markErr := a.markCommittedStartFailed(sessionID, generation, reason)
-	cleanupErr := a.cleanupWorkerGeneration(sessionID, generation, reason)
-	return errors.Join(markErr, cleanupErr)
+	return a.markCommittedStartFailed(sessionID, generation, reason)
+}
+
+func (a *Agent) scheduleCommittedStartFailureRetry(
+	sessionID string,
+	generation *workerGeneration,
+	reason string,
+) {
+	delay := 250 * time.Millisecond
+	if a.cfg.RequestTimeout >= 100*time.Millisecond && a.cfg.RequestTimeout < delay {
+		delay = a.cfg.RequestTimeout
+	}
+	time.AfterFunc(delay, func() {
+		a.mu.Lock()
+		current := a.generations[sessionID]
+		a.mu.Unlock()
+		if current != generation {
+			return
+		}
+		timeout := a.cfg.RequestTimeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		_ = a.reconcileCommittedStartFailure(
+			ctx, sessionID, generation, reason,
+		)
+	})
 }
 
 func (a *Agent) watchWorkerGeneration(
@@ -2567,6 +2878,17 @@ func (a *Agent) handleWorkerFinalStatus(
 }
 
 func (a *Agent) updateSession(ctx context.Context, sessionID, status string, barsProcessed int64, message string) error {
+	return a.updateSessionExpected(ctx, sessionID, status, barsProcessed, message, "")
+}
+
+func (a *Agent) updateSessionExpected(
+	ctx context.Context,
+	sessionID string,
+	status string,
+	barsProcessed int64,
+	message string,
+	expectedStatus string,
+) error {
 	return a.updateSessionWithIndicatorFinalization(
 		ctx,
 		sessionID,
@@ -2574,6 +2896,7 @@ func (a *Agent) updateSession(ctx context.Context, sessionID, status string, bar
 		barsProcessed,
 		message,
 		nil,
+		expectedStatus,
 	)
 }
 
@@ -2584,6 +2907,7 @@ func (a *Agent) updateSessionWithIndicatorFinalization(
 	barsProcessed int64,
 	message string,
 	indicatorFinalizationPending *bool,
+	expectedStatus ...string,
 ) error {
 	if barsProcessed < 0 {
 		barsProcessed = 0
@@ -2596,6 +2920,9 @@ func (a *Agent) updateSessionWithIndicatorFinalization(
 		SessionId: sessionID, Status: status, BarsProcessed: int32(barsProcessed),
 		Error: message, RuntimeId: strings.TrimSpace(a.cfg.RuntimeID),
 		IndicatorFinalizationPending: indicatorFinalizationPending,
+	}
+	if len(expectedStatus) > 0 {
+		req.ExpectedStatus = strings.TrimSpace(expectedStatus[0])
 	}
 	var response portfoliov1.UpdateSessionResponse
 	return a.invokePlatformProto(ctx, "portfolio.UpdateSession", req, &response)

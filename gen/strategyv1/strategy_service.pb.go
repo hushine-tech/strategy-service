@@ -2451,6 +2451,7 @@ type StrategySessionBootstrap struct {
 	LaunchOperationId    string                               `protobuf:"bytes,2,opt,name=launch_operation_id,json=launchOperationId,proto3" json:"launch_operation_id,omitempty"`
 	StrategySourceSha256 string                               `protobuf:"bytes,3,opt,name=strategy_source_sha256,json=strategySourceSha256,proto3" json:"strategy_source_sha256,omitempty"`
 	ConfirmedTargetFacts []*StrategySessionTargetLeverageFact `protobuf:"bytes,4,rep,name=confirmed_target_facts,json=confirmedTargetFacts,proto3" json:"confirmed_target_facts,omitempty"`
+	Environment          int32                                `protobuf:"varint,5,opt,name=environment,proto3" json:"environment,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2511,6 +2512,13 @@ func (x *StrategySessionBootstrap) GetConfirmedTargetFacts() []*StrategySessionT
 		return x.ConfirmedTargetFacts
 	}
 	return nil
+}
+
+func (x *StrategySessionBootstrap) GetEnvironment() int32 {
+	if x != nil {
+		return x.Environment
+	}
+	return 0
 }
 
 // Structured terminal result for a leverage target. status is one of:
@@ -2887,13 +2895,14 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x12confirmed_leverage\x18\t \x01(\rR\x11confirmedLeverage\x12/\n" +
 	"\x14confirmed_at_unix_ms\x18\n" +
 	" \x01(\x03R\x11confirmedAtUnixMsB\x14\n" +
-	"\x12_previous_leverage\"\x85\x02\n" +
+	"\x12_previous_leverage\"\xa7\x02\n" +
 	"\x18StrategySessionBootstrap\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12.\n" +
 	"\x13launch_operation_id\x18\x02 \x01(\tR\x11launchOperationId\x124\n" +
 	"\x16strategy_source_sha256\x18\x03 \x01(\tR\x14strategySourceSha256\x12d\n" +
-	"\x16confirmed_target_facts\x18\x04 \x03(\v2..strategy.v1.StrategySessionTargetLeverageFactR\x14confirmedTargetFacts\"\xd8\x04\n" +
+	"\x16confirmed_target_facts\x18\x04 \x03(\v2..strategy.v1.StrategySessionTargetLeverageFactR\x14confirmedTargetFacts\x12 \n" +
+	"\venvironment\x18\x05 \x01(\x05R\venvironment\"\xd8\x04\n" +
 	"\x1cStrategyLeverageTargetResult\x12\x19\n" +
 	"\bvenue_id\x18\x01 \x01(\x03R\avenueId\x12\x1a\n" +
 	"\bexchange\x18\x02 \x01(\x05R\bexchange\x12\x16\n" +

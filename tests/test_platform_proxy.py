@@ -13,6 +13,7 @@ from strategy_service.platform_proxy import (
     PORTFOLIO_SAVE_SESSION,
     PORTFOLIO_SAVE_STRATEGY_INDICATORS,
     PORTFOLIO_UPDATE_WALLET_STATE,
+    PORTFOLIO_UPDATE_SESSION,
     LOGS_EMIT,
     MARKETDATA_FETCH_BACKTEST_PAGE,
     MARKETDATA_FETCH_KLINES,
@@ -51,6 +52,24 @@ def test_proxy_portfolio_client_sends_save_session_over_runtime_channel():
     assert req.runtime_id == "runtime-1"
     assert req.leverage == 4
     assert req.initial_status == "pending"
+
+
+def test_proxy_portfolio_client_sends_pending_status_cas():
+    runtime = _FakeRuntimeChannel()
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    ok = proxy.portfolio_client().update_session(
+        session_id="sess-1",
+        status="running",
+        runtime_id="runtime-1",
+        expected_status="pending",
+    )
+
+    assert ok is True
+    method, req = runtime.calls[-1]
+    assert method == PORTFOLIO_UPDATE_SESSION
+    assert req.status == "running"
+    assert req.expected_status == "pending"
 
 
 def test_proxy_portfolio_client_sends_strategy_indicators_over_runtime_channel():

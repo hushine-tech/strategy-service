@@ -355,6 +355,7 @@ message StrategySessionBootstrap {
   string launch_operation_id = 2;
   string strategy_source_sha256 = 3;
   repeated StrategySessionTargetLeverageFact confirmed_target_facts = 4;
+  int32 environment = 5;
 }
 
 // Structured terminal result for a leverage target. status is one of:

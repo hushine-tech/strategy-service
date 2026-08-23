@@ -60,13 +60,16 @@ def test_portfolio_client_update_session_sends_runtime_guard():
     client = PortfolioClient("")
     client._stub = FakeStub()
 
-    ok = client.update_session("sess-1", "stopped", runtime_id="rt-1")
+    ok = client.update_session(
+        "sess-1", "running", runtime_id="rt-1", expected_status="pending"
+    )
 
     assert ok is True
     req = captured["req"]
     assert req.session_id == "sess-1"
-    assert req.status == "stopped"
+    assert req.status == "running"
     assert req.runtime_id == "rt-1"
+    assert req.expected_status == "pending"
 
 
 def test_portfolio_client_list_running_sessions_filters_by_runtime():

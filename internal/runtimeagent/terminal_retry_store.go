@@ -28,6 +28,7 @@ type TerminalRetryRecord struct {
 	EffectiveStatus string                        `json:"effective_status"`
 	BarsProcessed   int64                         `json:"bars_processed"`
 	Reason          string                        `json:"reason"`
+	ExpectedStatus  string                        `json:"expected_status,omitempty"`
 	Indicators      *IndicatorSessionCheckpointV2 `json:"indicators,omitempty"`
 }
 
@@ -346,6 +347,9 @@ func validateTerminalRetryRecord(record TerminalRetryRecord) error {
 	if !isTerminalRetryStatus(record.DesiredStatus) ||
 		!isTerminalRetryStatus(record.EffectiveStatus) {
 		return fmt.Errorf("terminal retry status is invalid")
+	}
+	if record.ExpectedStatus != "" && record.ExpectedStatus != "pending" {
+		return fmt.Errorf("terminal retry expected_status is invalid")
 	}
 	if len(record.Reason) > 64<<10 {
 		return fmt.Errorf("terminal retry reason is too large")

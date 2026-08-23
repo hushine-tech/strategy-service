@@ -39,7 +39,7 @@ def _validated_start_bootstrap(start, *, required: bool):
         raise RuntimeError("StrategySessionBootstrap session_id mismatch")
     if not str(bootstrap.launch_operation_id or "").strip():
         raise RuntimeError("StrategySessionBootstrap launch_operation_id is required")
-    digest = str(bootstrap.strategy_source_sha256 or "").strip().lower()
+    digest = str(bootstrap.strategy_source_sha256 or "")
     if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
         raise RuntimeError("StrategySessionBootstrap strategy_source_sha256 is invalid")
     return bootstrap

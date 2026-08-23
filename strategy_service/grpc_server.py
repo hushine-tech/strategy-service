@@ -497,6 +497,8 @@ def _validated_confirmed_target_map(
 ) -> dict[tuple[str, str, str], tuple[int, str, int]]:
     if bootstrap is None:
         raise _SessionBootstrapError("strategy Session bootstrap is required")
+    if int(getattr(bootstrap, "environment", -1)) != int(environment):
+        raise _SessionBootstrapError("strategy Session bootstrap environment mismatch")
     prepared_digest = str(
         getattr(
             getattr(getattr(prepared_strategy, "gated_source", None), "resolved", None),
@@ -507,8 +509,13 @@ def _validated_confirmed_target_map(
     ).strip().lower()
     bootstrap_digest = str(
         getattr(bootstrap, "strategy_source_sha256", "") or ""
-    ).strip().lower()
-    if not prepared_digest or prepared_digest != bootstrap_digest:
+    )
+    if (
+        not prepared_digest
+        or len(bootstrap_digest) != 64
+        or any(character not in "0123456789abcdef" for character in bootstrap_digest)
+        or prepared_digest != bootstrap_digest
+    ):
         raise _SessionBootstrapError("strategy source digest mismatch")
 
     declared: dict[tuple[str, str, str], tuple[int, str]] = {}
@@ -1514,13 +1521,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._sessions.discard(session_id, state)
 
     @staticmethod
-    def _persist_running_transition(acct_client: Any, session_id: str, state: SessionState) -> bool:
+    def _persist_running_transition(
+        acct_client: Any,
+        session_id: str,
+        state: SessionState,
+        *,
+        expected_status: str = "",
+    ) -> bool:
         result = acct_client.update_session(
             session_id=session_id,
             status="running",
             bars_processed=state.bars_processed,
             error=state.error,
             runtime_id=state.runtime_id,
+            expected_status=expected_status,
         )
         return result is True
 
@@ -2580,6 +2594,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 acct_client,
                 session_id,
                 state,
+                expected_status="pending" if new_protocol_start else "",
             )
         except BaseException:
             running_persisted = False

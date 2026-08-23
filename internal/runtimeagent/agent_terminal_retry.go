@@ -99,6 +99,7 @@ func (a *Agent) checkpointTerminalRetry(
 		EffectiveStatus: effectiveStatus,
 		BarsProcessed:   request.BarsProcessed,
 		Reason:          strings.TrimSpace(reason),
+		ExpectedStatus:  strings.TrimSpace(strings.ToLower(request.ExpectedStatus)),
 	}
 	if record.BarsProcessed < 0 {
 		record.BarsProcessed = 0
@@ -345,41 +346,86 @@ func (a *Agent) replayTerminalSession(
 	if a.cfg.PlatformInvoker == nil {
 		return fmt.Errorf("platform invoker is not configured")
 	}
+	var response portfoliov1.GetSessionResponse
+	readSession := func() error {
+		return a.invokePlatformProto(
+			ctx,
+			"portfolio.GetSession",
+			&portfoliov1.GetSessionRequest{
+				SessionId: record.SessionID,
+				UserId:    a.cfg.UserID,
+			},
+			&response,
+		)
+	}
+	validatedSession := func() (*portfoliov1.StrategySessionEntry, error) {
+		session := response.GetSession()
+		if session == nil ||
+			strings.TrimSpace(session.GetSessionId()) != record.SessionID {
+			return nil, fmt.Errorf("terminal retry returned mismatched session")
+		}
+		if runtimeID := strings.TrimSpace(session.GetRuntimeId()); runtimeID != "" && runtimeID != strings.TrimSpace(a.cfg.RuntimeID) {
+			return nil, fmt.Errorf("terminal retry returned mismatched runtime_id")
+		}
+		if a.cfg.UserID > 0 &&
+			session.GetUserId() > 0 &&
+			session.GetUserId() != a.cfg.UserID {
+			return nil, fmt.Errorf("terminal retry returned mismatched user_id")
+		}
+		return session, nil
+	}
+	if record.ExpectedStatus != "" {
+		if err := readSession(); err != nil {
+			if isExplicitPlatformNotFound(err) {
+				return a.completeTerminalRetry(record)
+			}
+			return err
+		}
+		session, err := validatedSession()
+		if err != nil {
+			return err
+		}
+		observedStatus := strings.TrimSpace(strings.ToLower(session.GetStatus()))
+		if observedStatus == "running" {
+			return a.deleteTerminalRetry(record.SessionID, record.Generation)
+		}
+		if observedStatus != record.ExpectedStatus && isTerminalRetryStatus(observedStatus) {
+			return a.completeTerminalRetry(record)
+		}
+	}
 	if err := a.indicatorSync.FinalizeSession(
 		ctx,
 		record.SessionID,
 	); err != nil {
 		return err
 	}
-	var response portfoliov1.GetSessionResponse
-	if err := a.invokePlatformProto(
-		ctx,
-		"portfolio.GetSession",
-		&portfoliov1.GetSessionRequest{
-			SessionId: record.SessionID,
-			UserId:    a.cfg.UserID,
-		},
-		&response,
-	); err != nil {
-		if isExplicitPlatformNotFound(err) {
-			return a.completeTerminalRetry(record)
+	if record.ExpectedStatus == "" {
+		if err := readSession(); err != nil {
+			if isExplicitPlatformNotFound(err) {
+				return a.completeTerminalRetry(record)
+			}
+			return err
 		}
+	}
+	session, err := validatedSession()
+	if err != nil {
 		return err
 	}
-	session := response.GetSession()
-	if session == nil ||
-		strings.TrimSpace(session.GetSessionId()) != record.SessionID {
-		return fmt.Errorf("terminal retry returned mismatched session")
+	observedStatus := strings.TrimSpace(strings.ToLower(session.GetStatus()))
+	if record.ExpectedStatus != "" && observedStatus != record.ExpectedStatus {
+		if observedStatus == "running" {
+			return a.deleteTerminalRetry(record.SessionID, record.Generation)
+		}
+		if isTerminalRetryStatus(observedStatus) {
+			return a.completeTerminalRetry(record)
+		}
+		return fmt.Errorf(
+			"terminal retry expected session status %q, got %q",
+			record.ExpectedStatus,
+			observedStatus,
+		)
 	}
-	if runtimeID := strings.TrimSpace(session.GetRuntimeId()); runtimeID != "" && runtimeID != strings.TrimSpace(a.cfg.RuntimeID) {
-		return fmt.Errorf("terminal retry returned mismatched runtime_id")
-	}
-	if a.cfg.UserID > 0 &&
-		session.GetUserId() > 0 &&
-		session.GetUserId() != a.cfg.UserID {
-		return fmt.Errorf("terminal retry returned mismatched user_id")
-	}
-	statusValue := strings.TrimSpace(strings.ToLower(session.GetStatus()))
+	statusValue := observedStatus
 	if !isTerminalRetryStatus(statusValue) {
 		statusValue = record.EffectiveStatus
 	}
@@ -405,6 +451,7 @@ func (a *Agent) replayTerminalSession(
 		barsProcessed,
 		message,
 		&pending,
+		record.ExpectedStatus,
 	); err != nil {
 		return err
 	}

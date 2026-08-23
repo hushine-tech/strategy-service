@@ -285,6 +285,7 @@ class PortfolioClient:
         bars_processed: int = 0,
         error: str = "",
         runtime_id: str = "",
+        expected_status: str = "",
     ) -> bool:
         """Update session status in core-service. Returns True on success."""
         if not self._stub:
@@ -295,6 +296,7 @@ class PortfolioClient:
                 session_id=session_id, status=status,
                 bars_processed=int(bars_processed), error=error,
                 runtime_id=str(runtime_id or ""),
+                expected_status=str(expected_status or ""),
             )
             self._stub.UpdateSession(req)
             return True

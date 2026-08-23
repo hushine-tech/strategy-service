@@ -19,6 +19,7 @@ type TerminalRequest struct {
 	Error                        string
 	ReconciliationRunID          string
 	IndicatorFinalizationPending *bool
+	ExpectedStatus               string
 }
 
 type terminalIndicatorLifecycle interface {

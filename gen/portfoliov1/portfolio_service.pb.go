@@ -6421,8 +6421,11 @@ type StrategySessionEntry struct {
 	Leverage                     float64                      `protobuf:"fixed64,24,opt,name=leverage,proto3" json:"leverage,omitempty"`
 	IndicatorFinalizationPending bool                         `protobuf:"varint,25,opt,name=indicator_finalization_pending,json=indicatorFinalizationPending,proto3" json:"indicator_finalization_pending,omitempty"`
 	TargetLeverageFacts          []*SessionTargetLeverageFact `protobuf:"bytes,26,rep,name=target_leverage_facts,json=targetLeverageFacts,proto3" json:"target_leverage_facts,omitempty"`
-	unknownFields                protoimpl.UnknownFields
-	sizeCache                    protoimpl.SizeCache
+	// Durable identity of the atomic strategy launch that created this Session.
+	// Legacy Sessions created outside the launch protocol leave this empty.
+	LaunchOperationId string `protobuf:"bytes,27,opt,name=launch_operation_id,json=launchOperationId,proto3" json:"launch_operation_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *StrategySessionEntry) Reset() {
@@ -6636,6 +6639,13 @@ func (x *StrategySessionEntry) GetTargetLeverageFacts() []*SessionTargetLeverage
 		return x.TargetLeverageFacts
 	}
 	return nil
+}
+
+func (x *StrategySessionEntry) GetLaunchOperationId() string {
+	if x != nil {
+		return x.LaunchOperationId
+	}
+	return ""
 }
 
 type SaveSessionRequest struct {
@@ -6852,8 +6862,10 @@ type UpdateSessionRequest struct {
 	Error                        string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	RuntimeId                    string                 `protobuf:"bytes,5,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"` // optional guard; when set, must match owning runtime
 	IndicatorFinalizationPending *bool                  `protobuf:"varint,6,opt,name=indicator_finalization_pending,json=indicatorFinalizationPending,proto3,oneof" json:"indicator_finalization_pending,omitempty"`
-	unknownFields                protoimpl.UnknownFields
-	sizeCache                    protoimpl.SizeCache
+	// Optional compare-and-set guard. Empty preserves legacy transition behavior.
+	ExpectedStatus string `protobuf:"bytes,7,opt,name=expected_status,json=expectedStatus,proto3" json:"expected_status,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *UpdateSessionRequest) Reset() {
@@ -6926,6 +6938,13 @@ func (x *UpdateSessionRequest) GetIndicatorFinalizationPending() bool {
 		return *x.IndicatorFinalizationPending
 	}
 	return false
+}
+
+func (x *UpdateSessionRequest) GetExpectedStatus() string {
+	if x != nil {
+		return x.ExpectedStatus
+	}
+	return ""
 }
 
 type UpdateSessionResponse struct {
@@ -11772,7 +11791,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\tR\aversion\x12'\n" +
 	"\x0fruntime_version\x18\x05 \x01(\tR\x0eruntimeVersion\x12'\n" +
-	"\x0fruntime_profile\x18\x06 \x01(\tR\x0eruntimeProfile\"\xa9\b\n" +
+	"\x0fruntime_profile\x18\x06 \x01(\tR\x0eruntimeProfile\"\xd9\b\n" +
 	"\x14StrategySessionEntry\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
@@ -11806,7 +11825,8 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x11error_detail_json\x18\x17 \x01(\tR\x0ferrorDetailJson\x12\x1e\n" +
 	"\bleverage\x18\x18 \x01(\x01B\x02\x18\x01R\bleverage\x12D\n" +
 	"\x1eindicator_finalization_pending\x18\x19 \x01(\bR\x1cindicatorFinalizationPending\x12[\n" +
-	"\x15target_leverage_facts\x18\x1a \x03(\v2'.portfolio.v1.SessionTargetLeverageFactR\x13targetLeverageFacts\"\xb1\x04\n" +
+	"\x15target_leverage_facts\x18\x1a \x03(\v2'.portfolio.v1.SessionTargetLeverageFactR\x13targetLeverageFacts\x12.\n" +
+	"\x13launch_operation_id\x18\x1b \x01(\tR\x11launchOperationId\"\xb1\x04\n" +
 	"\x12SaveSessionRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
@@ -11828,7 +11848,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\bleverage\x18\x0e \x01(\x01B\x02\x18\x01R\bleverage\x12%\n" +
 	"\x0einitial_status\x18\x0f \x01(\tR\rinitialStatus\x12\x17\n" +
 	"\auser_id\x18d \x01(\x03R\x06userId\"\x15\n" +
-	"\x13SaveSessionResponse\"\x97\x02\n" +
+	"\x13SaveSessionResponse\"\xc0\x02\n" +
 	"\x14UpdateSessionRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
@@ -11837,7 +11857,8 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12\x1d\n" +
 	"\n" +
 	"runtime_id\x18\x05 \x01(\tR\truntimeId\x12I\n" +
-	"\x1eindicator_finalization_pending\x18\x06 \x01(\bH\x00R\x1cindicatorFinalizationPending\x88\x01\x01B!\n" +
+	"\x1eindicator_finalization_pending\x18\x06 \x01(\bH\x00R\x1cindicatorFinalizationPending\x88\x01\x01\x12'\n" +
+	"\x0fexpected_status\x18\a \x01(\tR\x0eexpectedStatusB!\n" +
 	"\x1f_indicator_finalization_pending\"\x17\n" +
 	"\x15UpdateSessionResponse\"K\n" +
 	"\x11GetSessionRequest\x12\x1d\n" +

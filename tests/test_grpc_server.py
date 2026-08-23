@@ -56,6 +56,7 @@ def _mixed_leverage_bootstrap() -> pb2.StrategySessionBootstrap:
         session_id="1" * 32,
         launch_operation_id="launch-1",
         strategy_source_sha256="a" * 64,
+        environment=1,
         confirmed_target_facts=[
             pb2.StrategySessionTargetLeverageFact(
                 venue_id=22,
@@ -6743,6 +6744,7 @@ def test_committed_bootstrap_publishes_running_without_second_save(monkeypatch):
         session_id=canonical_id,
         launch_operation_id="launch-committed",
         strategy_source_sha256=digest,
+        environment=0,
     )
     context = _PublicationContext(canonical_id)
 
@@ -6763,10 +6765,56 @@ def test_committed_bootstrap_publishes_running_without_second_save(monkeypatch):
     assert response.session_id == canonical_id
     assert calls["save_session"] == 0
     assert [item["status"] for item in calls["update_session"]] == ["running"]
+    assert calls["update_session"][0]["expected_status"] == "pending"
     state = servicer._sessions.get(canonical_id)
     assert state is not None
     state.startup_result().release.set()
     state.thread.join(timeout=1.0)
+
+
+def test_committed_empty_fact_bootstrap_rejects_environment_mismatch(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    digest = _prepare_strategy_code_for_test(
+        "<committed-empty-fact-env>", source
+    ).gated_source.resolved.source_sha256
+    canonical_id = "e" * 32
+    servicer._require_session_bootstrap = True
+    servicer._session_bootstrap = pb2.StrategySessionBootstrap(
+        session_id=canonical_id,
+        launch_operation_id="launch-env-mismatch",
+        strategy_source_sha256=digest,
+        environment=1,
+    )
+    context = _PublicationContext(canonical_id)
+
+    response = servicer.RunStrategy(
+        pb2.RunStrategyRequest(
+            portfolio_id=704,
+            user_id=17,
+            runtime_id="rt-test",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        ),
+        context,
+    )
+
+    assert response.ok is False
+    assert context.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert "environment mismatch" in context.details
+    assert calls["save_session"] == 0
+    assert calls["update_session"] == []
 
 
 def test_worker_readiness_timeout_discards_without_durable_row(monkeypatch):
