@@ -1,5 +1,9 @@
 # Strategy Service
 
+Last verified: 2026-08-24 at implementation commit
+`6ec6671ec4dc4de4613a56ab779b5a34acd889ca` (before this documentation-only
+commit).
+
 Python strategy runtime service for Hushine.
 
 `strategy-service` is now the platform executor runtime only. It runs hosted and
@@ -137,6 +141,62 @@ explicitly allow source-mode fallback, set `RUNTIME_AGENT_ALLOW_GO_RUN=1`.
 - If demo/live market data becomes stale while a strategy is blocked or under a
   breakpoint, stale bars are dropped by lag time and the runtime reports
   `DATA_BACKPRESSURE`. Repeated drops mark the session failed via status patch.
+
+## Strategy-owned Futures leverage startup
+
+Strategy validation resolves each Futures `ORDER_TARGETS` entry once, in this
+order: target `leverage`, class `LEVERAGE`, then platform default `1x`. Values
+must be literal positive integers; Spot leverage is rejected. Legacy request
+leverage remains decodable but is ignored. The UI has no Start Demo, Backtest,
+or Resume leverage input.
+
+Preview and validation run in temporary one-shot workers. Preview calls the
+core-service preflight through RuntimeChannel and is read-only: no Binance
+leverage POST, admission, launch journal, outbox, Session, or Session target
+fact write.
+
+`RunStrategy` has a separate two-worker start boundary:
+
+1. runtime-agent creates `session_id`/`launch_operation_id` and invokes
+   `PrepareRunStrategyStart` in a one-shot preparation worker. The worker
+   reloads the current active strategy and returns its source digest,
+   declarations, routes, per-target leverage intents, and risk facts without
+   executing strategy callbacks.
+2. runtime-agent sends the typed manifest to
+   `portfolio.CommitStrategySessionStart` through the authenticated
+   RuntimeChannel platform proxy.
+3. Only after core-service confirms every target, commits the pending Session
+   and facts, and the agent reads the committed binding back does the agent
+   create the final session worker.
+4. The final worker re-resolves the current strategy and fails closed unless
+   source digest, target set, effective leverage/source, Venue/environment,
+   confirmed leverage, and canonical wallet risk metadata all match the typed
+   bootstrap. It never falls back to the deprecated Session scalar for a new
+   Session.
+
+Backtest (`environment=0`) and strategy-debugger-cli use the same declaration
+resolver and simulated Futures wallet metadata. They do not call Binance or
+acquire live admission, and the debugger has no leverage override. Demo
+(`environment=1`) may change Binance only after Start. Live
+(`environment=2`) remains rollout guarded. Runtime traffic stays proxy-only;
+the agent and worker receive no core/order, database, Kafka, credential, or
+caller-selected internal endpoint.
+
+Resume creates a new Session and repeats current-source preparation and
+commit; it does not reuse old target facts. Runtime loss leaves the old Session
+`recoverable`. A rollback failure remains a structured
+`LEVERAGE_ROLLBACK_FAILED` result, and a committed start that cannot safely
+launch the worker is reconciled against the committed Session rather than
+starting from unconfirmed local state.
+
+The BTC/ETH/ZEC functional template declares `LEVERAGE = 10`, sizes each symbol
+from confirmed canonical metadata and `wallet_balance * 1%`, compares margin
+mode only to canonical `cross`, and deduplicates an unchanged warning until the
+issue recovers. It has no `REQUIRED_LEVERAGE` or raw `CROSSED` branch.
+
+The cross-repository operator and schema guide is
+`../hushine-deploy/docs/strategy-owned-futures-leverage.md` when repositories
+are checked out in the standard sibling layout.
 
 ## Dependency Profile Startup and Strategy Validation
 
