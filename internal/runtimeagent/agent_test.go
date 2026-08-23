@@ -712,6 +712,7 @@ type strategyStartPlatform struct {
 	getErr                      error
 	noDurableCommit             bool
 	updateFailures              int
+	mutateOnUpdateFailure       func(*portfoliov1.StrategySessionEntry)
 	loseRunningAck              bool
 	loseRunningAckAfterDeadline bool
 	runningStrategyID           *int64
@@ -819,6 +820,9 @@ func (p *strategyStartPlatform) InvokePlatformAny(
 		}
 		if p.updateFailures > 0 {
 			p.updateFailures--
+			if p.committedSession != nil && p.mutateOnUpdateFailure != nil {
+				p.mutateOnUpdateFailure(p.committedSession)
+			}
 			p.mu.Unlock()
 			return nil, errors.New("Unavailable: UpdateSession acknowledgement lost")
 		}
@@ -970,6 +974,118 @@ func TestAgentRunStrategyStartupTimeoutLetsInflightRunningPublicationWin(t *test
 		t.Fatal("accepted running generation did not reopen admission")
 	}
 	generation.completePlatformCall()
+}
+
+func TestAgentRunStrategyStartupCleanupSecondReadRequiresExactRunningBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		expectedStrategyID int64
+		mutate             func(*portfoliov1.StrategySessionEntry)
+		wantAccepted       bool
+	}{
+		{
+			name:               "zero_strategy_exact",
+			expectedStrategyID: 0,
+			mutate: func(session *portfoliov1.StrategySessionEntry) {
+				session.Status = "running"
+			},
+			wantAccepted: true,
+		},
+		{
+			name:               "nonzero_exact",
+			expectedStrategyID: 12,
+			mutate: func(session *portfoliov1.StrategySessionEntry) {
+				session.Status = "running"
+			},
+			wantAccepted: true,
+		},
+		{
+			name:               "strategy_rebound_from_zero",
+			expectedStrategyID: 0,
+			mutate: func(session *portfoliov1.StrategySessionEntry) {
+				session.Status = "running"
+				session.StrategyId = 99
+			},
+		},
+		{
+			name:               "portfolio_rebound",
+			expectedStrategyID: 12,
+			mutate: func(session *portfoliov1.StrategySessionEntry) {
+				session.Status = "running"
+				session.PortfolioId = 99
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &strategyStartRecorder{}
+			platform := &strategyStartPlatform{
+				recorder: recorder, commitOK: true, updateFailures: 1,
+				mutateOnUpdateFailure: tc.mutate,
+			}
+			starter := &strategyStartWorkerStarter{
+				recorder: recorder, suppressFinalProgress: true,
+			}
+			sender := &strategyStartWorkerSender{
+				recorder: recorder, prepareOK: true,
+				strategyID: &tc.expectedStrategyID,
+			}
+			agent := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6,
+				WorkerStarter: starter, WorkerStopper: starter,
+				WorkerSender: sender, PlatformInvoker: platform,
+				StartTimeout: 20 * time.Millisecond, RequestTimeout: time.Second,
+			})
+			starter.agent = agent
+			sender.agent = agent
+
+			frame := runStrategyFrame(t, agent, &strategyv1.RunStrategyRequest{
+				PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+			})
+			platform.mu.Lock()
+			durable := proto.Clone(platform.committedSession).(*portfoliov1.StrategySessionEntry)
+			updates := append([]*portfoliov1.UpdateSessionRequest(nil), platform.updates...)
+			platform.mu.Unlock()
+			agent.mu.Lock()
+			var generation *workerGeneration
+			for _, candidate := range agent.generations {
+				generation = candidate
+			}
+			agent.mu.Unlock()
+			agent.retryMu.Lock()
+			retryCount := len(agent.terminalRetries)
+			agent.retryMu.Unlock()
+
+			if durable.GetStatus() != "running" || len(updates) != 1 ||
+				updates[0].GetStatus() != "failed" ||
+				updates[0].GetExpectedStatus() != "pending" || generation == nil {
+				t.Fatalf(
+					"second-read race durable=%+v updates=%+v generation=%+v",
+					durable, updates, generation,
+				)
+			}
+			admitted := generation.admit("post-second-read-probe")
+			if admitted {
+				generation.completePlatformCall()
+			}
+			if tc.wantAccepted {
+				if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE ||
+					!admitted || retryCount != 0 {
+					t.Fatalf(
+						"exact second-read frame=%+v admitted=%v retries=%d durable=%+v",
+						frame, admitted, retryCount, durable,
+					)
+				}
+				return
+			}
+			if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_ERROR ||
+				admitted || retryCount != 1 {
+				t.Fatalf(
+					"mismatched second-read frame=%+v admitted=%v retries=%d durable=%+v",
+					frame, admitted, retryCount, durable,
+				)
+			}
+		})
+	}
 }
 
 type lostRunningResponseScenario struct {
@@ -4410,6 +4526,7 @@ func TestRetryTerminalSessionsClaimsRecordBeforePlatformReplay(t *testing.T) {
 
 func TestStartupCleanupRetryDoesNotFinalizeAcceptedRunningSession(t *testing.T) {
 	const sessionID = "53535353535353535353535353535353"
+	const launchOperationID = "startup-operation-53"
 	var methods []string
 	platform := &fakePlatformInvoker{
 		onInvoke: func(method string, _ *anypb.Any) (*anypb.Any, error) {
@@ -4419,10 +4536,9 @@ func TestStartupCleanupRetryDoesNotFinalizeAcceptedRunningSession(t *testing.T) 
 			}
 			return anypb.New(&portfoliov1.GetSessionResponse{
 				Session: &portfoliov1.StrategySessionEntry{
-					SessionId: sessionID,
-					UserId:    6,
-					RuntimeId: "rt-1",
-					Status:    "running",
+					SessionId: sessionID, UserId: 6, PortfolioId: 7,
+					StrategyId: 12, RuntimeId: "rt-1", Environment: 1,
+					LaunchOperationId: launchOperationID, Status: "running",
 				},
 			})
 		},
@@ -4438,6 +4554,10 @@ func TestStartupCleanupRetryDoesNotFinalizeAcceptedRunningSession(t *testing.T) 
 		SessionID:     sessionID, Generation: 1, DesiredStatus: "failed",
 		EffectiveStatus: "failed", Reason: "startup timed out",
 		ExpectedStatus: "pending",
+		CommittedStartBinding: &committedStartBinding{
+			SessionID: sessionID, UserID: 6, PortfolioID: 7, StrategyID: 12,
+			RuntimeID: "rt-1", Environment: 1, LaunchOperationID: launchOperationID,
+		},
 	}
 	agent.terminalRetries[terminalRetryKey(sessionID, 1)] = record
 
@@ -4451,6 +4571,87 @@ func TestStartupCleanupRetryDoesNotFinalizeAcceptedRunningSession(t *testing.T) 
 	}
 	if agent.indicatorSync.lookupSession(sessionID) == nil {
 		t.Fatal("accepted running Session indicator state was finalized")
+	}
+	agent.retryMu.Lock()
+	retryCount := len(agent.terminalRetries)
+	agent.retryMu.Unlock()
+	if retryCount != 0 {
+		t.Fatalf("accepted running Session retained %d cleanup checkpoints", retryCount)
+	}
+}
+
+func TestStartupCleanupRetryRetainsMismatchedRunningBinding(t *testing.T) {
+	const sessionID = "54545454545454545454545454545454"
+	const launchOperationID = "startup-operation-54"
+	for _, tc := range []struct {
+		name   string
+		mutate func(*portfoliov1.StrategySessionEntry)
+	}{
+		{
+			name: "strategy",
+			mutate: func(session *portfoliov1.StrategySessionEntry) {
+				session.StrategyId = 99
+			},
+		},
+		{
+			name: "portfolio",
+			mutate: func(session *portfoliov1.StrategySessionEntry) {
+				session.PortfolioId = 99
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var methods []string
+			platform := &fakePlatformInvoker{
+				onInvoke: func(method string, _ *anypb.Any) (*anypb.Any, error) {
+					methods = append(methods, method)
+					if method != "portfolio.GetSession" {
+						return nil, fmt.Errorf("unexpected startup cleanup method: %s", method)
+					}
+					session := &portfoliov1.StrategySessionEntry{
+						SessionId: sessionID, UserId: 6, PortfolioId: 7,
+						StrategyId: 12, RuntimeId: "rt-1", Environment: 1,
+						LaunchOperationId: launchOperationID, Status: "running",
+					}
+					tc.mutate(session)
+					return anypb.New(&portfoliov1.GetSessionResponse{Session: session})
+				},
+			}
+			agent := NewAgent(AgentConfig{
+				RuntimeID: "rt-1", UserID: 6, PlatformInvoker: platform,
+				IndicatorRetryInitial: time.Millisecond,
+				IndicatorRetryMax:     2 * time.Millisecond,
+			})
+			bufferAgentIndicator(t, agent, sessionID)
+			record := TerminalRetryRecord{
+				SchemaVersion: indicatorTerminalRetrySchemaVersion,
+				SessionID:     sessionID, Generation: 1, DesiredStatus: "failed",
+				EffectiveStatus: "failed", Reason: "startup timed out",
+				ExpectedStatus: "pending",
+				CommittedStartBinding: &committedStartBinding{
+					SessionID: sessionID, UserID: 6, PortfolioID: 7, StrategyID: 12,
+					RuntimeID: "rt-1", Environment: 1, LaunchOperationID: launchOperationID,
+				},
+			}
+			agent.terminalRetries[terminalRetryKey(sessionID, 1)] = record
+
+			err := agent.RetryTerminalSessions(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "binding mismatch") {
+				t.Fatalf("RetryTerminalSessions error = %v, want binding mismatch", err)
+			}
+			if !slices.Equal(methods, []string{"portfolio.GetSession"}) {
+				t.Fatalf("startup cleanup methods = %v, want readback only", methods)
+			}
+			if agent.indicatorSync.lookupSession(sessionID) == nil {
+				t.Fatal("mismatched running Session indicator state was finalized")
+			}
+			agent.retryMu.Lock()
+			retryCount := len(agent.terminalRetries)
+			agent.retryMu.Unlock()
+			if retryCount != 1 {
+				t.Fatalf("mismatched running Session cleanup checkpoints = %d, want 1", retryCount)
+			}
+		})
 	}
 }
 

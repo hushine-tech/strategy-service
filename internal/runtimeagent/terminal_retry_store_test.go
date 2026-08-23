@@ -61,6 +61,11 @@ func TestTerminalRetryStoreRoundTripsAndDeletesAtomicRecord(t *testing.T) {
 		EffectiveStatus: "recoverable",
 		BarsProcessed:   17,
 		Reason:          "indicator finalization failed",
+		ExpectedStatus:  "pending",
+		CommittedStartBinding: &committedStartBinding{
+			SessionID: "sess-retry", UserID: 6, PortfolioID: 7, StrategyID: 0,
+			RuntimeID: "rt-1", Environment: 1, LaunchOperationID: "operation-7",
+		},
 	}
 	if err := store.Save(record); err != nil {
 		t.Fatalf("Save: %v", err)

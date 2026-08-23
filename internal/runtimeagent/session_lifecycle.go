@@ -20,6 +20,7 @@ type TerminalRequest struct {
 	ReconciliationRunID          string
 	IndicatorFinalizationPending *bool
 	ExpectedStatus               string
+	committedStartBinding        *committedStartBinding
 }
 
 type terminalIndicatorLifecycle interface {

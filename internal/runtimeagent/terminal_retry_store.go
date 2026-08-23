@@ -21,15 +21,16 @@ const (
 )
 
 type TerminalRetryRecord struct {
-	SchemaVersion   int                           `json:"schema_version"`
-	SessionID       string                        `json:"session_id"`
-	Generation      uint64                        `json:"generation"`
-	DesiredStatus   string                        `json:"desired_status"`
-	EffectiveStatus string                        `json:"effective_status"`
-	BarsProcessed   int64                         `json:"bars_processed"`
-	Reason          string                        `json:"reason"`
-	ExpectedStatus  string                        `json:"expected_status,omitempty"`
-	Indicators      *IndicatorSessionCheckpointV2 `json:"indicators,omitempty"`
+	SchemaVersion         int                           `json:"schema_version"`
+	SessionID             string                        `json:"session_id"`
+	Generation            uint64                        `json:"generation"`
+	DesiredStatus         string                        `json:"desired_status"`
+	EffectiveStatus       string                        `json:"effective_status"`
+	BarsProcessed         int64                         `json:"bars_processed"`
+	Reason                string                        `json:"reason"`
+	ExpectedStatus        string                        `json:"expected_status,omitempty"`
+	CommittedStartBinding *committedStartBinding        `json:"committed_start_binding,omitempty"`
+	Indicators            *IndicatorSessionCheckpointV2 `json:"indicators,omitempty"`
 }
 
 type terminalRetryEnvelope struct {
@@ -350,6 +351,17 @@ func validateTerminalRetryRecord(record TerminalRetryRecord) error {
 	}
 	if record.ExpectedStatus != "" && record.ExpectedStatus != "pending" {
 		return fmt.Errorf("terminal retry expected_status is invalid")
+	}
+	if binding := record.CommittedStartBinding; binding != nil {
+		if record.ExpectedStatus == "" {
+			return fmt.Errorf("terminal retry committed start binding requires expected_status")
+		}
+		if strings.TrimSpace(binding.SessionID) != record.SessionID ||
+			binding.SessionID != strings.TrimSpace(binding.SessionID) ||
+			binding.RuntimeID != strings.TrimSpace(binding.RuntimeID) ||
+			binding.LaunchOperationID != strings.TrimSpace(binding.LaunchOperationID) {
+			return fmt.Errorf("terminal retry committed start binding is invalid")
+		}
 	}
 	if len(record.Reason) > 64<<10 {
 		return fmt.Errorf("terminal retry reason is too large")

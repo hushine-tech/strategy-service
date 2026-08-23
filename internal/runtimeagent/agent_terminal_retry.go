@@ -101,6 +101,10 @@ func (a *Agent) checkpointTerminalRetry(
 		Reason:          strings.TrimSpace(reason),
 		ExpectedStatus:  strings.TrimSpace(strings.ToLower(request.ExpectedStatus)),
 	}
+	if request.committedStartBinding != nil {
+		binding := *request.committedStartBinding
+		record.CommittedStartBinding = &binding
+	}
 	if record.BarsProcessed < 0 {
 		record.BarsProcessed = 0
 	}
@@ -374,6 +378,15 @@ func (a *Agent) replayTerminalSession(
 		}
 		return session, nil
 	}
+	validateCommittedStartup := func(session *portfoliov1.StrategySessionEntry) error {
+		if record.ExpectedStatus == "" {
+			return nil
+		}
+		if record.CommittedStartBinding == nil {
+			return fmt.Errorf("terminal retry committed startup binding is unavailable")
+		}
+		return validateCommittedStartBinding(session, *record.CommittedStartBinding)
+	}
 	if record.ExpectedStatus != "" {
 		if err := readSession(); err != nil {
 			if isExplicitPlatformNotFound(err) {
@@ -383,6 +396,9 @@ func (a *Agent) replayTerminalSession(
 		}
 		session, err := validatedSession()
 		if err != nil {
+			return err
+		}
+		if err := validateCommittedStartup(session); err != nil {
 			return err
 		}
 		observedStatus := strings.TrimSpace(strings.ToLower(session.GetStatus()))
@@ -409,6 +425,9 @@ func (a *Agent) replayTerminalSession(
 	}
 	session, err := validatedSession()
 	if err != nil {
+		return err
+	}
+	if err := validateCommittedStartup(session); err != nil {
 		return err
 	}
 	observedStatus := strings.TrimSpace(strings.ToLower(session.GetStatus()))

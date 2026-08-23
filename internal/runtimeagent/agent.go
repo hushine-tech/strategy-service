@@ -144,6 +144,67 @@ type workerGeneration struct {
 	runtimeID          string
 }
 
+type committedStartBinding struct {
+	SessionID         string `json:"session_id"`
+	UserID            int64  `json:"user_id"`
+	PortfolioID       int64  `json:"portfolio_id"`
+	StrategyID        int64  `json:"strategy_id"`
+	RuntimeID         string `json:"runtime_id"`
+	Environment       int32  `json:"environment"`
+	LaunchOperationID string `json:"launch_operation_id"`
+}
+
+func (a *Agent) committedStartBindingForGeneration(
+	sessionID string,
+	generation *workerGeneration,
+) (committedStartBinding, error) {
+	if generation == nil {
+		return committedStartBinding{}, fmt.Errorf("worker generation is required")
+	}
+	generation.mu.Lock()
+	binding := committedStartBinding{
+		SessionID:         strings.TrimSpace(sessionID),
+		UserID:            generation.userID,
+		PortfolioID:       generation.portfolioID,
+		StrategyID:        generation.strategyID,
+		RuntimeID:         strings.TrimSpace(generation.runtimeID),
+		Environment:       generation.environment,
+		LaunchOperationID: strings.TrimSpace(generation.launchOperationID),
+	}
+	generation.mu.Unlock()
+	if a != nil && a.cfg.UserID > 0 {
+		binding.UserID = a.cfg.UserID
+	}
+	return binding, nil
+}
+
+func validateCommittedStartBinding(
+	session *portfoliov1.StrategySessionEntry,
+	expected committedStartBinding,
+) error {
+	if session == nil {
+		return fmt.Errorf("committed startup binding mismatch: Session is missing")
+	}
+	switch {
+	case strings.TrimSpace(session.GetSessionId()) != expected.SessionID:
+		return fmt.Errorf("committed startup binding mismatch: session_id")
+	case session.GetUserId() != expected.UserID:
+		return fmt.Errorf("committed startup binding mismatch: authenticated user_id")
+	case session.GetPortfolioId() != expected.PortfolioID:
+		return fmt.Errorf("committed startup binding mismatch: portfolio_id")
+	case session.GetStrategyId() != expected.StrategyID:
+		return fmt.Errorf("committed startup binding mismatch: strategy_id")
+	case strings.TrimSpace(session.GetRuntimeId()) != expected.RuntimeID:
+		return fmt.Errorf("committed startup binding mismatch: runtime_id")
+	case session.GetEnvironment() != expected.Environment:
+		return fmt.Errorf("committed startup binding mismatch: environment")
+	case strings.TrimSpace(session.GetLaunchOperationId()) != expected.LaunchOperationID:
+		return fmt.Errorf("committed startup binding mismatch: launch_operation_id")
+	default:
+		return nil
+	}
+}
+
 func newWorkerGeneration(sessionID string, generation uint64) *workerGeneration {
 	return &workerGeneration{
 		sessionID: sessionID, generation: generation, drained: make(chan struct{}),
@@ -883,26 +944,35 @@ func (a *Agent) reconcileCommittedStrategyStart(
 		return nil, fmt.Errorf("strategy start commit request is missing Session metadata")
 	}
 	expected := commit.GetSession()
+	expectedUserID := expected.GetUserId()
+	if a.cfg.UserID > 0 {
+		expectedUserID = a.cfg.UserID
+	}
+	binding := committedStartBinding{
+		SessionID:         strings.TrimSpace(expected.GetSessionId()),
+		UserID:            expectedUserID,
+		PortfolioID:       expected.GetPortfolioId(),
+		StrategyID:        expected.GetStrategyId(),
+		RuntimeID:         strings.TrimSpace(expected.GetRuntimeId()),
+		Environment:       expected.GetEnvironment(),
+		LaunchOperationID: strings.TrimSpace(commit.GetLaunchOperationId()),
+	}
 	var response portfoliov1.GetSessionResponse
 	if err := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
 		SessionId: expected.GetSessionId(),
-		UserId:    expected.GetUserId(),
+		UserId:    expectedUserID,
 	}, &response); err != nil {
 		return nil, err
 	}
 	session := response.GetSession()
-	if session == nil {
-		return nil, fmt.Errorf("committed strategy Session readback is missing")
-	}
-	if strings.TrimSpace(session.GetStatus()) != "pending" ||
-		strings.TrimSpace(session.GetSessionId()) != strings.TrimSpace(expected.GetSessionId()) ||
-		session.GetUserId() != expected.GetUserId() ||
-		session.GetPortfolioId() != expected.GetPortfolioId() ||
-		session.GetStrategyId() != expected.GetStrategyId() ||
-		strings.TrimSpace(session.GetRuntimeId()) != strings.TrimSpace(expected.GetRuntimeId()) ||
-		session.GetEnvironment() != expected.GetEnvironment() ||
-		strings.TrimSpace(session.GetLaunchOperationId()) != strings.TrimSpace(commit.GetLaunchOperationId()) {
+	if strings.TrimSpace(session.GetStatus()) != "pending" {
 		return nil, fmt.Errorf("committed strategy Session readback mismatch")
+	}
+	if err := validateCommittedStartBinding(session, binding); err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("committed strategy Session readback mismatch"),
+			err,
+		)
 	}
 	return session, nil
 }
@@ -1067,12 +1137,17 @@ func (a *Agent) checkpointCommittedStartFailure(
 	if generation == nil {
 		return fmt.Errorf("worker generation is required")
 	}
+	binding, err := a.committedStartBindingForGeneration(sessionID, generation)
+	if err != nil {
+		return err
+	}
 	return a.checkpointTerminalRetry(
 		TerminalRequest{
-			SessionID:      sessionID,
-			Status:         "failed",
-			Error:          reason,
-			ExpectedStatus: "pending",
+			SessionID:             sessionID,
+			Status:                "failed",
+			Error:                 reason,
+			ExpectedStatus:        "pending",
+			committedStartBinding: &binding,
 		},
 		generation.generation,
 		"failed",
@@ -1113,12 +1188,11 @@ func (a *Agent) reconcileCommittedStartFailure(
 	generation *workerGeneration,
 	reason string,
 ) error {
-	generation.mu.Lock()
-	boundUserID := generation.userID
-	generation.mu.Unlock()
-	if boundUserID <= 0 {
-		boundUserID = a.cfg.UserID
+	binding, bindingErr := a.committedStartBindingForGeneration(sessionID, generation)
+	if bindingErr != nil {
+		return bindingErr
 	}
+	boundUserID := binding.UserID
 	var response portfoliov1.GetSessionResponse
 	err := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
 		SessionId: sessionID,
@@ -1142,22 +1216,11 @@ func (a *Agent) reconcileCommittedStartFailure(
 		return errors.Join(err, checkpointErr)
 	}
 	session := response.GetSession()
-	generation.mu.Lock()
-	expectedLaunchOperationID := generation.launchOperationID
-	expectedUserID := generation.userID
-	expectedPortfolioID := generation.portfolioID
-	expectedStrategyID := generation.strategyID
-	expectedEnvironment := generation.environment
-	expectedRuntimeID := generation.runtimeID
-	generation.mu.Unlock()
-	if session == nil || strings.TrimSpace(session.GetSessionId()) != sessionID ||
-		(expectedRuntimeID != "" && strings.TrimSpace(session.GetRuntimeId()) != expectedRuntimeID) ||
-		(expectedLaunchOperationID != "" && strings.TrimSpace(session.GetLaunchOperationId()) != expectedLaunchOperationID) ||
-		(expectedUserID > 0 && session.GetUserId() != expectedUserID) ||
-		(expectedPortfolioID > 0 && session.GetPortfolioId() != expectedPortfolioID) ||
-		session.GetStrategyId() != expectedStrategyID ||
-		session.GetEnvironment() != expectedEnvironment {
-		err := fmt.Errorf("committed startup cleanup reconciliation mismatch")
+	if err := validateCommittedStartBinding(session, binding); err != nil {
+		err = errors.Join(
+			fmt.Errorf("committed startup cleanup reconciliation mismatch"),
+			err,
+		)
 		checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
 		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
 		return errors.Join(err, checkpointErr)
@@ -1181,29 +1244,34 @@ func (a *Agent) reconcileCommittedStartFailure(
 		if err := a.updateSessionExpected(
 			ctx, sessionID, "failed", int64(session.GetBarsProcessed()), reason, "pending",
 		); err != nil {
+			var readbackBindingErr error
 			var readback portfoliov1.GetSessionResponse
 			if readErr := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
 				SessionId: sessionID, UserId: boundUserID,
 			}, &readback); readErr == nil && readback.GetSession() != nil {
-				readStatus := strings.ToLower(strings.TrimSpace(readback.GetSession().GetStatus()))
-				if readStatus == "running" {
-					generation.resumeStartupAdmission()
-					if generation.acceptRunning() {
-						_ = a.deleteTerminalRetry(sessionID, generation.generation)
-						return errCommittedStartAcceptedRunning
+				readbackSession := readback.GetSession()
+				readbackBindingErr = validateCommittedStartBinding(readbackSession, binding)
+				if readbackBindingErr == nil {
+					readStatus := strings.ToLower(strings.TrimSpace(readbackSession.GetStatus()))
+					if readStatus == "running" {
+						generation.resumeStartupAdmission()
+						if generation.acceptRunning() {
+							_ = a.deleteTerminalRetry(sessionID, generation.generation)
+							return errCommittedStartAcceptedRunning
+						}
 					}
-				}
-				if isTerminalRetryStatus(readStatus) {
-					generation.mu.Lock()
-					generation.terminalAck = true
-					generation.mu.Unlock()
-					_ = a.deleteTerminalRetry(sessionID, generation.generation)
-					return a.cleanupWorkerGeneration(sessionID, generation, reason)
+					if isTerminalRetryStatus(readStatus) {
+						generation.mu.Lock()
+						generation.terminalAck = true
+						generation.mu.Unlock()
+						_ = a.deleteTerminalRetry(sessionID, generation.generation)
+						return a.cleanupWorkerGeneration(sessionID, generation, reason)
+					}
 				}
 			}
 			checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
 			a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
-			return errors.Join(err, checkpointErr)
+			return errors.Join(err, readbackBindingErr, checkpointErr)
 		}
 		generation.mu.Lock()
 		generation.terminalAck = true
@@ -2726,33 +2794,20 @@ func (a *Agent) reconcileAmbiguousRunningPublication(
 		strings.TrimSpace(update.GetSessionId()) != strings.TrimSpace(generation.sessionID) {
 		return result
 	}
-	generation.mu.Lock()
-	expectedLaunchOperationID := generation.launchOperationID
-	expectedUserID := generation.userID
-	expectedPortfolioID := generation.portfolioID
-	expectedStrategyID := generation.strategyID
-	expectedEnvironment := generation.environment
-	expectedRuntimeID := generation.runtimeID
-	generation.mu.Unlock()
-	if expectedUserID <= 0 {
-		expectedUserID = a.cfg.UserID
+	binding, err := a.committedStartBindingForGeneration(update.GetSessionId(), generation)
+	if err != nil {
+		return result
 	}
 	var response portfoliov1.GetSessionResponse
 	if err := a.invokePlatformProto(ctx, "portfolio.GetSession", &portfoliov1.GetSessionRequest{
 		SessionId: update.GetSessionId(),
-		UserId:    expectedUserID,
+		UserId:    binding.UserID,
 	}, &response); err != nil {
 		return result
 	}
 	session := response.GetSession()
-	if session == nil || strings.TrimSpace(strings.ToLower(session.GetStatus())) != "running" ||
-		strings.TrimSpace(session.GetSessionId()) != strings.TrimSpace(update.GetSessionId()) ||
-		(expectedUserID > 0 && session.GetUserId() != expectedUserID) ||
-		(expectedPortfolioID > 0 && session.GetPortfolioId() != expectedPortfolioID) ||
-		session.GetStrategyId() != expectedStrategyID ||
-		session.GetEnvironment() != expectedEnvironment ||
-		(expectedRuntimeID != "" && strings.TrimSpace(session.GetRuntimeId()) != expectedRuntimeID) ||
-		(expectedLaunchOperationID != "" && strings.TrimSpace(session.GetLaunchOperationId()) != expectedLaunchOperationID) {
+	if strings.TrimSpace(strings.ToLower(session.GetStatus())) != "running" ||
+		validateCommittedStartBinding(session, binding) != nil {
 		return result
 	}
 	packed, err := anypb.New(&portfoliov1.UpdateSessionResponse{})
