@@ -299,6 +299,7 @@ def attach_spot_risk_snapshots(
         metadata = _spot_metadata_from_proto(getattr(raw, "metadata", None), venue_id=venue_id)
         venue_wallet.spot.register_risk_facts(
             snapshot_id=str(getattr(raw, "snapshot_id", "") or ""),
+            environment=int(getattr(raw, "environment", -1)),
             metadata=metadata,
             exchange_filters=[
                 asdict(_spot_filter_from_proto(item))

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
+	portfoliov1 "github.com/hushine-tech/core-service/gen/portfoliov1"
 	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"google.golang.org/protobuf/proto"

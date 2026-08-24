@@ -12,7 +12,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 import math
 
-from strategy_service.types import (
+from hushine_strategy import (
     Exchange,
     Market,
     OrderDecision,
@@ -93,6 +93,11 @@ class MyStrategy:
     TRIGGER_PCT = 0.001
     MARGIN_FRACTION = Decimal("0.01")
     LEVERAGE = 10
+    DEFAULT_QTY_STEPS = {
+        "BTCUSDT": Decimal("0.0001"),
+        "ETHUSDT": Decimal("0.001"),
+        "ZECUSDT": Decimal("0.001"),
+    }
     EPSILON = 1e-12
 
     def __init__(self) -> None:
@@ -199,7 +204,9 @@ class MyStrategy:
                 return None
             self._recover(leverage_issue)
 
-            step = self._decimal(metadata.step_size)
+            step = self._decimal(getattr(metadata, "step_size", 0.0))
+            if step <= 0:
+                step = self.DEFAULT_QTY_STEPS.get(symbol, Decimal("0"))
             balance = self._decimal(route_wallet.get_wallet_balance())
             price_decimal = self._decimal(price)
             sizing_issue = f"sizing-inputs:{symbol}"

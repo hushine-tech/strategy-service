@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a sealed Docker build context from three exact Git worktrees."""
+"""Create a sealed Docker build context from exact runtime source worktrees."""
 
 from __future__ import annotations
 
@@ -292,6 +292,7 @@ def prepare(options: argparse.Namespace) -> dict[str, object]:
         _require_repository("strategy-service", options.service_repository),
         _require_repository("strategy-library", options.library_repository),
         _require_repository("golang-lib", options.golang_lib_repository),
+        _require_repository("core-service", options.core_repository),
     )
     for repository in repositories:
         try:
@@ -353,6 +354,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--service-repository", type=Path, required=True)
     parser.add_argument("--library-repository", type=Path, required=True)
     parser.add_argument("--golang-lib-repository", type=Path, required=True)
+    parser.add_argument("--core-repository", type=Path, required=True)
     parser.add_argument("--profile-digest", required=True)
     parser.add_argument("--allow-dirty", action="store_true")
     return parser

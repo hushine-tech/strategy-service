@@ -84,6 +84,7 @@ label_names = {
     "service_commit": "org.hushine.runtime.strategy-service.commit",
     "library_commit": "org.hushine.runtime.strategy-library.commit",
     "golang_commit": "org.hushine.runtime.golang-lib.commit",
+    "core_commit": "org.hushine.runtime.core-service.commit",
     "build_id": "org.hushine.runtime.image-build-id",
     "source_dirty": "org.hushine.runtime.source-dirty",
     "source_state": "org.hushine.runtime.source-state.sha256",
@@ -95,6 +96,7 @@ env_names = {
     "service_commit": "HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT",
     "library_commit": "HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT",
     "golang_commit": "HUSHINE_RUNTIME_GOLANG_LIB_COMMIT",
+    "core_commit": "HUSHINE_RUNTIME_CORE_SERVICE_COMMIT",
     "build_id": "HUSHINE_RUNTIME_IMAGE_BUILD_ID",
     "source_dirty": "HUSHINE_RUNTIME_SOURCE_DIRTY",
     "source_state": "HUSHINE_RUNTIME_SOURCE_STATE_SHA256",
@@ -110,7 +112,7 @@ for name in label_names:
 for name, expected in (("profile", profile), ("profile_version", version), ("digest", digest)):
     if facts[name] != expected:
         fail(name)
-for name in ("service_commit", "library_commit", "golang_commit"):
+for name in ("service_commit", "library_commit", "golang_commit", "core_commit"):
     if re.fullmatch(r"[0-9a-f]{40}", facts[name]) is None:
         fail(name)
 if re.fullmatch(r"[0-9a-f]{64}", facts["source_state"]) is None:
@@ -126,6 +128,7 @@ expected_prefix = "-".join(
         facts["service_commit"][:12],
         facts["library_commit"][:12],
         facts["golang_commit"][:12],
+        facts["core_commit"][:12],
         version,
         target,
     )

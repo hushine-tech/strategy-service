@@ -14,6 +14,7 @@ from strategy_service.wallet.portfolio_adapter import (
     attach_spot_risk_snapshots,
     build_portfolio_wallet_from_snapshot,
 )
+from strategy_service.wallet.spot import SpotFilterViolation
 
 
 EXCHANGE_BINANCE = 1
@@ -202,9 +203,9 @@ def _spot_asset(
     return value
 
 
-def _spot_wallet(*, assets):
+def _spot_wallet(*, assets, environment: int = 1):
     return portfolio_service_pb2.PortfolioWalletState(
-        environment=1,
+        environment=environment,
         spot=portfolio_service_pb2.SpotWallet(assets=list(assets)),
     )
 
@@ -337,7 +338,7 @@ def test_build_portfolio_wallet_from_spot_and_futures_venues():
     assert futures.futures.oracle_available_balance == pytest.approx(800.0)
 
 
-def test_spot_snapshot_loads_asset_codes_metadata_and_preflight_risk_facts():
+def test_spot_snapshot_uses_replay_price_when_backtest_risk_reference_is_empty():
     metadata = portfolio_service_pb2.SpotSymbolMetadata(
         symbol="BTCUSDT",
         status="TRADING",
@@ -363,6 +364,7 @@ def test_spot_snapshot_loads_asset_codes_metadata_and_preflight_risk_facts():
             market=MARKET_SPOT,
             spot_symbols=[metadata],
             wallet=_spot_wallet(
+                environment=0,
                 assets=[
                     _spot_asset("USDT", free_decimal="1000.00000000"),
                     _spot_asset("BTC", free_decimal="0.00000000"),
@@ -390,7 +392,7 @@ def test_spot_snapshot_loads_asset_codes_metadata_and_preflight_risk_facts():
                 market=MARKET_SPOT,
                 symbol="BTCUSDT",
                 metadata=metadata,
-                reference_price_decimal="50000",
+                reference_price_decimal="",
             )
         ],
     )
@@ -401,6 +403,68 @@ def test_spot_snapshot_loads_asset_codes_metadata_and_preflight_risk_facts():
         qty_decimal="0.00020",
         price_decimal=None,
     ) == "risk-1"
+
+
+def test_demo_spot_risk_never_replaces_binance_reference_with_kline_price():
+    metadata = portfolio_service_pb2.SpotSymbolMetadata(
+        symbol="BTCUSDT",
+        status="TRADING",
+        base_asset="BTC",
+        quote_asset="USDT",
+        base_asset_precision=8,
+        quote_asset_precision=8,
+        spot_trading_allowed=True,
+        order_types=["MARKET"],
+        filters=[
+            portfolio_service_pb2.SpotSymbolFilter(
+                filter_type="LOT_SIZE",
+                min_qty="0.00001",
+                max_qty="1000",
+                step_size="0.00001",
+            )
+        ],
+    )
+    routed = build_portfolio_wallet_from_snapshot(
+        _snapshot(
+            _venue(
+                venue_id=10,
+                market=MARKET_SPOT,
+                spot_symbols=[metadata],
+                wallet=_spot_wallet(
+                    assets=[
+                        _spot_asset("USDT", free_decimal="1000"),
+                        _spot_asset("BTC", free_decimal="0"),
+                    ],
+                ),
+            )
+        ),
+        {("binance", "spot")},
+    )
+    spot = routed.get("binance", "spot").spot
+    attach_spot_risk_snapshots(
+        routed,
+        [
+            portfolio_service_pb2.SpotRiskFactSnapshot(
+                snapshot_id="risk-demo",
+                venue_id=10,
+                exchange=EXCHANGE_BINANCE,
+                environment=1,
+                market=MARKET_SPOT,
+                symbol="BTCUSDT",
+                metadata=metadata,
+            )
+        ],
+    )
+    spot.on_market_data("BTCUSDT", Decimal("50000"))
+
+    with pytest.raises(SpotFilterViolation, match="SPOT_REFERENCE_PRICE_UNAVAILABLE"):
+        spot.review_order(
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="MARKET",
+            qty_decimal="0.00020",
+            price_decimal=None,
+        )
 
 
 def test_unrequested_venue_snapshot_is_ignored_before_wallet_validation():

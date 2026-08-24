@@ -1,6 +1,7 @@
 # Hosted/self-hosted executor runtime. The build context is a sealed temporary
 # directory containing only Git-derived strategy-service, strategy-library,
-# and golang-lib inputs (created by scripts/prepare_runtime_build_context.py).
+# golang-lib, and the canonical core-service protocol inputs (created by
+# scripts/prepare_runtime_build_context.py).
 
 FROM ghcr.io/astral-sh/uv:0.11.16@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1b1a47e321dba5158ab08864d AS uv-bin
 
@@ -11,6 +12,8 @@ ENV GOPROXY=${RUNTIME_GO_PROXY}
 
 WORKDIR /src
 COPY golang-lib/ /src/golang-lib/
+COPY core-service/go.mod core-service/go.sum /src/core-service/
+COPY core-service/gen/portfoliov1/ /src/core-service/gen/portfoliov1/
 COPY strategy-service/go.mod strategy-service/go.sum /src/strategy-service/
 COPY strategy-service/cmd/ /src/strategy-service/cmd/
 COPY strategy-service/gen/ /src/strategy-service/gen/
@@ -35,6 +38,7 @@ ARG RUNTIME_PUBLIC_IMPORT_ROOTS
 ARG RUNTIME_STRATEGY_SERVICE_COMMIT
 ARG RUNTIME_STRATEGY_LIBRARY_COMMIT
 ARG RUNTIME_GOLANG_LIB_COMMIT
+ARG RUNTIME_CORE_SERVICE_COMMIT
 ARG RUNTIME_IMAGE_BUILD_ID
 ARG RUNTIME_SOURCE_DIRTY
 ARG RUNTIME_SOURCE_STATE_SHA256
@@ -45,6 +49,7 @@ LABEL org.hushine.runtime.profile=${RUNTIME_PROFILE_NAME} \
       org.hushine.runtime.strategy-service.commit=${RUNTIME_STRATEGY_SERVICE_COMMIT} \
       org.hushine.runtime.strategy-library.commit=${RUNTIME_STRATEGY_LIBRARY_COMMIT} \
       org.hushine.runtime.golang-lib.commit=${RUNTIME_GOLANG_LIB_COMMIT} \
+      org.hushine.runtime.core-service.commit=${RUNTIME_CORE_SERVICE_COMMIT} \
       org.hushine.runtime.image-build-id=${RUNTIME_IMAGE_BUILD_ID} \
       org.hushine.runtime.source-dirty=${RUNTIME_SOURCE_DIRTY} \
       org.hushine.runtime.source-state.sha256=${RUNTIME_SOURCE_STATE_SHA256}
@@ -61,6 +66,7 @@ ENV PYTHONUNBUFFERED=1 \
     HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT=${RUNTIME_STRATEGY_SERVICE_COMMIT} \
     HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT=${RUNTIME_STRATEGY_LIBRARY_COMMIT} \
     HUSHINE_RUNTIME_GOLANG_LIB_COMMIT=${RUNTIME_GOLANG_LIB_COMMIT} \
+    HUSHINE_RUNTIME_CORE_SERVICE_COMMIT=${RUNTIME_CORE_SERVICE_COMMIT} \
     HUSHINE_RUNTIME_IMAGE_BUILD_ID=${RUNTIME_IMAGE_BUILD_ID} \
     HUSHINE_RUNTIME_SOURCE_DIRTY=${RUNTIME_SOURCE_DIRTY} \
     HUSHINE_RUNTIME_SOURCE_STATE_SHA256=${RUNTIME_SOURCE_STATE_SHA256}

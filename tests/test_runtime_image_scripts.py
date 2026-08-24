@@ -52,11 +52,12 @@ def _repository(root: Path, name: str, files: dict[str, str]) -> Path:
 
 
 @pytest.fixture
-def three_repositories(tmp_path: Path) -> tuple[Path, Path, Path]:
+def runtime_repositories(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     service = _repository(tmp_path, "strategy-service", {"service.py": "service\n"})
     library = _repository(tmp_path, "strategy-library", {"library.py": "library\n"})
     golang = _repository(tmp_path, "golang-lib", {"go.mod": "module fixture\n"})
-    for repository in (service, library, golang):
+    core = _repository(tmp_path, "core-service", {"gen/portfoliov1/portfolio.pb.go": "package portfoliov1\n"})
+    for repository in (service, library, golang, core):
         (repository / ".gitignore").write_text(
             ".venv/\n.pytest_cache/\n__pycache__/\n*.egg-info/\n.coverage*\n",
             encoding="utf-8",
@@ -73,12 +74,12 @@ def three_repositories(tmp_path: Path) -> tuple[Path, Path, Path]:
             path = repository / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("must-not-enter-context\n", encoding="utf-8")
-    return service, library, golang
+    return service, library, golang, core
 
 
 def _prepare_context(
     tmp_path: Path,
-    repositories: tuple[Path, Path, Path],
+    repositories: tuple[Path, Path, Path, Path],
     *,
     allow_dirty: bool = False,
 ):
@@ -96,6 +97,8 @@ def _prepare_context(
         str(repositories[1]),
         "--golang-lib-repository",
         str(repositories[2]),
+        "--core-repository",
+        str(repositories[3]),
         "--profile-digest",
         "a" * 64,
     ]
@@ -106,9 +109,9 @@ def _prepare_context(
 
 
 def test_sealed_context_contains_only_git_derived_inputs(
-    tmp_path: Path, three_repositories: tuple[Path, Path, Path]
+    tmp_path: Path, runtime_repositories: tuple[Path, Path, Path, Path]
 ):
-    result, context = _prepare_context(tmp_path, three_repositories)
+    result, context = _prepare_context(tmp_path, runtime_repositories)
     result.check_returncode()
     payload = json.loads(result.stdout)
 
@@ -118,6 +121,8 @@ def test_sealed_context_contains_only_git_derived_inputs(
     assert (context / "strategy-service/service.py").read_text() == "service\n"
     assert (context / "strategy-library/library.py").read_text() == "library\n"
     assert (context / "golang-lib/go.mod").read_text() == "module fixture\n"
+    assert (context / "core-service/gen/portfoliov1/portfolio.pb.go").read_text() == "package portfoliov1\n"
+    assert payload["commits"]["core-service"] == _git(runtime_repositories[3], "rev-parse", "HEAD")
     staged_paths = tuple(context.rglob("*"))
     staged = [str(path.relative_to(context)) for path in staged_paths]
     assert not any(".git" in Path(path).parts for path in staged)
@@ -133,19 +138,19 @@ def test_sealed_context_contains_only_git_derived_inputs(
 
 
 def test_clean_context_rejects_dirty_golang_lib_and_dirty_identity_changes(
-    tmp_path: Path, three_repositories: tuple[Path, Path, Path]
+    tmp_path: Path, runtime_repositories: tuple[Path, Path, Path, Path]
 ):
-    clean, clean_context = _prepare_context(tmp_path, three_repositories)
+    clean, clean_context = _prepare_context(tmp_path, runtime_repositories)
     clean.check_returncode()
     clean_state = json.loads(clean.stdout)["source_state_sha256"]
-    (three_repositories[2] / "go.mod").write_text("module changed\n", encoding="utf-8")
+    (runtime_repositories[2] / "go.mod").write_text("module changed\n", encoding="utf-8")
 
-    rejected, _ = _prepare_context(tmp_path, three_repositories)
+    rejected, _ = _prepare_context(tmp_path, runtime_repositories)
     assert rejected.returncode == 2
     assert "dirty" in rejected.stderr.lower()
 
     dirty, dirty_context = _prepare_context(
-        tmp_path, three_repositories, allow_dirty=True
+        tmp_path, runtime_repositories, allow_dirty=True
     )
     dirty.check_returncode()
     payload = json.loads(dirty.stdout)
@@ -156,9 +161,9 @@ def test_clean_context_rejects_dirty_golang_lib_and_dirty_identity_changes(
 
 
 def test_dirty_context_tracks_untracked_deletions_symlinks_and_executable_bits(
-    tmp_path: Path, three_repositories: tuple[Path, Path, Path]
+    tmp_path: Path, runtime_repositories: tuple[Path, Path, Path, Path]
 ):
-    service = three_repositories[0]
+    service = runtime_repositories[0]
     (service / "service.py").unlink()
     executable = service / "run.sh"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -167,7 +172,7 @@ def test_dirty_context_tracks_untracked_deletions_symlinks_and_executable_bits(
     (service / "library-link").symlink_to("../strategy-library")
 
     result, context = _prepare_context(
-        tmp_path, three_repositories, allow_dirty=True
+        tmp_path, runtime_repositories, allow_dirty=True
     )
     result.check_returncode()
     assert not (context / "strategy-service/service.py").exists()
@@ -189,9 +194,9 @@ def test_dirty_context_tracks_untracked_deletions_symlinks_and_executable_bits(
 
 
 def test_dirty_context_rejects_a_tracked_path_beneath_replaced_directory_symlink(
-    tmp_path: Path, three_repositories: tuple[Path, Path, Path]
+    tmp_path: Path, runtime_repositories: tuple[Path, Path, Path, Path]
 ):
-    service = three_repositories[0]
+    service = runtime_repositories[0]
     nested = service / "shared"
     nested.mkdir()
     (nested / "library.py").write_text("service-owned\n", encoding="utf-8")
@@ -201,7 +206,7 @@ def test_dirty_context_rejects_a_tracked_path_beneath_replaced_directory_symlink
     nested.symlink_to("../strategy-library", target_is_directory=True)
 
     result, _ = _prepare_context(
-        tmp_path, three_repositories, allow_dirty=True
+        tmp_path, runtime_repositories, allow_dirty=True
     )
 
     assert result.returncode == 2
@@ -246,6 +251,7 @@ def _fake_docker(tmp_path: Path) -> tuple[Path, Path]:
         "        'RUNTIME_STRATEGY_SERVICE_COMMIT': 'strategy-service.commit',\n"
         "        'RUNTIME_STRATEGY_LIBRARY_COMMIT': 'strategy-library.commit',\n"
         "        'RUNTIME_GOLANG_LIB_COMMIT': 'golang-lib.commit',\n"
+        "        'RUNTIME_CORE_SERVICE_COMMIT': 'core-service.commit',\n"
         "        'RUNTIME_IMAGE_BUILD_ID': 'image-build-id',\n"
         "        'RUNTIME_SOURCE_DIRTY': 'source-dirty',\n"
         "        'RUNTIME_SOURCE_STATE_SHA256': 'source-state.sha256',\n"
@@ -319,6 +325,7 @@ def test_build_script_uses_sealed_context_and_target_identity(
         "RUNTIME_STRATEGY_SERVICE_COMMIT",
         "RUNTIME_STRATEGY_LIBRARY_COMMIT",
         "RUNTIME_GOLANG_LIB_COMMIT",
+        "RUNTIME_CORE_SERVICE_COMMIT",
         "RUNTIME_SOURCE_DIRTY",
         "RUNTIME_SOURCE_STATE_SHA256",
     ):

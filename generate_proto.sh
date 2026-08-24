@@ -7,11 +7,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="${SCRIPT_DIR}/strategy_service/gen"
 GO_OUT_DIR="${SCRIPT_DIR}/gen/strategyv1"
-PORTFOLIO_GO_OUT_DIR="${SCRIPT_DIR}/gen/portfoliov1"
 RUNTIME_WORKER_GO_OUT_DIR="${SCRIPT_DIR}/gen/runtimeworkerv1"
 CONTROL_PANEL_GO_OUT_DIR="${SCRIPT_DIR}/gen/controlpanelv1"
 
-mkdir -p "$OUT_DIR" "$GO_OUT_DIR" "$PORTFOLIO_GO_OUT_DIR" "$RUNTIME_WORKER_GO_OUT_DIR" "$CONTROL_PANEL_GO_OUT_DIR"
+mkdir -p "$OUT_DIR" "$GO_OUT_DIR" "$RUNTIME_WORKER_GO_OUT_DIR" "$CONTROL_PANEL_GO_OUT_DIR"
 
 if [ -n "${HOME:-}" ]; then
   PATH="${HOME}/go/bin:${PATH}"
@@ -61,14 +60,6 @@ ACCT_PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"
 
 sed_in_place 's/^import portfolio_service_pb2/from . import portfolio_service_pb2/' "$OUT_DIR/portfolio_service_pb2_grpc.py"
 
-"$PROTOC_BIN" \
-  -I "$ACCT_PROTO_SRC" \
-  --go_out="$PORTFOLIO_GO_OUT_DIR" --go_opt=paths=source_relative \
-  --go_opt=Mportfolio_service.proto=github.com/hushine-tech/strategy-service/gen/portfoliov1 \
-  --go-grpc_out="$PORTFOLIO_GO_OUT_DIR" --go-grpc_opt=paths=source_relative \
-  --go-grpc_opt=Mportfolio_service.proto=github.com/hushine-tech/strategy-service/gen/portfoliov1 \
-  "$ACCT_PROTO_SRC/portfolio_service.proto"
-
 # --- order.v1 proto (Python stubs only) ---
 ORDER_PROTO_SRC="${SCRIPT_DIR}/../core-service/proto"
 
@@ -89,6 +80,7 @@ STRAT_PROTO_SRC="${SCRIPT_DIR}/proto"
 "$PYTHON_BIN" -m grpc_tools.protoc \
   -I "$CP_PROTO_SRC" \
   -I "$STRAT_PROTO_SRC" \
+  -I "$ACCT_PROTO_SRC" \
   --python_out="$OUT_DIR" \
   --grpc_python_out="$OUT_DIR" \
   "$CP_PROTO_SRC/control_panel_service.proto"
@@ -97,15 +89,18 @@ sed_in_place 's/^import control_panel_service_pb2/from . import control_panel_se
 sed_in_place 's/^import strategy_service_pb2/from . import strategy_service_pb2/' "$OUT_DIR/control_panel_service_pb2.py"
 sed_in_place 's/^import strategy_service_pb2/from . import strategy_service_pb2/' "$OUT_DIR/control_panel_service_pb2_grpc.py"
 
-# Go stubs for the runtime-agent. Keep these local to strategy-service so the
-# agent does not depend on the control-panel-service module at runtime.
+# Go stubs for the runtime-agent. Control-panel types stay local; imported
+# Portfolio types use core-service's single canonical Go package.
 "$PROTOC_BIN" \
   -I "$CP_PROTO_SRC" \
   -I "$STRAT_PROTO_SRC" \
+  -I "$ACCT_PROTO_SRC" \
   --go_out="$CONTROL_PANEL_GO_OUT_DIR" --go_opt=paths=source_relative \
   --go_opt=Mcontrol_panel_service.proto=github.com/hushine-tech/strategy-service/gen/controlpanelv1 \
+  --go_opt=Mportfolio_service.proto=github.com/hushine-tech/core-service/gen/portfoliov1 \
   --go-grpc_out="$CONTROL_PANEL_GO_OUT_DIR" --go-grpc_opt=paths=source_relative \
   --go-grpc_opt=Mcontrol_panel_service.proto=github.com/hushine-tech/strategy-service/gen/controlpanelv1 \
+  --go-grpc_opt=Mportfolio_service.proto=github.com/hushine-tech/core-service/gen/portfoliov1 \
   "$CP_PROTO_SRC/control_panel_service.proto"
 
 # Phase D2: market-data control-plane RPCs moved out of core-service into
@@ -123,22 +118,28 @@ sed_in_place 's/^import marketdata_service_pb2/from . import marketdata_service_
 # Python stubs
 "$PYTHON_BIN" -m grpc_tools.protoc \
   -I "$STRAT_PROTO_SRC" \
+  -I "$ACCT_PROTO_SRC" \
   --python_out="$OUT_DIR" \
   --grpc_python_out="$OUT_DIR" \
   "$STRAT_PROTO_SRC/strategy_service.proto"
 
 sed_in_place 's/^import strategy_service_pb2/from . import strategy_service_pb2/' "$OUT_DIR/strategy_service_pb2_grpc.py"
+sed_in_place 's/^import portfolio_service_pb2/from . import portfolio_service_pb2/' "$OUT_DIR/strategy_service_pb2.py"
 
 # Go stubs (for handler to import)
 "$PROTOC_BIN" \
   -I "$STRAT_PROTO_SRC" \
+  -I "$ACCT_PROTO_SRC" \
   --go_out="$GO_OUT_DIR" --go_opt=paths=source_relative \
+  --go_opt=Mportfolio_service.proto=github.com/hushine-tech/core-service/gen/portfoliov1 \
   --go-grpc_out="$GO_OUT_DIR" --go-grpc_opt=paths=source_relative \
+  --go-grpc_opt=Mportfolio_service.proto=github.com/hushine-tech/core-service/gen/portfoliov1 \
   "$STRAT_PROTO_SRC/strategy_service.proto"
 
 # --- runtime worker local IPC proto (Python + Go stubs) ---
 "$PYTHON_BIN" -m grpc_tools.protoc \
   -I "$STRAT_PROTO_SRC" \
+  -I "$ACCT_PROTO_SRC" \
   --python_out="$OUT_DIR" \
   --grpc_python_out="$OUT_DIR" \
   "$STRAT_PROTO_SRC/runtime_worker.proto"
@@ -148,13 +149,15 @@ sed_in_place 's/^import strategy_service_pb2/from . import strategy_service_pb2/
 
 "$PROTOC_BIN" \
   -I "$STRAT_PROTO_SRC" \
+  -I "$ACCT_PROTO_SRC" \
   --go_out="$RUNTIME_WORKER_GO_OUT_DIR" --go_opt=paths=source_relative \
+  --go_opt=Mportfolio_service.proto=github.com/hushine-tech/core-service/gen/portfoliov1 \
   --go-grpc_out="$RUNTIME_WORKER_GO_OUT_DIR" --go-grpc_opt=paths=source_relative \
+  --go-grpc_opt=Mportfolio_service.proto=github.com/hushine-tech/core-service/gen/portfoliov1 \
   "$STRAT_PROTO_SRC/runtime_worker.proto"
 
 echo "Generated stubs:"
 echo "  Python → $OUT_DIR"
 echo "  Go     → $GO_OUT_DIR"
-echo "  Portfolio → $PORTFOLIO_GO_OUT_DIR"
 echo "  Worker → $RUNTIME_WORKER_GO_OUT_DIR"
 echo "  RuntimeChannel → $CONTROL_PANEL_GO_OUT_DIR"

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
+	portfoliov1 "github.com/hushine-tech/core-service/gen/portfoliov1"
 )
 
 var errTerminalRetryInProgress = errors.New(

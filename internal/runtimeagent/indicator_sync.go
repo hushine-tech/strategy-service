@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
+	portfoliov1 "github.com/hushine-tech/core-service/gen/portfoliov1"
 	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"

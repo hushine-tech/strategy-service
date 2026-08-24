@@ -3,6 +3,8 @@ syntax = "proto3";
 package strategy.v1;
 option go_package = "github.com/hushine-tech/strategy-service/gen/strategyv1;strategyv1";
 
+import "portfolio_service.proto";
+
 service StrategyService {
   // RunStrategy starts strategy execution and returns immediately with a session_id.
   // Data delivery is selected from the Portfolio environment:
@@ -326,6 +328,7 @@ message PreparedRunStrategyStart {
   PreviewRunStrategyResponse preflight = 9;
   RiskControls risk_controls = 10;
   repeated PreflightFailureProto failures = 11;
+  repeated portfolio.v1.SpotRiskFactSnapshot spot_risk_snapshots = 12;
 }
 
 // Confirmed target fact safe for a final strategy worker. It deliberately has
@@ -349,6 +352,7 @@ message StrategySessionBootstrap {
   string strategy_source_sha256 = 3;
   repeated StrategySessionTargetLeverageFact confirmed_target_facts = 4;
   int32 environment = 5;
+  repeated portfolio.v1.SpotRiskFactSnapshot spot_risk_snapshots = 6;
 }
 
 // Structured terminal result for a leverage target. status is one of:

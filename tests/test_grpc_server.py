@@ -65,6 +65,30 @@ def test_spot_wallet_sync_state_uses_message_presence_not_asset_count() -> None:
     assert grpc_server._spot_wallet_has_state(populated) is True
 
 
+def test_target_close_balance_uses_declared_spot_route_value() -> None:
+    route_wallet = make_backtest_wallet(
+        wallet_balance=0.0,
+        initial_balance=0.0,
+        spot_assets=[
+            {
+                "asset": "USDT",
+                "free_decimal": "900",
+                "locked_decimal": "100",
+            }
+        ],
+    )
+    wallet = PortfolioWalletRuntime(
+        portfolio_id=2,
+        allowed_routes={("binance", "spot")},
+        wallets={("binance", "spot", 2): route_wallet},
+    )
+
+    assert grpc_server._target_close_margin_balance(
+        wallet,
+        {("binance", "spot", "BTCUSDT")},
+    ) == 1000.0
+
+
 def _prepare_strategy_code_for_test(path: str, code: str):
     gate = gate_strategy_source(
         resolve_strategy_source(path, code),
@@ -539,7 +563,7 @@ def _phase3_strategy_code() -> str:
         "from strategy_service.types import OrderDecision, OrderSide\n"
         "class MyStrategy:\n"
         '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
-        '    ORDER_TARGETS = [{"exchange": "binance", "market": "spot", "symbol": "ETH"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "spot", "symbol": "ETHUSDT"}]\n'
         "    def on_market_data(self, data, wallet): return None\n"
     )
 
@@ -549,7 +573,7 @@ def _phase3_strategy_code_with_target_leverage() -> str:
         "from strategy_service.types import OrderDecision, OrderSide\n"
         "class MyStrategy:\n"
         '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
-        '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "leverage": 7}, {"exchange": "binance", "market": "spot", "symbol": "ETH"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "leverage": 7}, {"exchange": "binance", "market": "spot", "symbol": "ETHUSDT"}]\n'
         "    def on_market_data(self, data, wallet): return None\n"
     )
 
@@ -561,11 +585,33 @@ def _bootstrap_for_source(
     session_id: str = "a" * 32,
 ) -> pb2.StrategySessionBootstrap:
     prepared = _prepare_strategy_code_for_test("<test-bootstrap>", source)
+    spot_risk_snapshots = [
+        portfolio_service_pb2.SpotRiskFactSnapshot(
+            snapshot_id=f"spot-risk-{target.symbol.lower()}",
+            venue_id=1002,
+            exchange=1,
+            environment=environment,
+            market=1,
+            symbol=target.symbol,
+            metadata=portfolio_service_pb2.SpotSymbolMetadata(
+                symbol=target.symbol,
+                status="TRADING",
+                base_asset=target.symbol.removesuffix("USDT"),
+                quote_asset="USDT",
+                spot_trading_allowed=True,
+                order_types=["MARKET", "LIMIT"],
+            ),
+            reference_price_decimal="2000",
+        )
+        for target in prepared.declarations.order_targets
+        if target.market == "spot"
+    ]
     return pb2.StrategySessionBootstrap(
         session_id=session_id,
         launch_operation_id="launch-test",
         strategy_source_sha256=prepared.gated_source.resolved.source_sha256,
         environment=environment,
+        spot_risk_snapshots=spot_risk_snapshots,
     )
 
 
@@ -6108,7 +6154,7 @@ def test_portfolio_preflight_preserves_structured_issue_facts():
                 )],
             )
 
-    issues = StrategyServiceServicer._run_portfolio_preflight(
+    outcome = StrategyServiceServicer._run_portfolio_preflight(
         acct_client=FakePortfolioClient(),
         portfolio_id=9,
         user_id=42,
@@ -6117,8 +6163,9 @@ def test_portfolio_preflight_preserves_structured_issue_facts():
         environment=1,
     )
 
-    assert issues is not None and len(issues) == 1
-    issue = issues[0]
+    assert len(outcome.issues) == 1
+    assert outcome.spot_risk_snapshots == ()
+    issue = outcome.issues[0]
     assert issue.code == "SPOT_MIN_NOTIONAL"
     assert issue.message == "notional below minimum"
     assert (issue.exchange, issue.market, issue.symbol, issue.venue_id) == (1, 1, "BTCUSDT", 77)
@@ -6181,6 +6228,30 @@ def _build_servicer_with_faked_preflight_deps(
         else:
             prepared_targets = tuple(prepared.declarations.order_targets)
             strategy_digest = prepared.gated_source.resolved.source_sha256
+    default_spot_risk_snapshots = [
+        portfolio_service_pb2.SpotRiskFactSnapshot(
+            snapshot_id=f"spot-risk-{target.symbol.lower()}",
+            venue_id=1002,
+            exchange=1,
+            environment=environment,
+            market=1,
+            symbol=target.symbol,
+            metadata=portfolio_service_pb2.SpotSymbolMetadata(
+                symbol=target.symbol,
+                status="TRADING",
+                base_asset=target.symbol.removesuffix("USDT"),
+                quote_asset="USDT",
+                spot_trading_allowed=True,
+                order_types=["MARKET", "LIMIT"],
+            ),
+            reference_price_decimal="2000",
+        )
+        for target in prepared_targets
+        if target.market == "spot"
+    ]
+    bootstrap_spot_risk_snapshots = list(
+        getattr(portfolio_preflight_response, "spot_risk_snapshots", ()) or ()
+    ) if portfolio_preflight_response is not None else default_spot_risk_snapshots
 
     class FakePortfolioClient:
         def __init__(self, _addr: str) -> None:
@@ -6315,6 +6386,7 @@ def _build_servicer_with_faked_preflight_deps(
                 for target in prepared_targets
                 if target.market in {"perpetual_futures", "delivery_futures"}
             ],
+            spot_risk_snapshots=bootstrap_spot_risk_snapshots,
         ),
     )
     servicer.set_runtime_data_source(FakeRuntimeDataSource())
@@ -6366,6 +6438,62 @@ def test_prepare_run_strategy_start_is_read_only_and_never_runs_callbacks(monkey
     assert servicer._sessions.list_ids() == ()
 
 
+def test_prepare_run_strategy_start_preserves_spot_risk_facts(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"}]\n'
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    risk_fact = portfolio_service_pb2.SpotRiskFactSnapshot(
+        snapshot_id="spot-risk-1",
+        venue_id=1002,
+        exchange=1,
+        environment=0,
+        market=1,
+        symbol="BTCUSDT",
+        metadata=portfolio_service_pb2.SpotSymbolMetadata(
+            symbol="BTCUSDT",
+            status="TRADING",
+            base_asset="BTC",
+            quote_asset="USDT",
+            spot_trading_allowed=True,
+            order_types=["MARKET", "LIMIT"],
+        ),
+        reference_price_decimal="50000",
+    )
+    servicer, _calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+        portfolio_preflight_response=portfolio_service_pb2.PreflightStrategySessionResponse(
+            ok=True,
+            spot_risk_snapshots=[risk_fact],
+        ),
+    )
+
+    response = servicer.PrepareRunStrategyStart(
+        pb2.PrepareRunStrategyStartRequest(
+            run_request=pb2.RunStrategyRequest(
+                portfolio_id=701,
+                user_id=17,
+                runtime_id="rt-test",
+                interval="1m",
+                start_time_ms=1,
+                end_time_ms=2,
+            ),
+            session_id="a" * 32,
+            launch_operation_id="launch-spot-risk",
+        ),
+        _FakeContext(),
+    )
+
+    assert response.ok is True
+    assert len(response.spot_risk_snapshots) == 1
+    assert response.spot_risk_snapshots[0] == risk_fact
+
+
 class _PublicationContext(_FakeContext):
     def __init__(self, start_session_id: str) -> None:
         super().__init__()
@@ -6375,6 +6503,59 @@ class _PublicationContext(_FakeContext):
     def bind_running_publication(self, session_id, state) -> None:
         assert self.running_publication is None
         self.running_publication = (session_id, state)
+
+
+def test_run_attaches_prepared_spot_risk_facts_to_active_and_restore_wallets(
+    monkeypatch,
+):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        '    ORDER_TARGETS = [{"exchange": "binance", "market": "spot", "symbol": "BTCUSDT"}]\n'
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, _calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    attached: list[tuple[object, tuple[str, ...]]] = []
+    real_attach = grpc_server.attach_spot_risk_snapshots
+
+    def capture_attach(wallet, snapshots):
+        copied = tuple(snapshots)
+        attached.append((wallet, tuple(item.snapshot_id for item in copied)))
+        real_attach(wallet, copied)
+
+    monkeypatch.setattr(grpc_server, "attach_spot_risk_snapshots", capture_attach)
+    context = _PublicationContext("a" * 32)
+
+    response = servicer.RunStrategy(
+        pb2.RunStrategyRequest(
+            portfolio_id=701,
+            user_id=17,
+            runtime_id="rt-test",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        ),
+        context,
+    )
+
+    assert context.code is None
+    assert response.ok is True
+    assert [snapshot_ids for _wallet, snapshot_ids in attached] == [
+        ("spot-risk-btcusdt",),
+        ("spot-risk-btcusdt",),
+    ]
+    state = servicer._sessions.get(response.session_id)
+    assert state is not None
+    assert servicer._sessions.claim_running_publication(response.session_id, state)
+    assert state.complete_running_publication_submission()
+    state.startup_result().release.set()
+    state.thread.join(timeout=1.0)
+    assert not state.thread.is_alive()
 
 
 def test_run_uses_canonical_id_and_waits_behind_pending_publication(monkeypatch):

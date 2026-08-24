@@ -230,6 +230,7 @@ class SpotWallet:
         self,
         *,
         snapshot_id: str,
+        environment: int,
         metadata: SpotSymbolMetadata,
         exchange_filters: list[dict[str, Any]] | None = None,
         symbol_filters: list[dict[str, Any]] | None = None,
@@ -240,8 +241,12 @@ class SpotWallet:
         snapshot_id = str(snapshot_id or "").strip()
         if not snapshot_id:
             raise ValueError("Spot risk snapshot_id is required")
+        environment = int(environment)
+        if environment not in {0, 1, 2}:
+            raise ValueError("Spot risk environment is invalid")
         self.risk_facts[facts.route_key] = {
             "snapshot_id": snapshot_id,
+            "environment": environment,
             "metadata": {
                 "symbol": facts.symbol,
                 "status": facts.status,
@@ -276,6 +281,13 @@ class SpotWallet:
             raise SpotFilterViolation("SPOT_RISK_FACTS_UNAVAILABLE")
         facts = dict(stored)
         facts.pop("snapshot_id", None)
+        if (
+            int(facts.get("environment", -1)) == 0
+            and not str(facts.get("reference_price_decimal", "") or "").strip()
+        ):
+            replay_price = self.symbol_prices.get(metadata.route_key)
+            if replay_price is not None:
+                facts["reference_price_decimal"] = str(replay_price)
         facts["open_orders"] = [
             {
                 "symbol": item.symbol,
@@ -452,6 +464,8 @@ class SpotWallet:
             entry.free = free
             entry.locked = locked
         base_entry = self.assets[base]
+        if base_entry.price is None:
+            base_entry.price = self.symbol_prices.get(metadata.route_key)
         if side == "BUY" and qty > ZERO:
             fill_price = quote_qty / qty
             gross_after = previous_base_qty + qty

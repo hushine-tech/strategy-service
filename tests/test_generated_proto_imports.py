@@ -245,6 +245,7 @@ def test_portfolio_commit_and_session_target_fact_contract_is_additive():
         "required_routes": 3,
         "required_symbols": 4,
         "resume_session_id": 5,
+        "spot_risk_snapshots": 6,
     }
     assert request.fields_by_name["session"].message_type.full_name == (
         "portfolio.v1.SaveSessionRequest"

@@ -161,6 +161,7 @@ def test_prepare_start_manifest_and_bootstrap_are_typed_and_secret_free():
         "preflight": 9,
         "risk_controls": 10,
         "failures": 11,
+        "spot_risk_snapshots": 12,
     }
     assert prepared.fields_by_name["required_routes"].is_repeated
     assert prepared.fields_by_name["required_symbols"].is_repeated
@@ -173,6 +174,7 @@ def test_prepare_start_manifest_and_bootstrap_are_typed_and_secret_free():
         "preflight": "strategy.v1.PreviewRunStrategyResponse",
         "risk_controls": "strategy.v1.RiskControls",
         "failures": "strategy.v1.PreflightFailureProto",
+        "spot_risk_snapshots": "portfolio.v1.SpotRiskFactSnapshot",
     }.items():
         assert prepared.fields_by_name[name].message_type.full_name == message_type
 
@@ -212,8 +214,13 @@ def test_prepare_start_manifest_and_bootstrap_are_typed_and_secret_free():
         "strategy_source_sha256": 3,
         "confirmed_target_facts": 4,
         "environment": 5,
+        "spot_risk_snapshots": 6,
     }
     assert bootstrap.fields_by_name["confirmed_target_facts"].is_repeated
+    assert bootstrap.fields_by_name["spot_risk_snapshots"].is_repeated
+    assert bootstrap.fields_by_name["spot_risk_snapshots"].message_type.full_name == (
+        "portfolio.v1.SpotRiskFactSnapshot"
+    )
     forbidden = {
         "credentials",
         "credential_fingerprint",

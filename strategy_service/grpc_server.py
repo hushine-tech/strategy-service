@@ -79,6 +79,7 @@ from strategy_service.strategy_imports import (
 )
 from strategy_service.wallet.portfolio_adapter import (
     apply_venue_wallet_snapshot,
+    attach_spot_risk_snapshots,
     build_portfolio_wallet_from_snapshot,
 )
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
@@ -567,6 +568,57 @@ def _validated_confirmed_target_map(
     return confirmed
 
 
+def _attach_validated_spot_risk_snapshots(
+    *,
+    bootstrap: Any,
+    prepared_strategy: PreparedStrategy,
+    environment: int,
+    wallet: Any,
+) -> None:
+    declared = {
+        _target_key(
+            getattr(target, "exchange", ""),
+            getattr(target, "market", ""),
+            getattr(target, "symbol", ""),
+        )
+        for target in getattr(
+            getattr(prepared_strategy, "declarations", None),
+            "order_targets",
+            (),
+        )
+        if str(getattr(target, "market", "") or "").strip().lower() == "spot"
+    }
+    facts: dict[tuple[str, str, str], Any] = {}
+    for snapshot in getattr(bootstrap, "spot_risk_snapshots", ()) or ():
+        exchange = {1: "binance", 2: "okx"}.get(
+            int(getattr(snapshot, "exchange", 0) or 0), ""
+        )
+        market = {
+            1: "spot",
+            2: "perpetual_futures",
+            3: "delivery_futures",
+        }.get(int(getattr(snapshot, "market", 0) or 0), "")
+        key = _target_key(exchange, market, getattr(snapshot, "symbol", ""))
+        if key in facts:
+            raise _SessionBootstrapError("Spot risk snapshot set mismatch")
+        if int(getattr(snapshot, "environment", -1)) != int(environment):
+            raise _SessionBootstrapError("Spot risk snapshot environment mismatch")
+        if int(getattr(snapshot, "venue_id", 0) or 0) <= 0:
+            raise _SessionBootstrapError("Spot risk snapshot venue is invalid")
+        metadata_symbol = str(
+            getattr(getattr(snapshot, "metadata", None), "symbol", "") or ""
+        ).strip().upper()
+        if metadata_symbol != key[2]:
+            raise _SessionBootstrapError("Spot risk snapshot symbol mismatch")
+        facts[key] = snapshot
+    if set(facts) != declared:
+        raise _SessionBootstrapError("Spot risk snapshot set mismatch")
+    try:
+        attach_spot_risk_snapshots(wallet, facts.values())
+    except (TypeError, ValueError) as exc:
+        raise _SessionBootstrapError("Spot risk snapshot wallet mismatch") from exc
+
+
 def _preview_response_from_preflight(
     *,
     profile: RuntimeSourceProfile,
@@ -662,6 +714,12 @@ class _PortfolioPreflightIssue:
         if self.symbol:
             route += f" symbol={self.symbol}"
         return f"{self.code}: {self.message}{route}".strip()
+
+
+@dataclass(frozen=True)
+class _PortfolioPreflightOutcome:
+    issues: tuple[_PortfolioPreflightIssue, ...] = ()
+    spot_risk_snapshots: tuple[Any, ...] = ()
 
 
 def _sync_strategy_snapshot(
@@ -869,14 +927,22 @@ def _target_close_margin_balance(
         total = 0.0
         found_target_route = False
         for (exchange, market, _venue_id), route_wallet in wallet.wallets.items():
-            if market not in {"perpetual_futures", "delivery_futures"}:
-                continue
             try:
                 route_exchange = _normalize_exchange(exchange)
                 route_market = _normalize_market(market)
             except StrategyDeclarationError:
                 continue
             if not any(key[0] == route_exchange and key[1] == route_market for key in normalized_targets):
+                continue
+            if route_market == "spot":
+                spot = getattr(route_wallet, "spot", None)
+                getter = getattr(spot, "get_estimated_value", None)
+                if not callable(getter):
+                    continue
+                total += float(getter())
+                found_target_route = True
+                continue
+            if route_market not in {"perpetual_futures", "delivery_futures"}:
                 continue
             futures = getattr(route_wallet, "futures", None)
             getter = getattr(futures, "get_wallet_balance", None)
@@ -1702,7 +1768,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_id=strategy_id,
             environment=environment,
         )
-        if portfolio_preflight is not None:
+        if portfolio_preflight.issues:
             return _failure_result(
                 PreflightResult(
                     profile=profile,
@@ -1720,7 +1786,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                             retryable=issue.retryable,
                             source=issue.source,
                         )
-                        for issue in portfolio_preflight
+                        for issue in portfolio_preflight.issues
                     ],
                 )
             )
@@ -1741,6 +1807,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 snapshot,
                 allowed_routes=required_routes,
                 simulated_order_targets=(order_targets if environment == 0 else ()),
+            )
+            attach_spot_risk_snapshots(
+                wallet,
+                portfolio_preflight.spot_risk_snapshots,
             )
             initial_margin_balance = _target_close_margin_balance(
                 wallet,
@@ -1870,6 +1940,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 max_loss_close_pct=effective_risk.max_loss_close_pct,
                 max_loss_close_source=effective_risk.max_loss_close_source,
             ),
+            spot_risk_snapshots=list(portfolio_preflight.spot_risk_snapshots),
         )
 
     def RunStrategy(self, request, context):
@@ -2028,6 +2099,19 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 environment=environment,
                 wallet=wallet,
             )
+            _attach_validated_spot_risk_snapshots(
+                bootstrap=self._session_bootstrap,
+                prepared_strategy=prepared_strategy,
+                environment=environment,
+                wallet=wallet,
+            )
+            if backtest_restore_wallet is not None:
+                _attach_validated_spot_risk_snapshots(
+                    bootstrap=self._session_bootstrap,
+                    prepared_strategy=prepared_strategy,
+                    environment=environment,
+                    wallet=backtest_restore_wallet,
+                )
         except _SessionBootstrapError as exc:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy Session bootstrap validation failed: {exc}")
@@ -2744,16 +2828,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         session_id: str = "",
         strategy_id: int = 0,
         environment: int = 0,
-    ) -> list[_PortfolioPreflightIssue] | None:
+    ) -> _PortfolioPreflightOutcome:
         preflight = getattr(acct_client, "preflight_strategy_session", None)
         if not callable(preflight):
-            return [_PortfolioPreflightIssue(
-                code="PREFLIGHT_UNAVAILABLE",
-                message="portfolio preflight client does not support PreflightStrategySession",
-                environment=environment,
-                retryable=True,
-                source="strategy-service",
-            )]
+            return _PortfolioPreflightOutcome(
+                issues=(
+                    _PortfolioPreflightIssue(
+                        code="PREFLIGHT_UNAVAILABLE",
+                        message="portfolio preflight client does not support PreflightStrategySession",
+                        environment=environment,
+                        retryable=True,
+                        source="strategy-service",
+                    ),
+                )
+            )
         resp = preflight(
             portfolio_id=portfolio_id,
             user_id=user_id,
@@ -2765,15 +2853,23 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_id=int(strategy_id),
         )
         if resp is None:
-            return [_PortfolioPreflightIssue(
-                code="PREFLIGHT_UNAVAILABLE",
-                message="core-service did not return a portfolio preflight result",
-                environment=environment,
-                retryable=True,
-                source="strategy-service",
-            )]
+            return _PortfolioPreflightOutcome(
+                issues=(
+                    _PortfolioPreflightIssue(
+                        code="PREFLIGHT_UNAVAILABLE",
+                        message="core-service did not return a portfolio preflight result",
+                        environment=environment,
+                        retryable=True,
+                        source="strategy-service",
+                    ),
+                )
+            )
         if bool(getattr(resp, "ok", False)):
-            return None
+            return _PortfolioPreflightOutcome(
+                spot_risk_snapshots=tuple(
+                    getattr(resp, "spot_risk_snapshots", ()) or ()
+                ),
+            )
         issues: list[_PortfolioPreflightIssue] = []
         for issue in getattr(resp, "issues", []) or []:
             issues.append(_PortfolioPreflightIssue(
@@ -2789,13 +2885,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 source=str(getattr(issue, "source", "") or "preflight").strip(),
             ))
         if issues:
-            return issues
-        return [_PortfolioPreflightIssue(
-            code="PREFLIGHT_FAILED",
-            message="portfolio preflight failed without issue details",
-            environment=environment,
-            source="strategy-service",
-        )]
+            return _PortfolioPreflightOutcome(issues=tuple(issues))
+        return _PortfolioPreflightOutcome(
+            issues=(
+                _PortfolioPreflightIssue(
+                    code="PREFLIGHT_FAILED",
+                    message="portfolio preflight failed without issue details",
+                    environment=environment,
+                    source="strategy-service",
+                ),
+            )
+        )
 
     def _run_profile_preflight(
         self,
@@ -4659,7 +4759,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
             environment=environment,
         )
-        if portfolio_preflight is not None:
+        if portfolio_preflight.issues:
             preflight = PreflightResult(
                 profile=profile,
                 failures=[
@@ -4676,7 +4776,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         retryable=issue.retryable,
                         source=issue.source,
                     )
-                    for issue in portfolio_preflight
+                    for issue in portfolio_preflight.issues
                 ],
             )
             return _shape(

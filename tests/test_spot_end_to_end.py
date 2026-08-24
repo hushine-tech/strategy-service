@@ -91,6 +91,20 @@ def test_spot_market_data_does_not_invent_an_unowned_base_asset():
     assert wallet.symbol_prices[(10, "binance", "spot", "BTCUSDT")] == Decimal("50000")
 
 
+def test_first_buy_hydrates_new_base_asset_from_observed_market_price():
+    wallet = SpotWallet.from_assets({"USDT": ("1000", "0")})
+    metadata = spot_metadata()
+    wallet.on_market_data("BTCUSDT", Decimal("50000"), metadata)
+
+    wallet.apply_order_update(
+        fill_update(fee="0", fee_asset="USDT"),
+        metadata,
+    )
+
+    assert wallet.assets["BTC"].price == Decimal("50000")
+    assert wallet.get_estimated_value() == Decimal("1000")
+
+
 def test_spot_buy_applies_actual_fill_and_bnb_commission_once_across_replays():
     wallet = SpotWallet.from_assets({"USDT": ("1500", "0"), "BNB": ("1", "0")})
     metadata = spot_metadata()

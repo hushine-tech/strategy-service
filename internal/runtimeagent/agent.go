@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	portfoliov1 "github.com/hushine-tech/core-service/gen/portfoliov1"
 	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
-	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
 	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"google.golang.org/grpc/codes"
@@ -865,6 +865,7 @@ func commitStrategySessionStartRequest(
 	request := &portfoliov1.CommitStrategySessionStartRequest{
 		LaunchOperationId: launchOperationID,
 		ResumeSessionId:   strings.TrimSpace(resumeSessionID),
+		SpotRiskSnapshots: cloneSpotRiskSnapshots(prepared.GetSpotRiskSnapshots()),
 		Session: &portfoliov1.SaveSessionRequest{
 			SessionId:      sessionID,
 			PortfolioId:    metadata.GetPortfolioId(),
@@ -990,6 +991,7 @@ func strategySessionBootstrap(
 		LaunchOperationId:    launchOperationID,
 		StrategySourceSha256: digest,
 		Environment:          committedSession.GetEnvironment(),
+		SpotRiskSnapshots:    cloneSpotRiskSnapshots(prepared.GetSpotRiskSnapshots()),
 	}
 	type targetIntent struct {
 		effective uint32
@@ -1070,6 +1072,21 @@ func strategySessionBootstrap(
 		return nil, fmt.Errorf("confirmed target fact set mismatch")
 	}
 	return bootstrap, nil
+}
+
+func cloneSpotRiskSnapshots(
+	snapshots []*portfoliov1.SpotRiskFactSnapshot,
+) []*portfoliov1.SpotRiskFactSnapshot {
+	result := make([]*portfoliov1.SpotRiskFactSnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot != nil {
+			result = append(
+				result,
+				proto.Clone(snapshot).(*portfoliov1.SpotRiskFactSnapshot),
+			)
+		}
+	}
+	return result
 }
 
 func strategyExchangeCode(value string) (int32, error) {

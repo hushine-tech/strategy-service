@@ -277,6 +277,22 @@ def test_wallet_balance_one_percent_is_margin_budget_at_ten_x():
     assert float(order.qty) * 3003.0 == pytest.approx(198.198)
 
 
+def test_backtest_wallet_without_exchange_step_uses_template_symbol_step():
+    strategy_type = strategy_class()
+    strategy = configured_strategy()
+    view = InputView(parse_declared_inputs(strategy_type.INPUTS))
+    route = RouteWallet()
+    for metadata in route.futures.risk_metadata.values():
+        metadata.step_size = 0.0
+    wallet = PortfolioWallet(route)
+
+    assert feed(strategy, view, wallet, "BTCUSDT", 100000.0) is None
+    order = feed(strategy, view, wallet, "BTCUSDT", 100100.0)
+
+    assert_market_order(order, symbol="BTCUSDT", side=OrderSide.BUY, qty="0.0009")
+    assert strategy.notify.calls == []
+
+
 def test_each_symbol_uses_its_declared_and_confirmed_leverage_for_sizing():
     strategy_type = strategy_class()
     strategy = configured_strategy()

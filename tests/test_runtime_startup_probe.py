@@ -146,6 +146,8 @@ def test_probe_rejects_invocation_hash_mismatch_without_echoing_path(capsys):
 def test_non_bare_probe_rejects_local_dev_image_facts(source, monkeypatch, capsys):
     monkeypatch.delenv("HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT", raising=False)
     monkeypatch.delenv("HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT", raising=False)
+    monkeypatch.delenv("HUSHINE_RUNTIME_GOLANG_LIB_COMMIT", raising=False)
+    monkeypatch.delenv("HUSHINE_RUNTIME_CORE_SERVICE_COMMIT", raising=False)
     monkeypatch.delenv("HUSHINE_RUNTIME_IMAGE_BUILD_ID", raising=False)
     monkeypatch.setattr(
         runtime_startup_probe,

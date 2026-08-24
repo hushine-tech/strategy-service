@@ -14,12 +14,16 @@ from strategy_service.runtime_profile import (
 BUILD_FACT_KEYS = (
     "HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT",
     "HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT",
+    "HUSHINE_RUNTIME_GOLANG_LIB_COMMIT",
+    "HUSHINE_RUNTIME_CORE_SERVICE_COMMIT",
     "HUSHINE_RUNTIME_IMAGE_BUILD_ID",
 )
 VALID_BUILD_FACTS = {
     BUILD_FACT_KEYS[0]: "a" * 40,
     BUILD_FACT_KEYS[1]: "b" * 40,
-    BUILD_FACT_KEYS[2]: f"{'a' * 12}-{'b' * 12}-{'c' * 12}-1.0.0-executor",
+    BUILD_FACT_KEYS[2]: "c" * 40,
+    BUILD_FACT_KEYS[3]: "d" * 40,
+    BUILD_FACT_KEYS[4]: f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-executor",
 }
 SAFE_CONFIGURATION_ERROR = "invalid runtime build identity configuration"
 
@@ -42,28 +46,32 @@ def test_all_missing_build_facts_use_one_local_dev_identity():
     assert profile.allowed_third_party_modules == manifest.public_import_roots
     assert profile.strategy_service_commit == "local-dev"
     assert profile.strategy_library_commit == "local-dev"
+    assert profile.golang_lib_commit == "local-dev"
+    assert profile.core_service_commit == "local-dev"
     assert profile.image_build_id == "local-dev"
 
 
 @pytest.mark.parametrize(
     "image_build_id",
     [
-        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-1.0.0-executor",
-        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-1.0.0-executor-coverage",
-        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-1.0.0-executor-dirty-{'d' * 12}",
+        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-executor",
+        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-executor-coverage",
+        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-executor-dirty-{'e' * 12}",
     ],
 )
 def test_all_present_build_facts_are_preserved_exactly(image_build_id):
-    environment = {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[2]: image_build_id}
+    environment = {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[4]: image_build_id}
     profile = _runtime_profile_from_environment(environment)
     assert profile.strategy_service_commit == environment[BUILD_FACT_KEYS[0]]
     assert profile.strategy_library_commit == environment[BUILD_FACT_KEYS[1]]
+    assert profile.golang_lib_commit == environment[BUILD_FACT_KEYS[2]]
+    assert profile.core_service_commit == environment[BUILD_FACT_KEYS[3]]
     assert profile.image_build_id == image_build_id
 
 
 PARTIAL_BUILD_FACT_KEY_SETS = [
     present
-    for count in (1, 2)
+    for count in range(1, len(BUILD_FACT_KEYS))
     for present in itertools.combinations(BUILD_FACT_KEYS, count)
 ]
 
@@ -84,7 +92,7 @@ def test_blank_build_facts_fail_closed_without_echoing_value(key, blank):
     assert str(exc_info.value) == SAFE_CONFIGURATION_ERROR
 
 
-@pytest.mark.parametrize("key", BUILD_FACT_KEYS[:2])
+@pytest.mark.parametrize("key", BUILD_FACT_KEYS[:4])
 @pytest.mark.parametrize(
     "poisoned",
     [
@@ -113,14 +121,14 @@ def test_malformed_commit_facts_fail_with_constant_safe_error(key, poisoned):
         "a\nexecutor",
         "a\x00executor",
         "é" * 40,
-        f"{'A' * 12}-{'b' * 12}-{'c' * 12}-1.0.0-executor",
-        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-01.0.0-executor",
-        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-1.0.0-worker",
-        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-1.0.0-executor-dirty-short",
+        f"{'A' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-executor",
+        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-01.0.0-executor",
+        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-worker",
+        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-executor-dirty-short",
     ],
 )
 def test_malformed_image_build_ids_fail_with_constant_safe_error(poisoned):
-    environment = {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[2]: poisoned}
+    environment = {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[4]: poisoned}
     with pytest.raises(RuntimeError) as exc_info:
         _runtime_profile_from_environment(environment)
     assert str(exc_info.value) == SAFE_CONFIGURATION_ERROR
@@ -130,30 +138,32 @@ def test_malformed_image_build_ids_fail_with_constant_safe_error(poisoned):
 @pytest.mark.parametrize(
     "image_build_id",
     [
-        f"{'d' * 12}-{'b' * 12}-{'c' * 12}-1.0.0-executor",
-        f"{'a' * 12}-{'d' * 12}-{'c' * 12}-1.0.0-executor",
+        f"{'e' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-executor",
+        f"{'a' * 12}-{'e' * 12}-{'c' * 12}-{'d' * 12}-1.0.0-executor",
+        f"{'a' * 12}-{'b' * 12}-{'e' * 12}-{'d' * 12}-1.0.0-executor",
+        f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'e' * 12}-1.0.0-executor",
     ],
 )
 def test_image_build_id_short_commits_must_match_full_commit_prefixes(
     image_build_id,
 ):
-    environment = {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[2]: image_build_id}
+    environment = {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[4]: image_build_id}
     with pytest.raises(RuntimeError, match=f"^{SAFE_CONFIGURATION_ERROR}$"):
         _runtime_profile_from_environment(environment)
 
 
 def test_image_build_id_semver_must_match_loaded_profile_version():
-    image_build_id = f"{'a' * 12}-{'b' * 12}-{'c' * 12}-2.0.0-executor"
+    image_build_id = f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-2.0.0-executor"
     with pytest.raises(RuntimeError, match=f"^{SAFE_CONFIGURATION_ERROR}$"):
         _runtime_profile_from_environment(
-            {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[2]: image_build_id}
+            {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[4]: image_build_id}
         )
 
 
 def test_image_build_id_accepts_96_ascii_bytes_and_rejects_97(monkeypatch):
-    prefix = f"{'a' * 12}-{'b' * 12}-{'c' * 12}-"
-    version_at_limit = "1.0.0+" + ("d" * 42)
-    oversized_version = "1.0.0+" + ("d" * 43)
+    prefix = f"{'a' * 12}-{'b' * 12}-{'c' * 12}-{'d' * 12}-"
+    version_at_limit = "1.0.0+" + ("e" * 29)
+    oversized_version = "1.0.0+" + ("e" * 30)
     exactly_96 = prefix + version_at_limit + "-executor"
     oversized = prefix + oversized_version + "-executor"
     assert len(exactly_96.encode("ascii")) == 96
@@ -166,7 +176,7 @@ def test_image_build_id_accepts_96_ascii_bytes_and_rejects_97(monkeypatch):
         lambda: replace(manifest, profile_version=version_at_limit),
     )
     profile = _runtime_profile_from_environment(
-        {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[2]: exactly_96}
+        {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[4]: exactly_96}
     )
     assert profile.image_build_id == exactly_96
     monkeypatch.setattr(
@@ -176,7 +186,7 @@ def test_image_build_id_accepts_96_ascii_bytes_and_rejects_97(monkeypatch):
     )
     with pytest.raises(RuntimeError, match=f"^{SAFE_CONFIGURATION_ERROR}$"):
         _runtime_profile_from_environment(
-            {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[2]: oversized}
+            {**VALID_BUILD_FACTS, BUILD_FACT_KEYS[4]: oversized}
         )
 
 

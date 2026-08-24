@@ -7,6 +7,7 @@
 package strategyv1
 
 import (
+	portfoliov1 "github.com/hushine-tech/core-service/gen/portfoliov1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -2149,18 +2150,19 @@ func (x *StrategyRequiredSymbolBinding) GetLeverageSource() string {
 // needed to construct portfolio.v1.CommitStrategySessionStartRequest without
 // parsing strategy source or recomputing target leverage.
 type PreparedRunStrategyStart struct {
-	state                protoimpl.MessageState           `protogen:"open.v1"`
-	Ok                   bool                             `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	Session              *StrategySessionMetadata         `protobuf:"bytes,2,opt,name=session,proto3" json:"session,omitempty"`
-	LaunchOperationId    string                           `protobuf:"bytes,3,opt,name=launch_operation_id,json=launchOperationId,proto3" json:"launch_operation_id,omitempty"`
-	StrategySourceSha256 string                           `protobuf:"bytes,4,opt,name=strategy_source_sha256,json=strategySourceSha256,proto3" json:"strategy_source_sha256,omitempty"`
-	DeclaredInputs       []*StrategyInputDeclaration      `protobuf:"bytes,5,rep,name=declared_inputs,json=declaredInputs,proto3" json:"declared_inputs,omitempty"`
-	DeclaredOrderTargets []*StrategyOrderTargetBinding    `protobuf:"bytes,6,rep,name=declared_order_targets,json=declaredOrderTargets,proto3" json:"declared_order_targets,omitempty"`
-	RequiredRoutes       []*StrategyRouteBinding          `protobuf:"bytes,7,rep,name=required_routes,json=requiredRoutes,proto3" json:"required_routes,omitempty"`
-	RequiredSymbols      []*StrategyRequiredSymbolBinding `protobuf:"bytes,8,rep,name=required_symbols,json=requiredSymbols,proto3" json:"required_symbols,omitempty"`
-	Preflight            *PreviewRunStrategyResponse      `protobuf:"bytes,9,opt,name=preflight,proto3" json:"preflight,omitempty"`
-	RiskControls         *RiskControls                    `protobuf:"bytes,10,opt,name=risk_controls,json=riskControls,proto3" json:"risk_controls,omitempty"`
-	Failures             []*PreflightFailureProto         `protobuf:"bytes,11,rep,name=failures,proto3" json:"failures,omitempty"`
+	state                protoimpl.MessageState              `protogen:"open.v1"`
+	Ok                   bool                                `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Session              *StrategySessionMetadata            `protobuf:"bytes,2,opt,name=session,proto3" json:"session,omitempty"`
+	LaunchOperationId    string                              `protobuf:"bytes,3,opt,name=launch_operation_id,json=launchOperationId,proto3" json:"launch_operation_id,omitempty"`
+	StrategySourceSha256 string                              `protobuf:"bytes,4,opt,name=strategy_source_sha256,json=strategySourceSha256,proto3" json:"strategy_source_sha256,omitempty"`
+	DeclaredInputs       []*StrategyInputDeclaration         `protobuf:"bytes,5,rep,name=declared_inputs,json=declaredInputs,proto3" json:"declared_inputs,omitempty"`
+	DeclaredOrderTargets []*StrategyOrderTargetBinding       `protobuf:"bytes,6,rep,name=declared_order_targets,json=declaredOrderTargets,proto3" json:"declared_order_targets,omitempty"`
+	RequiredRoutes       []*StrategyRouteBinding             `protobuf:"bytes,7,rep,name=required_routes,json=requiredRoutes,proto3" json:"required_routes,omitempty"`
+	RequiredSymbols      []*StrategyRequiredSymbolBinding    `protobuf:"bytes,8,rep,name=required_symbols,json=requiredSymbols,proto3" json:"required_symbols,omitempty"`
+	Preflight            *PreviewRunStrategyResponse         `protobuf:"bytes,9,opt,name=preflight,proto3" json:"preflight,omitempty"`
+	RiskControls         *RiskControls                       `protobuf:"bytes,10,opt,name=risk_controls,json=riskControls,proto3" json:"risk_controls,omitempty"`
+	Failures             []*PreflightFailureProto            `protobuf:"bytes,11,rep,name=failures,proto3" json:"failures,omitempty"`
+	SpotRiskSnapshots    []*portfoliov1.SpotRiskFactSnapshot `protobuf:"bytes,12,rep,name=spot_risk_snapshots,json=spotRiskSnapshots,proto3" json:"spot_risk_snapshots,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2268,6 +2270,13 @@ func (x *PreparedRunStrategyStart) GetRiskControls() *RiskControls {
 func (x *PreparedRunStrategyStart) GetFailures() []*PreflightFailureProto {
 	if x != nil {
 		return x.Failures
+	}
+	return nil
+}
+
+func (x *PreparedRunStrategyStart) GetSpotRiskSnapshots() []*portfoliov1.SpotRiskFactSnapshot {
+	if x != nil {
+		return x.SpotRiskSnapshots
 	}
 	return nil
 }
@@ -2397,6 +2406,7 @@ type StrategySessionBootstrap struct {
 	StrategySourceSha256 string                               `protobuf:"bytes,3,opt,name=strategy_source_sha256,json=strategySourceSha256,proto3" json:"strategy_source_sha256,omitempty"`
 	ConfirmedTargetFacts []*StrategySessionTargetLeverageFact `protobuf:"bytes,4,rep,name=confirmed_target_facts,json=confirmedTargetFacts,proto3" json:"confirmed_target_facts,omitempty"`
 	Environment          int32                                `protobuf:"varint,5,opt,name=environment,proto3" json:"environment,omitempty"`
+	SpotRiskSnapshots    []*portfoliov1.SpotRiskFactSnapshot  `protobuf:"bytes,6,rep,name=spot_risk_snapshots,json=spotRiskSnapshots,proto3" json:"spot_risk_snapshots,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2464,6 +2474,13 @@ func (x *StrategySessionBootstrap) GetEnvironment() int32 {
 		return x.Environment
 	}
 	return 0
+}
+
+func (x *StrategySessionBootstrap) GetSpotRiskSnapshots() []*portfoliov1.SpotRiskFactSnapshot {
+	if x != nil {
+		return x.SpotRiskSnapshots
+	}
+	return nil
 }
 
 // Structured terminal result for a leverage target. status is one of:
@@ -2621,7 +2638,7 @@ var File_strategy_service_proto protoreflect.FileDescriptor
 
 const file_strategy_service_proto_rawDesc = "" +
 	"\n" +
-	"\x16strategy_service.proto\x12\vstrategy.v1\"\xa1\x03\n" +
+	"\x16strategy_service.proto\x12\vstrategy.v1\x1a\x17portfolio_service.proto\"\xa1\x03\n" +
 	"\x18RuntimeDependencyProfile\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
 	"\fprofile_name\x18\x02 \x01(\tR\vprofileName\x12'\n" +
@@ -2809,7 +2826,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\forder_target\x18\x04 \x01(\bR\vorderTarget\x120\n" +
 	"\x14required_order_types\x18\x05 \x03(\tR\x12requiredOrderTypes\x12-\n" +
 	"\x12effective_leverage\x18\x06 \x01(\rR\x11effectiveLeverage\x12'\n" +
-	"\x0fleverage_source\x18\a \x01(\tR\x0eleverageSource\"\xe9\x05\n" +
+	"\x0fleverage_source\x18\a \x01(\tR\x0eleverageSource\"\xbd\x06\n" +
 	"\x18PreparedRunStrategyStart\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12>\n" +
 	"\asession\x18\x02 \x01(\v2$.strategy.v1.StrategySessionMetadataR\asession\x12.\n" +
@@ -2822,7 +2839,8 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\tpreflight\x18\t \x01(\v2'.strategy.v1.PreviewRunStrategyResponseR\tpreflight\x12>\n" +
 	"\rrisk_controls\x18\n" +
 	" \x01(\v2\x19.strategy.v1.RiskControlsR\friskControls\x12>\n" +
-	"\bfailures\x18\v \x03(\v2\".strategy.v1.PreflightFailureProtoR\bfailures\"\xac\x03\n" +
+	"\bfailures\x18\v \x03(\v2\".strategy.v1.PreflightFailureProtoR\bfailures\x12R\n" +
+	"\x13spot_risk_snapshots\x18\f \x03(\v2\".portfolio.v1.SpotRiskFactSnapshotR\x11spotRiskSnapshots\"\xac\x03\n" +
 	"!StrategySessionTargetLeverageFact\x12\x19\n" +
 	"\bvenue_id\x18\x01 \x01(\x03R\avenueId\x12\x1a\n" +
 	"\bexchange\x18\x02 \x01(\tR\bexchange\x12 \n" +
@@ -2835,14 +2853,15 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x12confirmed_leverage\x18\t \x01(\rR\x11confirmedLeverage\x12/\n" +
 	"\x14confirmed_at_unix_ms\x18\n" +
 	" \x01(\x03R\x11confirmedAtUnixMsB\x14\n" +
-	"\x12_previous_leverage\"\xa7\x02\n" +
+	"\x12_previous_leverage\"\xfb\x02\n" +
 	"\x18StrategySessionBootstrap\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12.\n" +
 	"\x13launch_operation_id\x18\x02 \x01(\tR\x11launchOperationId\x124\n" +
 	"\x16strategy_source_sha256\x18\x03 \x01(\tR\x14strategySourceSha256\x12d\n" +
 	"\x16confirmed_target_facts\x18\x04 \x03(\v2..strategy.v1.StrategySessionTargetLeverageFactR\x14confirmedTargetFacts\x12 \n" +
-	"\venvironment\x18\x05 \x01(\x05R\venvironment\"\xd8\x04\n" +
+	"\venvironment\x18\x05 \x01(\x05R\venvironment\x12R\n" +
+	"\x13spot_risk_snapshots\x18\x06 \x03(\v2\".portfolio.v1.SpotRiskFactSnapshotR\x11spotRiskSnapshots\"\xd8\x04\n" +
 	"\x1cStrategyLeverageTargetResult\x12\x19\n" +
 	"\bvenue_id\x18\x01 \x01(\x03R\avenueId\x12\x1a\n" +
 	"\bexchange\x18\x02 \x01(\x05R\bexchange\x12\x16\n" +
@@ -2922,6 +2941,7 @@ var file_strategy_service_proto_goTypes = []any{
 	(*StrategySessionTargetLeverageFact)(nil), // 26: strategy.v1.StrategySessionTargetLeverageFact
 	(*StrategySessionBootstrap)(nil),          // 27: strategy.v1.StrategySessionBootstrap
 	(*StrategyLeverageTargetResult)(nil),      // 28: strategy.v1.StrategyLeverageTargetResult
+	(*portfoliov1.SpotRiskFactSnapshot)(nil),  // 29: portfolio.v1.SpotRiskFactSnapshot
 }
 var file_strategy_service_proto_depIdxs = []int32{
 	3,  // 0: strategy.v1.ValidateStrategySourceResponse.issues:type_name -> strategy.v1.StrategyValidationIssueProto
@@ -2948,24 +2968,26 @@ var file_strategy_service_proto_depIdxs = []int32{
 	17, // 21: strategy.v1.PreparedRunStrategyStart.preflight:type_name -> strategy.v1.PreviewRunStrategyResponse
 	18, // 22: strategy.v1.PreparedRunStrategyStart.risk_controls:type_name -> strategy.v1.RiskControls
 	16, // 23: strategy.v1.PreparedRunStrategyStart.failures:type_name -> strategy.v1.PreflightFailureProto
-	26, // 24: strategy.v1.StrategySessionBootstrap.confirmed_target_facts:type_name -> strategy.v1.StrategySessionTargetLeverageFact
-	7,  // 25: strategy.v1.StrategyService.RunStrategy:input_type -> strategy.v1.RunStrategyRequest
-	22, // 26: strategy.v1.StrategyService.PrepareRunStrategyStart:input_type -> strategy.v1.PrepareRunStrategyStartRequest
-	14, // 27: strategy.v1.StrategyService.PreviewRunStrategy:input_type -> strategy.v1.PreviewRunStrategyRequest
-	4,  // 28: strategy.v1.StrategyService.ValidateStrategySource:input_type -> strategy.v1.ValidateStrategySourceRequest
-	9,  // 29: strategy.v1.StrategyService.GetStrategyStatus:input_type -> strategy.v1.GetStrategyStatusRequest
-	11, // 30: strategy.v1.StrategyService.StopStrategy:input_type -> strategy.v1.StopStrategyRequest
-	8,  // 31: strategy.v1.StrategyService.RunStrategy:output_type -> strategy.v1.RunStrategyResponse
-	25, // 32: strategy.v1.StrategyService.PrepareRunStrategyStart:output_type -> strategy.v1.PreparedRunStrategyStart
-	17, // 33: strategy.v1.StrategyService.PreviewRunStrategy:output_type -> strategy.v1.PreviewRunStrategyResponse
-	6,  // 34: strategy.v1.StrategyService.ValidateStrategySource:output_type -> strategy.v1.ValidateStrategySourceResponse
-	10, // 35: strategy.v1.StrategyService.GetStrategyStatus:output_type -> strategy.v1.GetStrategyStatusResponse
-	12, // 36: strategy.v1.StrategyService.StopStrategy:output_type -> strategy.v1.StopStrategyResponse
-	31, // [31:37] is the sub-list for method output_type
-	25, // [25:31] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	29, // 24: strategy.v1.PreparedRunStrategyStart.spot_risk_snapshots:type_name -> portfolio.v1.SpotRiskFactSnapshot
+	26, // 25: strategy.v1.StrategySessionBootstrap.confirmed_target_facts:type_name -> strategy.v1.StrategySessionTargetLeverageFact
+	29, // 26: strategy.v1.StrategySessionBootstrap.spot_risk_snapshots:type_name -> portfolio.v1.SpotRiskFactSnapshot
+	7,  // 27: strategy.v1.StrategyService.RunStrategy:input_type -> strategy.v1.RunStrategyRequest
+	22, // 28: strategy.v1.StrategyService.PrepareRunStrategyStart:input_type -> strategy.v1.PrepareRunStrategyStartRequest
+	14, // 29: strategy.v1.StrategyService.PreviewRunStrategy:input_type -> strategy.v1.PreviewRunStrategyRequest
+	4,  // 30: strategy.v1.StrategyService.ValidateStrategySource:input_type -> strategy.v1.ValidateStrategySourceRequest
+	9,  // 31: strategy.v1.StrategyService.GetStrategyStatus:input_type -> strategy.v1.GetStrategyStatusRequest
+	11, // 32: strategy.v1.StrategyService.StopStrategy:input_type -> strategy.v1.StopStrategyRequest
+	8,  // 33: strategy.v1.StrategyService.RunStrategy:output_type -> strategy.v1.RunStrategyResponse
+	25, // 34: strategy.v1.StrategyService.PrepareRunStrategyStart:output_type -> strategy.v1.PreparedRunStrategyStart
+	17, // 35: strategy.v1.StrategyService.PreviewRunStrategy:output_type -> strategy.v1.PreviewRunStrategyResponse
+	6,  // 36: strategy.v1.StrategyService.ValidateStrategySource:output_type -> strategy.v1.ValidateStrategySourceResponse
+	10, // 37: strategy.v1.StrategyService.GetStrategyStatus:output_type -> strategy.v1.GetStrategyStatusResponse
+	12, // 38: strategy.v1.StrategyService.StopStrategy:output_type -> strategy.v1.StopStrategyResponse
+	33, // [33:39] is the sub-list for method output_type
+	27, // [27:33] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_strategy_service_proto_init() }

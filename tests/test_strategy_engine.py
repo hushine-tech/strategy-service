@@ -232,6 +232,7 @@ def _register_spot_facts(spot_wallet, symbol: str) -> None:
     metadata = _spot_metadata(symbol)
     spot_wallet.register_risk_facts(
         snapshot_id=f"test-risk-{metadata.symbol}",
+        environment=0,
         metadata=metadata,
         reference_price_decimal="100",
     )

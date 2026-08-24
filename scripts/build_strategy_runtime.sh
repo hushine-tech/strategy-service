@@ -18,6 +18,7 @@ SERVICE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WORKSPACE_DIR="$(cd "${SERVICE_DIR}/.." && pwd)"
 LIBRARY_DIR="${WORKSPACE_DIR}/strategy-library"
 GOLANG_LIB_DIR="${WORKSPACE_DIR}/golang-lib"
+CORE_DIR="${WORKSPACE_DIR}/core-service"
 IMAGE_PREFIX="${IMAGE_PREFIX:-hushine/strategy-runtime}"
 
 MODE="normal"
@@ -70,7 +71,7 @@ GO_PROXY_PATTERN='^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%+/-]*)?(,(htt
     && "${RUNTIME_GO_PROXY_VALUE}" =~ ${GO_PROXY_PATTERN} ]] \
     || fail_usage "invalid RUNTIME_GO_PROXY"
 
-for repository in "${SERVICE_DIR}" "${LIBRARY_DIR}" "${GOLANG_LIB_DIR}"; do
+for repository in "${SERVICE_DIR}" "${LIBRARY_DIR}" "${GOLANG_LIB_DIR}" "${CORE_DIR}"; do
     [[ -d "${repository}/.git" || -f "${repository}/.git" ]] \
         || fail_usage "missing Git repository: ${repository}"
 done
@@ -113,6 +114,7 @@ CONTEXT_ARGUMENTS=(
     --service-repository "${SERVICE_DIR}"
     --library-repository "${LIBRARY_DIR}"
     --golang-lib-repository "${GOLANG_LIB_DIR}"
+    --core-repository "${CORE_DIR}"
     --profile-digest "${CONTRACT_SHA256}"
 )
 if [[ "${ALLOW_DIRTY}" == "true" ]]; then
@@ -136,6 +138,7 @@ json_commit() {
 SERVICE_COMMIT="$(json_commit strategy-service)"
 LIBRARY_COMMIT="$(json_commit strategy-library)"
 GOLANG_LIB_COMMIT="$(json_commit golang-lib)"
+CORE_COMMIT="$(json_commit core-service)"
 SOURCE_DIRTY="$(json_value source_dirty)"
 SOURCE_STATE_SHA256="$(json_value source_state_sha256)"
 [[ "${SOURCE_DIRTY}" == "True" ]] && SOURCE_DIRTY="true" || SOURCE_DIRTY="false"
@@ -143,6 +146,7 @@ SOURCE_STATE_SHA256="$(json_value source_state_sha256)"
 SERVICE_COMMIT_SHORT="${SERVICE_COMMIT:0:12}"
 LIBRARY_COMMIT_SHORT="${LIBRARY_COMMIT:0:12}"
 GOLANG_LIB_COMMIT_SHORT="${GOLANG_LIB_COMMIT:0:12}"
+CORE_COMMIT_SHORT="${CORE_COMMIT:0:12}"
 
 validate_build_id() {
     local value="$1"
@@ -152,7 +156,7 @@ validate_build_id() {
 
 default_build_id() {
     local target="$1"
-    local value="${SERVICE_COMMIT_SHORT}-${LIBRARY_COMMIT_SHORT}-${GOLANG_LIB_COMMIT_SHORT}-${PROFILE_VERSION}-${target}"
+    local value="${SERVICE_COMMIT_SHORT}-${LIBRARY_COMMIT_SHORT}-${GOLANG_LIB_COMMIT_SHORT}-${CORE_COMMIT_SHORT}-${PROFILE_VERSION}-${target}"
     if [[ "${SOURCE_DIRTY}" == "true" ]]; then
         value="${value}-dirty-${SOURCE_STATE_SHA256:0:12}"
     fi
@@ -222,6 +226,7 @@ common_build_args() {
         "RUNTIME_STRATEGY_SERVICE_COMMIT=${SERVICE_COMMIT}" \
         "RUNTIME_STRATEGY_LIBRARY_COMMIT=${LIBRARY_COMMIT}" \
         "RUNTIME_GOLANG_LIB_COMMIT=${GOLANG_LIB_COMMIT}" \
+        "RUNTIME_CORE_SERVICE_COMMIT=${CORE_COMMIT}" \
         "RUNTIME_IMAGE_BUILD_ID=${build_id}" \
         "RUNTIME_SOURCE_DIRTY=${SOURCE_DIRTY}" \
         "RUNTIME_SOURCE_STATE_SHA256=${SOURCE_STATE_SHA256}"

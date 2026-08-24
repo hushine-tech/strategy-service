@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	portfoliov1 "github.com/hushine-tech/core-service/gen/portfoliov1"
 	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
-	portfoliov1 "github.com/hushine-tech/strategy-service/gen/portfoliov1"
 	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"google.golang.org/protobuf/proto"
@@ -66,6 +66,10 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 	if platform.commit.GetResumeSessionId() != "session-recoverable-source" {
 		t.Fatalf("commit Resume binding = %q", platform.commit.GetResumeSessionId())
 	}
+	if len(platform.commit.GetSpotRiskSnapshots()) != 1 ||
+		platform.commit.GetSpotRiskSnapshots()[0].GetSnapshotId() != "spot-risk-1" {
+		t.Fatalf("commit Spot facts = %+v", platform.commit.GetSpotRiskSnapshots())
+	}
 	if starter.finalStart == nil || starter.finalStart.GetSessionBootstrap() == nil {
 		t.Fatalf("final StartSession = %+v", starter.finalStart)
 	}
@@ -77,7 +81,9 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 		bootstrap.GetLaunchOperationId() != platform.commit.GetLaunchOperationId() ||
 		bootstrap.GetStrategySourceSha256() != strategyStartDigest ||
 		bootstrap.GetEnvironment() != 1 ||
-		len(bootstrap.GetConfirmedTargetFacts()) != 2 {
+		len(bootstrap.GetConfirmedTargetFacts()) != 2 ||
+		len(bootstrap.GetSpotRiskSnapshots()) != 1 ||
+		bootstrap.GetSpotRiskSnapshots()[0].GetSnapshotId() != "spot-risk-1" {
 		t.Fatalf("bootstrap = %+v", &bootstrap)
 	}
 }
@@ -701,6 +707,10 @@ func preparedStrategyStart(sessionID, operationID string) *strategyv1.PreparedRu
 			{Exchange: "binance", Market: "perpetual_futures", Symbol: "BTCUSDT", OrderTarget: true, RequiredOrderTypes: []string{"MARKET", "LIMIT"}, EffectiveLeverage: 2, LeverageSource: "order_target"},
 			{Exchange: "binance", Market: "perpetual_futures", Symbol: "ETHUSDT", OrderTarget: true, RequiredOrderTypes: []string{"MARKET", "LIMIT"}, EffectiveLeverage: 3, LeverageSource: "strategy_default"},
 		},
+		SpotRiskSnapshots: []*portfoliov1.SpotRiskFactSnapshot{{
+			SnapshotId: "spot-risk-1", VenueId: 23, Exchange: 1, Environment: 1,
+			Market: 1, Symbol: "BTCUSDT", ReferencePriceDecimal: "50000",
+		}},
 	}
 }
 

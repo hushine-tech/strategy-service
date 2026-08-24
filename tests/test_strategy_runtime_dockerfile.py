@@ -117,7 +117,7 @@ def test_all_image_smokes_compare_the_inherited_runtime_identity_environment():
         assert '--expected-digest "${RUNTIME_CONTRACT_SHA256}"' not in stage
 
 
-def test_final_targets_embed_all_nine_identity_facts():
+def test_final_targets_embed_all_runtime_identity_facts():
     text = DOCKERFILE.read_text(encoding="utf-8")
     expected_labels = {
         "org.hushine.runtime.profile",
@@ -126,6 +126,7 @@ def test_final_targets_embed_all_nine_identity_facts():
         "org.hushine.runtime.strategy-service.commit",
         "org.hushine.runtime.strategy-library.commit",
         "org.hushine.runtime.golang-lib.commit",
+        "org.hushine.runtime.core-service.commit",
         "org.hushine.runtime.image-build-id",
         "org.hushine.runtime.source-dirty",
         "org.hushine.runtime.source-state.sha256",
@@ -139,6 +140,7 @@ def test_final_targets_embed_all_nine_identity_facts():
         "HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT",
         "HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT",
         "HUSHINE_RUNTIME_GOLANG_LIB_COMMIT",
+        "HUSHINE_RUNTIME_CORE_SERVICE_COMMIT",
         "HUSHINE_RUNTIME_IMAGE_BUILD_ID",
         "HUSHINE_RUNTIME_SOURCE_DIRTY",
         "HUSHINE_RUNTIME_SOURCE_STATE_SHA256",
