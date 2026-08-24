@@ -1,4 +1,4 @@
-"""Wallet runtime protocol shared by legacy and exchange-parity implementations."""
+"""Wallet runtime protocol shared by the current exchange-parity implementations."""
 
 from __future__ import annotations
 

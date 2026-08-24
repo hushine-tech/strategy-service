@@ -10,8 +10,8 @@ import (
 )
 
 // TerminalRequest is the worker's desired terminal outcome. The reconciliation
-// identity is carried through the lifecycle coordinator even though the legacy
-// UpdateSession wire message has no field for it.
+// identity is carried through the lifecycle coordinator; UpdateSession stores
+// only the Session status and indicator-finalization state.
 type TerminalRequest struct {
 	SessionID                    string
 	Status                       string

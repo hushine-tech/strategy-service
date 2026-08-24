@@ -28,7 +28,7 @@ Normalization rules:
 
 - ``exchange`` lower-cased; MUST be in ``{"binance", "okx"}``
 - ``market`` MUST be in ``{"spot", "perpetual_futures", "delivery_futures"}``
-- legacy aliases such as ``futures`` are not accepted
+- only canonical market names are accepted
 - ``symbol`` upper-cased + stripped; MUST be non-empty
 - ``interval`` trimmed; MUST be non-empty
 """

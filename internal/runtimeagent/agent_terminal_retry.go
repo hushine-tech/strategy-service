@@ -425,8 +425,8 @@ func (a *Agent) replayTerminalSession(
 	if record.ExpectedStatus == "" {
 		if err := readSession(); err != nil {
 			if isExplicitPlatformNotFound(err) {
-				// Preserve the historical absence-is-terminal behavior for legacy
-				// terminal retries that have no committed-start pending binding.
+				// A terminal retry without a pending-start binding has no durable
+				// Session left to update, so its checkpoint is complete.
 				return a.completeTerminalRetry(record)
 			}
 			return err

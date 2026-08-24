@@ -958,7 +958,7 @@ def test_run_strategy_returns_not_found_when_portfolio_lookup_fails(monkeypatch)
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             assert portfolio_id == 101
             assert user_id == 17
             return None
@@ -992,7 +992,7 @@ def test_run_strategy_rejects_wallet_schema_mismatch(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             assert portfolio_id == 202
             assert user_id == 17
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id)
@@ -1029,7 +1029,7 @@ def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int = 0):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int = 0, **_kwargs):
             calls["portfolio"] += 1
             assert portfolio_id == 404
             assert user_id == 17
@@ -1101,7 +1101,7 @@ def test_run_strategy_fails_start_when_backtest_wallet_sync_is_missing(monkeypat
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int = 0):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int = 0, **_kwargs):
             calls["portfolio"] += 1
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id)
 
@@ -1249,7 +1249,7 @@ def test_backtest_run_persists_wallet_snapshots(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int = 0):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int = 0, **_kwargs):
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id)
 
         def update_portfolio_wallet_state(self, *args, **kwargs):
@@ -1329,7 +1329,7 @@ def test_backtest_run_restores_portfolio_wallet_state_after_finish(monkeypatch):
         def __init__(self, _addr: str) -> None:
             pass
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int = 0):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int = 0, **_kwargs):
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id)
 
         def preflight_strategy_session(self, **_kwargs):
@@ -1518,7 +1518,7 @@ def test_run_strategy_rejects_empty_runtime_binding_before_persist(monkeypatch):
     context = _FakeContext()
 
     class FakePortfolioClient:
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             assert portfolio_id == 303
             assert user_id == 17
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id)
@@ -1805,7 +1805,7 @@ def test_run_strategy_rejects_strategy_missing_inputs_declaration(monkeypatch):
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id)
 
         def get_active_strategy(self, portfolio_id: int):
@@ -1842,7 +1842,7 @@ def test_run_strategy_mode2_preflight_rejects_before_session_creation(monkeypatc
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             assert portfolio_id == 404
             assert user_id == 17
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id, environment=1)
@@ -1921,7 +1921,7 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             assert portfolio_id == 405
             assert user_id == 17
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id, environment=1)
@@ -2044,7 +2044,7 @@ class MyStrategy:
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             assert portfolio_id == 406
             assert user_id == 17
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id, environment=1)
@@ -6196,7 +6196,7 @@ def _build_servicer_with_faked_preflight_deps(
         def list_running_sessions(self, runtime_id: str = ""):
             return []
 
-        def get_portfolio_snapshot(self, _portfolio_id: int, _user_id: int):
+        def get_portfolio_snapshot(self, _portfolio_id: int, _user_id: int, **_kwargs):
             calls["snapshot_reads"] += 1
             snapshot = make_portfolio_snapshot_with_binance_perp_and_spot(
                 _portfolio_id,
@@ -7896,7 +7896,7 @@ def test_proxy_only_uses_platform_proxy_client_factories():
 
 def test_proxy_only_with_proxy_fails_closed_before_market_data_source_ready():
     class FakePortfolioClient:
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             assert portfolio_id == 201
             assert user_id == 17
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id)
@@ -7942,7 +7942,7 @@ def test_proxy_only_with_proxy_fails_closed_before_market_data_source_ready():
 
 def test_proxy_only_mode2_without_live_delivery_fails_closed_before_session():
     class FakePortfolioClient:
-        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int):
+        def get_portfolio_snapshot(self, portfolio_id: int, user_id: int, **_kwargs):
             assert portfolio_id == 201
             assert user_id == 17
             return make_portfolio_snapshot_with_binance_perp_and_spot(portfolio_id, user_id=user_id, environment=1)

@@ -1005,10 +1005,7 @@ def _get_portfolio_snapshot(
 ):
     getter = getattr(acct_client, "get_portfolio_snapshot")
     if required_symbols:
-        try:
-            return getter(portfolio_id, user_id, required_symbols=sorted(required_symbols))
-        except TypeError:
-            logger.debug("portfolio client does not accept required_symbols; using legacy snapshot call")
+        return getter(portfolio_id, user_id, required_symbols=sorted(required_symbols))
     return getter(portfolio_id, user_id)
 
 
@@ -1910,7 +1907,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
         # 2. Resolve the runtime source profile FIRST (pre_C3 gate 2 §4).
         # This is an internal runtime-source mapping, not a strategy/portfolio
-        # compatibility signal. Unsupported profiles (today: live environment)
+        # profile agreement. Unsupported profiles (today: live environment)
         # fail-fast here with a structured PROFILE failure, *before* we try
         # to build a wallet or load a strategy — so the error surfaces the
         # actual reason (profile not wired up) instead of a downstream

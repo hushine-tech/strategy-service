@@ -9,7 +9,7 @@ extend that set.
 This module is the single source of truth for:
 
 - ``RuntimeSourceProfile`` — conceptual runtime source (backtest / demo /
-  live). This is **not** a strategy-vs-portfolio compatibility condition;
+  live). This is **not** a strategy-vs-portfolio matching condition;
   it only decides which data sources and which preflight to run.
 - ``SUPPORTED_PROFILES`` — profiles currently wired up in strategy-service.
   Mirrors the ``wallet_factory.RUNTIME_REGISTRY`` allowlist. LIVE is
