@@ -70,7 +70,7 @@ type ControlPanelServiceClient interface {
 	//
 	// Fail-closed contract: returns a typed error (NOT_FOUND / FAILED_PRECONDITION /
 	// PERMISSION_DENIED / RESOURCE_EXHAUSTED) when the runtime is missing,
-	// unpaired, unhealthy, owned by a different user, or over quota. Callers
+	// unhealthy, owned by a different user, or over quota. Callers
 	// (notably quant-handler) MUST surface the error and MUST NOT silently fall
 	// back to a shared strategy-service while user isolation is enabled.
 	ResolveRuntimeRouteByID(ctx context.Context, in *ResolveRuntimeRouteByIDRequest, opts ...grpc.CallOption) (*ResolveRuntimeRouteResponse, error)
@@ -109,7 +109,7 @@ type ControlPanelServiceClient interface {
 	// ListRuntimeCredentials returns the active credentials owned by the
 	// calling user. Consumed credentials are returned by default so users can
 	// see which runtime consumed a bootstrap token. Revoked / expired inactive
-	// credentials are excluded unless include_inactive/include_revoked is set.
+	// credentials are excluded unless include_inactive is set.
 	// Sensitive fields (private key) are never persisted and therefore
 	// never returned. Each entry includes audit metadata: created_at,
 	// last_used_at, revoked_at.
@@ -406,7 +406,7 @@ type ControlPanelServiceServer interface {
 	//
 	// Fail-closed contract: returns a typed error (NOT_FOUND / FAILED_PRECONDITION /
 	// PERMISSION_DENIED / RESOURCE_EXHAUSTED) when the runtime is missing,
-	// unpaired, unhealthy, owned by a different user, or over quota. Callers
+	// unhealthy, owned by a different user, or over quota. Callers
 	// (notably quant-handler) MUST surface the error and MUST NOT silently fall
 	// back to a shared strategy-service while user isolation is enabled.
 	ResolveRuntimeRouteByID(context.Context, *ResolveRuntimeRouteByIDRequest) (*ResolveRuntimeRouteResponse, error)
@@ -445,7 +445,7 @@ type ControlPanelServiceServer interface {
 	// ListRuntimeCredentials returns the active credentials owned by the
 	// calling user. Consumed credentials are returned by default so users can
 	// see which runtime consumed a bootstrap token. Revoked / expired inactive
-	// credentials are excluded unless include_inactive/include_revoked is set.
+	// credentials are excluded unless include_inactive is set.
 	// Sensitive fields (private key) are never persisted and therefore
 	// never returned. Each entry includes audit metadata: created_at,
 	// last_used_at, revoked_at.

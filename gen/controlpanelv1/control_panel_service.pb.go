@@ -135,7 +135,7 @@ func (FrameType) EnumDescriptor() ([]byte, []int) {
 type Runtime struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	RuntimeId string                 `protobuf:"bytes,1,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
-	// Authenticated owning user. 0 means unpaired.
+	// Authenticated owning user. 0 means not yet assigned.
 	UserId          int64                  `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Name            string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`     // user-visible label, e.g. "default"
 	Source          string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"` // "hosted" | "self_hosted"
@@ -145,7 +145,7 @@ type Runtime struct {
 	Capabilities    []string               `protobuf:"bytes,8,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	ResourceProfile string                 `protobuf:"bytes,9,opt,name=resource_profile,json=resourceProfile,proto3" json:"resource_profile,omitempty"` // "small" | "medium" | "large" | etc.
 	Version         string                 `protobuf:"bytes,10,opt,name=version,proto3" json:"version,omitempty"`
-	Status          string                 `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"` // "unpaired" | "paired" | "active" | "unhealthy" | "ended"
+	Status          string                 `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"` // "starting" | "active" | "unhealthy" | terminal status
 	PairedAt        *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=paired_at,json=pairedAt,proto3" json:"paired_at,omitempty"`
 	HeartbeatAt     *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=heartbeat_at,json=heartbeatAt,proto3" json:"heartbeat_at,omitempty"`
 	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
@@ -2235,9 +2235,6 @@ func (x *BootstrapBareRuntimeCertificateResponse) GetClientCertExpiresAt() *time
 type ListRuntimeCredentialsRequest struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	UserId int64                  `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	// Deprecated compatibility flag. Prefer include_inactive.
-	// If true, include revoked/expired inactive credentials (audit view).
-	IncludeRevoked bool `protobuf:"varint,2,opt,name=include_revoked,json=includeRevoked,proto3" json:"include_revoked,omitempty"`
 	// If true, include inactive terminal credentials such as revoked/expired.
 	// Consumed credentials are returned regardless of this flag.
 	IncludeInactive bool  `protobuf:"varint,3,opt,name=include_inactive,json=includeInactive,proto3" json:"include_inactive,omitempty"`
@@ -2282,13 +2279,6 @@ func (x *ListRuntimeCredentialsRequest) GetUserId() int64 {
 		return x.UserId
 	}
 	return 0
-}
-
-func (x *ListRuntimeCredentialsRequest) GetIncludeRevoked() bool {
-	if x != nil {
-		return x.IncludeRevoked
-	}
-	return false
 }
 
 func (x *ListRuntimeCredentialsRequest) GetIncludeInactive() bool {
@@ -5074,10 +5064,9 @@ const file_control_panel_service_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12&\n" +
 	"\x0fclient_cert_pem\x18\x03 \x01(\tR\rclientCertPem\x12\"\n" +
 	"\rserver_ca_pem\x18\x04 \x01(\tR\vserverCaPem\x12O\n" +
-	"\x16client_cert_expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x13clientCertExpiresAt\"\xba\x01\n" +
+	"\x16client_cert_expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x13clientCertExpiresAt\"\x91\x01\n" +
 	"\x1dListRuntimeCredentialsRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12'\n" +
-	"\x0finclude_revoked\x18\x02 \x01(\bR\x0eincludeRevoked\x12)\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12)\n" +
 	"\x10include_inactive\x18\x03 \x01(\bR\x0fincludeInactive\x12\x14\n" +
 	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12\x16\n" +
 	"\x06offset\x18\x05 \x01(\x05R\x06offset\"\x97\x01\n" +

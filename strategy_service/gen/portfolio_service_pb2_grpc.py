@@ -120,11 +120,6 @@ class PortfolioServiceStub:
                 request_serializer=portfolio__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
                 response_deserializer=portfolio__service__pb2.GetPortfolioSnapshotResponse.FromString,
                 _registered_method=True)
-        self.UpdatePortfolioSnapshot = channel.unary_unary(
-                '/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot',
-                request_serializer=portfolio__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
-                response_deserializer=portfolio__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
-                _registered_method=True)
         self.UpdatePortfolioWalletState = channel.unary_unary(
                 '/portfolio.v1.PortfolioService/UpdatePortfolioWalletState',
                 request_serializer=portfolio__service__pb2.UpdatePortfolioWalletStateRequest.SerializeToString,
@@ -399,14 +394,6 @@ class PortfolioServiceServicer:
         """Phase 2 canonical portfolio snapshot API. It reads active portfolio venues
         through the exchange capability registry and returns portfolio-level summary
         plus per-venue balances/positions.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def UpdatePortfolioSnapshot(self, request, context):
-        """Refresh and persist the current portfolio snapshot. Exchange-backed
-        portfolios read from active venues; backtest portfolios read local state.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -727,11 +714,6 @@ def add_PortfolioServiceServicer_to_server(servicer, server):
                     servicer.GetPortfolioSnapshot,
                     request_deserializer=portfolio__service__pb2.GetPortfolioSnapshotRequest.FromString,
                     response_serializer=portfolio__service__pb2.GetPortfolioSnapshotResponse.SerializeToString,
-            ),
-            'UpdatePortfolioSnapshot': grpc.unary_unary_rpc_method_handler(
-                    servicer.UpdatePortfolioSnapshot,
-                    request_deserializer=portfolio__service__pb2.UpdatePortfolioSnapshotRequest.FromString,
-                    response_serializer=portfolio__service__pb2.UpdatePortfolioSnapshotResponse.SerializeToString,
             ),
             'UpdatePortfolioWalletState': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdatePortfolioWalletState,
@@ -1349,33 +1331,6 @@ class PortfolioService:
             '/portfolio.v1.PortfolioService/GetPortfolioSnapshot',
             portfolio__service__pb2.GetPortfolioSnapshotRequest.SerializeToString,
             portfolio__service__pb2.GetPortfolioSnapshotResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def UpdatePortfolioSnapshot(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot',
-            portfolio__service__pb2.UpdatePortfolioSnapshotRequest.SerializeToString,
-            portfolio__service__pb2.UpdatePortfolioSnapshotResponse.FromString,
             options,
             channel_credentials,
             insecure,

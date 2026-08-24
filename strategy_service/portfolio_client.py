@@ -91,43 +91,6 @@ class PortfolioClient:
             )
             return None
 
-    def update_portfolio_snapshot(
-        self,
-        portfolio_id: int,
-        user_id: int = 0,
-        snapshot_reason: int = 0,
-        strategy_id: int = 0,
-        session_id: str = "",
-        snapshot_time: object | None = None,
-    ):
-        """Refresh and persist a portfolio snapshot through core-service."""
-        if not self._stub:
-            return None
-        try:
-            from strategy_service.gen import portfolio_service_pb2
-
-            kwargs = {
-                "portfolio_id": int(portfolio_id),
-                "user_id": int(user_id),
-                "snapshot_reason": int(snapshot_reason),
-                "strategy_id": int(strategy_id),
-                "session_id": str(session_id or ""),
-            }
-            snapshot_time_pb = _market_time_to_proto(snapshot_time)
-            if snapshot_time_pb is not None:
-                kwargs["snapshot_time"] = snapshot_time_pb
-            req = portfolio_service_pb2.UpdatePortfolioSnapshotRequest(**kwargs)
-            resp = self._stub.UpdatePortfolioSnapshot(req)
-            return resp.snapshot
-        except Exception:
-            logger.warning(
-                "UpdatePortfolioSnapshot failed for portfolio_id=%s user_id=%s",
-                portfolio_id,
-                user_id,
-                exc_info=True,
-            )
-            return None
-
     def preflight_strategy_session(
         self,
         portfolio_id: int,

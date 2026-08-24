@@ -6,7 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from strategy_service import platform_proxy
-from strategy_service.gen import portfolio_service_pb2, marketdata_service_pb2, order_service_pb2
+from strategy_service.gen import (
+    control_panel_service_pb2,
+    marketdata_service_pb2,
+    order_service_pb2,
+    portfolio_service_pb2,
+)
 from strategy_service.platform_proxy import (
     PORTFOLIO_COMMIT_STRATEGY_SESSION_START,
     PORTFOLIO_PREFLIGHT_STRATEGY_SESSION,
@@ -87,21 +92,20 @@ def test_proxy_portfolio_client_fetches_portfolio_snapshot_over_runtime_channel(
     assert snapshot.portfolio_id == 7
 
 
-def test_proxy_portfolio_client_updates_portfolio_snapshot_over_runtime_channel():
-    runtime = _FakeRuntimeChannel()
-    proxy = RuntimeChannelPlatformProxy(runtime)
+def test_removed_portfolio_snapshot_update_contract_is_absent():
+    service = portfolio_service_pb2.DESCRIPTOR.services_by_name["PortfolioService"]
+    assert "UpdatePortfolioSnapshot" not in service.methods_by_name
+    assert "UpdatePortfolioSnapshotRequest" not in portfolio_service_pb2.DESCRIPTOR.message_types_by_name
+    assert "UpdatePortfolioSnapshotResponse" not in portfolio_service_pb2.DESCRIPTOR.message_types_by_name
+    assert not hasattr(platform_proxy.ProxyPortfolioClient, "update_portfolio_snapshot")
 
-    with pytest.raises(RuntimeError, match="deprecated"):
-        proxy.portfolio_client().update_portfolio_snapshot(
-            portfolio_id=7,
-            user_id=3,
-            snapshot_reason=2,
-            strategy_id=9,
-            session_id="sess-1",
-            snapshot_time=1780274580000,
-        )
 
-    assert runtime.calls == []
+def test_removed_runtime_credential_flag_is_absent():
+    request = control_panel_service_pb2.DESCRIPTOR.message_types_by_name[
+        "ListRuntimeCredentialsRequest"
+    ]
+    assert "include_revoked" not in request.fields_by_name
+    assert "include_inactive" in request.fields_by_name
 
 
 def test_proxy_portfolio_client_updates_backtest_wallet_state_over_runtime_channel():

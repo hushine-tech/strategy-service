@@ -36,7 +36,6 @@ const (
 	PortfolioService_CommitStrategySessionStart_FullMethodName        = "/portfolio.v1.PortfolioService/CommitStrategySessionStart"
 	PortfolioService_GetProductCapabilities_FullMethodName            = "/portfolio.v1.PortfolioService/GetProductCapabilities"
 	PortfolioService_GetPortfolioSnapshot_FullMethodName              = "/portfolio.v1.PortfolioService/GetPortfolioSnapshot"
-	PortfolioService_UpdatePortfolioSnapshot_FullMethodName           = "/portfolio.v1.PortfolioService/UpdatePortfolioSnapshot"
 	PortfolioService_UpdatePortfolioWalletState_FullMethodName        = "/portfolio.v1.PortfolioService/UpdatePortfolioWalletState"
 	PortfolioService_ListSymbols_FullMethodName                       = "/portfolio.v1.PortfolioService/ListSymbols"
 	PortfolioService_CreateStrategy_FullMethodName                    = "/portfolio.v1.PortfolioService/CreateStrategy"
@@ -109,9 +108,6 @@ type PortfolioServiceClient interface {
 	// through the exchange capability registry and returns portfolio-level summary
 	// plus per-venue balances/positions.
 	GetPortfolioSnapshot(ctx context.Context, in *GetPortfolioSnapshotRequest, opts ...grpc.CallOption) (*GetPortfolioSnapshotResponse, error)
-	// Refresh and persist the current portfolio snapshot. Exchange-backed
-	// portfolios read from active venues; backtest portfolios read local state.
-	UpdatePortfolioSnapshot(ctx context.Context, in *UpdatePortfolioSnapshotRequest, opts ...grpc.CallOption) (*UpdatePortfolioSnapshotResponse, error)
 	// Push strategy-computed wallet state for snapshot/audit sync.
 	// Backtest portfolios persist it as authoritative local state; exchange-backed
 	// portfolios use it as the local side of reconciliation.
@@ -351,16 +347,6 @@ func (c *portfolioServiceClient) GetPortfolioSnapshot(ctx context.Context, in *G
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPortfolioSnapshotResponse)
 	err := c.cc.Invoke(ctx, PortfolioService_GetPortfolioSnapshot_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *portfolioServiceClient) UpdatePortfolioSnapshot(ctx context.Context, in *UpdatePortfolioSnapshotRequest, opts ...grpc.CallOption) (*UpdatePortfolioSnapshotResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UpdatePortfolioSnapshotResponse)
-	err := c.cc.Invoke(ctx, PortfolioService_UpdatePortfolioSnapshot_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -716,9 +702,6 @@ type PortfolioServiceServer interface {
 	// through the exchange capability registry and returns portfolio-level summary
 	// plus per-venue balances/positions.
 	GetPortfolioSnapshot(context.Context, *GetPortfolioSnapshotRequest) (*GetPortfolioSnapshotResponse, error)
-	// Refresh and persist the current portfolio snapshot. Exchange-backed
-	// portfolios read from active venues; backtest portfolios read local state.
-	UpdatePortfolioSnapshot(context.Context, *UpdatePortfolioSnapshotRequest) (*UpdatePortfolioSnapshotResponse, error)
 	// Push strategy-computed wallet state for snapshot/audit sync.
 	// Backtest portfolios persist it as authoritative local state; exchange-backed
 	// portfolios use it as the local side of reconciliation.
@@ -844,9 +827,6 @@ func (UnimplementedPortfolioServiceServer) GetProductCapabilities(context.Contex
 }
 func (UnimplementedPortfolioServiceServer) GetPortfolioSnapshot(context.Context, *GetPortfolioSnapshotRequest) (*GetPortfolioSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPortfolioSnapshot not implemented")
-}
-func (UnimplementedPortfolioServiceServer) UpdatePortfolioSnapshot(context.Context, *UpdatePortfolioSnapshotRequest) (*UpdatePortfolioSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpdatePortfolioSnapshot not implemented")
 }
 func (UnimplementedPortfolioServiceServer) UpdatePortfolioWalletState(context.Context, *UpdatePortfolioWalletStateRequest) (*UpdatePortfolioWalletStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdatePortfolioWalletState not implemented")
@@ -1264,24 +1244,6 @@ func _PortfolioService_GetPortfolioSnapshot_Handler(srv interface{}, ctx context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PortfolioServiceServer).GetPortfolioSnapshot(ctx, req.(*GetPortfolioSnapshotRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PortfolioService_UpdatePortfolioSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdatePortfolioSnapshotRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PortfolioServiceServer).UpdatePortfolioSnapshot(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PortfolioService_UpdatePortfolioSnapshot_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PortfolioServiceServer).UpdatePortfolioSnapshot(ctx, req.(*UpdatePortfolioSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1918,10 +1880,6 @@ var PortfolioService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPortfolioSnapshot",
 			Handler:    _PortfolioService_GetPortfolioSnapshot_Handler,
-		},
-		{
-			MethodName: "UpdatePortfolioSnapshot",
-			Handler:    _PortfolioService_UpdatePortfolioSnapshot_Handler,
 		},
 		{
 			MethodName: "UpdatePortfolioWalletState",

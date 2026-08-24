@@ -123,20 +123,6 @@ class ProxyPortfolioClient:
             )
             return None
 
-    def update_portfolio_snapshot(
-        self,
-        portfolio_id: int,
-        user_id: int = 0,
-        snapshot_reason: int = 0,
-        strategy_id: int = 0,
-        session_id: str = "",
-        snapshot_time: object | None = None,
-    ):
-        del portfolio_id, user_id, snapshot_reason, strategy_id, session_id, snapshot_time
-        raise RuntimeError(
-            "UpdatePortfolioSnapshot is deprecated for runtime sessions; use UpdatePortfolioWalletState"
-        )
-
     def update_portfolio_wallet_state(
         self,
         portfolio_id: int,

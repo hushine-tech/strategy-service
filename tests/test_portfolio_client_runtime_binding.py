@@ -125,38 +125,6 @@ def test_portfolio_client_get_portfolio_snapshot_sends_required_symbols():
     assert req.required_symbols[0].symbol == "ETHUSDT"
 
 
-def test_portfolio_client_update_portfolio_snapshot_uses_portfolio_api():
-    captured: dict[str, object] = {}
-
-    class FakeStub:
-        def UpdatePortfolioSnapshot(self, req):
-            captured["req"] = req
-            return portfolio_service_pb2.UpdatePortfolioSnapshotResponse(
-                snapshot=portfolio_service_pb2.PortfolioSnapshot(portfolio_id=11, user_id=5)
-            )
-
-    client = PortfolioClient("")
-    client._stub = FakeStub()
-
-    snapshot = client.update_portfolio_snapshot(
-        portfolio_id=11,
-        user_id=5,
-        snapshot_reason=2,
-        strategy_id=22,
-        session_id="sess-1",
-        snapshot_time=datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc),
-    )
-
-    req = captured["req"]
-    assert req.portfolio_id == 11
-    assert req.user_id == 5
-    assert req.snapshot_reason == 2
-    assert req.strategy_id == 22
-    assert req.session_id == "sess-1"
-    assert req.snapshot_time.ToDatetime(tzinfo=timezone.utc) == datetime(2026, 6, 1, 0, 43, tzinfo=timezone.utc)
-    assert snapshot.portfolio_id == 11
-
-
 def test_portfolio_client_preflight_sends_session_metadata():
     captured: dict[str, object] = {}
 

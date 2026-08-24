@@ -371,9 +371,6 @@ def test_backtest_snapshot_sync_pushes_local_wallet_state():
             calls.append(kwargs)
             return SimpleNamespace()
 
-        def update_portfolio_snapshot(self, **_kwargs):
-            raise AssertionError("backtest wallet sync must push local wallet state")
-
     grpc_server._sync_strategy_snapshot(
         FakePortfolioClient(),
         portfolio_id=407,
@@ -405,9 +402,6 @@ def test_exchange_snapshot_sync_pushes_local_wallet_state_for_reconciliation():
         def update_portfolio_wallet_state(self, **kwargs):
             calls.append(kwargs)
             return SimpleNamespace()
-
-        def update_portfolio_snapshot(self, **_kwargs):
-            raise AssertionError("exchange wallet sync must include local wallet for reconciliation")
 
     grpc_server._sync_strategy_snapshot(
         FakePortfolioClient(),
@@ -6178,7 +6172,6 @@ def _build_servicer_with_faked_preflight_deps(
     readiness, time range, etc.).
     """
     calls = record_calls if record_calls is not None else {}
-    calls.setdefault("update_portfolio", 0)
     calls.setdefault("update_wallet", 0)
     calls.setdefault("snapshot_reads", 0)
     calls.setdefault("thread_created", 0)
@@ -6241,10 +6234,6 @@ def _build_servicer_with_faked_preflight_deps(
         def update_session(self, **kwargs) -> bool:
             calls["update_session"].append(dict(kwargs))
             return True
-
-        def update_portfolio_snapshot(self, *_args, **_kwargs):
-            calls["update_portfolio"] += 1
-            return SimpleNamespace()
 
         def update_portfolio_wallet_state(self, *_args, **_kwargs):
             calls["update_wallet"] += 1
