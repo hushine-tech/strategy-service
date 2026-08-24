@@ -6,7 +6,9 @@ import subprocess
 import sys
 
 from google.protobuf.descriptor import FieldDescriptor
+import pytest
 
+from strategy_service.gen import order_service_pb2 as order_pb2
 from strategy_service.gen import portfolio_service_pb2 as portfolio_pb2
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 
@@ -34,6 +36,114 @@ def test_order_proto_imports_from_outside_repository(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_spot_wallet_uses_only_canonical_assets_and_exact_balances():
+    wallet = portfolio_pb2.SpotWallet.DESCRIPTOR.fields_by_name
+    asset = portfolio_pb2.SpotAsset.DESCRIPTOR.fields_by_name
+
+    assert {"assets"} <= set(wallet)
+    assert {"asset", "free_decimal", "locked_decimal"} <= set(asset)
+
+    forbidden = {
+        "SpotWallet": {"free", "locked"} & set(wallet),
+        "SpotAsset": {"symbol", "qty", "free", "locked"} & set(asset),
+    }
+    assert forbidden == {"SpotWallet": set(), "SpotAsset": set()}
+
+
+@pytest.mark.parametrize(
+    ("contract_name", "descriptor", "legacy_fields", "exact_fields"),
+    [
+        (
+            "PlaceOrderRequest",
+            order_pb2.PlaceOrderRequest.DESCRIPTOR,
+            {"qty", "price", "mark_price"},
+            {"qty_decimal", "price_decimal", "mark_price_decimal"},
+        ),
+        (
+            "OrderIntentEntry",
+            order_pb2.OrderIntentEntry.DESCRIPTOR,
+            {"requested_qty", "requested_price"},
+            {"requested_qty_decimal", "requested_price_decimal"},
+        ),
+        (
+            "OrderAttemptEntry",
+            order_pb2.OrderAttemptEntry.DESCRIPTOR,
+            {"requested_qty", "requested_price", "mark_price"},
+            {
+                "requested_qty_decimal",
+                "requested_price_decimal",
+                "mark_price_decimal",
+            },
+        ),
+        (
+            "OrderEntry",
+            order_pb2.ExchangeOrderEntry.DESCRIPTOR,
+            {"orig_qty", "executed_qty", "remaining_qty", "avg_price", "price"},
+            {
+                "orig_qty_decimal",
+                "executed_qty_decimal",
+                "remaining_qty_decimal",
+                "avg_price_decimal",
+                "price_decimal",
+                "cumulative_quote_qty_decimal",
+            },
+        ),
+        (
+            "FillEntry",
+            order_pb2.OrderFillEntry.DESCRIPTOR,
+            {"qty", "fill_price", "fee"},
+            {
+                "qty_decimal",
+                "fill_price_decimal",
+                "fee_decimal",
+                "quote_qty_decimal",
+            },
+        ),
+        (
+            "FillDelta",
+            order_pb2.FillDeltaEntry.DESCRIPTOR,
+            {"qty", "fill_price", "fee"},
+            {
+                "qty_decimal",
+                "fill_price_decimal",
+                "fee_decimal",
+                "quote_qty_decimal",
+            },
+        ),
+        (
+            "OrderStateDelta",
+            order_pb2.OrderStateEntry.DESCRIPTOR,
+            {"orig_qty", "executed_qty", "remaining_qty", "avg_price"},
+            {
+                "orig_qty_decimal",
+                "executed_qty_decimal",
+                "remaining_qty_decimal",
+                "avg_price_decimal",
+                "price_decimal",
+                "cumulative_quote_qty_decimal",
+            },
+        ),
+    ],
+)
+def test_order_business_values_use_exact_decimal_fields_only(
+    contract_name, descriptor, legacy_fields, exact_fields
+):
+    fields = descriptor.fields_by_name
+
+    assert exact_fields <= set(fields), f"{contract_name} lost exact decimal fields"
+
+    present_legacy_fields = legacy_fields & set(fields)
+    present_legacy_doubles = {
+        name
+        for name in present_legacy_fields
+        if fields[name].type == FieldDescriptor.TYPE_DOUBLE
+    }
+    assert not present_legacy_doubles, (
+        f"{contract_name} still exposes parallel double business fields: "
+        f"{sorted(present_legacy_doubles)}"
+    )
 
 
 def _field(message_name: str, field_name: str):
