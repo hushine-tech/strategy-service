@@ -1,16 +1,16 @@
 # Canonical Wallet State
 
-日期：`2026-04-18`
+最后核验：`2026-08-25`
 
 ## 目的
 
-`Phase B` 起，`core-service -> strategy-service` 之间的钱包 contract 以 canonical 命名为准。
+`core-service -> strategy-service` 之间的钱包 contract 只使用 canonical 命名。
 
 原则：
 
-- 标准层优先表达交易所语义
-- `legacy` 兼容放在 adapter 内部处理
-- 不再新增 `WB`、`balance`、`marginRequired` 这类模糊字段名
+- 标准层直接表达交易所语义
+- 每个余额、保证金和仓位字段只有一个明确含义
+- 缺少必需字段时 fail closed，不做别名或近似值推导
 
 ## Canonical 字段
 
@@ -25,7 +25,7 @@
 | `updated_at` | `PortfolioWalletState.updated_at` | 快照时间 |
 | `metrics_authoritative` | `PortfolioWalletState.metrics_authoritative` | 展示指标是否由服务端权威给出 |
 
-说明：顶层 canonical contract 只保留账户总览字段；`wallet_balance`、`available_balance`、`margin_balance`、`unrealized_pnl` 不再属于顶层 canonical，统一从 `futures.*` 读取。顶层若仍有同名 wire 字段，视为兼容镜像，不作为标准消费入口。
+说明：顶层 canonical contract 只保留账户总览字段；`wallet_balance`、`available_balance`、`margin_balance`、`unrealized_pnl` 统一从 `futures.*` 读取。
 
 ### Futures 账户级
 
@@ -92,20 +92,8 @@
 - futures / spot 的 `NEW / PARTIALLY_FILLED / CANCELED / EXPIRED` 这类 lifecycle 事件必须带显式 `order_id`
 - 只有直接 `FILLED` 的即时成交路径可以省略 `order_id`
 
-## Legacy 对照
+## Runtime 边界
 
-| Legacy | Canonical | 处理方式 |
-| --- | --- | --- |
-| `WB` | `wallet_balance` | 仅 legacy 内部继续使用，不再作为标准层命名 |
-| `balance` | `wallet_balance` / `available_balance` / `margin_balance` | 必须拆分语义 |
-| `marginRequired` | `initial_margin` / `position_initial_margin` / `open_order_initial_margin` | 必须拆分语义 |
-| `qty` | `position_qty` | 标准层不再保留 alias 读取；仅 legacy / wire mirror 可出现 |
-| `margin_type` | `margin_mode` | 标准层不再保留 alias 读取；仅 legacy / wire mirror 可出现 |
-
-## 兼容边界
-
-- `environment=0`：`BinanceWalletRuntime` 直接消费 canonical state；backtest 共用同一 runtime
-- `environment=1`：`BinanceWalletRuntime` 直接消费 canonical state（旧别名 `BinanceParityWallet` 已在 `C2b` 清理中删除）
-- demo/live 交易所环境若 `multi_assets_mode=true` 或 `portfolio_margin=true`：直接 fail-closed
-- 缺 metadata 的风险字段仍可保留 exchange/oracle 值，但不再回退 legacy 近似公式
-- `LegacyWalletAdapter` 已在 `Phase C / C2b` 删除；主代码不再依赖 canonical -> legacy 转换层
+- `environment=0` 与 `environment=1` 都由 `BinanceWalletRuntime` 直接消费 canonical state
+- demo/live 交易所环境若 `multi_assets_mode=true` 或 `portfolio_margin=true`：直接 fail closed
+- 风险计算需要的 metadata 缺失时拒绝交易，不用近似公式填补

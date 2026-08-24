@@ -1,8 +1,6 @@
 # Strategy Service
 
-Last verified: 2026-08-24 at implementation commit
-`eb18951b7542621e69a283d24040b1dd4dd81966` (before this documentation-only
-commit).
+Last verified: 2026-08-25.
 
 Python strategy runtime service for Hushine.
 
@@ -146,9 +144,9 @@ explicitly allow source-mode fallback, set `RUNTIME_AGENT_ALLOW_GO_RUN=1`.
 
 Strategy validation resolves each Futures `ORDER_TARGETS` entry once, in this
 order: target `leverage`, class `LEVERAGE`, then platform default `1x`. Values
-must be literal positive integers; Spot leverage is rejected. Legacy request
-leverage remains decodable but is ignored. The UI has no Start Demo, Backtest,
-or Resume leverage input.
+must be literal positive integers; Spot leverage is rejected. Start requests
+carry no leverage authority, and the UI has no Start Demo, Backtest, or Resume
+leverage input.
 
 Preview and validation run in temporary one-shot workers. Preview calls the
 core-service preflight through RuntimeChannel and is read-only: no Binance
@@ -171,8 +169,7 @@ fact write.
 4. The final worker re-resolves the current strategy and fails closed unless
    source digest, target set, effective leverage/source, Venue/environment,
    confirmed leverage, and canonical wallet risk metadata all match the typed
-   bootstrap. It never falls back to the deprecated Session scalar for a new
-   Session.
+   bootstrap. The Session must contain committed per-target leverage facts.
 
 Backtest (`environment=0`) and strategy-debugger-cli use the same declaration
 resolver and simulated Futures wallet metadata. They do not call Binance or
