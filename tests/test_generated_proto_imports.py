@@ -39,17 +39,31 @@ def test_order_proto_imports_from_outside_repository(tmp_path):
 
 
 def test_spot_wallet_uses_only_canonical_assets_and_exact_balances():
-    wallet = portfolio_pb2.SpotWallet.DESCRIPTOR.fields_by_name
-    asset = portfolio_pb2.SpotAsset.DESCRIPTOR.fields_by_name
+    wallet = portfolio_pb2.SpotWallet.DESCRIPTOR
+    asset = portfolio_pb2.SpotAsset.DESCRIPTOR
 
-    assert {"assets"} <= set(wallet)
-    assert {"asset", "free_decimal", "locked_decimal"} <= set(asset)
-
-    forbidden = {
-        "SpotWallet": {"free", "locked"} & set(wallet),
-        "SpotAsset": {"symbol", "qty", "free", "locked"} & set(asset),
+    assert {field.name: field.number for field in wallet.fields} == {"assets": 1}
+    assert {field.name: field.number for field in asset.fields} == {
+        "asset": 1,
+        "free_decimal": 2,
+        "locked_decimal": 3,
+        "avg_entry_price_decimal": 4,
+        "price_decimal": 5,
     }
-    assert forbidden == {"SpotWallet": set(), "SpotAsset": set()}
+
+    assets = wallet.fields_by_name["assets"]
+    assert assets.type == FieldDescriptor.TYPE_MESSAGE
+    assert assets.is_repeated
+    assert not assets.has_presence
+    assert assets.containing_oneof is None
+    assert assets.message_type.full_name == "portfolio.v1.SpotAsset"
+
+    for field in asset.fields:
+        assert field.type == FieldDescriptor.TYPE_STRING
+        assert not field.is_repeated
+        want_presence = field.name == "price_decimal"
+        assert field.has_presence is want_presence
+        assert (field.containing_oneof is not None) is want_presence
 
 
 ORDER_BUSINESS_VALUE_CONTRACTS = [
