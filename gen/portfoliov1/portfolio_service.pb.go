@@ -4069,12 +4069,8 @@ func (x *FuturesRiskBracket) GetCumulative() float64 {
 }
 
 type SpotWallet struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Deprecated: Marked as deprecated in portfolio_service.proto.
-	Free float64 `protobuf:"fixed64,1,opt,name=free,proto3" json:"free,omitempty"`
-	// Deprecated: Marked as deprecated in portfolio_service.proto.
-	Locked        float64      `protobuf:"fixed64,2,opt,name=locked,proto3" json:"locked,omitempty"`
-	Assets        []*SpotAsset `protobuf:"bytes,3,rep,name=assets,proto3" json:"assets,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Assets        []*SpotAsset           `protobuf:"bytes,1,rep,name=assets,proto3" json:"assets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4109,22 +4105,6 @@ func (*SpotWallet) Descriptor() ([]byte, []int) {
 	return file_portfolio_service_proto_rawDescGZIP(), []int{52}
 }
 
-// Deprecated: Marked as deprecated in portfolio_service.proto.
-func (x *SpotWallet) GetFree() float64 {
-	if x != nil {
-		return x.Free
-	}
-	return 0
-}
-
-// Deprecated: Marked as deprecated in portfolio_service.proto.
-func (x *SpotWallet) GetLocked() float64 {
-	if x != nil {
-		return x.Locked
-	}
-	return 0
-}
-
 func (x *SpotWallet) GetAssets() []*SpotAsset {
 	if x != nil {
 		return x.Assets
@@ -4133,21 +4113,14 @@ func (x *SpotWallet) GetAssets() []*SpotAsset {
 }
 
 type SpotAsset struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Deprecated: Marked as deprecated in portfolio_service.proto.
-	Symbol string `protobuf:"bytes,1,opt,name=symbol,proto3" json:"symbol,omitempty"`
-	// Deprecated: Marked as deprecated in portfolio_service.proto.
-	Qty float64 `protobuf:"fixed64,2,opt,name=qty,proto3" json:"qty,omitempty"`
-	// Deprecated: Marked as deprecated in portfolio_service.proto.
-	Locked        float64  `protobuf:"fixed64,3,opt,name=locked,proto3" json:"locked,omitempty"`
-	AvgEntryPrice float64  `protobuf:"fixed64,4,opt,name=avg_entry_price,json=avgEntryPrice,proto3" json:"avg_entry_price,omitempty"`
-	Price         *float64 `protobuf:"fixed64,5,opt,name=price,proto3,oneof" json:"price,omitempty"`
-	Asset         string   `protobuf:"bytes,6,opt,name=asset,proto3" json:"asset,omitempty"`
-	Free          float64  `protobuf:"fixed64,7,opt,name=free,proto3" json:"free,omitempty"`
-	FreeDecimal   string   `protobuf:"bytes,8,opt,name=free_decimal,json=freeDecimal,proto3" json:"free_decimal,omitempty"`
-	LockedDecimal string   `protobuf:"bytes,9,opt,name=locked_decimal,json=lockedDecimal,proto3" json:"locked_decimal,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Asset                string                 `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
+	FreeDecimal          string                 `protobuf:"bytes,2,opt,name=free_decimal,json=freeDecimal,proto3" json:"free_decimal,omitempty"`
+	LockedDecimal        string                 `protobuf:"bytes,3,opt,name=locked_decimal,json=lockedDecimal,proto3" json:"locked_decimal,omitempty"`
+	AvgEntryPriceDecimal string                 `protobuf:"bytes,4,opt,name=avg_entry_price_decimal,json=avgEntryPriceDecimal,proto3" json:"avg_entry_price_decimal,omitempty"`
+	PriceDecimal         *string                `protobuf:"bytes,5,opt,name=price_decimal,json=priceDecimal,proto3,oneof" json:"price_decimal,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SpotAsset) Reset() {
@@ -4180,56 +4153,11 @@ func (*SpotAsset) Descriptor() ([]byte, []int) {
 	return file_portfolio_service_proto_rawDescGZIP(), []int{53}
 }
 
-// Deprecated: Marked as deprecated in portfolio_service.proto.
-func (x *SpotAsset) GetSymbol() string {
-	if x != nil {
-		return x.Symbol
-	}
-	return ""
-}
-
-// Deprecated: Marked as deprecated in portfolio_service.proto.
-func (x *SpotAsset) GetQty() float64 {
-	if x != nil {
-		return x.Qty
-	}
-	return 0
-}
-
-// Deprecated: Marked as deprecated in portfolio_service.proto.
-func (x *SpotAsset) GetLocked() float64 {
-	if x != nil {
-		return x.Locked
-	}
-	return 0
-}
-
-func (x *SpotAsset) GetAvgEntryPrice() float64 {
-	if x != nil {
-		return x.AvgEntryPrice
-	}
-	return 0
-}
-
-func (x *SpotAsset) GetPrice() float64 {
-	if x != nil && x.Price != nil {
-		return *x.Price
-	}
-	return 0
-}
-
 func (x *SpotAsset) GetAsset() string {
 	if x != nil {
 		return x.Asset
 	}
 	return ""
-}
-
-func (x *SpotAsset) GetFree() float64 {
-	if x != nil {
-		return x.Free
-	}
-	return 0
 }
 
 func (x *SpotAsset) GetFreeDecimal() string {
@@ -4242,6 +4170,20 @@ func (x *SpotAsset) GetFreeDecimal() string {
 func (x *SpotAsset) GetLockedDecimal() string {
 	if x != nil {
 		return x.LockedDecimal
+	}
+	return ""
+}
+
+func (x *SpotAsset) GetAvgEntryPriceDecimal() string {
+	if x != nil {
+		return x.AvgEntryPriceDecimal
+	}
+	return ""
+}
+
+func (x *SpotAsset) GetPriceDecimal() string {
+	if x != nil && x.PriceDecimal != nil {
+		return *x.PriceDecimal
 	}
 	return ""
 }
@@ -10971,23 +10913,17 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x12maint_margin_ratio\x18\x05 \x01(\x01R\x10maintMarginRatio\x12\x1e\n" +
 	"\n" +
 	"cumulative\x18\x06 \x01(\x01R\n" +
-	"cumulative\"q\n" +
+	"cumulative\"=\n" +
 	"\n" +
-	"SpotWallet\x12\x16\n" +
-	"\x04free\x18\x01 \x01(\x01B\x02\x18\x01R\x04free\x12\x1a\n" +
-	"\x06locked\x18\x02 \x01(\x01B\x02\x18\x01R\x06locked\x12/\n" +
-	"\x06assets\x18\x03 \x03(\v2\x17.portfolio.v1.SpotAssetR\x06assets\"\x9a\x02\n" +
-	"\tSpotAsset\x12\x1a\n" +
-	"\x06symbol\x18\x01 \x01(\tB\x02\x18\x01R\x06symbol\x12\x14\n" +
-	"\x03qty\x18\x02 \x01(\x01B\x02\x18\x01R\x03qty\x12\x1a\n" +
-	"\x06locked\x18\x03 \x01(\x01B\x02\x18\x01R\x06locked\x12&\n" +
-	"\x0favg_entry_price\x18\x04 \x01(\x01R\ravgEntryPrice\x12\x19\n" +
-	"\x05price\x18\x05 \x01(\x01H\x00R\x05price\x88\x01\x01\x12\x14\n" +
-	"\x05asset\x18\x06 \x01(\tR\x05asset\x12\x12\n" +
-	"\x04free\x18\a \x01(\x01R\x04free\x12!\n" +
-	"\ffree_decimal\x18\b \x01(\tR\vfreeDecimal\x12%\n" +
-	"\x0elocked_decimal\x18\t \x01(\tR\rlockedDecimalB\b\n" +
-	"\x06_price\"=\n" +
+	"SpotWallet\x12/\n" +
+	"\x06assets\x18\x01 \x03(\v2\x17.portfolio.v1.SpotAssetR\x06assets\"\xde\x01\n" +
+	"\tSpotAsset\x12\x14\n" +
+	"\x05asset\x18\x01 \x01(\tR\x05asset\x12!\n" +
+	"\ffree_decimal\x18\x02 \x01(\tR\vfreeDecimal\x12%\n" +
+	"\x0elocked_decimal\x18\x03 \x01(\tR\rlockedDecimal\x125\n" +
+	"\x17avg_entry_price_decimal\x18\x04 \x01(\tR\x14avgEntryPriceDecimal\x12(\n" +
+	"\rprice_decimal\x18\x05 \x01(\tH\x00R\fpriceDecimal\x88\x01\x01B\x10\n" +
+	"\x0e_price_decimal\"=\n" +
 	"\x17SpotSymbolPermissionSet\x12\"\n" +
 	"\falternatives\x18\x01 \x03(\tR\falternatives\"\xf1\x03\n" +
 	"\x12SpotSymbolMetadata\x12\x16\n" +
