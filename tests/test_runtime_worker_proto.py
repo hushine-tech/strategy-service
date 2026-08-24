@@ -258,29 +258,11 @@ def test_prepare_start_manifest_and_bootstrap_are_typed_and_secret_free():
         assert result.fields_by_name[name].has_presence
 
 
-def test_legacy_strategy_leverage_scalars_are_deprecated_in_place():
-    for message_name, field_number in (
-        ("RunStrategyRequest", 103),
-        ("PreviewRunStrategyRequest", 103),
-        ("RiskControls", 3),
-    ):
-        field = _strategy_message(message_name).fields_by_name["leverage"]
-        assert field.number == field_number
-        assert field.GetOptions().deprecated
-
-    source = _strategy_message("RiskControls").fields_by_name["leverage_source"]
-    assert source.number == 4
-    assert source.GetOptions().deprecated
-
-
-def test_new_protocol_start_requires_typed_bootstrap():
-    start = pb2.StartSession(
-        session_id="1" * 32,
-        run_strategy_request=ProtoAny(),
-    )
+def test_start_without_typed_bootstrap_is_rejected():
+    start = pb2.StartSession(session_id="1" * 32)
 
     with pytest.raises(RuntimeError, match="bootstrap is required"):
-        session_worker_entry._validated_start_bootstrap(start, required=True)
+        session_worker_entry._validated_start_bootstrap(start)
 
 
 def test_new_protocol_start_rejects_bootstrap_identity_mismatch():
@@ -294,7 +276,7 @@ def test_new_protocol_start_rejects_bootstrap_identity_mismatch():
     start = pb2.StartSession(session_id="1" * 32, session_bootstrap=packed)
 
     with pytest.raises(RuntimeError, match="session_id mismatch"):
-        session_worker_entry._validated_start_bootstrap(start, required=True)
+        session_worker_entry._validated_start_bootstrap(start)
 
 
 @pytest.mark.parametrize(
@@ -313,10 +295,4 @@ def test_new_protocol_start_rejects_noncanonical_digest(digest):
     start = pb2.StartSession(session_id="1" * 32, session_bootstrap=packed)
 
     with pytest.raises(RuntimeError, match="strategy_source_sha256 is invalid"):
-        session_worker_entry._validated_start_bootstrap(start, required=True)
-
-
-def test_legacy_start_without_new_capability_marker_keeps_compatibility_path():
-    start = pb2.StartSession(session_id="legacy-session")
-
-    assert session_worker_entry._validated_start_bootstrap(start, required=False) is None
+        session_worker_entry._validated_start_bootstrap(start)

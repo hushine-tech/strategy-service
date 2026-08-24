@@ -8,6 +8,7 @@ import sys
 from google.protobuf.descriptor import FieldDescriptor
 
 from strategy_service.gen import portfolio_service_pb2 as portfolio_pb2
+from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 
 
 def test_order_proto_imports_from_outside_repository(tmp_path):
@@ -41,6 +42,22 @@ def _field(message_name: str, field_name: str):
     field = message.fields_by_name.get(field_name)
     assert field is not None, f"{message.full_name}.{field_name} is missing"
     return field
+
+
+def test_session_wide_leverage_fields_do_not_exist():
+    assert "leverage" not in strategy_pb2.RunStrategyRequest.DESCRIPTOR.fields_by_name
+    assert (
+        "leverage"
+        not in strategy_pb2.PreviewRunStrategyRequest.DESCRIPTOR.fields_by_name
+    )
+    assert "leverage" not in strategy_pb2.RiskControls.DESCRIPTOR.fields_by_name
+    assert "leverage_source" not in strategy_pb2.RiskControls.DESCRIPTOR.fields_by_name
+    assert (
+        "leverage"
+        not in portfolio_pb2.PreflightStrategySessionRequest.DESCRIPTOR.fields_by_name
+    )
+    assert "leverage" not in portfolio_pb2.StrategySessionEntry.DESCRIPTOR.fields_by_name
+    assert "leverage" not in portfolio_pb2.SaveSessionRequest.DESCRIPTOR.fields_by_name
 
 
 def test_portfolio_leverage_preview_contract_is_additive_and_read_only():
@@ -82,8 +99,6 @@ def test_portfolio_leverage_preview_contract_is_additive_and_read_only():
 
     request = portfolio_pb2.PreflightStrategySessionRequest.DESCRIPTOR
     assert "apply" not in request.fields_by_name
-    assert request.fields_by_name["leverage"].number == 7
-    assert request.fields_by_name["leverage"].GetOptions().deprecated
 
 
 def test_portfolio_commit_and_session_target_fact_contract_is_additive():
@@ -173,15 +188,9 @@ def test_portfolio_commit_and_session_target_fact_contract_is_additive():
         assert fact.fields_by_name[name].type == FieldDescriptor.TYPE_UINT32
 
     session = portfolio_pb2.StrategySessionEntry.DESCRIPTOR
-    assert session.fields_by_name["leverage"].number == 24
-    assert session.fields_by_name["leverage"].GetOptions().deprecated
     target_facts = session.fields_by_name["target_leverage_facts"]
     assert target_facts.number == 26
     assert target_facts.is_repeated
     assert target_facts.message_type.full_name == (
         "portfolio.v1.SessionTargetLeverageFact"
     )
-
-    save_session = portfolio_pb2.SaveSessionRequest.DESCRIPTOR
-    assert save_session.fields_by_name["leverage"].number == 14
-    assert save_session.fields_by_name["leverage"].GetOptions().deprecated
