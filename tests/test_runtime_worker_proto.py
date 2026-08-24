@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 from google.protobuf.any_pb2 import Any as ProtoAny
 from google.protobuf import descriptor_pb2
@@ -263,6 +265,12 @@ def test_start_without_typed_bootstrap_is_rejected():
 
     with pytest.raises(RuntimeError, match="bootstrap is required"):
         session_worker_entry._validated_start_bootstrap(start)
+
+
+def test_start_bootstrap_validation_has_no_optional_compatibility_switch():
+    assert "required" not in inspect.signature(
+        session_worker_entry._validated_start_bootstrap
+    ).parameters
 
 
 def test_new_protocol_start_rejects_bootstrap_identity_mismatch():
