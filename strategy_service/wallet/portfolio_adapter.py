@@ -157,20 +157,16 @@ def _validated_full_wallet_for_market(venue: Any, market: str) -> Any | None:
 
     wallet = getattr(venue, "wallet", None)
     if market == "spot":
-        if not _spot_wallet_has_content(getattr(wallet, "spot", None)):
-            raise ValueError("spot VenueSnapshot requires non-empty full canonical wallet")
+        if not _has_message_field(wallet, "spot"):
+            raise ValueError(
+                "spot VenueSnapshot requires full canonical wallet with SpotWallet presence"
+            )
         return wallet
     if market == "perpetual_futures":
         if not _futures_wallet_has_content(getattr(wallet, "futures", None)):
             raise ValueError("futures VenueSnapshot requires non-empty full canonical wallet")
         return wallet
     return wallet
-
-
-def _spot_wallet_has_content(spot: Any) -> bool:
-    if spot is None:
-        return False
-    return bool(list(getattr(spot, "assets", []) or []))
 
 
 def _futures_wallet_has_content(futures: Any) -> bool:

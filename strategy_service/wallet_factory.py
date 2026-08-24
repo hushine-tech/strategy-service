@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from strategy_service.wallet.canonical import (
@@ -12,6 +13,82 @@ from strategy_service.wallet.canonical import (
     CanonicalSpotState,
     norm_symbol,
 )
+
+
+_PLAIN_DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z")
+_BINANCE_ASSET = re.compile(r"[A-Z0-9]+\Z")
+_PORTFOLIO_FIELDS = frozenset({"futures", "spot"})
+_FUTURES_FIELDS = frozenset({
+    "margin_mode",
+    "position_mode",
+    "initial_balance",
+    "deposit_sum",
+    "withdrawal_sum",
+    "positions",
+})
+_FUTURES_POSITION_FIELDS = frozenset({
+    "symbol",
+    "direction",
+    "initial_balance",
+    "leverage",
+    "fee_rate",
+    "mark_price",
+    "position_qty",
+    "entry_price",
+    "margin_mode",
+})
+_SPOT_FIELDS = frozenset({"assets"})
+_SPOT_ASSET_FIELDS = frozenset({
+    "asset",
+    "free_decimal",
+    "locked_decimal",
+    "avg_entry_price_decimal",
+    "price_decimal",
+})
+
+
+def _closed_mapping(
+    value: Any,
+    field_name: str,
+    allowed: frozenset[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"canonical contract error: {field_name} must be an object")
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(
+            f"canonical contract error: unknown {field_name} field {unknown[0]}"
+        )
+    return value
+
+
+def _closed_list(value: Any, field_name: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ValueError(f"canonical contract error: {field_name} must be a list")
+    return value
+
+
+def _spot_decimal_text(
+    value: Any,
+    field_name: str,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    if allow_empty and value == "":
+        return ""
+    if not isinstance(value, str) or _PLAIN_DECIMAL.fullmatch(value) is None:
+        raise ValueError(f"canonical contract error: invalid SpotAsset.{field_name}")
+    integer, _, fraction = value.partition(".")
+    significant_integer = integer.lstrip("0") or "0"
+    if len(significant_integer) > 20 or len(fraction) > 18:
+        raise ValueError(f"canonical contract error: invalid SpotAsset.{field_name}")
+    return value
+
+
+def _spot_asset_code(value: Any) -> str:
+    if not isinstance(value, str) or _BINANCE_ASSET.fullmatch(value) is None:
+        raise ValueError("canonical contract error: invalid SpotAsset.asset")
+    return value
 
 
 def _bootstrap_futures_equity(state: CanonicalFuturesState) -> float:
@@ -44,12 +121,26 @@ def portfolio_dict_to_canonical_state(portfolio: dict[str, Any]) -> CanonicalPor
     ``environment=backtest`` and routed through the same Binance runtime used
     by the gRPC backtest path.
     """
-    fa = portfolio.get("futures") or {}
+    portfolio = _closed_mapping(portfolio, "portfolio", _PORTFOLIO_FIELDS)
+    fa = _closed_mapping(portfolio.get("futures", {}), "FuturesWallet", _FUTURES_FIELDS)
     margin_mode = str(fa.get("margin_mode", "isolated")).strip().lower()
     position_mode = str(fa.get("position_mode", "one_way")).strip().lower()
 
     futures_positions: list[CanonicalFuturesPositionState] = []
-    for raw in fa.get("positions") or []:
+    raw_positions = _closed_list(
+        fa.get("positions", []),
+        "FuturesWallet.positions",
+    )
+    for value in raw_positions:
+        raw = _closed_mapping(
+            value,
+            "FuturesPosition",
+            _FUTURES_POSITION_FIELDS,
+        )
+        if "position_qty" not in raw:
+            raise ValueError(
+                "canonical contract error: missing FuturesPosition.position_qty"
+            )
         direction_key = int(raw.get("direction", 0) or 0)
         position_side = "BOTH"
         if position_mode == "hedge":
@@ -65,7 +156,7 @@ def portfolio_dict_to_canonical_state(portfolio: dict[str, Any]) -> CanonicalPor
                 leverage=float(raw.get("leverage", 1.0) or 1.0),
                 fee_rate=float(raw.get("fee_rate", 0.0004) or 0.0004),
                 mark_price=float(raw["mark_price"]) if raw.get("mark_price") is not None else None,
-                position_qty=float(raw.get("position_qty", raw.get("qty", 0.0)) or 0.0),
+                position_qty=float(raw["position_qty"]),
                 entry_price=float(raw.get("entry_price", 0.0) or 0.0),
                 position_side=position_side,
                 margin_mode=str(raw.get("margin_mode", margin_mode) or margin_mode).strip().lower(),
@@ -81,10 +172,8 @@ def portfolio_dict_to_canonical_state(portfolio: dict[str, Any]) -> CanonicalPor
         positions=futures_positions,
     )
 
-    sa = portfolio.get("spot") or {}
-    spot_assets = sa.get("assets") or []
-    if not isinstance(spot_assets, list):
-        raise ValueError("canonical Spot assets must be a list")
+    sa = _closed_mapping(portfolio.get("spot", {}), "SpotWallet", _SPOT_FIELDS)
+    spot_assets = _closed_list(sa.get("assets", []), "SpotWallet.assets")
     spot_state = CanonicalSpotState(assets=[_dict_spot_asset(value) for value in spot_assets])
 
     futures_equity = _bootstrap_futures_equity(futures_state)
@@ -100,16 +189,19 @@ def portfolio_dict_to_canonical_state(portfolio: dict[str, Any]) -> CanonicalPor
 
 
 def _dict_spot_asset(value: Any) -> CanonicalSpotAssetState:
-    if not isinstance(value, dict):
-        raise ValueError("canonical Spot asset must be an object")
+    value = _closed_mapping(value, "SpotAsset", _SPOT_ASSET_FIELDS)
     return CanonicalSpotAssetState(
-        asset=str(value.get("asset", "")),
-        free_decimal=str(value.get("free_decimal", "")),
-        locked_decimal=str(value.get("locked_decimal", "")),
-        avg_entry_price_decimal=str(value.get("avg_entry_price_decimal", "") or ""),
+        asset=_spot_asset_code(value.get("asset")),
+        free_decimal=_spot_decimal_text(value.get("free_decimal"), "free_decimal"),
+        locked_decimal=_spot_decimal_text(value.get("locked_decimal"), "locked_decimal"),
+        avg_entry_price_decimal=_spot_decimal_text(
+            value.get("avg_entry_price_decimal", ""),
+            "avg_entry_price_decimal",
+            allow_empty=True,
+        ),
         price_decimal=(
-            str(value["price_decimal"])
-            if value.get("price_decimal") is not None
+            _spot_decimal_text(value["price_decimal"], "price_decimal")
+            if "price_decimal" in value
             else None
         ),
     )

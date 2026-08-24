@@ -43,7 +43,7 @@ def _make_fake_client(cls, addr: str):
         return cls()
 
 
-def test_spot_wallet_sync_state_is_defined_only_by_canonical_assets() -> None:
+def test_spot_wallet_sync_state_uses_message_presence_not_asset_count() -> None:
     empty = portfolio_service_pb2.SpotWallet()
     populated = portfolio_service_pb2.SpotWallet(assets=[
         portfolio_service_pb2.SpotAsset(
@@ -55,7 +55,8 @@ def test_spot_wallet_sync_state_is_defined_only_by_canonical_assets() -> None:
 
     assert "free" not in empty.DESCRIPTOR.fields_by_name
     assert "locked" not in empty.DESCRIPTOR.fields_by_name
-    assert grpc_server._spot_wallet_has_state(empty) is False
+    assert grpc_server._spot_wallet_has_state(None) is False
+    assert grpc_server._spot_wallet_has_state(empty) is True
     assert grpc_server._spot_wallet_has_state(populated) is True
 
 

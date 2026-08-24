@@ -13,6 +13,22 @@ def test_canonical_decimal_text_normalizes_signed_zero() -> None:
     assert canonical_decimal_text("-0.000") == "0.000"
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "-1",
+        "NaN",
+        "Infinity",
+        "123456789012345678901",
+        "0.1234567890123456789",
+    ],
+)
+def test_canonical_decimal_text_rejects_invalid_protocol_values(value) -> None:
+    with pytest.raises(ValueError):
+        canonical_decimal_text(value)
+
+
 class _Stub:
     def __init__(self, response: order_service_pb2.PlaceOrderResponse) -> None:
         self.response = response

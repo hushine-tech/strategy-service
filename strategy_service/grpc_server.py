@@ -713,9 +713,7 @@ def _wallet_parts_for_portfolio_sync(wallet: Any) -> tuple[Any | None, Any | Non
 
 
 def _spot_wallet_has_state(spot_wallet: Any) -> bool:
-    if spot_wallet is None:
-        return False
-    return bool(getattr(spot_wallet, "assets", {}) or {})
+    return spot_wallet is not None
 
 
 def _snapshot_time_present(value: object | None) -> bool:

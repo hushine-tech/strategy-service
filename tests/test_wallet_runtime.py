@@ -199,6 +199,7 @@ def test_build_wallet_from_http_backtest_dict_uses_binance_runtime_after_c2a():
                     "initial_balance": 5_000.0,
                     "leverage": 20.0,
                     "fee_rate": 0.0004,
+                    "position_qty": 0.0,
                 }
             ],
         },
@@ -208,6 +209,125 @@ def test_build_wallet_from_http_backtest_dict_uses_binance_runtime_after_c2a():
     assert isinstance(wallet, BinanceWalletRuntime)
     assert wallet.environment_code == 0
     assert ("BTCUSDT", 0) in wallet.futures.positions
+
+
+@pytest.mark.parametrize(
+    ("section", "legacy_field", "legacy_value"),
+    [
+        ("futures_position", "qty", 0.1),
+        ("futures_position", "margin_type", "cross"),
+        ("spot_wallet", "free", 1.0),
+        ("spot_wallet", "locked", 1.0),
+        ("spot_asset", "symbol", "BTCUSDT"),
+        ("spot_asset", "qty", 1.0),
+        ("spot_asset", "free", 1.0),
+        ("spot_asset", "locked", 0.0),
+        ("spot_asset", "avg_entry_price", 100.0),
+        ("spot_asset", "price", 110.0),
+        ("futures_position", "unexpected_position_field", True),
+        ("futures_wallet", "unexpected_futures_field", True),
+        ("spot_wallet", "unexpected_spot_field", True),
+        ("spot_asset", "unexpected_asset_field", True),
+        ("portfolio", "unexpected_portfolio_field", True),
+    ],
+)
+def test_http_backtest_dict_rejects_removed_wallet_fields(
+    section,
+    legacy_field,
+    legacy_value,
+):
+    position = {
+        "symbol": "BTCUSDT",
+        "position_qty": 0.1,
+        "margin_mode": "cross",
+    }
+    spot = {
+        "assets": [
+            {
+                "asset": "BTC",
+                "free_decimal": "1",
+                "locked_decimal": "0",
+            },
+        ],
+    }
+    if section == "futures_position":
+        position[legacy_field] = legacy_value
+    elif section == "spot_wallet":
+        spot[legacy_field] = legacy_value
+    elif section == "spot_asset":
+        spot["assets"][0][legacy_field] = legacy_value
+
+    portfolio = {
+        "futures": {
+            "margin_mode": "cross",
+            "position_mode": "one_way",
+            "positions": [position],
+        },
+        "spot": spot,
+    }
+    if section == "futures_wallet":
+        portfolio["futures"][legacy_field] = legacy_value
+    elif section == "portfolio":
+        portfolio[legacy_field] = legacy_value
+
+    with pytest.raises(ValueError, match=legacy_field):
+        build_wallet_from_portfolio(portfolio)
+
+
+def test_http_backtest_futures_positions_require_position_qty():
+    with pytest.raises(ValueError, match="position_qty"):
+        build_wallet_from_portfolio(
+            {
+                "futures": {
+                    "margin_mode": "cross",
+                    "position_mode": "one_way",
+                    "positions": [
+                        {
+                            "symbol": "BTCUSDT",
+                            "margin_mode": "cross",
+                        }
+                    ],
+                },
+                "spot": {"assets": []},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("asset", "btc"),
+        ("asset", "BTC-USDT"),
+        ("free_decimal", 1),
+        ("free_decimal", "1e-19"),
+        ("free_decimal", "1e39"),
+        ("free_decimal", "-1"),
+        ("free_decimal", "NaN"),
+        ("free_decimal", ""),
+        ("free_decimal", "123456789012345678901"),
+        ("free_decimal", "0.1234567890123456789"),
+        ("locked_decimal", 0),
+        ("avg_entry_price_decimal", 0),
+        ("price_decimal", 110),
+    ],
+)
+def test_http_backtest_spot_assets_require_canonical_exact_values(field_name, value):
+    asset = {
+        "asset": "BTC",
+        "free_decimal": "1",
+        "locked_decimal": "0",
+        "avg_entry_price_decimal": "100",
+        "price_decimal": "110",
+    }
+    asset[field_name] = value
+
+    with pytest.raises(ValueError, match=field_name):
+        build_wallet_from_portfolio(
+            {
+                "futures": {"margin_mode": "cross", "position_mode": "one_way"},
+                "spot": {"assets": [asset]},
+            }
+        )
 
 
 def test_http_backtest_wallet_installs_resolved_target_leverage_metadata():
@@ -1551,12 +1671,10 @@ def test_hedge_mode_ledger_event_without_position_side_does_not_crash():
     long_pos.symbol = "BTCUSDT"
     long_pos.position_side = "LONG"
     long_pos.position_qty = 0.1
-    long_pos.qty = 0.1
     long_pos.entry_price = 45_000.0
     long_pos.mark_price = 45_000.0
     long_pos.leverage = 20.0
     long_pos.margin_mode = "cross"
-    long_pos.margin_type = "cross"
 
     wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
     before_wb = wallet.get_wallet_balance()
@@ -1596,12 +1714,10 @@ def test_hedge_mode_ledger_event_with_explicit_position_side_still_routes():
     short_pos.symbol = "BTCUSDT"
     short_pos.position_side = "SHORT"
     short_pos.position_qty = -0.1
-    short_pos.qty = 0.1
     short_pos.entry_price = 45_000.0
     short_pos.mark_price = 45_000.0
     short_pos.leverage = 20.0
     short_pos.margin_mode = "isolated"
-    short_pos.margin_type = "isolated"
     short_pos.initial_margin = 225.0
     short_pos.position_initial_margin = 225.0
     short_pos.isolated_wallet = 250.0

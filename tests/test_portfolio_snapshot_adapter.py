@@ -10,6 +10,7 @@ from strategy_service.gen import portfolio_service_pb2
 from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
 from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.portfolio_adapter import (
+    apply_venue_wallet_snapshot,
     attach_spot_risk_snapshots,
     build_portfolio_wallet_from_snapshot,
 )
@@ -602,6 +603,58 @@ def test_spot_empty_compact_without_full_wallet_fails_closed():
         )
 
 
+def test_present_empty_spot_wallet_hydrates_as_empty_canonical_state():
+    routed = build_portfolio_wallet_from_snapshot(
+        _snapshot(
+            _venue(
+                venue_id=10,
+                market=MARKET_SPOT,
+                wallet=_spot_wallet(assets=[]),
+                total_value=0.0,
+                wallet_balance=0.0,
+                available_balance=0.0,
+            )
+        ),
+        allowed_routes={("binance", "spot")},
+    )
+
+    assert routed.get("binance", "spot").spot.assets == {}
+
+
+def test_present_empty_spot_wallet_replaces_existing_assets_during_sync():
+    routed = build_portfolio_wallet_from_snapshot(
+        _snapshot(
+            _venue(
+                venue_id=10,
+                market=MARKET_SPOT,
+                wallet=_spot_wallet(
+                    assets=[_spot_asset("USDT", free_decimal="100")]
+                ),
+            )
+        ),
+        allowed_routes={("binance", "spot")},
+    )
+
+    empty_venue = _venue(
+        venue_id=10,
+        market=MARKET_SPOT,
+        wallet=_spot_wallet(assets=[]),
+        total_value=0.0,
+        wallet_balance=0.0,
+        available_balance=0.0,
+    )
+    empty_venue.environment = 1
+
+    route = apply_venue_wallet_snapshot(
+        routed,
+        empty_venue,
+        expected_environment=1,
+    )
+
+    assert route == ("binance", "spot", 10)
+    assert routed.get("binance", "spot").spot.assets == {}
+
+
 def test_futures_empty_compact_without_full_wallet_fails_closed():
     snapshot = _snapshot(
         _venue(
@@ -620,7 +673,7 @@ def test_futures_empty_compact_without_full_wallet_fails_closed():
         )
 
 
-def test_spot_empty_full_wallet_with_compact_balances_fails_closed():
+def test_spot_full_wallet_without_spot_message_fails_closed():
     snapshot = _snapshot(
         _venue(
             venue_id=10,
