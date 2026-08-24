@@ -3115,6 +3115,59 @@ func TestAgentForwardsWorkerPlatformCall(t *testing.T) {
 	}
 }
 
+func TestHandleWorkerFrameRejectsDirectSaveSessionBeforeAdmission(t *testing.T) {
+	const sessionID = "sess-direct-save-rejected"
+	packedRequest, err := anypb.New(&portfoliov1.SaveSessionRequest{})
+	if err != nil {
+		t.Fatalf("pack request: %v", err)
+	}
+	invoker := &fakePlatformInvoker{}
+	agent := NewAgent(AgentConfig{
+		RuntimeID:       "rt-1",
+		PlatformInvoker: invoker,
+	})
+	generation := newWorkerGeneration(sessionID, 1)
+	generation.mu.Lock()
+	durableBefore := generation.durablePossible
+	generation.mu.Unlock()
+	agent.generations[sessionID] = generation
+
+	var sent *rwv1.AgentFrame
+	err = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+		Payload: &rwv1.WorkerFrame_PlatformCall{PlatformCall: &rwv1.PlatformCall{
+			CallId:  "call-direct-save",
+			Method:  "  portfolio.SaveSession\t",
+			Request: packedRequest,
+		}},
+	}, func(frame *rwv1.AgentFrame) error {
+		sent = frame
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("HandleWorkerFrame: %v", err)
+	}
+	if invoker.method != "" {
+		t.Fatalf("platform invoker called with method %q", invoker.method)
+	}
+	result := sent.GetPlatformCallResult()
+	if result == nil || result.GetOk() || result.GetCallId() != "call-direct-save" ||
+		strings.TrimSpace(result.GetError()) == "" {
+		t.Fatalf("platform result = %+v", result)
+	}
+	generation.mu.Lock()
+	inFlight := generation.inFlight
+	durablePossible := generation.durablePossible
+	generation.mu.Unlock()
+	if inFlight != 0 || durablePossible != durableBefore {
+		t.Fatalf(
+			"generation inFlight=%d durablePossible=%v, want unchanged %v",
+			inFlight,
+			durablePossible,
+			durableBefore,
+		)
+	}
+}
+
 func TestAgentPreviewRunStrategyRunsOneShotWorkerUnary(t *testing.T) {
 	starter := &fakeWorkerStarter{}
 	sender := &fakeWorkerSender{}

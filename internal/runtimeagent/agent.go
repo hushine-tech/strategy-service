@@ -2496,6 +2496,17 @@ func (a *Agent) handleWorkerFrameForGeneration(
 		if send == nil {
 			return fmt.Errorf("worker platform call sender is not configured")
 		}
+		if strings.TrimSpace(call.GetMethod()) == "portfolio.SaveSession" {
+			return send(&rwv1.AgentFrame{
+				Payload: &rwv1.AgentFrame_PlatformCallResult{
+					PlatformCallResult: &rwv1.PlatformCallResult{
+						CallId: call.GetCallId(),
+						Ok:     false,
+						Error:  "worker direct portfolio.SaveSession is not supported",
+					},
+				},
+			})
+		}
 		result := a.invokeWorkerPlatformCallForGeneration(ctx, generation, call)
 		return send(&rwv1.AgentFrame{
 			Payload: &rwv1.AgentFrame_PlatformCallResult{PlatformCallResult: result},
