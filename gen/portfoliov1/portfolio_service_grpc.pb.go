@@ -136,7 +136,7 @@ type PortfolioServiceClient interface {
 	GetActiveStrategy(ctx context.Context, in *GetActiveStrategyRequest, opts ...grpc.CallOption) (*GetActiveStrategyResponse, error)
 	// 保存新 session（strategy-service 调用）
 	SaveSession(ctx context.Context, in *SaveSessionRequest, opts ...grpc.CallOption) (*SaveSessionResponse, error)
-	// 更新 session 状态（completed/stopped/failed/recoverable）
+	// 更新 session 状态（finished/stopped/failed/recoverable）
 	UpdateSession(ctx context.Context, in *UpdateSessionRequest, opts ...grpc.CallOption) (*UpdateSessionResponse, error)
 	// 获取单个 session
 	GetSession(ctx context.Context, in *GetSessionRequest, opts ...grpc.CallOption) (*GetSessionResponse, error)
@@ -730,7 +730,7 @@ type PortfolioServiceServer interface {
 	GetActiveStrategy(context.Context, *GetActiveStrategyRequest) (*GetActiveStrategyResponse, error)
 	// 保存新 session（strategy-service 调用）
 	SaveSession(context.Context, *SaveSessionRequest) (*SaveSessionResponse, error)
-	// 更新 session 状态（completed/stopped/failed/recoverable）
+	// 更新 session 状态（finished/stopped/failed/recoverable）
 	UpdateSession(context.Context, *UpdateSessionRequest) (*UpdateSessionResponse, error)
 	// 获取单个 session
 	GetSession(context.Context, *GetSessionRequest) (*GetSessionResponse, error)

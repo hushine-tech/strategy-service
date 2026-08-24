@@ -22,7 +22,7 @@ from strategy_service.worker_agent_client import (
 
 logger = logging.getLogger("hushine-session-worker")
 
-_TERMINAL_STATUSES = {"finished", "completed", "failed", "stopped", "stop_failed", "recoverable"}
+_TERMINAL_STATUSES = {"finished", "failed", "stopped", "stop_failed", "recoverable"}
 
 
 def _validated_start_bootstrap(start):
@@ -213,7 +213,7 @@ def _poll_until_terminal(
             except (FinalStatusRejected, TimeoutError) as exc:
                 logger.error("final session status was not acknowledged: %s", exc)
                 return 1
-            return 0 if status.status in {"finished", "completed", "stopped"} else 1
+            return 0 if status.status in {"finished", "stopped"} else 1
         client.send_progress(
             session_id=session_id,
             status=status.status,

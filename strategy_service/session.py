@@ -10,7 +10,7 @@ from dataclasses import FrozenInstanceError, dataclass, field
 import re
 from typing import Callable, Literal
 
-_TERMINAL_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
+_TERMINAL_STATUSES = frozenset({"finished", "stopped", "failed", "stop_failed", "recoverable"})
 _ACTIVE_STATUSES = frozenset({"running", "stopping"})
 _SESSION_ID_RE = re.compile(r"[0-9a-f]{32}")
 _PUBLICATION_BLOCKED = "BLOCKED"

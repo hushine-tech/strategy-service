@@ -84,9 +84,6 @@ func (a *Agent) checkpointTerminalRetry(
 		return fmt.Errorf("terminal retry generation is required")
 	}
 	desiredStatus := strings.TrimSpace(strings.ToLower(request.Status))
-	if desiredStatus == "completed" {
-		desiredStatus = "finished"
-	}
 	effectiveStatus = strings.TrimSpace(strings.ToLower(effectiveStatus))
 	if effectiveStatus == "" {
 		effectiveStatus = "recoverable"

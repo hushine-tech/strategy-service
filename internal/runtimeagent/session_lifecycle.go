@@ -95,9 +95,6 @@ func terminalRequestFromFinalStatus(status *rwv1.FinalStatus) (TerminalRequest, 
 		return TerminalRequest{}, fmt.Errorf("final status session_id is required")
 	}
 	statusValue := strings.TrimSpace(strings.ToLower(status.GetStatus()))
-	if statusValue == "completed" {
-		statusValue = "finished"
-	}
 	switch statusValue {
 	case "finished", "failed", "stopped", "stop_failed", "recoverable":
 	default:

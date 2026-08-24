@@ -6632,7 +6632,7 @@ func (*SaveSessionResponse) Descriptor() ([]byte, []int) {
 type UpdateSessionRequest struct {
 	state                        protoimpl.MessageState `protogen:"open.v1"`
 	SessionId                    string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Status                       string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // running / stopping / recoverable / completed / stopped / failed / stop_failed
+	Status                       string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // running / stopping / recoverable / finished / stopped / failed / stop_failed
 	BarsProcessed                int32                  `protobuf:"varint,3,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
 	Error                        string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	RuntimeId                    string                 `protobuf:"bytes,5,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"` // optional guard; when set, must match owning runtime

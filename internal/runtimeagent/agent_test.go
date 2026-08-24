@@ -4935,6 +4935,15 @@ func TestTerminalRequestFromFinalStatusPreservesReconciliationRunID(t *testing.T
 	}
 }
 
+func TestTerminalRequestFromFinalStatusRejectsRemovedCompletedStatus(t *testing.T) {
+	_, err := terminalRequestFromFinalStatus(&rwv1.FinalStatus{
+		SessionId: "sess-1", Status: "completed",
+	})
+	if err == nil {
+		t.Fatal("removed completed status was accepted")
+	}
+}
+
 func TestAgentFinalStatusPreservesFailedStatus(t *testing.T) {
 	invoker := &agentFinalPlatform{}
 	agent := NewAgent(AgentConfig{RuntimeID: "rt-1", PlatformInvoker: invoker})

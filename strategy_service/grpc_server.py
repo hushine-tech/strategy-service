@@ -103,7 +103,7 @@ DEFAULT_STOP_DECISION_DRAIN_TIMEOUT_SECONDS = 30
 DEFAULT_STOP_ONLY_TIMEOUT_SECONDS = 30
 DEFAULT_STOP_ONLY_POLL_SECONDS = 0.05
 DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
-TERMINAL_SESSION_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
+TERMINAL_SESSION_STATUSES = frozenset({"finished", "stopped", "failed", "stop_failed", "recoverable"})
 _STOP_OPERATION_NAMESPACE = uuid.UUID("842eb725-3fcb-5d55-9f0e-b02a0af07878")
 _STOP_ORDER_TERMINAL_STATUSES = frozenset({"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"})
 
@@ -3517,7 +3517,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             self._persist_session_status(request.session_id, state)
             self._halt_session_runtime(state, finalize=True)
             return pb2.StopStrategyResponse(
-                stopped=state.status in {"completed", "finished", "stopped"},
+                stopped=state.status in {"finished", "stopped"},
                 status=state.status,
                 code="ALREADY_TERMINAL",
                 reconciliation_run_id=state.reconciliation_run_id,

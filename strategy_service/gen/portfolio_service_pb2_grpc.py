@@ -499,7 +499,7 @@ class PortfolioServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def UpdateSession(self, request, context):
-        """更新 session 状态（completed/stopped/failed/recoverable）
+        """更新 session 状态（finished/stopped/failed/recoverable）
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

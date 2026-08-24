@@ -289,6 +289,11 @@ def test_force_failed_overrides_every_prior_status_and_error(initial_status):
     assert state.error == "fixed fatal detail"
 
 
+def test_removed_completed_status_is_not_terminal():
+    state = SessionState(status="completed")
+    assert state.is_terminal() is False
+
+
 def test_begin_stopping_atomically_closes_strategy_decision_admission():
     state = SessionState(status="running")
 
