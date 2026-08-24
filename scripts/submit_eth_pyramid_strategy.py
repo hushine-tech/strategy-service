@@ -296,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"{args.handler_url.rstrip('/')}/api/portfolios/{args.portfolio_id}/run-strategy "
                     "-H 'Authorization: Bearer <TOKEN>' "
                     "-H 'Content-Type: application/json' "
-                    "-d '{\"strategy_path\":\"\",\"interval\":\"1m\"}'"
+                    "-d '{\"interval\":\"1m\"}'"
                 )
         else:
             print("portfolio_action=none")

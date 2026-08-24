@@ -80,15 +80,15 @@
 
 | Canonical | 当前来源 | 说明 |
 | --- | --- | --- |
-| `free` | `spot.free` | 可用现货余额 |
-| `locked` | `spot.locked` | quote-side 冻结余额 |
-| `qty` | `spot.assets[].qty` | 资产数量 |
-| `price` | `spot.assets[].price` | 标价 |
-| `avg_entry_price` | `spot.assets[].avg_entry_price` | 均价 |
+| `asset` | `spot.assets[].asset` | Binance 资产代码，例如 `BTC` 或 `USDT` |
+| `free_decimal` | `spot.assets[].free_decimal` | 可用现货余额；字符串十进制值 |
+| `locked_decimal` | `spot.assets[].locked_decimal` | 已被未完成订单锁定的余额；字符串十进制值 |
+| `price_decimal` | `spot.assets[].price_decimal` | 当前标价；可为空 |
+| `avg_entry_price_decimal` | `spot.assets[].avg_entry_price_decimal` | 持仓平均成本 |
 
 补充：
 
-- spot 卖出前置检查应读取 `qty - locked`
+- spot 卖出前置检查直接读取对应资产的 `free_decimal`；它已经不包含 `locked_decimal`
 - futures / spot 的 `NEW / PARTIALLY_FILLED / CANCELED / EXPIRED` 这类 lifecycle 事件必须带显式 `order_id`
 - 只有直接 `FILLED` 的即时成交路径可以省略 `order_id`
 

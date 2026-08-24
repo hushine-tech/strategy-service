@@ -36,6 +36,11 @@ from tests.helpers.wallet_fixtures import make_testnet_wallet
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
 
+def test_run_rpc_contract_does_not_expose_legacy_strategy_path() -> None:
+    assert "strategy_path" not in pb2.RunStrategyRequest.DESCRIPTOR.fields_by_name
+    assert "strategy_path" not in pb2.PreviewRunStrategyRequest.DESCRIPTOR.fields_by_name
+
+
 def _make_fake_client(cls, addr: str):
     try:
         return cls(addr)
@@ -947,7 +952,6 @@ def test_run_strategy_returns_not_found_when_portfolio_lookup_fails(monkeypatch)
     request = SimpleNamespace(
         portfolio_id=101,
         user_id=17,
-        strategy_path="strategies.buy_once",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -981,7 +985,6 @@ def test_run_strategy_rejects_wallet_schema_mismatch(monkeypatch):
     request = SimpleNamespace(
         portfolio_id=202,
         user_id=17,
-        strategy_path="strategies.buy_once",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -1076,7 +1079,6 @@ def test_run_strategy_builds_wallet_from_portfolio_snapshot(monkeypatch):
         portfolio_id=404,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -1147,7 +1149,6 @@ def test_run_strategy_fails_start_when_backtest_wallet_sync_is_missing(monkeypat
         portfolio_id=404,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -1406,7 +1407,6 @@ def test_backtest_run_restores_portfolio_wallet_state_after_finish(monkeypatch):
         portfolio_id=407,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -1510,7 +1510,6 @@ def test_run_strategy_rejects_empty_runtime_binding_before_persist(monkeypatch):
     request = SimpleNamespace(
         portfolio_id=303,
         user_id=17,
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -1783,7 +1782,6 @@ def test_run_strategy_rejects_strategy_missing_inputs_declaration(monkeypatch):
     request = SimpleNamespace(
         portfolio_id=405,
         user_id=17,
-        strategy_path="",
         interval="1m",
         start_time_ms=0,
         end_time_ms=0,
@@ -1827,7 +1825,6 @@ def test_run_strategy_mode2_preflight_rejects_before_session_creation(monkeypatc
     request = SimpleNamespace(
         portfolio_id=404,
         user_id=17,
-        strategy_path="",
         interval="1m",
         start_time_ms=0,
         end_time_ms=0,
@@ -1906,7 +1903,6 @@ def test_run_strategy_mode2_preflight_disabled_still_resolves_stream_bindings(mo
     request = SimpleNamespace(
         portfolio_id=405,
         user_id=17,
-        strategy_path="",
         interval="1m",
         start_time_ms=0,
         end_time_ms=0,
@@ -2020,7 +2016,6 @@ def test_run_strategy_mode2_uses_strategy_declared_symbols_for_preflight(monkeyp
     request = SimpleNamespace(
         portfolio_id=406,
         user_id=17,
-        strategy_path="",
         interval="1m",
         start_time_ms=0,
         end_time_ms=0,
@@ -2150,7 +2145,6 @@ def test_run_strategy_mode2_creates_subscriptions_from_required_streams(monkeypa
     request = SimpleNamespace(
         portfolio_id=203,
         user_id=17,
-        strategy_path="",
         interval="1m",
         start_time_ms=0,
         end_time_ms=0,
@@ -2213,7 +2207,6 @@ def test_subscription_baseexception_fails_pending_activation_and_releases(monkey
         SimpleNamespace(
             portfolio_id=203,
             user_id=17,
-            strategy_path="",
             interval="1m",
             start_time_ms=0,
             end_time_ms=0,
@@ -6410,7 +6403,6 @@ def test_run_uses_canonical_id_and_waits_behind_pending_publication(monkeypatch)
             portfolio_id=701,
             user_id=17,
             runtime_id="rt-test",
-            strategy_path="",
             interval="1m",
             start_time_ms=1,
             end_time_ms=2,
@@ -6617,7 +6609,6 @@ def test_worker_readiness_timeout_discards_without_durable_row(monkeypatch):
             portfolio_id=702,
             user_id=17,
             runtime_id="rt-test",
-            strategy_path="",
             interval="1m",
             start_time_ms=1,
             end_time_ms=2,
@@ -6667,7 +6658,6 @@ def test_activation_failure_keeps_durable_session_non_running(monkeypatch):
             portfolio_id=703,
             user_id=17,
             runtime_id="rt-test",
-            strategy_path="",
             interval="1m",
             start_time_ms=1,
             end_time_ms=2,
@@ -6760,7 +6750,6 @@ def test_late_activation_after_timeout_releases_new_subscription(monkeypatch):
             portfolio_id=704,
             user_id=17,
             runtime_id="rt-test",
-            strategy_path="",
             interval="1m",
             start_time_ms=1,
             end_time_ms=2,
@@ -6809,7 +6798,6 @@ def test_bare_materialization_failure_is_symmetric_and_stops_before_gate(
         portfolio_id=900,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -6845,7 +6833,6 @@ def test_dependency_gate_rejects_unsupported_import_before_side_effects(monkeypa
         portfolio_id=901,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -6884,7 +6871,6 @@ def test_strategy_source_gate_rejects_missing_allowed_child_symmetrically(monkey
         portfolio_id=902,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -6926,7 +6912,6 @@ def test_strategy_source_gate_internal_failure_is_fixed_and_side_effect_free(mon
         portfolio_id=903,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -6985,7 +6970,6 @@ def test_failed_gate_serializer_baseexception_is_symmetric_internal_and_side_eff
         portfolio_id=903,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -7035,7 +7019,6 @@ def test_strategy_source_resolution_internal_failure_is_distinct_and_side_effect
         portfolio_id=903,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -7087,7 +7070,6 @@ def test_strategy_source_gate_run_claims_once_before_register(monkeypatch):
             portfolio_id=904,
             user_id=17,
             runtime_id="rt-test",
-            strategy_path="",
             interval="1m",
             start_time_ms=1,
             end_time_ms=2,
@@ -7127,7 +7109,6 @@ def test_strategy_source_gate_binding_failure_is_invisible(monkeypatch, caplog):
         portfolio_id=905,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -7173,7 +7154,6 @@ def test_strategy_source_gate_cursor_failure_has_no_direct_terminal_write(monkey
         portfolio_id=906,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -7313,7 +7293,6 @@ def test_session_thread_registration_failure_never_starts_or_leaks_session(monke
             portfolio_id=907,
             user_id=17,
             runtime_id="rt-test",
-            strategy_path="",
             interval="1m",
             start_time_ms=1,
             end_time_ms=2,
@@ -7369,7 +7348,6 @@ def test_otel_baseexception_is_owned_by_one_session_terminal_boundary(
             portfolio_id=908,
             user_id=17,
             runtime_id="rt-test",
-            strategy_path="",
             interval="1m",
             start_time_ms=1,
             end_time_ms=2,
@@ -7673,7 +7651,6 @@ def test_run_strategy_rejects_mode1_as_unsupported_profile(monkeypatch):
 
     request = SimpleNamespace(
         portfolio_id=101, user_id=17,
-        strategy_path="", interval="1m",
         start_time_ms=0, end_time_ms=0,
     )
     context = _FakeContext()
@@ -7712,7 +7689,6 @@ def test_run_strategy_persists_runtime_binding(monkeypatch):
         portfolio_id=201,
         user_id=17,
         runtime_id="rt-hosted",
-        strategy_path="",
         interval="1m",
         start_time_ms=1_700_000_000_000,
         end_time_ms=1_700_000_060_000,
@@ -7744,7 +7720,6 @@ def test_run_strategy_stores_effective_risk_controls(monkeypatch):
     request = SimpleNamespace(
         portfolio_id=201,
         user_id=17,
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -7804,7 +7779,6 @@ def test_run_strategy_rejects_runtime_id_mismatch_before_internal_calls(monkeypa
         portfolio_id=201,
         user_id=17,
         runtime_id="rt-other",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -7844,7 +7818,6 @@ def test_run_strategy_proxy_only_fails_closed_before_internal_calls(monkeypatch)
         portfolio_id=201,
         user_id=17,
         runtime_id="rt-self",
-        strategy_path="",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -7925,7 +7898,6 @@ def test_proxy_only_with_proxy_fails_closed_before_market_data_source_ready():
         portfolio_id=201,
         user_id=17,
         runtime_id="rt-self",
-        strategy_path="strategies.buy_once",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -7971,7 +7943,6 @@ def test_proxy_only_mode2_without_live_delivery_fails_closed_before_session():
         portfolio_id=201,
         user_id=17,
         runtime_id="rt-self",
-        strategy_path="strategies.buy_once",
         interval="1m",
         start_time_ms=1,
         end_time_ms=2,
@@ -8345,7 +8316,6 @@ def test_run_strategy_backtest_allows_empty_wallet_when_data_available(monkeypat
 
     request = SimpleNamespace(
         portfolio_id=201, user_id=17,
-        strategy_path="", interval="1m",
         start_time_ms=1_700_000_000_000,
         end_time_ms=1_700_000_060_000,
     )
@@ -8390,7 +8360,6 @@ def test_run_strategy_backtest_applies_resolved_targets_to_runtime_and_restore_w
             portfolio_id=201,
             user_id=17,
             runtime_id="rt-test",
-            strategy_path="",
             interval="1m",
             start_time_ms=1,
             end_time_ms=2,
@@ -8451,7 +8420,6 @@ def test_preview_backtest_applies_resolved_targets_but_demo_does_not(monkeypatch
             SimpleNamespace(
                 portfolio_id=301,
                 user_id=17,
-                strategy_path="",
                 start_time_ms=1,
                 end_time_ms=2,
             ),
@@ -8508,7 +8476,6 @@ def test_run_strategy_backtest_rejects_when_historical_data_missing(monkeypatch)
 
     request = SimpleNamespace(
         portfolio_id=202, user_id=17,
-        strategy_path="", interval="1m",
         start_time_ms=1, end_time_ms=2,
     )
     context = _FakeContext()
@@ -8558,7 +8525,6 @@ def test_run_strategy_live_preflight_ignores_undeclared_wallet_holdings(monkeypa
 
     request = SimpleNamespace(
         portfolio_id=203, user_id=17,
-        strategy_path="", interval="1m",
         start_time_ms=0, end_time_ms=0,
     )
     context = _FakeContext()
@@ -8604,7 +8570,6 @@ def test_run_strategy_backtest_distinct_intervals_are_preserved(monkeypatch):
 
     request = SimpleNamespace(
         portfolio_id=204, user_id=17,
-        strategy_path="", interval="1m",
         start_time_ms=1, end_time_ms=2,
     )
     servicer.RunStrategy(request, _FakeContext())
@@ -8654,7 +8619,6 @@ def test_preview_run_strategy_reports_backtest_availability(monkeypatch):
 
     request = SimpleNamespace(
         portfolio_id=301, user_id=17,
-        strategy_path="",
         start_time_ms=1, end_time_ms=2,
     )
     context = _FakeContext()
@@ -8695,7 +8659,6 @@ def test_preview_run_strategy_portfolio_preflight_does_not_persist_session(monke
     request = SimpleNamespace(
         portfolio_id=501,
         user_id=17,
-        strategy_path="",
         start_time_ms=1,
         end_time_ms=2,
     )
@@ -8747,7 +8710,6 @@ def test_preview_run_strategy_preserves_structured_portfolio_preflight_failure(m
     response = servicer.PreviewRunStrategy(SimpleNamespace(
         portfolio_id=502,
         user_id=17,
-        strategy_path="",
         start_time_ms=1,
         end_time_ms=2,
     ), _FakeContext())
@@ -8786,7 +8748,6 @@ def test_preview_run_strategy_returns_declared_inputs_for_backtest(monkeypatch):
 
     request = SimpleNamespace(
         portfolio_id=301, user_id=17,
-        strategy_path="",
         start_time_ms=1_779_033_600_000,
         end_time_ms=1_779_037_200_000,
     )
@@ -8834,7 +8795,6 @@ def test_preview_run_strategy_returns_effective_risk_controls(monkeypatch):
     request = SimpleNamespace(
         portfolio_id=301,
         user_id=17,
-        strategy_path="",
         start_time_ms=1,
         end_time_ms=2,
         max_loss_close_pct=0.25,
@@ -8879,7 +8839,6 @@ def test_preview_run_strategy_preserves_mixed_target_leverage_without_scalar_col
         SimpleNamespace(
             portfolio_id=301,
             user_id=17,
-            strategy_path="",
             start_time_ms=1,
             end_time_ms=2,
         ),
@@ -8918,7 +8877,6 @@ def test_preview_run_strategy_uses_request_risk_default_when_strategy_omits(monk
     request = SimpleNamespace(
         portfolio_id=301,
         user_id=17,
-        strategy_path="",
         start_time_ms=1,
         end_time_ms=2,
         max_loss_close_pct=0.25,
@@ -8950,7 +8908,6 @@ def test_preview_run_strategy_reports_unsupported_live_profile(monkeypatch):
 
     request = SimpleNamespace(
         portfolio_id=302, user_id=17,
-        strategy_path="",
         start_time_ms=0, end_time_ms=0,
     )
     context = _FakeContext()
@@ -8991,7 +8948,6 @@ def test_preview_run_strategy_mirrors_wallet_build_failure(monkeypatch):
 
     request = SimpleNamespace(
         portfolio_id=401, user_id=17,
-        strategy_path="",
         start_time_ms=0, end_time_ms=0,
     )
     context = _FakeContext()
@@ -9036,7 +8992,6 @@ def test_preview_run_strategy_honours_preflight_enabled_bypass(monkeypatch):
 
     request = SimpleNamespace(
         portfolio_id=402, user_id=17,
-        strategy_path="",
         start_time_ms=1, end_time_ms=2,
     )
     context = _FakeContext()
@@ -9065,7 +9020,6 @@ def test_preview_run_strategy_rejects_invalid_declaration(monkeypatch):
 
     request = SimpleNamespace(
         portfolio_id=303, user_id=17,
-        strategy_path="",
         start_time_ms=1, end_time_ms=2,
     )
     context = _FakeContext()
@@ -9095,7 +9049,6 @@ def test_run_and_preview_reject_saved_code_with_same_validation_error(monkeypatc
         portfolio_id=303,
         user_id=17,
         runtime_id="rt-test",
-        strategy_path="",
         start_time_ms=1,
         end_time_ms=2,
     )

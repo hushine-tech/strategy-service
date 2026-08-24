@@ -575,10 +575,9 @@ func (x *ValidateStrategySourceResponse) GetDeclaredOrderTargets() []*StrategyOr
 }
 
 type RunStrategyRequest struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	PortfolioId  int64                  `protobuf:"varint,1,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
-	StrategyPath string                 `protobuf:"bytes,2,opt,name=strategy_path,json=strategyPath,proto3" json:"strategy_path,omitempty"` // Python import path (Phase 2 后由 active strategy 替代)
-	Interval     string                 `protobuf:"bytes,5,opt,name=interval,proto3" json:"interval,omitempty"`                             // "1m", "5m", "15m", "1h", "4h", "1d"
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	PortfolioId int64                  `protobuf:"varint,1,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
+	Interval    string                 `protobuf:"bytes,5,opt,name=interval,proto3" json:"interval,omitempty"` // "1m", "5m", "15m", "1h", "4h", "1d"
 	// Backtest only (used when portfolio environment=0; ignored for demo/live)
 	StartTimeMs int64  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"`
 	EndTimeMs   int64  `protobuf:"varint,7,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
@@ -629,13 +628,6 @@ func (x *RunStrategyRequest) GetPortfolioId() int64 {
 		return x.PortfolioId
 	}
 	return 0
-}
-
-func (x *RunStrategyRequest) GetStrategyPath() string {
-	if x != nil {
-		return x.StrategyPath
-	}
-	return ""
 }
 
 func (x *RunStrategyRequest) GetInterval() string {
@@ -1136,13 +1128,12 @@ func (x *StopTargetResult) GetMessage() string {
 }
 
 type PreviewRunStrategyRequest struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	PortfolioId  int64                  `protobuf:"varint,1,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
-	StrategyPath string                 `protobuf:"bytes,2,opt,name=strategy_path,json=strategyPath,proto3" json:"strategy_path,omitempty"` // same semantics as RunStrategy (may be empty)
-	StartTimeMs  int64                  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"` // backtest-only; ignored for demo/live
-	EndTimeMs    int64                  `protobuf:"varint,7,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
-	UserId       int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	RuntimeId    string                 `protobuf:"bytes,101,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	PortfolioId int64                  `protobuf:"varint,1,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
+	StartTimeMs int64                  `protobuf:"varint,6,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"` // backtest-only; ignored for demo/live
+	EndTimeMs   int64                  `protobuf:"varint,7,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
+	UserId      int64                  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RuntimeId   string                 `protobuf:"bytes,101,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
 	// Ratio, not percent. 0 means "not provided"; runtime falls back to
 	// strategy declaration or platform default.
 	MaxLossClosePct float64 `protobuf:"fixed64,102,opt,name=max_loss_close_pct,json=maxLossClosePct,proto3" json:"max_loss_close_pct,omitempty"`
@@ -1185,13 +1176,6 @@ func (x *PreviewRunStrategyRequest) GetPortfolioId() int64 {
 		return x.PortfolioId
 	}
 	return 0
-}
-
-func (x *PreviewRunStrategyRequest) GetStrategyPath() string {
-	if x != nil {
-		return x.StrategyPath
-	}
-	return ""
 }
 
 func (x *PreviewRunStrategyRequest) GetStartTimeMs() int64 {
@@ -2679,10 +2663,9 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06issues\x18\x02 \x03(\v2).strategy.v1.StrategyValidationIssueProtoR\x06issues\x12N\n" +
 	"\x0fruntime_profile\x18\x03 \x01(\v2%.strategy.v1.RuntimeDependencyProfileR\x0eruntimeProfile\x12N\n" +
 	"\x0fdeclared_inputs\x18\x04 \x03(\v2%.strategy.v1.StrategyInputDeclarationR\x0edeclaredInputs\x12]\n" +
-	"\x16declared_order_targets\x18\x05 \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\"\xee\x02\n" +
+	"\x16declared_order_targets\x18\x05 \x03(\v2'.strategy.v1.StrategyOrderTargetBindingR\x14declaredOrderTargets\"\xde\x02\n" +
 	"\x12RunStrategyRequest\x12!\n" +
-	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12#\n" +
-	"\rstrategy_path\x18\x02 \x01(\tR\fstrategyPath\x12\x1a\n" +
+	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12\x1a\n" +
 	"\binterval\x18\x05 \x01(\tR\binterval\x12\"\n" +
 	"\rstart_time_ms\x18\x06 \x01(\x03R\vstartTimeMs\x12\x1e\n" +
 	"\vend_time_ms\x18\a \x01(\x03R\tendTimeMs\x12\x17\n" +
@@ -2690,7 +2673,7 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\n" +
 	"runtime_id\x18e \x01(\tR\truntimeId\x12+\n" +
 	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\x12*\n" +
-	"\x11resume_session_id\x18h \x01(\tR\x0fresumeSessionIdJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x06symbolR\vsymbol_type\"\x93\x02\n" +
+	"\x11resume_session_id\x18h \x01(\tR\x0fresumeSessionIdJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\rstrategy_pathR\x06symbolR\vsymbol_type\"\x93\x02\n" +
 	"\x13RunStrategyResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x0e\n" +
@@ -2731,16 +2714,15 @@ const file_strategy_service_proto_rawDesc = "" +
 	"\x06symbol\x18\x03 \x01(\tR\x06symbol\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x12\n" +
 	"\x04code\x18\x05 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x06 \x01(\tR\amessage\"\x8c\x02\n" +
+	"\amessage\x18\x06 \x01(\tR\amessage\"\xfc\x01\n" +
 	"\x19PreviewRunStrategyRequest\x12!\n" +
-	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12#\n" +
-	"\rstrategy_path\x18\x02 \x01(\tR\fstrategyPath\x12\"\n" +
+	"\fportfolio_id\x18\x01 \x01(\x03R\vportfolioId\x12\"\n" +
 	"\rstart_time_ms\x18\x06 \x01(\x03R\vstartTimeMs\x12\x1e\n" +
 	"\vend_time_ms\x18\a \x01(\x03R\tendTimeMs\x12\x17\n" +
 	"\auser_id\x18d \x01(\x03R\x06userId\x12\x1d\n" +
 	"\n" +
 	"runtime_id\x18e \x01(\tR\truntimeId\x12+\n" +
-	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePct\"_\n" +
+	"\x12max_loss_close_pct\x18f \x01(\x01R\x0fmaxLossClosePctJ\x04\b\x02\x10\x03R\rstrategy_path\"_\n" +
 	"\x11PreflightInputKey\x12\x16\n" +
 	"\x06market\x18\x01 \x01(\tR\x06market\x12\x16\n" +
 	"\x06symbol\x18\x02 \x01(\tR\x06symbol\x12\x1a\n" +

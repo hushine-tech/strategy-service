@@ -6217,7 +6217,7 @@ type StrategySessionEntry struct {
 	IndicatorFinalizationPending bool                         `protobuf:"varint,25,opt,name=indicator_finalization_pending,json=indicatorFinalizationPending,proto3" json:"indicator_finalization_pending,omitempty"`
 	TargetLeverageFacts          []*SessionTargetLeverageFact `protobuf:"bytes,26,rep,name=target_leverage_facts,json=targetLeverageFacts,proto3" json:"target_leverage_facts,omitempty"`
 	// Durable identity of the atomic strategy launch that created this Session.
-	// Legacy Sessions created outside the launch protocol leave this empty.
+	// Sessions written directly through SaveSession leave this empty.
 	LaunchOperationId string `protobuf:"bytes,27,opt,name=launch_operation_id,json=launchOperationId,proto3" json:"launch_operation_id,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -6450,8 +6450,7 @@ type SaveSessionRequest struct {
 	SessionType    string                 `protobuf:"bytes,11,opt,name=session_type,json=sessionType,proto3" json:"session_type,omitempty"`
 	RuntimeVersion string                 `protobuf:"bytes,12,opt,name=runtime_version,json=runtimeVersion,proto3" json:"runtime_version,omitempty"`
 	SessionName    string                 `protobuf:"bytes,13,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	// Empty preserves legacy running startup; runtime workers persist pending
-	// until their complete activation barrier succeeds.
+	// Required. Use pending before the activation barrier or running after it.
 	InitialStatus string `protobuf:"bytes,15,opt,name=initial_status,json=initialStatus,proto3" json:"initial_status,omitempty"`
 	UserId        int64  `protobuf:"varint,100,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -6637,7 +6636,7 @@ type UpdateSessionRequest struct {
 	Error                        string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	RuntimeId                    string                 `protobuf:"bytes,5,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"` // optional guard; when set, must match owning runtime
 	IndicatorFinalizationPending *bool                  `protobuf:"varint,6,opt,name=indicator_finalization_pending,json=indicatorFinalizationPending,proto3,oneof" json:"indicator_finalization_pending,omitempty"`
-	// Optional compare-and-set guard. Empty preserves legacy transition behavior.
+	// Optional compare-and-set guard. When set, the current status must match.
 	ExpectedStatus string `protobuf:"bytes,7,opt,name=expected_status,json=expectedStatus,proto3" json:"expected_status,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -6856,7 +6855,7 @@ func (x *GetSessionResponse) GetSession() *StrategySessionEntry {
 
 type ListSessionsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 0 means all portfolios owned by user_id; non-zero keeps legacy portfolio-scoped behavior.
+	// 0 lists all portfolios owned by user_id; non-zero filters to that portfolio.
 	PortfolioId       int64  `protobuf:"varint,1,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
 	Limit             int32  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
 	Offset            int32  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
@@ -7049,7 +7048,7 @@ func (x *ListSessionsResponse) GetTotal() int64 {
 
 type ListRunningSessionsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	RuntimeId     string                 `protobuf:"bytes,1,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"` // optional filter; empty preserves legacy global listing
+	RuntimeId     string                 `protobuf:"bytes,1,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"` // optional filter; when set, returns only sessions bound to this runtime
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

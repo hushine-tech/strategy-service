@@ -1596,7 +1596,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         strategy_code: str | None = None
         strategy_name = ""
         strategy_version = ""
-        strategy_path = str(getattr(run_request, "strategy_path", "") or "")
         active = acct_client.get_active_strategy(portfolio_id)
         if active is not None and int(getattr(active, "strategy_id", 0) or 0) != 0:
             strategy_id = int(getattr(active, "strategy_id", 0) or 0)
@@ -1604,7 +1603,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_name = str(getattr(active, "name", "") or "")
             strategy_version = str(getattr(active, "version", "") or "")
             strategy_path = f"<db:{strategy_name}@{strategy_version}>"
-        elif not strategy_path:
+        else:
             return pb2.PreparedRunStrategyStart(
                 ok=False,
                 launch_operation_id=launch_operation_id,
@@ -1921,12 +1920,12 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if not self._require_market_data_execution_path(context, "RunStrategy", profile):
             return pb2.RunStrategyResponse()
 
-        # 3. 确定策略来源：优先 GetActiveStrategy（DB 存储），fallback strategy_path（开发/测试）
+        # 3. Resolve the mounted active strategy. The start RPC does not accept
+        # an alternate source path; bare hot reload only materializes this DB source.
         strategy_id = 0
         strategy_code: str | None = None
         strategy_name = ""
         strategy_version = ""
-        strategy_path = request.strategy_path  # may be empty in production
         strategy_hot_reload = False
 
         active = acct_client.get_active_strategy(portfolio_id)
@@ -1936,7 +1935,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_name = str(getattr(active, "name", "") or "")
             strategy_version = str(getattr(active, "version", "") or "")
             strategy_path = f"<db:{strategy_name}@{strategy_version}>"
-        elif not strategy_path:
+        else:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details("portfolio has no active strategy; mount and activate one first")
             return pb2.RunStrategyResponse()
@@ -4592,7 +4591,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         strategy_code: str | None = None
         strategy_name = ""
         strategy_version = ""
-        strategy_path = getattr(request, "strategy_path", "") or ""
 
         active = acct_client.get_active_strategy(portfolio_id)
         if active is not None and int(getattr(active, "strategy_id", 0) or 0) != 0:
@@ -4601,8 +4599,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             strategy_name = str(getattr(active, "name", "") or "")
             strategy_version = str(getattr(active, "version", "") or "")
             strategy_path = f"<db:{strategy_name}@{strategy_version}>"
-        elif not strategy_path:
-            # No active strategy and no explicit strategy_path.
+        else:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details("portfolio has no active strategy; mount and activate one first")
             return pb2.PreviewRunStrategyResponse()

@@ -93,9 +93,8 @@ message ValidateStrategySourceResponse {
 
 message RunStrategyRequest {
   int64  portfolio_id    = 1;
-  string strategy_path = 2;  // Python import path (Phase 2 后由 active strategy 替代)
-  reserved 3, 4;
-  reserved "symbol", "symbol_type";
+  reserved 2, 3, 4;
+  reserved "strategy_path", "symbol", "symbol_type";
   string interval      = 5;  // "1m", "5m", "15m", "1h", "4h", "1d"
   // Backtest only (used when portfolio environment=0; ignored for demo/live)
   int64  start_time_ms = 6;
@@ -174,7 +173,8 @@ message StopTargetResult {
 
 message PreviewRunStrategyRequest {
   int64  portfolio_id    = 1;
-  string strategy_path = 2;  // same semantics as RunStrategy (may be empty)
+  reserved 2;
+  reserved "strategy_path";
   int64  start_time_ms = 6;  // backtest-only; ignored for demo/live
   int64  end_time_ms   = 7;
   int64  user_id       = 100;

@@ -1741,22 +1741,15 @@ func (a *Agent) shutdownWorkerGenerations(
 func (a *Agent) resolveRestartSession(ctx context.Context, opts RestartSessionOptions) (*portfoliov1.StrategySessionEntry, error) {
 	sessionID := strings.TrimSpace(opts.SessionID)
 	if sessionID != "" {
-		cached := a.sessionFromCachedRunRequest(sessionID)
 		req := &portfoliov1.GetSessionRequest{
 			SessionId: sessionID,
 			UserId:    a.cfg.UserID,
 		}
 		var resp portfoliov1.GetSessionResponse
 		if err := a.invokePlatformProto(ctx, "portfolio.GetSession", req, &resp); err != nil {
-			if cached != nil {
-				return cached, nil
-			}
 			return nil, err
 		}
 		if resp.GetSession() == nil {
-			if cached != nil {
-				return cached, nil
-			}
 			return nil, fmt.Errorf("session not found: %s", sessionID)
 		}
 		return resp.GetSession(), nil
@@ -3070,35 +3063,6 @@ func (a *Agent) rememberRunRequest(sessionID string, request *anypb.Any) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.runRequests[sessionID] = cloned
-}
-
-func (a *Agent) sessionFromCachedRunRequest(sessionID string) *portfoliov1.StrategySessionEntry {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return nil
-	}
-	a.mu.Lock()
-	packed := a.runRequests[sessionID]
-	a.mu.Unlock()
-	if packed == nil {
-		return nil
-	}
-	var runReq strategyv1.RunStrategyRequest
-	if err := packed.UnmarshalTo(&runReq); err != nil {
-		return nil
-	}
-	return &portfoliov1.StrategySessionEntry{
-		SessionId:     sessionID,
-		PortfolioId:   runReq.GetPortfolioId(),
-		UserId:        runReq.GetUserId(),
-		RuntimeId:     firstNonEmpty(runReq.GetRuntimeId(), a.cfg.RuntimeID),
-		RuntimeName:   a.cfg.RuntimeName,
-		RuntimeSource: a.cfg.RuntimeSource,
-		Status:        "running",
-		Interval:      runReq.GetInterval(),
-		StartTimeMs:   runReq.GetStartTimeMs(),
-		EndTimeMs:     runReq.GetEndTimeMs(),
-	}
 }
 
 func (a *Agent) restartRunRequest(session *portfoliov1.StrategySessionEntry, runtimeID string) *strategyv1.RunStrategyRequest {

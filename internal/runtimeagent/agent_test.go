@@ -5652,23 +5652,15 @@ func TestAgentRestartSessionOwnsDisconnectCleanupUntilIndicatorTailIsFinalized(t
 	}
 }
 
-func TestAgentRestartSessionUsesCachedRunRequestWhenGetSessionIsUnsupported(t *testing.T) {
+func TestAgentRestartSessionFailsClosedWhenGetSessionIsUnsupported(t *testing.T) {
 	starter := &fakeWorkerStarter{}
 	stopper := &fakeWorkerStopper{}
-	var updateReq portfoliov1.UpdateSessionRequest
 	invoker := &fakePlatformInvoker{
 		onInvoke: func(method string, request *anypb.Any) (*anypb.Any, error) {
-			switch method {
-			case "portfolio.GetSession":
+			if method == "portfolio.GetSession" {
 				return nil, errors.New("Unimplemented: unsupported runtime platform method: portfolio.GetSession")
-			case "portfolio.UpdateSession":
-				if err := request.UnmarshalTo(&updateReq); err != nil {
-					return nil, err
-				}
-				return anypb.New(&portfoliov1.UpdateSessionResponse{})
-			default:
-				return nil, errors.New("unexpected method: " + method)
 			}
+			return nil, errors.New("unexpected method: " + method)
 		},
 	}
 	agent := NewAgent(AgentConfig{
@@ -5695,27 +5687,16 @@ func TestAgentRestartSessionUsesCachedRunRequestWhenGetSessionIsUnsupported(t *t
 		t.Fatalf("pack cached run: %v", err)
 	}
 	agent.runRequests["sess-old"] = cachedRun
-	starter.onStart = func(pendingSessionID string) {
-		go func() {
-			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
-				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
-					SessionId: pendingSessionID,
-					Status:    "running",
-				}},
-			}, nil)
-		}()
-	}
 
-	result, err := agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "sess-old"})
-	if err != nil {
-		t.Fatalf("RestartSession: %v", err)
+	_, err = agent.RestartSession(context.Background(), RestartSessionOptions{SessionID: "sess-old"})
+	if err == nil || !strings.Contains(err.Error(), "portfolio.GetSession") {
+		t.Fatalf("RestartSession error = %v, want GetSession failure", err)
 	}
-
-	if result.NewSessionID != starter.startedSessionID {
-		t.Fatalf("restart result = %+v", result)
+	if stopper.sessionID != "" {
+		t.Fatalf("worker stopped before persisted session lookup succeeded: %q", stopper.sessionID)
 	}
-	if updateReq.GetSessionId() != "sess-old" || updateReq.GetStatus() != "recoverable" || updateReq.GetRuntimeId() != "rt-1" {
-		t.Fatalf("update request = %+v", &updateReq)
+	if starter.startedSessionID != "" {
+		t.Fatalf("replacement worker started before persisted session lookup succeeded: %q", starter.startedSessionID)
 	}
 }
 
@@ -5757,7 +5738,6 @@ func TestAgentRestartSessionPreservesCachedRunRequestOptions(t *testing.T) {
 	enableStrategyStartProtocol(agent, starter)
 	cachedRun, err := anypb.New(&strategyv1.RunStrategyRequest{
 		PortfolioId:     99,
-		StrategyPath:    "custom.strategy",
 		Interval:        "5m",
 		StartTimeMs:     1111,
 		EndTimeMs:       2222,
@@ -5798,9 +5778,6 @@ func TestAgentRestartSessionPreservesCachedRunRequestOptions(t *testing.T) {
 
 	if restartedReq.GetMaxLossClosePct() != 0.17 {
 		t.Fatalf("max_loss_close_pct = %v", restartedReq.GetMaxLossClosePct())
-	}
-	if restartedReq.GetStrategyPath() != "custom.strategy" {
-		t.Fatalf("strategy_path = %q", restartedReq.GetStrategyPath())
 	}
 	if restartedReq.GetPortfolioId() != 7 || restartedReq.GetInterval() != "1m" {
 		t.Fatalf("restart request did not apply session fields: %+v", &restartedReq)
