@@ -508,19 +508,6 @@ class WorkerRuntimeChannelAdapter:
             timeout_seconds=timeout_seconds,
         )
 
-    def send_status_patch(
-        self,
-        *,
-        runtime_id: str = "",
-        session_id: str = "",
-        status: str,
-        reason: str = "",
-        payload: Any | None = None,
-    ) -> None:
-        del runtime_id, payload
-        self._client.send_progress(session_id=session_id, status=status, error=reason)
-
-
 @dataclass(frozen=True)
 class RuntimeSessionEvent:
     kind: str

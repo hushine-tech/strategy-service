@@ -212,7 +212,7 @@ func newWorkerGeneration(sessionID string, generation uint64) *workerGeneration 
 	}
 }
 
-func (g *workerGeneration) admit(method string) bool {
+func (g *workerGeneration) admit(_ string) bool {
 	if g == nil {
 		return false
 	}
@@ -220,9 +220,6 @@ func (g *workerGeneration) admit(method string) bool {
 	defer g.mu.Unlock()
 	if g.closing || g.startupClosing {
 		return false
-	}
-	if strings.TrimSpace(method) == "portfolio.SaveSession" {
-		g.durablePossible = true
 	}
 	g.inFlight++
 	return true
@@ -439,7 +436,6 @@ func (a *Agent) RunSyncLoop(ctx context.Context) {
 type RestartSessionOptions struct {
 	SessionID       string
 	MaxLossClosePct float64
-	Leverage        float64
 }
 
 type RestartSessionResult struct {
@@ -643,11 +639,7 @@ func (a *Agent) handleRunStrategy(
 		a.mu.Unlock()
 	}()
 
-	finalWorkerEnv := append(
-		a.workerEnv(),
-		"HUSHINE_STRATEGY_SESSION_BOOTSTRAP_REQUIRED=1",
-	)
-	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, sessionID, finalWorkerEnv)
+	worker, err := a.cfg.WorkerStarter.StartSessionWorker(ctx, sessionID, a.workerEnv())
 	if err != nil {
 		failureErr := a.markCommittedStartFailed(
 			sessionID,
@@ -1456,18 +1448,11 @@ func (a *Agent) RestartSession(ctx context.Context, opts RestartSessionOptions) 
 	if userID == 0 {
 		userID = a.cfg.UserID
 	}
-	leverage := session.GetLeverage()
-	if opts.Leverage > 0 {
-		leverage = opts.Leverage
-	}
 	runReq := a.restartRunRequest(session, runtimeID)
 	runReq.UserId = userID
 	runReq.RuntimeId = runtimeID
 	if opts.MaxLossClosePct > 0 {
 		runReq.MaxLossClosePct = opts.MaxLossClosePct
-	}
-	if leverage > 0 {
-		runReq.Leverage = leverage
 	}
 
 	restartCall, restartOwner, err := a.beginSessionRestart(oldSessionID)
@@ -3102,7 +3087,6 @@ func (a *Agent) sessionFromCachedRunRequest(sessionID string) *portfoliov1.Strat
 		Interval:      runReq.GetInterval(),
 		StartTimeMs:   runReq.GetStartTimeMs(),
 		EndTimeMs:     runReq.GetEndTimeMs(),
-		Leverage:      runReq.GetLeverage(),
 	}
 }
 
@@ -3129,9 +3113,6 @@ func (a *Agent) restartRunRequest(session *portfoliov1.StrategySessionEntry, run
 	}
 	if session.GetUserId() > 0 {
 		req.UserId = session.GetUserId()
-	}
-	if session.GetLeverage() > 0 {
-		req.Leverage = session.GetLeverage()
 	}
 	req.RuntimeId = runtimeID
 	return req

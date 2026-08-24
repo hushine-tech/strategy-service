@@ -60,8 +60,8 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 	if platform.commit == nil || platform.commit.GetSession().GetSessionId() != response.GetSessionId() {
 		t.Fatalf("commit request = %+v", platform.commit)
 	}
-	if platform.commit.GetLaunchOperationId() == "" || platform.commit.GetSession().GetLeverage() != 0 {
-		t.Fatalf("commit operation/scalar = %+v", platform.commit)
+	if platform.commit.GetLaunchOperationId() == "" {
+		t.Fatalf("commit operation = %+v", platform.commit)
 	}
 	if platform.commit.GetResumeSessionId() != "session-recoverable-source" {
 		t.Fatalf("commit Resume binding = %q", platform.commit.GetResumeSessionId())
@@ -79,9 +79,6 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 		bootstrap.GetEnvironment() != 1 ||
 		len(bootstrap.GetConfirmedTargetFacts()) != 2 {
 		t.Fatalf("bootstrap = %+v", &bootstrap)
-	}
-	if starter.finalEnv["HUSHINE_STRATEGY_SESSION_BOOTSTRAP_REQUIRED"] != "1" {
-		t.Fatalf("final worker env = %+v", starter.finalEnv)
 	}
 }
 
@@ -343,7 +340,6 @@ func TestAgentRestartSessionPreparesFreshSessionOperationSourceAndTargetFacts(t 
 		restartSession: &portfoliov1.StrategySessionEntry{
 			SessionId: "old-session", PortfolioId: 7, StrategyId: 12, Environment: 1,
 			UserId: 6, RuntimeId: "rt-1", Status: "running", Interval: "1m",
-			Leverage: 99,
 			TargetLeverageFacts: []*portfoliov1.SessionTargetLeverageFact{{
 				SessionId: "old-session", VenueId: 22, Exchange: 1, Environment: 1,
 				Market: 2, Symbol: "BTCUSDT", EffectiveLeverage: 9,
@@ -1819,22 +1815,26 @@ func TestValidateDeclarationsRoundTripThroughOneShotWorkerAndCleanup(t *testing.
 	}
 }
 
-func TestGenerationCleanupDrainsAdmittedSaveBeforeFailedReconciliation(t *testing.T) {
+func TestGenerationCleanupDrainsAdmittedRunningUpdateBeforeReconciliation(t *testing.T) {
 	const sessionID = "11111111111111111111111111111111"
 	platform := &admissionCleanupPlatform{
 		saveStarted: make(chan struct{}),
 		releaseSave: make(chan struct{}),
-		status:      "",
+		status:      "pending",
 	}
 	agent := NewAgent(AgentConfig{
 		RuntimeID: "rt-1", UserID: 6, PlatformInvoker: platform,
 		RequestTimeout: time.Second,
 	})
 	generation := newWorkerGeneration(sessionID, 7)
+	generation.durablePossible = true
 	agent.mu.Lock()
 	agent.generations[sessionID] = generation
 	agent.mu.Unlock()
-	request, err := anypb.New(&portfoliov1.SaveSessionRequest{SessionId: sessionID})
+	request, err := anypb.New(&portfoliov1.UpdateSessionRequest{
+		SessionId: sessionID,
+		Status:    "running",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1842,14 +1842,14 @@ func TestGenerationCleanupDrainsAdmittedSaveBeforeFailedReconciliation(t *testin
 	go func() {
 		callDone <- agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
 			Payload: &rwv1.WorkerFrame_PlatformCall{PlatformCall: &rwv1.PlatformCall{
-				CallId: "save-1", Method: "portfolio.SaveSession", Request: request,
+				CallId: "running-1", Method: "portfolio.UpdateSession", Request: request,
 			}},
 		}, func(*rwv1.AgentFrame) error { return nil })
 	}()
 	select {
 	case <-platform.saveStarted:
 	case <-time.After(time.Second):
-		t.Fatal("SaveSession was not admitted")
+		t.Fatal("running UpdateSession was not admitted")
 	}
 	disconnectDone := make(chan error, 1)
 	go func() {
@@ -1858,8 +1858,8 @@ func TestGenerationCleanupDrainsAdmittedSaveBeforeFailedReconciliation(t *testin
 		}, errors.New("worker stream closed"))
 	}()
 	time.Sleep(20 * time.Millisecond)
-	if got := platform.snapshotEvents(); !slices.Equal(got, []string{"SaveSession:start"}) {
-		t.Fatalf("events before Save release = %v", got)
+	if got := platform.snapshotEvents(); !slices.Equal(got, []string{"UpdateSession:running:start"}) {
+		t.Fatalf("events before running update release = %v", got)
 	}
 	close(platform.releaseSave)
 	if err := <-callDone; err != nil {
@@ -1869,7 +1869,7 @@ func TestGenerationCleanupDrainsAdmittedSaveBeforeFailedReconciliation(t *testin
 		t.Fatalf("disconnect cleanup: %v", err)
 	}
 	if got := platform.snapshotEvents(); !slices.Equal(got, []string{
-		"SaveSession:start", "SaveSession:end", "GetSession", "UpdateSession:failed",
+		"UpdateSession:running:start", "UpdateSession:running:end", "GetSession", "UpdateSession:recoverable",
 	}) {
 		t.Fatalf("events = %v", got)
 	}
@@ -1988,7 +1988,8 @@ func TestGenerationCleanupDrainTimeoutPersistsRecoverableRetry(t *testing.T) {
 		RequestTimeout:  20 * time.Millisecond,
 	})
 	generation := newWorkerGeneration(sessionID, 18)
-	if !generation.admit("portfolio.SaveSession") {
+	generation.durablePossible = true
+	if !generation.admit("portfolio.UpdateSession") {
 		t.Fatal("admit durable in-flight call")
 	}
 	if !generation.bindAuthenticatedGeneration(28) {
@@ -2823,14 +2824,6 @@ func TestAgentChildExitAfterRunningReconcilesCanonicalRowRecoverable(
 	enableStrategyStartProtocol(agent, starter)
 	starter.onStart = func(sessionID string) {
 		go func() {
-			save, _ := anypb.New(&portfoliov1.SaveSessionRequest{SessionId: sessionID})
-			if err := agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
-				Payload: &rwv1.WorkerFrame_PlatformCall{PlatformCall: &rwv1.PlatformCall{
-					CallId: "save", Method: "portfolio.SaveSession", Request: save,
-				}},
-			}, func(*rwv1.AgentFrame) error { return nil }); err != nil {
-				t.Errorf("save call: %v", err)
-			}
 			update, _ := anypb.New(&portfoliov1.UpdateSessionRequest{SessionId: sessionID, Status: "running"})
 			if err := agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
 				Payload: &rwv1.WorkerFrame_PlatformCall{PlatformCall: &rwv1.PlatformCall{
@@ -2858,8 +2851,15 @@ func TestAgentChildExitAfterRunningReconcilesCanonicalRowRecoverable(
 	deadline := time.Now().Add(time.Second)
 	for {
 		events := platform.snapshotEvents()
-		if len(events) >= 4 &&
+		if len(events) >= 3 &&
 			events[len(events)-1] == "UpdateSession:recoverable" {
+			if !slices.Equal(events, []string{
+				"UpdateSession:running:start",
+				"UpdateSession:running:end",
+				"UpdateSession:recoverable",
+			}) {
+				t.Fatalf("cleanup events = %v", events)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
@@ -3995,7 +3995,8 @@ func TestAgentFinalStatusDrainTimeoutPersistsTerminalRetry(t *testing.T) {
 		RequestTimeout:  20 * time.Millisecond,
 	})
 	generation := newWorkerGeneration(sessionID, 17)
-	if !generation.admit("portfolio.SaveSession") {
+	generation.durablePossible = true
+	if !generation.admit("portfolio.UpdateSession") {
 		t.Fatal("admit durable in-flight call")
 	}
 	agent.generations[sessionID] = generation
@@ -5027,7 +5028,6 @@ func TestAgentRestartSessionStopsOldWorkerMarksRecoverableClearsBuffersAndStarts
 					StartTimeMs:   1000,
 					EndTimeMs:     2000,
 					BarsProcessed: 19,
-					Leverage:      3,
 				}})
 			case "portfolio.SaveStrategyIndicatorsV2":
 				if err := request.UnmarshalTo(&indicatorReq); err != nil {
@@ -5387,7 +5387,8 @@ func TestAgentRestartSessionDrainTimeoutPersistsRecoverableRetry(t *testing.T) {
 		RequestTimeout:  20 * time.Millisecond,
 	})
 	generation := newWorkerGeneration(sessionID, 27)
-	if !generation.admit("portfolio.SaveSession") {
+	generation.durablePossible = true
+	if !generation.admit("portfolio.UpdateSession") {
 		t.Fatal("admit durable in-flight call")
 	}
 	agent.generations[sessionID] = generation
@@ -5627,7 +5628,6 @@ func TestAgentRestartSessionUsesCachedRunRequestWhenGetSessionIsUnsupported(t *t
 		EndTimeMs:   2000,
 		UserId:      6,
 		RuntimeId:   "rt-1",
-		Leverage:    2,
 	})
 	if err != nil {
 		t.Fatalf("pack cached run: %v", err)
@@ -5673,7 +5673,6 @@ func TestAgentRestartSessionPreservesCachedRunRequestOptions(t *testing.T) {
 					Interval:    "1m",
 					StartTimeMs: 1000,
 					EndTimeMs:   2000,
-					Leverage:    3,
 				}})
 			case "portfolio.UpdateSession":
 				return anypb.New(&portfoliov1.UpdateSessionResponse{})
@@ -5703,7 +5702,6 @@ func TestAgentRestartSessionPreservesCachedRunRequestOptions(t *testing.T) {
 		UserId:          6,
 		RuntimeId:       "rt-1",
 		MaxLossClosePct: 0.17,
-		Leverage:        2,
 	})
 	if err != nil {
 		t.Fatalf("pack cached run: %v", err)
@@ -5742,7 +5740,7 @@ func TestAgentRestartSessionPreservesCachedRunRequestOptions(t *testing.T) {
 	if restartedReq.GetStrategyPath() != "custom.strategy" {
 		t.Fatalf("strategy_path = %q", restartedReq.GetStrategyPath())
 	}
-	if restartedReq.GetPortfolioId() != 7 || restartedReq.GetInterval() != "1m" || restartedReq.GetLeverage() != 3 {
+	if restartedReq.GetPortfolioId() != 7 || restartedReq.GetInterval() != "1m" {
 		t.Fatalf("restart request did not apply session fields: %+v", &restartedReq)
 	}
 }
@@ -6537,15 +6535,6 @@ func (p *admissionCleanupPlatform) InvokePlatformAny(
 	_ time.Duration,
 ) (*anypb.Any, error) {
 	switch method {
-	case "portfolio.SaveSession":
-		p.recordEvent("SaveSession:start")
-		close(p.saveStarted)
-		<-p.releaseSave
-		p.mu.Lock()
-		p.status = "pending"
-		p.events = append(p.events, "SaveSession:end")
-		p.mu.Unlock()
-		return anypb.New(&portfoliov1.SaveSessionResponse{})
 	case "portfolio.GetSession":
 		p.recordEvent("GetSession")
 		var get portfoliov1.GetSessionRequest
@@ -6564,6 +6553,16 @@ func (p *admissionCleanupPlatform) InvokePlatformAny(
 		var update portfoliov1.UpdateSessionRequest
 		if err := request.UnmarshalTo(&update); err != nil {
 			return nil, err
+		}
+		if update.GetStatus() == "running" {
+			p.recordEvent("UpdateSession:running:start")
+			close(p.saveStarted)
+			<-p.releaseSave
+			p.mu.Lock()
+			p.status = "running"
+			p.events = append(p.events, "UpdateSession:running:end")
+			p.mu.Unlock()
+			return anypb.New(&portfoliov1.UpdateSessionResponse{})
 		}
 		p.mu.Lock()
 		p.status = update.GetStatus()

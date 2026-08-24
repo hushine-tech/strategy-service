@@ -24,7 +24,7 @@ func TestLocalControlRestartWorkerSessionPostsRestartRequest(t *testing.T) {
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
-	body := []byte(`{"session_id":"sess-old","max_loss_close_pct":0.25,"leverage":3}`)
+	body := []byte(`{"session_id":"sess-old","max_loss_close_pct":0.25}`)
 	resp, err := http.Post("http://"+addr.String()+"/restart-worker-session", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST restart-worker-session: %v", err)
@@ -40,8 +40,29 @@ func TestLocalControlRestartWorkerSessionPostsRestartRequest(t *testing.T) {
 	if got != restarter.result {
 		t.Fatalf("response = %+v", got)
 	}
-	if restarter.opts.SessionID != "sess-old" || restarter.opts.MaxLossClosePct != 0.25 || restarter.opts.Leverage != 3 {
+	if restarter.opts.SessionID != "sess-old" || restarter.opts.MaxLossClosePct != 0.25 {
 		t.Fatalf("restart opts = %+v", restarter.opts)
+	}
+}
+
+func TestLocalControlRestartWorkerSessionRejectsUnknownFields(t *testing.T) {
+	restarter := &fakeSessionRestarter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addr, shutdown, err := StartLocalControlServer(ctx, "127.0.0.1:0", restarter)
+	if err != nil {
+		t.Fatalf("StartLocalControlServer: %v", err)
+	}
+	defer func() { _ = shutdown(context.Background()) }()
+
+	body := []byte(`{"session_id":"sess-old","leverage":3}`)
+	resp, err := http.Post("http://"+addr.String()+"/restart-worker-session", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST restart-worker-session: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
 }
 

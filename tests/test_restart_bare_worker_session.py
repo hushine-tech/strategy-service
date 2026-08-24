@@ -73,10 +73,11 @@ def test_build_restart_payload_omits_empty_optional_values() -> None:
     mod = _load_script()
 
     payload = mod.build_restart_payload(
-        session_id="", max_loss_close_pct=0.0, leverage=3.0
+        session_id="sess-old", max_loss_close_pct=0.25
     )
     assert payload == {
-        "leverage": 3.0,
+        "session_id": "sess-old",
+        "max_loss_close_pct": 0.25,
     }
 
 

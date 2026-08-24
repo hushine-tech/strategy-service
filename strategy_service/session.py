@@ -92,10 +92,6 @@ class SessionState:
         tuple[str, str, str],
         tuple[int, str, int],
     ] = field(default_factory=dict)
-    # Deprecated legacy compatibility only. New protocol Sessions populate
-    # target_leverage_facts and never read these scalars.
-    leverage: float = 1.0
-    leverage_source: str = "platform_default"
     initial_margin_balance: float = 0.0
     max_loss_close_triggered: bool = False
     user_code_fatal_stage: str = ""
@@ -261,19 +257,17 @@ class SessionState:
         order_target_keys: set[tuple[str, str, str]],
         max_loss_close_pct: float,
         max_loss_close_source: str,
-        initial_margin_balance: float = 0.0,
-        leverage: float = 1.0,
-        leverage_source: str = "platform_default",
         target_leverage_facts: dict[
             tuple[str, str, str],
             tuple[int, str, int],
-        ] | None = None,
+        ],
+        initial_margin_balance: float = 0.0,
     ) -> None:
         normalized_target_facts: dict[
             tuple[str, str, str],
             tuple[int, str, int],
         ] = {}
-        for raw_key, raw_fact in (target_leverage_facts or {}).items():
+        for raw_key, raw_fact in target_leverage_facts.items():
             exchange, market, symbol = raw_key
             key = (
                 str(exchange or "").strip().lower(),
@@ -291,9 +285,6 @@ class SessionState:
             self.max_loss_close_pct = float(max_loss_close_pct)
             self.max_loss_close_source = str(max_loss_close_source or "platform_default")
             self.target_leverage_facts = normalized_target_facts
-            if not normalized_target_facts:
-                self.leverage = float(leverage)
-                self.leverage_source = str(leverage_source or "platform_default")
             self.initial_margin_balance = float(initial_margin_balance)
             self.max_loss_close_triggered = False
 
@@ -303,13 +294,13 @@ class SessionState:
             str(market or "").strip().lower(),
             str(symbol or "").strip().upper(),
         )
+        if key[1] not in {"perpetual_futures", "delivery_futures"}:
+            return 1.0
         with self._lock:
             fact = self.target_leverage_facts.get(key)
             if fact is not None:
                 return float(fact[2])
-            if self.target_leverage_facts:
-                raise KeyError(f"confirmed target leverage is missing for {key}")
-            return float(self.leverage)
+            raise KeyError(f"confirmed target leverage is missing for {key}")
 
     def mark_max_loss_close_triggered(self) -> bool:
         with self._lock:

@@ -15,40 +15,7 @@ def test_save_session_initial_status_descriptor_is_field_15():
 
     assert field is not None
     assert field.number == 15
-    assert request.fields_by_name["leverage"].number == 14
     assert request.fields_by_name["user_id"].number == 100
-
-
-def test_portfolio_client_save_session_sends_runtime_binding():
-    captured: dict[str, object] = {}
-
-    class FakeStub:
-        def SaveSession(self, req):
-            captured["req"] = req
-            return portfolio_service_pb2.SaveSessionResponse()
-
-    client = PortfolioClient("")
-    client._stub = FakeStub()
-
-    ok = client.save_session(
-        session_id="sess-1",
-        portfolio_id=11,
-        strategy_id=22,
-        environment=1,
-        runtime_id="rt-1",
-        runtime_source="hosted",
-        runtime_name="default",
-        leverage=5,
-        initial_status="pending",
-    )
-
-    assert ok is True
-    req = captured["req"]
-    assert req.runtime_id == "rt-1"
-    assert req.runtime_source == "hosted"
-    assert req.runtime_name == "default"
-    assert req.leverage == 5
-    assert req.initial_status == "pending"
 
 
 def test_portfolio_client_update_session_sends_runtime_guard():
@@ -233,7 +200,6 @@ def test_portfolio_client_preflight_sends_session_metadata():
     assert resp.ok is True
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 22
-    assert req.leverage == 0
     symbols = {
         (item.exchange, item.market, item.symbol): item
         for item in req.required_symbols
@@ -266,24 +232,6 @@ def test_portfolio_client_preflight_sends_session_metadata():
     assert list(spot_target.required_order_types) == ["MARKET", "LIMIT"]
     assert spot_target.effective_leverage == 0
     assert spot_target.leverage_source == ""
-
-
-def test_portfolio_client_preflight_never_serializes_deprecated_global_leverage():
-    captured: dict[str, object] = {}
-
-    class FakeStub:
-        def PreflightStrategySession(self, req):
-            captured["req"] = req
-            return portfolio_service_pb2.PreflightStrategySessionResponse(ok=True)
-
-    client = PortfolioClient("")
-    client._stub = FakeStub()
-
-    client.preflight_strategy_session(portfolio_id=11, user_id=5, leverage=99)
-
-    assert captured["req"].leverage == 0
-
-
 def test_portfolio_client_commit_strategy_session_start_forwards_typed_contract_and_timeout():
     captured: dict[str, object] = {}
     expected = portfolio_service_pb2.CommitStrategySessionStartResponse(

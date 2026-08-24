@@ -15,10 +15,9 @@ import (
 )
 
 var allowedWorkerExtraEnv = map[string]struct{}{
-	"HUSHINE_RUNTIME_ID":                          {},
-	"HUSHINE_RUNTIME_SOURCE":                      {},
-	"HUSHINE_RUNTIME_NAME":                        {},
-	"HUSHINE_STRATEGY_SESSION_BOOTSTRAP_REQUIRED": {},
+	"HUSHINE_RUNTIME_ID":     {},
+	"HUSHINE_RUNTIME_SOURCE": {},
+	"HUSHINE_RUNTIME_NAME":   {},
 }
 
 var embeddedRuntimeEnvironmentKeys = map[string]struct{}{

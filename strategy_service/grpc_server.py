@@ -79,7 +79,6 @@ from strategy_service.strategy_imports import (
 )
 from strategy_service.wallet.portfolio_adapter import (
     apply_venue_wallet_snapshot,
-    attach_spot_risk_snapshots,
     build_portfolio_wallet_from_snapshot,
 )
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
@@ -104,7 +103,6 @@ DEFAULT_STOP_DECISION_DRAIN_TIMEOUT_SECONDS = 30
 DEFAULT_STOP_ONLY_TIMEOUT_SECONDS = 30
 DEFAULT_STOP_ONLY_POLL_SECONDS = 0.05
 DEFAULT_MAX_LOSS_CLOSE_PCT = 0.30
-DEFAULT_SESSION_LEVERAGE = 1.0
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "finished", "stopped", "failed", "stop_failed", "recoverable"})
 _STOP_OPERATION_NAMESPACE = uuid.UUID("842eb725-3fcb-5d55-9f0e-b02a0af07878")
 _STOP_ORDER_TERMINAL_STATUSES = frozenset({"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"})
@@ -438,23 +436,6 @@ class _EffectiveRiskControls:
     max_loss_close_source: str
 
 
-@dataclass(frozen=True)
-class _SessionLeverageCompatibility:
-    """Temporary scalar bridge for the pre-Task-8 session runtime.
-
-    Values come only from resolved Futures ORDER_TARGETS. Task 8 can delete
-    this bridge when portfolio preparation and session bootstrap consume the
-    target-level facts carried by the strategy protocol.
-    """
-
-    leverage: float
-    leverage_source: str
-
-
-class _TargetLeverageCapabilityError(Exception):
-    pass
-
-
 class _SessionBootstrapError(Exception):
     pass
 
@@ -717,32 +698,6 @@ def _sync_strategy_snapshot(
     return result
 
 
-def _safe_send_session_status_patch(
-    platform_proxy: Any | None,
-    *,
-    session_id: str,
-    status: str,
-    bars_processed: int,
-    error: str,
-    runtime_id: str,
-) -> bool:
-    send = getattr(platform_proxy, "send_session_status_patch", None)
-    if not callable(send):
-        return False
-    try:
-        send(
-            session_id=session_id,
-            status=status,
-            bars_processed=bars_processed,
-            error=error,
-            runtime_id=runtime_id,
-        )
-    except BaseException:
-        logger.warning("STRATEGY_STATUS_PATCH_FAILED session=%s", session_id)
-        return False
-    return True
-
-
 def _wallet_parts_for_portfolio_sync(wallet: Any) -> tuple[Any | None, Any | None]:
     futures_wallet = None
     spot_wallet = None
@@ -854,46 +809,6 @@ def _effective_risk_controls_from_request(
     return _EffectiveRiskControls(
         max_loss_close_pct=max_loss_close_pct,
         max_loss_close_source=max_loss_close_source,
-    )
-
-
-def _session_leverage_compatibility(
-    order_targets: list[StrategyOrderTarget],
-) -> _SessionLeverageCompatibility:
-    """Translate resolved target facts for legacy scalar-only consumers.
-
-    This is deliberately not risk-control resolution: request leverage never
-    enters it. Mixed Futures value/source facts cannot be represented by the
-    deprecated preflight scalar, persisted Session, and in-process SessionState
-    fields, so the bridge fails closed until Task 8 removes those consumers.
-    """
-
-    futures_facts: set[tuple[int, str]] = set()
-    for target in order_targets:
-        if target.market not in {"perpetual_futures", "delivery_futures"}:
-            continue
-        if target.effective_leverage is None or not target.leverage_source:
-            raise StrategyDeclarationError(
-                "Futures ORDER_TARGETS must have resolved leverage facts"
-            )
-        futures_facts.add(
-            (int(target.effective_leverage), str(target.leverage_source))
-        )
-
-    if len(futures_facts) > 1:
-        raise _TargetLeverageCapabilityError(
-            "STRATEGY_TARGET_LEVERAGE_CAPABILITY_UNSUPPORTED: legacy scalar "
-            "session bridge cannot represent mixed Futures leverage facts"
-        )
-    if not futures_facts:
-        return _SessionLeverageCompatibility(
-            leverage=DEFAULT_SESSION_LEVERAGE,
-            leverage_source="platform_default",
-        )
-    leverage, leverage_source = next(iter(futures_facts))
-    return _SessionLeverageCompatibility(
-        leverage=float(leverage),
-        leverage_source=leverage_source,
     )
 
 
@@ -1121,10 +1036,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         restore_running_sessions: bool = True,
         platform_proxy: Any | None = None,
         notification_client: Any | None = None,
-        agent_managed_final_status: bool = False,
         start_session_id: str = "",
         session_bootstrap: Any | None = None,
-        require_session_bootstrap: bool = False,
     ) -> None:
         self._portfolio_addr = portfolio_service_addr
         self._market_data_addr = market_data_control_panel_addr
@@ -1145,10 +1058,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self._platform_access_mode = PLATFORM_ACCESS_PROXY_ONLY
         self._platform_proxy = platform_proxy
         self._notification_client = notification_client
-        self._agent_managed_final_status = bool(agent_managed_final_status)
         self._start_session_id = str(start_session_id or "")
         self._session_bootstrap = session_bootstrap
-        self._require_session_bootstrap = bool(require_session_bootstrap)
         self._runtime_data_source = None
         self._indicator_frame_sink: Callable[..., None] | None = None
         self._preflight_enabled = bool(self._market_data_policy.get("preflight_enabled", True))
@@ -1358,60 +1269,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             return "", "", ""
         return runtime_id, self._runtime_source, self._runtime_name
 
-    @staticmethod
-    def _error_details(exc: BaseException) -> str:
-        details = getattr(exc, "details", None)
-        if callable(details):
-            try:
-                value = details()
-                if value:
-                    return str(value)
-            except Exception:  # noqa: BLE001
-                pass
-        return str(exc)
-
-    @staticmethod
-    def _is_save_session_conflict(exc: BaseException) -> bool:
-        code_getter = getattr(exc, "code", None)
-        if callable(code_getter):
-            try:
-                code = code_getter()
-                if code in (grpc.StatusCode.FAILED_PRECONDITION, grpc.StatusCode.ALREADY_EXISTS):
-                    return True
-            except Exception:  # noqa: BLE001
-                pass
-        text = str(exc).lower()
-        return (
-            "failedprecondition" in text
-            or "failed_precondition" in text
-            or "alreadyexists" in text
-            or "already_exists" in text
-            or "active session" in text
-        )
-
-    def _persist_session_or_set_error(self, acct_client: Any, context, **kwargs: Any) -> bool:
-        strict = getattr(acct_client, "require_save_session", None)
-        try:
-            if callable(strict):
-                strict(**kwargs)
-            else:
-                ok = acct_client.save_session(**kwargs)
-                if not ok:
-                    raise RuntimeError("SaveSession returned false")
-            return True
-        except Exception as exc:  # noqa: BLE001
-            if self._is_save_session_conflict(exc):
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                detail = self._error_details(exc)
-                context.set_details(
-                    "portfolio already has an active session; stop or recover the existing "
-                    f"session before starting a new one ({detail})"
-                )
-            else:
-                context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details(f"failed to persist session to core-service: {self._error_details(exc)}")
-            return False
-
     def _enforce_session_runtime(self, request: Any, state: SessionState, context) -> bool:
         requested = str(getattr(request, "runtime_id", "") or "").strip()
         if state.runtime_id and requested and requested != state.runtime_id:
@@ -1488,16 +1345,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
     # ── RunStrategy ──────────────────────────────────────────────────────────
 
     def _canonical_start_session_id(self, context: Any) -> str:
+        bootstrap_id = str(
+            getattr(self._session_bootstrap, "session_id", "") or ""
+        ).strip()
         candidate = str(
             getattr(context, "start_session_id", "")
             or self._start_session_id
-            or ""
-        )
-        if not candidate:
-            # Compatibility for direct in-process callers. Runtime workers always
-            # receive the Agent-owned canonical ID through StartSession.
-            candidate = uuid.uuid4().hex
-        return self._sessions._validate_session_id(candidate)
+            or bootstrap_id
+        ).strip()
+        if candidate != bootstrap_id:
+            raise SessionRegistrationError(reason="state_mismatch")
+        return self._sessions._validate_session_id(bootstrap_id)
 
     def _bounded_join_startup_thread(self, state: SessionState) -> None:
         thread = state.thread
@@ -1529,20 +1387,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         acct_client: Any,
         session_id: str,
         state: SessionState,
-        *,
-        expected_status: str = "",
     ) -> bool:
-        update_args = dict(
+        result = acct_client.update_session(
             session_id=session_id,
             status="running",
             bars_processed=state.bars_processed,
             error=state.error,
             runtime_id=state.runtime_id,
-            expected_status=expected_status,
+            expected_status="pending",
+            strict=True,
         )
-        if expected_status:
-            update_args["strict"] = True
-        result = acct_client.update_session(**update_args)
         return result is True
 
     def ValidateStrategySource(self, request, context):
@@ -1856,7 +1710,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             order_targets=order_targets,
             session_id=session_id,
             strategy_id=strategy_id,
-            leverage=0.0,
             environment=environment,
         )
         if portfolio_preflight is not None:
@@ -2030,8 +1883,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         )
 
     def RunStrategy(self, request, context):
-        new_protocol_start = bool(self._require_session_bootstrap)
-        if new_protocol_start and self._session_bootstrap is None:
+        if self._session_bootstrap is None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details("strategy Session bootstrap is required")
             return pb2.RunStrategyResponse()
@@ -2136,20 +1988,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"strategy risk control invalid: {e}")
             return pb2.RunStrategyResponse()
-        if new_protocol_start:
-            session_leverage = _SessionLeverageCompatibility(
-                leverage=DEFAULT_SESSION_LEVERAGE,
-                leverage_source="platform_default",
-            )
-        else:
-            try:
-                session_leverage = _session_leverage_compatibility(
-                    list(declarations.order_targets)
-                )
-            except _TargetLeverageCapabilityError as e:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(str(e))
-                return pb2.RunStrategyResponse()
         declared_inputs = list(declarations.inputs)
         required_routes = set(declarations.required_routes)
         required_symbols = {
@@ -2161,34 +1999,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         except SessionRegistrationError:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("invalid canonical session_id")
-            return pb2.RunStrategyResponse()
-
-        preflight_responses: list[Any] = []
-        portfolio_preflight = None
-        if not new_protocol_start:
-            portfolio_preflight = self._run_portfolio_preflight(
-                acct_client=acct_client,
-                portfolio_id=portfolio_id,
-                user_id=user_id,
-                required_routes=required_routes,
-                required_symbols=required_symbols,
-                order_targets=list(declarations.order_targets),
-                session_id=preflight_session_id,
-                strategy_id=strategy_id,
-                leverage=session_leverage.leverage,
-                response_sink=preflight_responses,
-                environment=environment,
-            )
-        if portfolio_preflight is not None:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            try:
-                context.set_trailing_metadata((("preflight-session-id", preflight_session_id),))
-            except Exception:  # noqa: BLE001
-                logger.debug("context does not support trailing metadata for preflight failure")
-            details = "portfolio preflight failed: " + "; ".join(
-                issue.format() for issue in portfolio_preflight
-            )
-            context.set_details(f"{details}; preflight_session_id={preflight_session_id}")
             return pb2.RunStrategyResponse()
 
         snapshot = _get_portfolio_snapshot(
@@ -2210,11 +2020,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     declarations.order_targets if environment == 0 else ()
                 ),
             )
-            if preflight_responses:
-                attach_spot_risk_snapshots(
-                    wallet,
-                    getattr(preflight_responses[0], "spot_risk_snapshots", []) or [],
-                )
             backtest_restore_wallet = None
             if environment == 0:
                 backtest_restore_wallet = build_portfolio_wallet_from_snapshot(
@@ -2222,31 +2027,21 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     allowed_routes=required_routes,
                     simulated_order_targets=declarations.order_targets,
                 )
-                if preflight_responses:
-                    attach_spot_risk_snapshots(
-                        backtest_restore_wallet,
-                        getattr(preflight_responses[0], "spot_risk_snapshots", []) or [],
-                    )
         except Exception as e:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(f"failed to build wallet: {e}")
             return pb2.RunStrategyResponse()
-        confirmed_target_facts: dict[
-            tuple[str, str, str],
-            tuple[int, str, int],
-        ] = {}
-        if new_protocol_start:
-            try:
-                confirmed_target_facts = _validated_confirmed_target_map(
-                    bootstrap=self._session_bootstrap,
-                    prepared_strategy=prepared_strategy,
-                    environment=environment,
-                    wallet=wallet,
-                )
-            except _SessionBootstrapError as exc:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(f"strategy Session bootstrap validation failed: {exc}")
-                return pb2.RunStrategyResponse()
+        try:
+            confirmed_target_facts = _validated_confirmed_target_map(
+                bootstrap=self._session_bootstrap,
+                prepared_strategy=prepared_strategy,
+                environment=environment,
+                wallet=wallet,
+            )
+        except _SessionBootstrapError as exc:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(f"strategy Session bootstrap validation failed: {exc}")
+            return pb2.RunStrategyResponse()
         try:
             initial_margin_balance = _target_close_margin_balance(
                 wallet,
@@ -2320,8 +2115,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             order_target_keys=set(declarations.order_target_keys),
             max_loss_close_pct=effective_risk.max_loss_close_pct,
             max_loss_close_source=effective_risk.max_loss_close_source,
-            leverage=session_leverage.leverage,
-            leverage_source=session_leverage.leverage_source,
             target_leverage_facts=confirmed_target_facts,
             initial_margin_balance=initial_margin_balance,
         )
@@ -2538,30 +2331,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             context.set_details("strategy worker startup failed")
             return pb2.RunStrategyResponse()
 
-        if not new_protocol_start:
-            if not self._persist_session_or_set_error(
-                acct_client,
-                context,
-                session_id=session_id,
-                portfolio_id=portfolio_id,
-                strategy_id=strategy_id,
-                environment=environment,
-                interval=request.interval or "1m",
-                start_time_ms=request.start_time_ms,
-                end_time_ms=request.end_time_ms,
-                runtime_id=runtime_id,
-                runtime_source=runtime_source,
-                runtime_name=runtime_name,
-                leverage=session_leverage.leverage,
-                initial_status="pending",
-            ):
-                self._fail_unpersisted_startup(
-                    session_id=session_id,
-                    state=state,
-                    startup=startup,
-                )
-                return pb2.RunStrategyResponse()
-
         # 写 strategy_start 组合快照。启动快照写不进去时直接拒绝启动，
         # 否则 backtest 会继续产生成交但没有钱包/PnL 审计链路。
         try:
@@ -2616,20 +2385,17 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 acct_client,
                 session_id,
                 state,
-                expected_status="pending" if new_protocol_start else "",
             )
         except BaseException:
-            if new_protocol_start:
-                return self._abort_persisted_startup(
-                    session_id=session_id,
-                    state=state,
-                    environment=environment,
-                    context=context,
-                    error="running session publication is ambiguous",
-                    status_code=grpc.StatusCode.UNAVAILABLE,
-                    detail="running session publication is ambiguous",
-                )
-            running_persisted = False
+            return self._abort_persisted_startup(
+                session_id=session_id,
+                state=state,
+                environment=environment,
+                context=context,
+                error="running session publication is ambiguous",
+                status_code=grpc.StatusCode.UNAVAILABLE,
+                detail="running session publication is ambiguous",
+            )
         if not running_persisted:
             return self._abort_persisted_startup(
                 session_id=session_id,
@@ -2652,35 +2418,28 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             )
 
         bind_publication = getattr(context, "bind_running_publication", None)
-        if callable(bind_publication):
-            try:
-                bind_publication(session_id, state)
-            except BaseException:
-                return self._abort_persisted_startup(
-                    session_id=session_id,
-                    state=state,
-                    environment=environment,
-                    context=context,
-                    error="running publication binding failed",
-                    status_code=grpc.StatusCode.INTERNAL,
-                    detail="running publication binding failed",
-                )
-        else:
-            # Direct compatibility callers do not have the worker publication
-            # context. Release locally only after the same state CAS succeeds.
-            if (
-                not self._sessions.claim_running_publication(session_id, state)
-                or not state.complete_running_publication_submission(startup.release)
-            ):
-                return self._abort_persisted_startup(
-                    session_id=session_id,
-                    state=state,
-                    environment=environment,
-                    context=context,
-                    error="running publication failed",
-                    status_code=grpc.StatusCode.INTERNAL,
-                    detail="running publication failed",
-                )
+        if not callable(bind_publication):
+            return self._abort_persisted_startup(
+                session_id=session_id,
+                state=state,
+                environment=environment,
+                context=context,
+                error="running publication binding failed",
+                status_code=grpc.StatusCode.INTERNAL,
+                detail="running publication binding failed",
+            )
+        try:
+            bind_publication(session_id, state)
+        except BaseException:
+            return self._abort_persisted_startup(
+                session_id=session_id,
+                state=state,
+                environment=environment,
+                context=context,
+                error="running publication binding failed",
+                status_code=grpc.StatusCode.INTERNAL,
+                detail="running publication binding failed",
+            )
 
         return pb2.RunStrategyResponse(session_id=session_id, ok=True)
 
@@ -2700,19 +2459,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             startup.abort.set()
             self._bounded_join_startup_thread(state)
         state.force_failed(error)
-        terminal_confirmed = bool(self._require_session_bootstrap)
-        if not terminal_confirmed:
-            try:
-                terminal_result = self._persist_session_status(
-                    session_id,
-                    state,
-                    fallback_patch=True,
-                    force_core_update=True,
-                )
-                terminal_confirmed = terminal_result is True
-            except BaseException:
-                logger.error("STRATEGY_STARTUP_TERMINAL_PERSIST_FAILED session=%s", session_id)
-
         release_confirmed = True
         if environment == 1:
             try:
@@ -2725,7 +2471,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 release_confirmed = False
                 logger.error("STRATEGY_STARTUP_SUBSCRIPTION_RELEASE_FAILED session=%s", session_id)
 
-        if terminal_confirmed and release_confirmed:
+        if release_confirmed:
             self._sessions.discard(session_id, state)
         context.set_code(status_code)
         context.set_details(detail)
@@ -2742,17 +2488,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             startup.abort.set()
             self._bounded_join_startup_thread(state)
         state.fail_running_publication(error)
-        terminal_confirmed = bool(self._require_session_bootstrap)
-        if not terminal_confirmed:
-            try:
-                terminal_confirmed = self._persist_session_status(
-                    session_id,
-                    state,
-                    fallback_patch=True,
-                    force_core_update=True,
-                ) is True
-            except BaseException:
-                logger.error("STRATEGY_PUBLICATION_TERMINAL_PERSIST_FAILED session=%s", session_id)
         release_confirmed = True
         if state.environment == 1:
             try:
@@ -2763,9 +2498,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             except BaseException:
                 release_confirmed = False
                 logger.error("STRATEGY_PUBLICATION_SUBSCRIPTION_RELEASE_FAILED session=%s", session_id)
-        if terminal_confirmed and release_confirmed:
+        if release_confirmed:
             self._sessions.discard(session_id, state)
-        return terminal_confirmed and release_confirmed
+        return release_confirmed
 
     def _run_session(
         self,
@@ -2979,7 +2714,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         # This is the sole terminal persistence/registry owner for the runner.
         # Each operation is attempted at most once even if the first one raises.
         try:
-            self._persist_session_status(session_id, state, fallback_patch=True)
+            self._persist_session_status(session_id, state)
         except BaseException:
             if primary_user_fatal is not None:
                 logger.error(
@@ -3018,8 +2753,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         order_targets: list[StrategyOrderTarget] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
-        leverage: float = 0.0,
-        response_sink: list[Any] | None = None,
         environment: int = 0,
     ) -> list[_PortfolioPreflightIssue] | None:
         preflight = getattr(acct_client, "preflight_strategy_session", None)
@@ -3040,7 +2773,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             order_targets=list(order_targets or []),
             session_id=str(session_id or ""),
             strategy_id=int(strategy_id),
-            leverage=float(leverage or 0.0),
         )
         if resp is None:
             return [_PortfolioPreflightIssue(
@@ -3050,8 +2782,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 retryable=True,
                 source="strategy-service",
             )]
-        if response_sink is not None:
-            response_sink.append(resp)
         if bool(getattr(resp, "ok", False)):
             return None
         issues: list[_PortfolioPreflightIssue] = []
@@ -3975,48 +3705,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         self,
         session_id: str,
         state: SessionState,
-        *,
-        fallback_patch: bool = False,
-        force_core_update: bool = False,
     ) -> bool:
-        if (
-            self._agent_managed_final_status
-            and state.status in TERMINAL_SESSION_STATUSES
-            and not force_core_update
-        ):
+        if state.status in TERMINAL_SESSION_STATUSES:
             return True
-        try:
-            acct_client = self._portfolio_client()
-            ok = acct_client.update_session(
-                session_id=session_id,
-                status=state.status,
-                bars_processed=state.bars_processed,
-                error=state.error,
-                runtime_id=state.runtime_id,
-            )
-        except BaseException:
-            if fallback_patch:
-                _safe_send_session_status_patch(
-                    self._platform_proxy,
-                    session_id=session_id,
-                    status=state.status,
-                    bars_processed=state.bars_processed,
-                    error=state.error,
-                    runtime_id=state.runtime_id,
-                )
-            raise
+        acct_client = self._portfolio_client()
+        ok = acct_client.update_session(
+            session_id=session_id,
+            status=state.status,
+            bars_processed=state.bars_processed,
+            error=state.error,
+            runtime_id=state.runtime_id,
+        )
         confirmed = ok is True
         if not confirmed:
             logger.warning("session %s: failed to persist status=%s", session_id, state.status)
-            if fallback_patch:
-                _safe_send_session_status_patch(
-                    self._platform_proxy,
-                    session_id=session_id,
-                    status=state.status,
-                    bars_processed=state.bars_processed,
-                    error=state.error,
-                    runtime_id=state.runtime_id,
-                )
         return confirmed
 
     @staticmethod
@@ -4967,7 +4669,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             required_symbols=required_symbols,
             order_targets=list(declarations.order_targets),
             strategy_id=int(getattr(active, "strategy_id", 0) or 0) if active is not None else 0,
-            leverage=0.0,
             environment=environment,
         )
         if portfolio_preflight is not None:

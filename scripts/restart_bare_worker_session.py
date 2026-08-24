@@ -58,15 +58,13 @@ def choose_control_url(explicit: str, state: dict[str, str]) -> str:
     return ""
 
 
-def build_restart_payload(session_id: str, max_loss_close_pct: float, leverage: float) -> dict[str, Any]:
+def build_restart_payload(session_id: str, max_loss_close_pct: float) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     session_id = session_id.strip()
     if session_id:
         payload["session_id"] = session_id
     if max_loss_close_pct > 0:
         payload["max_loss_close_pct"] = max_loss_close_pct
-    if leverage > 0:
-        payload["leverage"] = leverage
     return payload
 
 
@@ -114,7 +112,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--state-file", default="", help="path to runtime.env written by start-bare-runtime-debugpy.sh")
     parser.add_argument("--control-url", default=os.environ.get("RUNTIME_AGENT_CONTROL_URL", ""), help="local runtime-agent control URL")
     parser.add_argument("--max-loss-close-pct", type=float, default=0.0, help="optional override passed to the restarted run")
-    parser.add_argument("--leverage", type=float, default=0.0, help="optional leverage override passed to the restarted run")
     parser.add_argument("--timeout", type=float, default=60.0, help="HTTP timeout in seconds")
     return parser.parse_args(argv)
 
@@ -130,7 +127,6 @@ def main(argv: list[str] | None = None) -> int:
     payload = build_restart_payload(
         session_id=str(args.session_id or args.session_id_pos or ""),
         max_loss_close_pct=float(args.max_loss_close_pct or 0.0),
-        leverage=float(args.leverage or 0.0),
     )
     try:
         result = post_restart(control_url, payload, timeout=float(args.timeout))

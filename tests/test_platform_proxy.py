@@ -11,7 +11,6 @@ from strategy_service.platform_proxy import (
     PORTFOLIO_COMMIT_STRATEGY_SESSION_START,
     PORTFOLIO_PREFLIGHT_STRATEGY_SESSION,
     PORTFOLIO_GET_PORTFOLIO,
-    PORTFOLIO_SAVE_SESSION,
     PORTFOLIO_UPDATE_WALLET_STATE,
     PORTFOLIO_UPDATE_SESSION,
     LOGS_EMIT,
@@ -26,31 +25,6 @@ from strategy_service.platform_proxy import (
 )
 from strategy_service.inputs import StrategyOrderTarget
 from strategy_service.types import OrderDecision
-
-
-def test_proxy_portfolio_client_sends_save_session_over_runtime_channel():
-    runtime = _FakeRuntimeChannel()
-    proxy = RuntimeChannelPlatformProxy(runtime)
-
-    ok = proxy.portfolio_client().save_session(
-        session_id="sess-1",
-        portfolio_id=7,
-        strategy_id=9,
-        environment=1,
-        runtime_id="runtime-1",
-        runtime_source="self_hosted",
-        runtime_name="desk",
-        leverage=4,
-        initial_status="pending",
-    )
-
-    assert ok is True
-    method, req = runtime.calls[-1]
-    assert method == PORTFOLIO_SAVE_SESSION
-    assert req.session_id == "sess-1"
-    assert req.runtime_id == "runtime-1"
-    assert req.leverage == 4
-    assert req.initial_status == "pending"
 
 
 def test_proxy_portfolio_client_sends_pending_status_cas():
@@ -230,31 +204,11 @@ def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_ch
     assert resp.ok is True
     assert req.session_id == "preflight-session-1"
     assert req.strategy_id == 9
-    assert req.leverage == 0
     symbols = {item.symbol: item for item in req.required_symbols}
     assert symbols["BTCUSDT"].effective_leverage == 3
     assert symbols["BTCUSDT"].leverage_source == "strategy_default"
     assert symbols["ETHUSDT"].effective_leverage == 0
     assert symbols["ETHUSDT"].leverage_source == ""
-
-
-def test_proxy_portfolio_client_preflight_never_serializes_deprecated_global_leverage():
-    runtime = _FakeRuntimeChannel()
-    runtime.responses[PORTFOLIO_PREFLIGHT_STRATEGY_SESSION] = (
-        portfolio_service_pb2.PreflightStrategySessionResponse(ok=True)
-    )
-    proxy = RuntimeChannelPlatformProxy(runtime)
-
-    proxy.portfolio_client().preflight_strategy_session(
-        portfolio_id=7,
-        user_id=3,
-        leverage=99,
-    )
-
-    _, request = runtime.calls[-1]
-    assert request.leverage == 0
-
-
 def test_proxy_portfolio_client_commit_strategy_session_start_preserves_typed_contract_and_deadline():
     runtime = _FakeRuntimeChannel()
     expected = portfolio_service_pb2.CommitStrategySessionStartResponse(
@@ -687,7 +641,6 @@ class _FakeRuntimeChannel:
         self.timeouts = []
         self.errors = {}
         self.responses = {
-            PORTFOLIO_SAVE_SESSION: portfolio_service_pb2.SaveSessionResponse(),
             ORDER_PLACE: order_service_pb2.PlaceOrderResponse(),
             MARKETDATA_GET_STATUS: marketdata_service_pb2.GetMarketDataStreamStatusResponse(),
         }

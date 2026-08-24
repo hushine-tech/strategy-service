@@ -2180,11 +2180,6 @@ type PreflightStrategySessionRequest struct {
 	RequiredSymbols []*RequiredSymbol      `protobuf:"bytes,4,rep,name=required_symbols,json=requiredSymbols,proto3" json:"required_symbols,omitempty"`
 	SessionId       string                 `protobuf:"bytes,5,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	StrategyId      int64                  `protobuf:"varint,6,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
-	// Deprecated session-wide input retained for wire compatibility. New
-	// callers send zero and use RequiredSymbol target intents.
-	//
-	// Deprecated: Marked as deprecated in portfolio_service.proto.
-	Leverage float64 `protobuf:"fixed64,7,opt,name=leverage,proto3" json:"leverage,omitempty"`
 	// Requests side-effect-free immutable facts for an offline debug package.
 	// Spot admission uses offline_spot_usdt instead of Session start capability.
 	DebugPackage  bool `protobuf:"varint,8,opt,name=debug_package,json=debugPackage,proto3" json:"debug_package,omitempty"`
@@ -2260,14 +2255,6 @@ func (x *PreflightStrategySessionRequest) GetSessionId() string {
 func (x *PreflightStrategySessionRequest) GetStrategyId() int64 {
 	if x != nil {
 		return x.StrategyId
-	}
-	return 0
-}
-
-// Deprecated: Marked as deprecated in portfolio_service.proto.
-func (x *PreflightStrategySessionRequest) GetLeverage() float64 {
-	if x != nil {
-		return x.Leverage
 	}
 	return 0
 }
@@ -6390,35 +6377,30 @@ func (x *GetActiveStrategyResponse) GetRuntimeProfile() string {
 }
 
 type StrategySessionEntry struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	PortfolioId     int64                  `protobuf:"varint,2,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
-	StrategyId      int64                  `protobuf:"varint,3,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
-	Environment     int32                  `protobuf:"varint,4,opt,name=environment,proto3" json:"environment,omitempty"`
-	Status          string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
-	Interval        string                 `protobuf:"bytes,6,opt,name=interval,proto3" json:"interval,omitempty"`
-	StartTimeMs     int64                  `protobuf:"varint,7,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"`
-	EndTimeMs       int64                  `protobuf:"varint,8,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
-	BarsProcessed   int32                  `protobuf:"varint,9,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
-	Error           string                 `protobuf:"bytes,10,opt,name=error,proto3" json:"error,omitempty"`
-	StartedAt       *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	CompletedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
-	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UserId          int64                  `protobuf:"varint,14,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	RuntimeId       string                 `protobuf:"bytes,15,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
-	RuntimeSource   string                 `protobuf:"bytes,16,opt,name=runtime_source,json=runtimeSource,proto3" json:"runtime_source,omitempty"`
-	RuntimeName     string                 `protobuf:"bytes,17,opt,name=runtime_name,json=runtimeName,proto3" json:"runtime_name,omitempty"`
-	SessionType     string                 `protobuf:"bytes,18,opt,name=session_type,json=sessionType,proto3" json:"session_type,omitempty"`
-	RuntimeVersion  string                 `protobuf:"bytes,19,opt,name=runtime_version,json=runtimeVersion,proto3" json:"runtime_version,omitempty"`
-	SessionName     string                 `protobuf:"bytes,20,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	ErrorCode       string                 `protobuf:"bytes,21,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
-	ErrorMessage    string                 `protobuf:"bytes,22,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	ErrorDetailJson string                 `protobuf:"bytes,23,opt,name=error_detail_json,json=errorDetailJson,proto3" json:"error_detail_json,omitempty"`
-	// Deprecated historical session scalar. New Sessions use target facts;
-	// readers may use this only when target_leverage_facts is empty.
-	//
-	// Deprecated: Marked as deprecated in portfolio_service.proto.
-	Leverage                     float64                      `protobuf:"fixed64,24,opt,name=leverage,proto3" json:"leverage,omitempty"`
+	state                        protoimpl.MessageState       `protogen:"open.v1"`
+	SessionId                    string                       `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	PortfolioId                  int64                        `protobuf:"varint,2,opt,name=portfolio_id,json=portfolioId,proto3" json:"portfolio_id,omitempty"`
+	StrategyId                   int64                        `protobuf:"varint,3,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
+	Environment                  int32                        `protobuf:"varint,4,opt,name=environment,proto3" json:"environment,omitempty"`
+	Status                       string                       `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	Interval                     string                       `protobuf:"bytes,6,opt,name=interval,proto3" json:"interval,omitempty"`
+	StartTimeMs                  int64                        `protobuf:"varint,7,opt,name=start_time_ms,json=startTimeMs,proto3" json:"start_time_ms,omitempty"`
+	EndTimeMs                    int64                        `protobuf:"varint,8,opt,name=end_time_ms,json=endTimeMs,proto3" json:"end_time_ms,omitempty"`
+	BarsProcessed                int32                        `protobuf:"varint,9,opt,name=bars_processed,json=barsProcessed,proto3" json:"bars_processed,omitempty"`
+	Error                        string                       `protobuf:"bytes,10,opt,name=error,proto3" json:"error,omitempty"`
+	StartedAt                    *timestamppb.Timestamp       `protobuf:"bytes,11,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	CompletedAt                  *timestamppb.Timestamp       `protobuf:"bytes,12,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	CreatedAt                    *timestamppb.Timestamp       `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UserId                       int64                        `protobuf:"varint,14,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RuntimeId                    string                       `protobuf:"bytes,15,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	RuntimeSource                string                       `protobuf:"bytes,16,opt,name=runtime_source,json=runtimeSource,proto3" json:"runtime_source,omitempty"`
+	RuntimeName                  string                       `protobuf:"bytes,17,opt,name=runtime_name,json=runtimeName,proto3" json:"runtime_name,omitempty"`
+	SessionType                  string                       `protobuf:"bytes,18,opt,name=session_type,json=sessionType,proto3" json:"session_type,omitempty"`
+	RuntimeVersion               string                       `protobuf:"bytes,19,opt,name=runtime_version,json=runtimeVersion,proto3" json:"runtime_version,omitempty"`
+	SessionName                  string                       `protobuf:"bytes,20,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	ErrorCode                    string                       `protobuf:"bytes,21,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage                 string                       `protobuf:"bytes,22,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ErrorDetailJson              string                       `protobuf:"bytes,23,opt,name=error_detail_json,json=errorDetailJson,proto3" json:"error_detail_json,omitempty"`
 	IndicatorFinalizationPending bool                         `protobuf:"varint,25,opt,name=indicator_finalization_pending,json=indicatorFinalizationPending,proto3" json:"indicator_finalization_pending,omitempty"`
 	TargetLeverageFacts          []*SessionTargetLeverageFact `protobuf:"bytes,26,rep,name=target_leverage_facts,json=targetLeverageFacts,proto3" json:"target_leverage_facts,omitempty"`
 	// Durable identity of the atomic strategy launch that created this Session.
@@ -6619,14 +6601,6 @@ func (x *StrategySessionEntry) GetErrorDetailJson() string {
 	return ""
 }
 
-// Deprecated: Marked as deprecated in portfolio_service.proto.
-func (x *StrategySessionEntry) GetLeverage() float64 {
-	if x != nil {
-		return x.Leverage
-	}
-	return 0
-}
-
 func (x *StrategySessionEntry) GetIndicatorFinalizationPending() bool {
 	if x != nil {
 		return x.IndicatorFinalizationPending
@@ -6663,10 +6637,6 @@ type SaveSessionRequest struct {
 	SessionType    string                 `protobuf:"bytes,11,opt,name=session_type,json=sessionType,proto3" json:"session_type,omitempty"`
 	RuntimeVersion string                 `protobuf:"bytes,12,opt,name=runtime_version,json=runtimeVersion,proto3" json:"runtime_version,omitempty"`
 	SessionName    string                 `protobuf:"bytes,13,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	// Deprecated session-wide scalar retained for legacy SaveSession callers.
-	//
-	// Deprecated: Marked as deprecated in portfolio_service.proto.
-	Leverage float64 `protobuf:"fixed64,14,opt,name=leverage,proto3" json:"leverage,omitempty"`
 	// Empty preserves legacy running startup; runtime workers persist pending
 	// until their complete activation barrier succeeds.
 	InitialStatus string `protobuf:"bytes,15,opt,name=initial_status,json=initialStatus,proto3" json:"initial_status,omitempty"`
@@ -6794,14 +6764,6 @@ func (x *SaveSessionRequest) GetSessionName() string {
 		return x.SessionName
 	}
 	return ""
-}
-
-// Deprecated: Marked as deprecated in portfolio_service.proto.
-func (x *SaveSessionRequest) GetLeverage() float64 {
-	if x != nil {
-		return x.Leverage
-	}
-	return 0
 }
 
 func (x *SaveSessionRequest) GetInitialStatus() string {
@@ -10813,7 +10775,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\venvironment\x18\b \x01(\x05R\venvironment\x12\x1c\n" +
 	"\tretryable\x18\t \x01(\bR\tretryable\x12\x16\n" +
 	"\x06source\x18\n" +
-	" \x01(\tR\x06source\"\xf1\x02\n" +
+	" \x01(\tR\x06source\"\xd1\x02\n" +
 	"\x1fPreflightStrategySessionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\x03R\x06userId\x12!\n" +
 	"\fportfolio_id\x18\x02 \x01(\x03R\vportfolioId\x12D\n" +
@@ -10822,8 +10784,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x05 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vstrategy_id\x18\x06 \x01(\x03R\n" +
-	"strategyId\x12\x1e\n" +
-	"\bleverage\x18\a \x01(\x01B\x02\x18\x01R\bleverage\x12#\n" +
+	"strategyId\x12#\n" +
 	"\rdebug_package\x18\b \x01(\bR\fdebugPackage\"\xe1\x02\n" +
 	" PreflightStrategySessionResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x124\n" +
@@ -11210,7 +11171,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\tR\aversion\x12'\n" +
 	"\x0fruntime_version\x18\x05 \x01(\tR\x0eruntimeVersion\x12'\n" +
-	"\x0fruntime_profile\x18\x06 \x01(\tR\x0eruntimeProfile\"\xd9\b\n" +
+	"\x0fruntime_profile\x18\x06 \x01(\tR\x0eruntimeProfile\"\xb9\b\n" +
 	"\x14StrategySessionEntry\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
@@ -11241,11 +11202,10 @@ const file_portfolio_service_proto_rawDesc = "" +
 	"\n" +
 	"error_code\x18\x15 \x01(\tR\terrorCode\x12#\n" +
 	"\rerror_message\x18\x16 \x01(\tR\ferrorMessage\x12*\n" +
-	"\x11error_detail_json\x18\x17 \x01(\tR\x0ferrorDetailJson\x12\x1e\n" +
-	"\bleverage\x18\x18 \x01(\x01B\x02\x18\x01R\bleverage\x12D\n" +
+	"\x11error_detail_json\x18\x17 \x01(\tR\x0ferrorDetailJson\x12D\n" +
 	"\x1eindicator_finalization_pending\x18\x19 \x01(\bR\x1cindicatorFinalizationPending\x12[\n" +
 	"\x15target_leverage_facts\x18\x1a \x03(\v2'.portfolio.v1.SessionTargetLeverageFactR\x13targetLeverageFacts\x12.\n" +
-	"\x13launch_operation_id\x18\x1b \x01(\tR\x11launchOperationId\"\xb1\x04\n" +
+	"\x13launch_operation_id\x18\x1b \x01(\tR\x11launchOperationId\"\x91\x04\n" +
 	"\x12SaveSessionRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
@@ -11263,8 +11223,7 @@ const file_portfolio_service_proto_rawDesc = "" +
 	" \x01(\tR\vruntimeName\x12!\n" +
 	"\fsession_type\x18\v \x01(\tR\vsessionType\x12'\n" +
 	"\x0fruntime_version\x18\f \x01(\tR\x0eruntimeVersion\x12!\n" +
-	"\fsession_name\x18\r \x01(\tR\vsessionName\x12\x1e\n" +
-	"\bleverage\x18\x0e \x01(\x01B\x02\x18\x01R\bleverage\x12%\n" +
+	"\fsession_name\x18\r \x01(\tR\vsessionName\x12%\n" +
 	"\x0einitial_status\x18\x0f \x01(\tR\rinitialStatus\x12\x17\n" +
 	"\auser_id\x18d \x01(\x03R\x06userId\"\x15\n" +
 	"\x13SaveSessionResponse\"\xc0\x02\n" +

@@ -105,9 +105,6 @@ message RunStrategyRequest {
   // Ratio, not percent. 0 means "not provided"; runtime falls back to
   // strategy declaration or platform default.
   double max_loss_close_pct = 102;
-  // Deprecated session-wide leverage retained for wire compatibility. Target
-  // leverage is strategy-owned and this value is ignored.
-  double leverage = 103 [deprecated = true];
   // Explicit stopped/recoverable predecessor selected for Resume. Empty means
   // an ordinary start; it is never inferred by the runtime or control plane.
   string resume_session_id = 104;
@@ -185,9 +182,6 @@ message PreviewRunStrategyRequest {
   // Ratio, not percent. 0 means "not provided"; runtime falls back to
   // strategy declaration or platform default.
   double max_loss_close_pct = 102;
-  // Deprecated session-wide preview input retained for wire compatibility.
-  // Target leverage is strategy-owned and this value is ignored.
-  double leverage = 103 [deprecated = true];
 }
 
 message PreflightInputKey {
@@ -247,10 +241,6 @@ message PreviewRunStrategyResponse {
 message RiskControls {
   double max_loss_close_pct = 1;
   string max_loss_close_source = 2; // strategy / request_default / platform_default
-  // Deprecated session-wide compatibility fields. New code consumes the
-  // effective/source facts on each StrategyOrderTargetBinding.
-  double leverage = 3 [deprecated = true];
-  string leverage_source = 4 [deprecated = true];
 }
 
 message StrategyOrderTargetBinding {

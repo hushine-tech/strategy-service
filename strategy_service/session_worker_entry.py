@@ -25,13 +25,11 @@ logger = logging.getLogger("hushine-session-worker")
 _TERMINAL_STATUSES = {"finished", "completed", "failed", "stopped", "stop_failed", "recoverable"}
 
 
-def _validated_start_bootstrap(start, *, required: bool):
+def _validated_start_bootstrap(start):
     packed = getattr(start, "session_bootstrap", None)
     has_bootstrap = bool(packed is not None and str(getattr(packed, "type_url", "") or ""))
     if not has_bootstrap:
-        if required:
-            raise RuntimeError("strategy Session bootstrap is required for this protocol start")
-        return None
+        raise RuntimeError("strategy Session bootstrap is required for this protocol start")
     bootstrap = strategy_pb2.StrategySessionBootstrap()
     if not packed.Unpack(bootstrap):
         raise RuntimeError("StartSession.session_bootstrap is not a StrategySessionBootstrap")
@@ -72,14 +70,7 @@ def main() -> int:
         if start.user_id and not request.user_id:
             request.user_id = start.user_id
 
-        bootstrap_required = os.environ.get(
-            "HUSHINE_STRATEGY_SESSION_BOOTSTRAP_REQUIRED",
-            "",
-        ).strip().lower() in {"1", "true", "yes"}
-        session_bootstrap = _validated_start_bootstrap(
-            start,
-            required=bootstrap_required,
-        )
+        session_bootstrap = _validated_start_bootstrap(start)
 
         servicer = _build_servicer(
             client,
@@ -87,7 +78,6 @@ def main() -> int:
             runtime_id=runtime_id,
             start_session_id=start.session_id,
             session_bootstrap=session_bootstrap,
-            require_session_bootstrap=bootstrap_required,
         )
         client.set_agent_platform_call_handler(lambda call: _invoke_servicer_platform_call(servicer, call))
         context = _WorkerContext(start_session_id=start.session_id)
@@ -293,7 +283,6 @@ def _build_servicer(
     runtime_id: str,
     start_session_id: str = "",
     session_bootstrap=None,
-    require_session_bootstrap: bool = False,
 ) -> StrategyServiceServicer:
     platform_proxy = RuntimeChannelPlatformProxy(WorkerRuntimeChannelAdapter(client))
     servicer = StrategyServiceServicer(
@@ -309,10 +298,8 @@ def _build_servicer(
         restore_running_sessions=False,
         platform_proxy=platform_proxy,
         notification_client=platform_proxy.notification_client(),
-        agent_managed_final_status=True,
         start_session_id=start_session_id,
         session_bootstrap=session_bootstrap,
-        require_session_bootstrap=require_session_bootstrap,
     )
     data_source = WorkerAgentDataSource(client)
     servicer.set_runtime_data_source(data_source)

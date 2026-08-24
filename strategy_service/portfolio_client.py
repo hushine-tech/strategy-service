@@ -138,10 +138,8 @@ class PortfolioClient:
         order_targets: list[Any] | tuple[Any, ...] | None = None,
         session_id: str = "",
         strategy_id: int = 0,
-        leverage: float = 0.0,
     ):
         """Validate venue route/symbol availability before strategy runtime creation."""
-        del leverage  # Deprecated scalar is compatibility-only and never preflight authority.
         if not self._stub:
             return None
         try:
@@ -197,86 +195,6 @@ class PortfolioClient:
         except Exception:
             logger.warning("GetActiveStrategy failed for portfolio_id=%s", portfolio_id, exc_info=True)
             return None
-
-    def save_session(
-        self,
-        session_id: str,
-        portfolio_id: int,
-        strategy_id: int,
-        environment: int,
-        interval: str = "1m",
-        start_time_ms: int = 0,
-        end_time_ms: int = 0,
-        runtime_id: str = "",
-        runtime_source: str = "",
-        runtime_name: str = "",
-        session_type: str = "",
-        runtime_version: str = "",
-        session_name: str = "",
-        leverage: float = 1.0,
-        initial_status: str = "",
-    ) -> bool:
-        """Create a session record in core-service. Returns True on success."""
-        try:
-            self.require_save_session(
-                session_id=session_id,
-                portfolio_id=portfolio_id,
-                strategy_id=strategy_id,
-                environment=environment,
-                interval=interval,
-                start_time_ms=start_time_ms,
-                end_time_ms=end_time_ms,
-                runtime_id=runtime_id,
-                runtime_source=runtime_source,
-                runtime_name=runtime_name,
-                session_type=session_type,
-                runtime_version=runtime_version,
-                session_name=session_name,
-                leverage=leverage,
-                initial_status=initial_status,
-            )
-            return True
-        except Exception:
-            logger.warning("SaveSession failed for session=%s", session_id, exc_info=True)
-            return False
-
-    def require_save_session(
-        self,
-        session_id: str,
-        portfolio_id: int,
-        strategy_id: int,
-        environment: int,
-        interval: str = "1m",
-        start_time_ms: int = 0,
-        end_time_ms: int = 0,
-        runtime_id: str = "",
-        runtime_source: str = "",
-        runtime_name: str = "",
-        session_type: str = "",
-        runtime_version: str = "",
-        session_name: str = "",
-        leverage: float = 1.0,
-        initial_status: str = "",
-    ) -> None:
-        """Create a session record and raise on core-service errors."""
-        if not self._stub:
-            raise RuntimeError("PortfolioClient is not connected")
-        from strategy_service.gen import portfolio_service_pb2
-
-        req = portfolio_service_pb2.SaveSessionRequest(
-            session_id=session_id, portfolio_id=int(portfolio_id),
-            strategy_id=int(strategy_id), environment=int(environment),
-            interval=interval, start_time_ms=int(start_time_ms), end_time_ms=int(end_time_ms),
-            runtime_id=str(runtime_id or ""),
-            runtime_source=str(runtime_source or ""),
-            runtime_name=str(runtime_name or ""),
-            session_type=str(session_type or ""),
-            runtime_version=str(runtime_version or ""),
-            session_name=str(session_name or ""),
-            leverage=float(leverage or 1.0),
-            initial_status=str(initial_status or ""),
-        )
-        self._stub.SaveSession(req)
 
     def update_session(
         self,

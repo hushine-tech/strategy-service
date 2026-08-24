@@ -200,7 +200,6 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 		EndTimeMs:   1_780_000_120_000,
 		UserId:      6,
 		RuntimeId:   blockedWorkerRuntimeID,
-		Leverage:    1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -595,32 +594,6 @@ func (s *blockedWorkerControl) platformResponse(
 		return responseFrame(
 			frame.GetCorrelationId(),
 			&portfoliov1.CommitStrategySessionStartResponse{Ok: true},
-		)
-	case "portfolio.SaveSession":
-		var request portfoliov1.SaveSessionRequest
-		if err := frame.GetRequest().GetRequest().UnmarshalTo(&request); err != nil {
-			return runtimeErrorFrame(frame.GetCorrelationId(), "InvalidArgument", err.Error())
-		}
-		s.mu.Lock()
-		s.sessions[request.GetSessionId()] = &portfoliov1.StrategySessionEntry{
-			SessionId:     request.GetSessionId(),
-			PortfolioId:   request.GetPortfolioId(),
-			StrategyId:    request.GetStrategyId(),
-			UserId:        6,
-			RuntimeId:     request.GetRuntimeId(),
-			RuntimeSource: request.GetRuntimeSource(),
-			RuntimeName:   request.GetRuntimeName(),
-			Status:        "pending",
-			Interval:      request.GetInterval(),
-			StartTimeMs:   request.GetStartTimeMs(),
-			EndTimeMs:     request.GetEndTimeMs(),
-			Leverage:      request.GetLeverage(),
-		}
-		s.events = append(s.events, "SaveSession:"+request.GetSessionId())
-		s.mu.Unlock()
-		return responseFrame(
-			frame.GetCorrelationId(),
-			&portfoliov1.SaveSessionResponse{},
 		)
 	case "portfolio.GetSession":
 		var request portfoliov1.GetSessionRequest

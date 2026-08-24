@@ -19,7 +19,6 @@ type SessionRestarter interface {
 type restartSessionHTTPRequest struct {
 	SessionID       string  `json:"session_id"`
 	MaxLossClosePct float64 `json:"max_loss_close_pct"`
-	Leverage        float64 `json:"leverage"`
 }
 
 func StartLocalControlServer(ctx context.Context, listenAddr string, restarter SessionRestarter) (net.Addr, func(context.Context) error, error) {
@@ -60,6 +59,7 @@ func StartLocalControlServer(ctx context.Context, listenAddr string, restarter S
 		defer r.Body.Close()
 		var req restartSessionHTTPRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeLocalControlError(w, http.StatusBadRequest, "invalid json body")
 			return
@@ -67,7 +67,6 @@ func StartLocalControlServer(ctx context.Context, listenAddr string, restarter S
 		result, err := restarter.RestartSession(r.Context(), RestartSessionOptions{
 			SessionID:       req.SessionID,
 			MaxLossClosePct: req.MaxLossClosePct,
-			Leverage:        req.Leverage,
 		})
 		if err != nil {
 			writeLocalControlError(w, http.StatusInternalServerError, err.Error())

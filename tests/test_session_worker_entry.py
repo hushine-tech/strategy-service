@@ -162,14 +162,13 @@ class _StatusPortfolioClient:
         return True
 
 
-def test_agent_managed_servicer_defers_terminal_but_not_running_persistence():
+def test_worker_servicer_defers_terminal_but_not_running_persistence():
     servicer = StrategyServiceServicer(
         portfolio_service_addr="",
         order_service_addr="",
         timescale_config={},
         kafka_brokers="",
         restore_running_sessions=False,
-        agent_managed_final_status=True,
     )
     portfolio = _StatusPortfolioClient()
     servicer._portfolio_client = lambda: portfolio
@@ -187,13 +186,6 @@ def test_agent_managed_servicer_defers_terminal_but_not_running_persistence():
         "error": "",
         "runtime_id": "rt-1",
     }]
-
-
-def test_session_worker_builds_agent_managed_final_status_servicer():
-    servicer = _build_servicer(_FinalClient(), bound_user_id=6, runtime_id="rt-1")
-    assert servicer._agent_managed_final_status is True
-
-
 def test_worker_context_binds_exact_running_publication_once():
     context = _WorkerContext()
     state = SessionState(session_id="1" * 32, status="running")
