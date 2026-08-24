@@ -317,6 +317,19 @@ def attach_spot_risk_snapshots(
                 }
                 for item in getattr(raw, "asset_filters", []) or []
             ],
+            open_orders=[
+                {
+                    "symbol": str(getattr(item, "symbol", "") or ""),
+                    "side": str(getattr(item, "side", "") or ""),
+                    "orig_qty_decimal": str(
+                        getattr(item, "orig_qty_decimal", "") or ""
+                    ),
+                    "executed_qty_decimal": str(
+                        getattr(item, "executed_qty_decimal", "") or ""
+                    ),
+                }
+                for item in getattr(raw, "open_orders", []) or []
+            ],
             reference_price_decimal=str(
                 getattr(raw, "reference_price_decimal", "") or ""
             ),

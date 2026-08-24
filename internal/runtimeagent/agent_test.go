@@ -67,7 +67,8 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 		t.Fatalf("commit Resume binding = %q", platform.commit.GetResumeSessionId())
 	}
 	if len(platform.commit.GetSpotRiskSnapshots()) != 1 ||
-		platform.commit.GetSpotRiskSnapshots()[0].GetSnapshotId() != "spot-risk-1" {
+		platform.commit.GetSpotRiskSnapshots()[0].GetSnapshotId() != "spot-risk-1" ||
+		len(platform.commit.GetSpotRiskSnapshots()[0].GetOpenOrders()) != 1 {
 		t.Fatalf("commit Spot facts = %+v", platform.commit.GetSpotRiskSnapshots())
 	}
 	if starter.finalStart == nil || starter.finalStart.GetSessionBootstrap() == nil {
@@ -83,7 +84,8 @@ func TestAgentRunStrategyPreparesCommitsThenStartsFinalWorker(t *testing.T) {
 		bootstrap.GetEnvironment() != 1 ||
 		len(bootstrap.GetConfirmedTargetFacts()) != 2 ||
 		len(bootstrap.GetSpotRiskSnapshots()) != 1 ||
-		bootstrap.GetSpotRiskSnapshots()[0].GetSnapshotId() != "spot-risk-1" {
+		bootstrap.GetSpotRiskSnapshots()[0].GetSnapshotId() != "spot-risk-1" ||
+		len(bootstrap.GetSpotRiskSnapshots()[0].GetOpenOrders()) != 1 {
 		t.Fatalf("bootstrap = %+v", &bootstrap)
 	}
 }
@@ -710,6 +712,9 @@ func preparedStrategyStart(sessionID, operationID string) *strategyv1.PreparedRu
 		SpotRiskSnapshots: []*portfoliov1.SpotRiskFactSnapshot{{
 			SnapshotId: "spot-risk-1", VenueId: 23, Exchange: 1, Environment: 1,
 			Market: 1, Symbol: "BTCUSDT", ReferencePriceDecimal: "50000",
+			OpenOrders: []*portfoliov1.SpotOpenOrderFact{{
+				Symbol: "BTCUSDT", Side: "BUY", OrigQtyDecimal: "0.01", ExecutedQtyDecimal: "0",
+			}},
 		}},
 	}
 }

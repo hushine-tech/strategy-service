@@ -467,6 +467,81 @@ def test_demo_spot_risk_never_replaces_binance_reference_with_kline_price():
         )
 
 
+def test_demo_spot_risk_counts_exchange_open_orders_before_new_order():
+    open_order_type = getattr(portfolio_service_pb2, "SpotOpenOrderFact", None)
+    assert open_order_type is not None
+    metadata = portfolio_service_pb2.SpotSymbolMetadata(
+        symbol="BTCUSDT",
+        status="TRADING",
+        base_asset="BTC",
+        quote_asset="USDT",
+        base_asset_precision=8,
+        quote_asset_precision=8,
+        spot_trading_allowed=True,
+        order_types=["MARKET"],
+        filters=[
+            portfolio_service_pb2.SpotSymbolFilter(
+                filter_type="LOT_SIZE",
+                min_qty="0.00001",
+                max_qty="1000",
+                step_size="0.00001",
+            ),
+            portfolio_service_pb2.SpotSymbolFilter(
+                filter_type="MAX_NUM_ORDERS",
+                max_num_orders=1,
+            ),
+        ],
+    )
+    routed = build_portfolio_wallet_from_snapshot(
+        _snapshot(
+            _venue(
+                venue_id=10,
+                market=MARKET_SPOT,
+                spot_symbols=[metadata],
+                wallet=_spot_wallet(
+                    assets=[
+                        _spot_asset("USDT", free_decimal="1000"),
+                        _spot_asset("BTC", free_decimal="0"),
+                    ],
+                ),
+            )
+        ),
+        {("binance", "spot")},
+    )
+    attach_spot_risk_snapshots(
+        routed,
+        [
+            portfolio_service_pb2.SpotRiskFactSnapshot(
+                snapshot_id="risk-demo-open-orders",
+                venue_id=10,
+                exchange=EXCHANGE_BINANCE,
+                environment=1,
+                market=MARKET_SPOT,
+                symbol="BTCUSDT",
+                metadata=metadata,
+                reference_price_decimal="50000",
+                open_orders=[
+                    open_order_type(
+                        symbol="BTCUSDT",
+                        side="BUY",
+                        orig_qty_decimal="0.01",
+                        executed_qty_decimal="0",
+                    )
+                ],
+            )
+        ],
+    )
+
+    with pytest.raises(SpotFilterViolation, match="SPOT_MAX_NUM_ORDERS"):
+        routed.get("binance", "spot").spot.review_order(
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="MARKET",
+            qty_decimal="0.00020",
+            price_decimal=None,
+        )
+
+
 def test_unrequested_venue_snapshot_is_ignored_before_wallet_validation():
     snapshot = _snapshot(
         _venue(

@@ -235,6 +235,7 @@ class SpotWallet:
         exchange_filters: list[dict[str, Any]] | None = None,
         symbol_filters: list[dict[str, Any]] | None = None,
         asset_filters: list[dict[str, Any]] | None = None,
+        open_orders: list[dict[str, Any]] | None = None,
         reference_price_decimal: str,
     ) -> None:
         facts = self.register_metadata(metadata)
@@ -262,6 +263,7 @@ class SpotWallet:
             "exchange_filters": list(exchange_filters or []),
             "symbol_filters": list(symbol_filters or []),
             "asset_filters": list(asset_filters or []),
+            "open_orders": list(open_orders or []),
             "reference_price_decimal": str(reference_price_decimal or ""),
         }
 
@@ -288,7 +290,7 @@ class SpotWallet:
             replay_price = self.symbol_prices.get(metadata.route_key)
             if replay_price is not None:
                 facts["reference_price_decimal"] = str(replay_price)
-        facts["open_orders"] = [
+        facts["open_orders"] = list(facts.get("open_orders") or []) + [
             {
                 "symbol": item.symbol,
                 "side": item.side,
