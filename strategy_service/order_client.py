@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import logging
 import uuid
 
@@ -51,6 +51,36 @@ POSITION_SIDE_NAMES = {
     1: "long",
     2: "short",
 }
+
+
+def canonical_decimal_text(value: int | float | Decimal | str) -> str:
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("a finite non-negative decimal is required") from exc
+    if not decimal_value.is_finite() or decimal_value < 0:
+        raise ValueError("a finite non-negative decimal is required")
+    if decimal_value == 0:
+        decimal_value = decimal_value.copy_abs()
+    integer_digits = 1 if decimal_value == 0 else max(decimal_value.adjusted() + 1, 1)
+    fractional_digits = max(-decimal_value.as_tuple().exponent, 0)
+    if integer_digits > 20 or fractional_digits > 18:
+        raise ValueError(
+            "a finite non-negative decimal within NUMERIC(38,18) is required"
+        )
+    return format(decimal_value, "f")
+
+
+def _required_decimal_text(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field_name} is required")
+    return canonical_decimal_text(value)
+
+
+def _optional_decimal_text(value: object) -> str:
+    if value in (None, ""):
+        return ""
+    return canonical_decimal_text(value)
 
 
 def _target_value(target, name: str, default=None):
@@ -168,20 +198,17 @@ class OrderClient:
                 portfolio_id=int(portfolio_id),
                 symbol=symbol,
                 side=decision.side,
-                qty=float(decision.qty),
-                mark_price=float(mark_price),
                 strategy_id=int(strategy_id),
                 market=market_code,
                 session_id=session_id,
                 intent_id=intent,
                 exchange=exchange_code,
                 position_side=position_side_code,
-                qty_decimal=str(decision.qty).strip(),
-                mark_price_decimal=str(mark_price).strip(),
+                qty_decimal=canonical_decimal_text(decision.qty),
+                mark_price_decimal=canonical_decimal_text(mark_price),
             )
             if decision.price is not None:
-                kwargs["price"] = float(decision.price)
-                kwargs["price_decimal"] = str(decision.price).strip()
+                kwargs["price_decimal"] = canonical_decimal_text(decision.price)
             order_type = str(getattr(decision, "order_type", None) or "").strip().upper()
             if not order_type:
                 order_type = "LIMIT" if decision.price is not None else "MARKET"
@@ -323,17 +350,41 @@ class OrderClient:
             return None
         if event.fill.fee_missing:
             return None
-        raw_qty = abs(float(event.fill.qty or 0.0))
-        if raw_qty <= 0.0:
-            return None
         cls._exchange_code(event.exchange)
         market = event.market
         cls._market_code(market)
+        qty_decimal = _required_decimal_text(
+            getattr(event.fill, "qty_decimal", ""),
+            "fill.qty_decimal",
+        )
+        fill_price_decimal = _required_decimal_text(
+            getattr(event.fill, "fill_price_decimal", ""),
+            "fill.fill_price_decimal",
+        )
+        fee_decimal = _required_decimal_text(
+            getattr(event.fill, "fee_decimal", ""),
+            "fill.fee_decimal",
+        )
+        raw_qty = abs(float(Decimal(qty_decimal)))
+        if raw_qty <= 0.0:
+            return None
         side = event.side or ""
         wallet_qty = cls._wallet_qty(raw_qty, side, market)
-        orig_qty = abs(float(getattr(event, "orig_qty", 0.0) or 0.0))
-        executed_qty = abs(float(getattr(event, "executed_qty", 0.0) or 0.0))
-        remaining_qty = abs(float(getattr(event, "remaining_qty", 0.0) or 0.0))
+        orig_qty_decimal = _required_decimal_text(
+            getattr(event, "orig_qty_decimal", ""),
+            "order.orig_qty_decimal",
+        )
+        executed_qty_decimal = _required_decimal_text(
+            getattr(event, "executed_qty_decimal", ""),
+            "order.executed_qty_decimal",
+        )
+        remaining_qty_decimal = _required_decimal_text(
+            getattr(event, "remaining_qty_decimal", ""),
+            "order.remaining_qty_decimal",
+        )
+        orig_qty = abs(float(Decimal(orig_qty_decimal)))
+        executed_qty = abs(float(Decimal(executed_qty_decimal)))
+        remaining_qty = abs(float(Decimal(remaining_qty_decimal)))
         if executed_qty <= 0.0:
             executed_qty = raw_qty
         if orig_qty <= 0.0:
@@ -344,9 +395,9 @@ class OrderClient:
             symbol=event.fill.symbol,
             side=side,
             qty=wallet_qty,
-            fill_price=float(event.fill.fill_price or 0.0),
+            fill_price=float(Decimal(fill_price_decimal)),
             status=event.order_status or "FILLED",
-            fee=float(event.fill.fee or 0.0),
+            fee=float(Decimal(fee_decimal)),
             order_id=event.order_id,
             position_side=event.position_side,
             orig_qty=orig_qty,
@@ -367,19 +418,21 @@ class OrderClient:
                 or ""
             ),
             fee_asset=str(getattr(event.fill, "fee_asset", "") or ""),
-            qty_decimal=str(getattr(event.fill, "qty_decimal", "") or event.fill.qty or "0"),
-            fill_price_decimal=str(
-                getattr(event.fill, "fill_price_decimal", "")
-                or event.fill.fill_price
-                or "0"
+            qty_decimal=qty_decimal,
+            fill_price_decimal=fill_price_decimal,
+            fee_decimal=fee_decimal,
+            quote_qty_decimal=_required_decimal_text(
+                getattr(event.fill, "quote_qty_decimal", ""),
+                "fill.quote_qty_decimal",
             ),
-            fee_decimal=str(getattr(event.fill, "fee_decimal", "") or event.fill.fee or "0"),
-            quote_qty_decimal=str(getattr(event.fill, "quote_qty_decimal", "") or ""),
-            orig_qty_decimal=str(getattr(event, "orig_qty_decimal", "") or orig_qty or "0"),
-            executed_qty_decimal=str(getattr(event, "executed_qty_decimal", "") or executed_qty or "0"),
-            remaining_qty_decimal=str(getattr(event, "remaining_qty_decimal", "") or remaining_qty or "0"),
-            price_decimal=str(getattr(event, "price_decimal", "") or ""),
-            cumulative_quote_qty_decimal=str(getattr(event, "cumulative_quote_qty_decimal", "") or ""),
+            orig_qty_decimal=orig_qty_decimal,
+            executed_qty_decimal=executed_qty_decimal,
+            remaining_qty_decimal=remaining_qty_decimal,
+            price_decimal=_optional_decimal_text(getattr(event, "price_decimal", "")),
+            cumulative_quote_qty_decimal=_required_decimal_text(
+                getattr(event, "cumulative_quote_qty_decimal", ""),
+                "order.cumulative_quote_qty_decimal",
+            ),
         )
 
     @staticmethod
@@ -390,20 +443,29 @@ class OrderClient:
     def _order_update_event_from_proto(item) -> OrderUpdateEvent:
         fill = None
         if item.HasField("fill_delta"):
+            qty_decimal = _required_decimal_text(item.fill_delta.qty_decimal, "fill_delta.qty_decimal")
+            fill_price_decimal = _required_decimal_text(
+                item.fill_delta.fill_price_decimal,
+                "fill_delta.fill_price_decimal",
+            )
+            fee_decimal = _required_decimal_text(item.fill_delta.fee_decimal, "fill_delta.fee_decimal")
             fill = OrderUpdateFill(
                 symbol=str(item.fill_delta.symbol or item.order_state.symbol or "").upper(),
-                qty=float(item.fill_delta.qty or 0.0),
-                fill_price=float(item.fill_delta.fill_price or item.order_state.avg_price or 0.0),
-                fee=float(item.fill_delta.fee or 0.0),
+                qty=float(Decimal(qty_decimal)),
+                fill_price=float(Decimal(fill_price_decimal)),
+                fee=float(Decimal(fee_decimal)),
                 fee_asset=str(item.fill_delta.fee_asset or ""),
                 fee_missing=bool(item.fill_delta.fee_missing),
                 exchange_trade_id=str(item.fill_delta.exchange_trade_id or ""),
                 exchange_order_id=str(item.fill_delta.exchange_order_id or ""),
+                qty_decimal=qty_decimal,
+                fill_price_decimal=fill_price_decimal,
+                fee_decimal=fee_decimal,
+                quote_qty_decimal=_required_decimal_text(
+                    item.fill_delta.quote_qty_decimal,
+                    "fill_delta.quote_qty_decimal",
+                ),
             )
-            object.__setattr__(fill, "qty_decimal", str(getattr(item.fill_delta, "qty_decimal", "") or ""))
-            object.__setattr__(fill, "fill_price_decimal", str(getattr(item.fill_delta, "fill_price_decimal", "") or ""))
-            object.__setattr__(fill, "fee_decimal", str(getattr(item.fill_delta, "fee_decimal", "") or ""))
-            object.__setattr__(fill, "quote_qty_decimal", str(getattr(item.fill_delta, "quote_qty_decimal", "") or ""))
         order_state = item.order_state if item.HasField("order_state") else None
         event = OrderUpdateEvent(
             event_id=int(item.event_id),
@@ -424,16 +486,30 @@ class OrderClient:
             exchange_order_id=str(item.exchange_order_id or ""),
             exchange_trade_id=str(item.exchange_trade_id or ""),
             fill=fill,
-            orig_qty=float(getattr(order_state, "orig_qty", 0.0) or 0.0),
-            executed_qty=float(getattr(order_state, "executed_qty", 0.0) or 0.0),
-            remaining_qty=float(getattr(order_state, "remaining_qty", 0.0) or 0.0),
-            avg_price=float(getattr(order_state, "avg_price", 0.0) or 0.0),
+            orig_qty=float(Decimal(_required_decimal_text(order_state.orig_qty_decimal, "order_state.orig_qty_decimal"))) if order_state is not None else 0.0,
+            executed_qty=float(Decimal(_required_decimal_text(order_state.executed_qty_decimal, "order_state.executed_qty_decimal"))) if order_state is not None else 0.0,
+            remaining_qty=float(Decimal(_required_decimal_text(order_state.remaining_qty_decimal, "order_state.remaining_qty_decimal"))) if order_state is not None else 0.0,
+            avg_price=float(Decimal(_required_decimal_text(order_state.avg_price_decimal, "order_state.avg_price_decimal"))) if order_state is not None else 0.0,
+            orig_qty_decimal=_required_decimal_text(
+                order_state.orig_qty_decimal,
+                "order_state.orig_qty_decimal",
+            ) if order_state is not None else "",
+            executed_qty_decimal=_required_decimal_text(
+                order_state.executed_qty_decimal,
+                "order_state.executed_qty_decimal",
+            ) if order_state is not None else "",
+            remaining_qty_decimal=_required_decimal_text(
+                order_state.remaining_qty_decimal,
+                "order_state.remaining_qty_decimal",
+            ) if order_state is not None else "",
+            price_decimal=_optional_decimal_text(
+                order_state.price_decimal,
+            ) if order_state is not None else "",
+            cumulative_quote_qty_decimal=_required_decimal_text(
+                order_state.cumulative_quote_qty_decimal,
+                "order_state.cumulative_quote_qty_decimal",
+            ) if order_state is not None else "",
         )
-        object.__setattr__(event, "orig_qty_decimal", str(getattr(order_state, "orig_qty_decimal", "") or ""))
-        object.__setattr__(event, "executed_qty_decimal", str(getattr(order_state, "executed_qty_decimal", "") or ""))
-        object.__setattr__(event, "remaining_qty_decimal", str(getattr(order_state, "remaining_qty_decimal", "") or ""))
-        object.__setattr__(event, "price_decimal", str(getattr(order_state, "price_decimal", "") or ""))
-        object.__setattr__(event, "cumulative_quote_qty_decimal", str(getattr(order_state, "cumulative_quote_qty_decimal", "") or ""))
         return event
 
     def _resolve_unknown_attempt(
@@ -491,7 +567,11 @@ class OrderClient:
             fill_count = len(fill_events)
             delta_qty = sum(float(event.qty or 0.0) for event in fill_events)
             total_fee = sum(float(event.fee or 0.0) for event in fill_events)
-            last_fill_price = float(resp.order.avg_price or 0.0)
+            order_avg_price_decimal = _required_decimal_text(
+                resp.order.avg_price_decimal,
+                "order.avg_price_decimal",
+            )
+            last_fill_price = float(Decimal(order_avg_price_decimal))
             if fill_events:
                 last_fill_price = float(fill_events[-1].fill_price or last_fill_price or 0.0)
             wallet_qty = delta_qty
@@ -503,10 +583,10 @@ class OrderClient:
                 status=resp.order.status,
                 fee=total_fee,
                 order_id=resp.order.order_id,
-                orig_qty=float(resp.order.orig_qty or 0.0),
-                executed_qty=float(resp.order.executed_qty or 0.0),
-                remaining_qty=float(resp.order.remaining_qty or 0.0),
-                price=float(resp.order.price or 0.0),
+                orig_qty=float(Decimal(_required_decimal_text(resp.order.orig_qty_decimal, "order.orig_qty_decimal"))),
+                executed_qty=float(Decimal(_required_decimal_text(resp.order.executed_qty_decimal, "order.executed_qty_decimal"))),
+                remaining_qty=float(Decimal(_required_decimal_text(resp.order.remaining_qty_decimal, "order.remaining_qty_decimal"))),
+                price=float(Decimal(_optional_decimal_text(resp.order.price_decimal) or "0")),
                 venue_id=int(getattr(resp.order, "venue_id", 0) or 0),
                 exchange=EXCHANGE_NAMES.get(int(getattr(resp.order, "exchange", 0) or 0), ""),
                 market=MARKET_NAMES.get(int(getattr(resp.order, "market", 0) or 0), market),
@@ -517,14 +597,17 @@ class OrderClient:
                     else ""
                 ),
                 qty_decimal=str(sum((Decimal(item.qty_decimal or "0") for item in fill_events), Decimal("0"))),
-                fill_price_decimal=(fill_events[-1].fill_price_decimal if fill_events else str(getattr(resp.order, "avg_price_decimal", "") or "")),
+                fill_price_decimal=(fill_events[-1].fill_price_decimal if fill_events else order_avg_price_decimal),
                 fee_decimal=str(sum((Decimal(item.fee_decimal or "0") for item in fill_events), Decimal("0"))),
                 quote_qty_decimal=str(sum((Decimal(item.quote_qty_decimal or "0") for item in fill_events), Decimal("0"))),
-                orig_qty_decimal=str(getattr(resp.order, "orig_qty_decimal", "") or resp.order.orig_qty or "0"),
-                executed_qty_decimal=str(getattr(resp.order, "executed_qty_decimal", "") or resp.order.executed_qty or "0"),
-                remaining_qty_decimal=str(getattr(resp.order, "remaining_qty_decimal", "") or resp.order.remaining_qty or "0"),
-                price_decimal=str(getattr(resp.order, "price_decimal", "") or resp.order.price or ""),
-                cumulative_quote_qty_decimal=str(getattr(resp.order, "cumulative_quote_qty_decimal", "") or ""),
+                orig_qty_decimal=_required_decimal_text(resp.order.orig_qty_decimal, "order.orig_qty_decimal"),
+                executed_qty_decimal=_required_decimal_text(resp.order.executed_qty_decimal, "order.executed_qty_decimal"),
+                remaining_qty_decimal=_required_decimal_text(resp.order.remaining_qty_decimal, "order.remaining_qty_decimal"),
+                price_decimal=_optional_decimal_text(resp.order.price_decimal),
+                cumulative_quote_qty_decimal=_required_decimal_text(
+                    resp.order.cumulative_quote_qty_decimal,
+                    "order.cumulative_quote_qty_decimal",
+                ),
                 environment=int(getattr(resp.order, "environment", 0) or 0),
             )
             return ExecutionFeedback(
@@ -583,11 +666,12 @@ class OrderClient:
         symbol: str,
     ) -> list[OrderResponse]:
         side = str(getattr(order, "side", "") or fallback_side or "").strip()
-        orig_qty = abs(float(getattr(order, "orig_qty", 0.0) or 0.0))
-        orig_qty_decimal = str(getattr(order, "orig_qty_decimal", "") or orig_qty or "0")
+        orig_qty_decimal = _required_decimal_text(order.orig_qty_decimal, "order.orig_qty_decimal")
+        orig_qty = abs(float(Decimal(orig_qty_decimal)))
         final_status = str(getattr(order, "status", "") or "").strip().upper()
         order_id = str(getattr(order, "order_id", "") or "")
-        price = float(getattr(order, "price", 0.0) or 0.0)
+        price_decimal = _optional_decimal_text(order.price_decimal)
+        price = float(Decimal(price_decimal or "0"))
 
         raw_fills = list(fill_deltas)
         if any(
@@ -600,22 +684,14 @@ class OrderClient:
         cumulative_executed = Decimal("0")
         cumulative_quote = Decimal("0")
         for index, fill in enumerate(raw_fills):
-            qty_decimal = str(getattr(fill, "qty_decimal", "") or getattr(fill, "qty", 0.0) or "0")
+            qty_decimal = _required_decimal_text(fill.qty_decimal, "fill.qty_decimal")
             raw_qty_decimal = abs(Decimal(qty_decimal))
             raw_qty = float(raw_qty_decimal)
             if raw_qty_decimal <= 0:
                 continue
-            fill_price_decimal = str(
-                getattr(fill, "fill_price_decimal", "")
-                or getattr(fill, "fill_price", 0.0)
-                or "0"
-            )
-            quote_qty_decimal = str(getattr(fill, "quote_qty_decimal", "") or "")
-            if quote_qty_decimal:
-                raw_quote = Decimal(quote_qty_decimal)
-            else:
-                raw_quote = raw_qty_decimal * Decimal(fill_price_decimal)
-                quote_qty_decimal = str(raw_quote)
+            fill_price_decimal = _required_decimal_text(fill.fill_price_decimal, "fill.fill_price_decimal")
+            quote_qty_decimal = _required_decimal_text(fill.quote_qty_decimal, "fill.quote_qty_decimal")
+            raw_quote = Decimal(quote_qty_decimal)
             cumulative_executed += raw_qty_decimal
             cumulative_quote += raw_quote
             remaining_exact = max(Decimal("0"), Decimal(orig_qty_decimal) - cumulative_executed)
@@ -628,9 +704,9 @@ class OrderClient:
                 symbol=symbol,
                 side=side,
                 qty=wallet_qty,
-                fill_price=float(getattr(fill, "fill_price", 0.0) or 0.0),
+                fill_price=float(Decimal(fill_price_decimal)),
                 status=status or "PARTIALLY_FILLED",
-                fee=float(getattr(fill, "fee", 0.0) or 0.0),
+                fee=float(Decimal(_required_decimal_text(fill.fee_decimal, "fill.fee_decimal"))),
                 order_id=order_id,
                 orig_qty=orig_qty,
                 executed_qty=float(cumulative_executed),
@@ -644,12 +720,12 @@ class OrderClient:
                 fee_asset=str(getattr(fill, "fee_asset", "") or ""),
                 qty_decimal=str(raw_qty_decimal),
                 fill_price_decimal=fill_price_decimal,
-                fee_decimal=str(getattr(fill, "fee_decimal", "") or getattr(fill, "fee", 0.0) or "0"),
+                fee_decimal=_required_decimal_text(fill.fee_decimal, "fill.fee_decimal"),
                 quote_qty_decimal=quote_qty_decimal,
                 orig_qty_decimal=orig_qty_decimal,
                 executed_qty_decimal=str(cumulative_executed),
                 remaining_qty_decimal=str(remaining_exact),
-                price_decimal=str(getattr(order, "price_decimal", "") or getattr(order, "price", 0.0) or ""),
+                price_decimal=price_decimal,
                 cumulative_quote_qty_decimal=str(cumulative_quote),
                 environment=int(getattr(fill, "environment", 0) or getattr(order, "environment", 0) or 0),
             ))

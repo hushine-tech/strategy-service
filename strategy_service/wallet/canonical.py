@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Any
 
 
@@ -118,29 +117,18 @@ class CanonicalFuturesState:
 
 @dataclass(slots=True)
 class CanonicalSpotAssetState:
-    symbol: str
-    qty: float = 0.0
-    locked: float = 0.0
-    avg_entry_price: float = 0.0
-    price: float | None = None
-    # Binance account semantics. ``symbol``/``qty`` remain additive-read
-    # compatibility for snapshots written before asset-code fields existed.
-    asset: str = ""
-    free: Decimal | str | float | int | None = None
-    free_decimal: str = ""
-    locked_decimal: str = ""
-
-    def normalized_symbol(self) -> str:
-        return norm_symbol(self.symbol)
+    asset: str
+    free_decimal: str
+    locked_decimal: str
+    avg_entry_price_decimal: str = ""
+    price_decimal: str | None = None
 
     def normalized_asset(self) -> str:
-        return norm_symbol(self.asset or self.symbol)
+        return norm_symbol(self.asset)
 
 
 @dataclass(slots=True)
 class CanonicalSpotState:
-    free: float = 0.0
-    locked: float = 0.0
     assets: list[CanonicalSpotAssetState] = field(default_factory=list)
 
 

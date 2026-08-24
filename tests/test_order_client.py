@@ -5,8 +5,12 @@ from datetime import datetime, timezone
 import pytest
 
 from strategy_service.gen import order_service_pb2
-from strategy_service.order_client import OrderClient
+from strategy_service.order_client import OrderClient, canonical_decimal_text
 from strategy_service.types import OrderDecision, OrderUpdateEvent, OrderUpdateFill
+
+
+def test_canonical_decimal_text_normalizes_signed_zero() -> None:
+    assert canonical_decimal_text("-0.000") == "0.000"
 
 
 class _Stub:
@@ -126,24 +130,27 @@ def test_place_order_uses_canonical_symbol_and_emits_fill_events():
             exchange_order_id="ex-1",
             symbol="ETHUSDT",
             side="BUY",
-            orig_qty=0.05,
-            executed_qty=0.05,
-            remaining_qty=0.0,
-            avg_price=51200.0,
+            orig_qty_decimal="0.05",
+            executed_qty_decimal="0.05",
+            remaining_qty_decimal="0",
+            avg_price_decimal="51200",
+            cumulative_quote_qty_decimal="2560",
             status="FILLED",
         ),
         fill_deltas=[
             order_service_pb2.OrderFillEntry(
                 order_id="order-1",
-                qty=0.02,
-                fill_price=50000.0,
-                fee=0.1,
+                qty_decimal="0.02",
+                fill_price_decimal="50000",
+                fee_decimal="0.1",
+                quote_qty_decimal="1000",
             ),
             order_service_pb2.OrderFillEntry(
                 order_id="order-1",
-                qty=0.03,
-                fill_price=52000.0,
-                fee=0.2,
+                qty_decimal="0.03",
+                fill_price_decimal="52000",
+                fee_decimal="0.2",
+                quote_qty_decimal="1560",
             ),
         ],
     )
@@ -190,19 +197,21 @@ def test_place_order_ioc_partial_expired_emits_terminal_fill_event():
             exchange_order_id="ex-ioc",
             symbol="ETHUSDT",
             side="BUY",
-            orig_qty=0.02,
-            executed_qty=0.004,
-            remaining_qty=0.016,
-            avg_price=2500.0,
-            price=2500.0,
+            orig_qty_decimal="0.02",
+            executed_qty_decimal="0.004",
+            remaining_qty_decimal="0.016",
+            avg_price_decimal="2500",
+            price_decimal="2500",
+            cumulative_quote_qty_decimal="10",
             status="EXPIRED",
         ),
         fill_deltas=[
             order_service_pb2.OrderFillEntry(
                 order_id="order-ioc",
-                qty=0.004,
-                fill_price=2500.0,
-                fee=0.01,
+                qty_decimal="0.004",
+                fill_price_decimal="2500",
+                fee_decimal="0.01",
+                quote_qty_decimal="10",
             ),
         ],
     )
@@ -273,18 +282,20 @@ def test_place_order_exception_triggers_resolve_unknown_attempt():
             exchange_order_id="ex-2",
             symbol="ETHUSDT",
             side="BUY",
-            orig_qty=0.05,
-            executed_qty=0.05,
-            remaining_qty=0.0,
-            avg_price=51000.0,
+            orig_qty_decimal="0.05",
+            executed_qty_decimal="0.05",
+            remaining_qty_decimal="0",
+            avg_price_decimal="51000",
+            cumulative_quote_qty_decimal="2550",
             status="FILLED",
         ),
         fill_deltas=[
             order_service_pb2.OrderFillEntry(
                 order_id="order-2",
-                qty=0.05,
-                fill_price=51000.0,
-                fee=0.2,
+                qty_decimal="0.05",
+                fill_price_decimal="51000",
+                fee_decimal="0.2",
+                quote_qty_decimal="2550",
             ),
         ],
         client_order_id="coid-2",
@@ -317,19 +328,21 @@ def test_fee_missing_fill_is_not_wallet_settleable():
             exchange_order_id="ex-3",
             symbol="ETHUSDT",
             side="BUY",
-            orig_qty=0.05,
-            executed_qty=0.05,
-            remaining_qty=0.0,
-            avg_price=51000.0,
+            orig_qty_decimal="0.05",
+            executed_qty_decimal="0.05",
+            remaining_qty_decimal="0",
+            avg_price_decimal="51000",
+            cumulative_quote_qty_decimal="2550",
             status="FILLED",
             error_message="binance trade fee data not available after confirmed execution",
         ),
         fill_deltas=[
             order_service_pb2.OrderFillEntry(
                 order_id="order-3",
-                qty=0.05,
-                fill_price=51000.0,
-                fee=0.0,
+                qty_decimal="0.05",
+                fill_price_decimal="51000",
+                fee_decimal="0",
+                quote_qty_decimal="2550",
                 status="FEE_MISSING",
             ),
         ],
@@ -417,7 +430,8 @@ def test_place_order_sends_advanced_order_contract_fields():
     )
 
     assert stub.last_request is not None
-    assert stub.last_request.price == 50000.0
+    assert "price" not in stub.last_request.DESCRIPTOR.fields_by_name
+    assert stub.last_request.price_decimal == "50000"
     assert stub.last_request.order_type == "LIMIT"
     assert stub.last_request.time_in_force == "GTD"
     assert stub.last_request.post_only is True
@@ -439,8 +453,6 @@ def test_spot_place_order_preserves_exact_request_fill_fee_and_trade_identity():
             market=1,
             symbol="BTCUSDT",
             side="BUY",
-            orig_qty=0.01,
-            executed_qty=0.01,
             status="FILLED",
             orig_qty_decimal="0.01000000",
             executed_qty_decimal="0.01000000",
@@ -458,9 +470,6 @@ def test_spot_place_order_preserves_exact_request_fill_fee_and_trade_identity():
                 market=1,
                 symbol="BTCUSDT",
                 side="BUY",
-                qty=0.01,
-                fill_price=50000.1,
-                fee=0.0002,
                 fee_asset="BNB",
                 qty_decimal="0.01000000",
                 fill_price_decimal="50000.10",
@@ -604,9 +613,6 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
         exchange_trade_id="0",
         fill_delta=order_service_pb2.FillDeltaEntry(
             symbol="ETHUSDT",
-            qty=0.1,
-            fill_price=2500.0,
-            fee=0.02,
             fee_asset="USDT",
             exchange_trade_id="0",
             exchange_order_id="1001",
@@ -618,10 +624,6 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
         order_state=order_service_pb2.OrderStateEntry(
             symbol="ETHUSDT",
             status="FILLED",
-            orig_qty=0.1,
-            executed_qty=0.1,
-            remaining_qty=0.0,
-            avg_price=2500.0,
             orig_qty_decimal="0.10000000",
             executed_qty_decimal="0.10000000",
             remaining_qty_decimal="0.00000000",
@@ -672,11 +674,21 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
                 order_id="order-1",
                 fill_delta=order_service_pb2.FillDeltaEntry(
                     symbol="ETHUSDT",
-                    qty=0.1,
-                    fill_price=3000.0,
-                    fee=0.2,
                     fee_asset="USDT",
                     exchange_trade_id="trade-1",
+                    qty_decimal="0.1",
+                    fill_price_decimal="3000",
+                    fee_decimal="0.2",
+                    quote_qty_decimal="300",
+                ),
+                order_state=order_service_pb2.OrderStateEntry(
+                    symbol="ETHUSDT",
+                    status="FILLED",
+                    orig_qty_decimal="0.1",
+                    executed_qty_decimal="0.1",
+                    remaining_qty_decimal="0",
+                    avg_price_decimal="3000",
+                    cumulative_quote_qty_decimal="300",
                 ),
             )
         ]
@@ -742,17 +754,19 @@ def test_order_response_from_update_uses_lifecycle_order_state():
                 order_id="order-1",
                 fill_delta=order_service_pb2.FillDeltaEntry(
                     symbol="ETHUSDT",
-                    qty=0.02,
-                    fill_price=3000.0,
-                    fee=0.2,
+                    qty_decimal="0.02",
+                    fill_price_decimal="3000",
+                    fee_decimal="0.2",
+                    quote_qty_decimal="60",
                 ),
                 order_state=order_service_pb2.OrderStateEntry(
                     symbol="ETHUSDT",
                     status="PARTIALLY_FILLED",
-                    orig_qty=0.05,
-                    executed_qty=0.02,
-                    remaining_qty=0.03,
-                    avg_price=3000.0,
+                    orig_qty_decimal="0.05",
+                    executed_qty_decimal="0.02",
+                    remaining_qty_decimal="0.03",
+                    avg_price_decimal="3000",
+                    cumulative_quote_qty_decimal="60",
                 ),
             )
         ]

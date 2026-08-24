@@ -715,10 +715,6 @@ def _wallet_parts_for_portfolio_sync(wallet: Any) -> tuple[Any | None, Any | Non
 def _spot_wallet_has_state(spot_wallet: Any) -> bool:
     if spot_wallet is None:
         return False
-    if float(getattr(spot_wallet, "free", 0.0) or 0.0) != 0.0:
-        return True
-    if float(getattr(spot_wallet, "locked", 0.0) or 0.0) != 0.0:
-        return True
     return bool(getattr(spot_wallet, "assets", {}) or {})
 
 

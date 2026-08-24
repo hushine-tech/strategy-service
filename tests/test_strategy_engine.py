@@ -237,6 +237,48 @@ def _register_spot_facts(spot_wallet, symbol: str) -> None:
     )
 
 
+def _exact_order_update_fill(
+    symbol: str,
+    qty: str,
+    fill_price: str,
+    *,
+    fee: str = "0",
+) -> OrderUpdateFill:
+    return OrderUpdateFill(
+        symbol=symbol,
+        qty=float(qty),
+        fill_price=float(fill_price),
+        fee=float(fee),
+        qty_decimal=qty,
+        fill_price_decimal=fill_price,
+        fee_decimal=fee,
+        quote_qty_decimal=format(Decimal(qty) * Decimal(fill_price), "f"),
+    )
+
+
+def _exact_order_state(
+    *,
+    orig: str,
+    executed: str,
+    remaining: str,
+    price: str,
+) -> dict[str, object]:
+    return {
+        "orig_qty": float(orig),
+        "executed_qty": float(executed),
+        "remaining_qty": float(remaining),
+        "avg_price": float(price),
+        "orig_qty_decimal": orig,
+        "executed_qty_decimal": executed,
+        "remaining_qty_decimal": remaining,
+        "price_decimal": price,
+        "cumulative_quote_qty_decimal": format(
+            Decimal(executed) * Decimal(price),
+            "f",
+        ),
+    }
+
+
 def test_spot_replay_parity_matches_hosted_filters_and_canonical_fill_wallet():
     fixture = (
         Path(__file__).resolve().parents[2]
@@ -350,9 +392,13 @@ def test_spot_replay_parity_matches_hosted_filters_and_canonical_fill_wallet():
 
 def _wallet_with_spot_slot(symbol: str = "TESTUSDT"):
     """Build a backtest wallet runtime with one spot asset slot preconfigured."""
+    normalized = symbol.strip().upper()
     wallet = make_backtest_wallet(
         margin_mode="isolated",
-        spot_assets=[{"symbol": symbol.strip().upper()}],
+        spot_assets=[
+            {"asset": "USDT", "free_decimal": "1000", "locked_decimal": "0"},
+            {"asset": normalized[:-4], "free_decimal": "0", "locked_decimal": "0"},
+        ],
     )
     routed = _portfolio_wallet(wallet, ("binance", "perpetual_futures"), ("binance", "spot"))
     _register_spot_facts(wallet.spot, symbol)
@@ -1460,7 +1506,10 @@ def test_order_update_event_updates_wallet_before_callback():
                     event_type="fill",
                     order_status="FILLED",
                     order_id="order-1",
-                    fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+                    fill=_exact_order_update_fill("TESTUSDT", "0.1", "50000"),
+                    **_exact_order_state(
+                        orig="0.1", executed="0.1", remaining="0", price="50000",
+                    ),
                 )
             ]
 
@@ -1527,7 +1576,8 @@ def test_strategy_engine_routes_order_update_to_matching_session():
         event_type="fill",
         order_status="FILLED",
         order_id="order-5",
-        fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+        fill=_exact_order_update_fill("TESTUSDT", "0.1", "50000"),
+        **_exact_order_state(orig="0.1", executed="0.1", remaining="0", price="50000"),
     ))
 
     assert delivered is True
@@ -1571,10 +1621,10 @@ def test_async_order_update_unblocks_symbol_and_triggers_snapshot_callback():
                     event_type="fill",
                     order_status="FILLED",
                     order_id="order-async",
-                    fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
-                    orig_qty=0.1,
-                    executed_qty=0.1,
-                    remaining_qty=0.0,
+                    fill=_exact_order_update_fill("TESTUSDT", "0.1", "50000"),
+                    **_exact_order_state(
+                        orig="0.1", executed="0.1", remaining="0", price="50000",
+                    ),
                 )
             ]
 
@@ -1647,10 +1697,10 @@ def test_async_partial_order_update_keeps_symbol_blocked():
                     event_type="fill",
                     order_status="PARTIALLY_FILLED",
                     order_id="order-async",
-                    fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.04, fill_price=50_000.0),
-                    orig_qty=0.1,
-                    executed_qty=0.04,
-                    remaining_qty=0.06,
+                    fill=_exact_order_update_fill("TESTUSDT", "0.04", "50000"),
+                    **_exact_order_state(
+                        orig="0.1", executed="0.04", remaining="0.06", price="50000",
+                    ),
                 )
             ]
 
@@ -1756,10 +1806,10 @@ def test_incremental_fill_event_updates_wallet_once():
         event_type="fill",
         order_status="PARTIALLY_FILLED",
         order_id="order-once",
-        fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.04, fill_price=50_000.0),
-        orig_qty=0.1,
-        executed_qty=0.04,
-        remaining_qty=0.06,
+        fill=_exact_order_update_fill("TESTUSDT", "0.04", "50000"),
+        **_exact_order_state(
+            orig="0.1", executed="0.04", remaining="0.06", price="50000",
+        ),
     )
 
     class FakeOrderClient:
@@ -1815,7 +1865,10 @@ def test_order_update_callback_error_does_not_block_market_tick():
                     event_type="fill",
                     order_status="FILLED",
                     order_id="order-1",
-                    fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+                    fill=_exact_order_update_fill("TESTUSDT", "0.1", "50000"),
+                    **_exact_order_state(
+                        orig="0.1", executed="0.1", remaining="0", price="50000",
+                    ),
                 )
             ]
 
@@ -1856,7 +1909,8 @@ def test_existing_order_events_seed_cursor_without_replaying_wallet():
         event_type="fill",
         order_status="FILLED",
         order_id="order-old",
-        fill=OrderUpdateFill(symbol="TESTUSDT", qty=0.1, fill_price=50_000.0),
+        fill=_exact_order_update_fill("TESTUSDT", "0.1", "50000"),
+        **_exact_order_state(orig="0.1", executed="0.1", remaining="0", price="50000"),
     )
 
     class FakeOrderClient:
@@ -2041,7 +2095,12 @@ def test_strategy_declared_symbols_route_even_without_wallet_slot():
     """Pre_C3 §2.2: wallet can be empty; declaration alone drives routing."""
     wallet = _portfolio_wallet(make_backtest_wallet(
         margin_mode="isolated",
-        spot_assets=[{"symbol": "USDC", "qty": 1.0, "price": 1.0}],
+        spot_assets=[{
+            "asset": "USDC",
+            "free_decimal": "1",
+            "locked_decimal": "0",
+            "price_decimal": "1",
+        }],
     ), ("binance", "perpetual_futures"))
     svc = StrategyEngine()
     strategy_code = _inline(
@@ -2345,7 +2404,6 @@ def test_futures_short_signal_closes_one_way_position():
 
 def test_spot_market_buy_updates_spot_wallet_only():
     wallet = _wallet_with_spot_slot()
-    wallet.spot.free = 1_000.0
     svc = StrategyEngine()
     order_client = FilledOrderClient()
     # buy_once declares (futures, TESTUSDT, 1m); for the spot test we use an
@@ -2368,9 +2426,9 @@ def test_spot_market_buy_updates_spot_wallet_only():
     svc.running_strategy(_md(symbol="TESTUSDT", price=100.0, market="spot"))
 
     asset = wallet.spot.assets["TEST"]
-    assert asset.qty == Decimal("0.1")
+    assert asset.total == Decimal("0.1")
     assert asset.avg_entry_price == Decimal("100.0")
-    assert wallet.spot.free == 990.0
+    assert wallet.spot.assets["USDT"].free == Decimal("990")
     assert wallet.futures.positions == {}
     assert order_client.calls[0]["spot_risk_snapshot_id"] == "test-risk-TESTUSDT"
 
@@ -2431,7 +2489,12 @@ def test_limit_order_passes_market_tick_as_mark_price_not_limit_price():
 
 def test_spot_sell_precheck_uses_unlocked_qty():
     wallet = _wallet_with_spot_slot()
-    wallet.spot.assets["TEST"] = SpotAsset(qty=1.0, locked=0.8, avg_entry_price=90.0, price=100.0)
+    wallet.spot.assets["TEST"] = SpotAsset(
+        free=Decimal("0.2"),
+        locked=Decimal("0.8"),
+        avg_entry_price=Decimal("90"),
+        price=Decimal("100"),
+    )
     wallet.on_order = MagicMock(wraps=wallet.on_order)
     strategy_code = _inline(
         body=(
@@ -2446,7 +2509,7 @@ def test_spot_sell_precheck_uses_unlocked_qty():
     svc.running_strategy(_md(symbol="TESTUSDT", price=100.0, market="spot"))
 
     wallet.on_order.assert_not_called()
-    assert wallet.spot.assets["TEST"].qty == Decimal("1.0")
+    assert wallet.spot.assets["TEST"].total == Decimal("1.0")
     assert wallet.spot.assets["TEST"].locked == Decimal("0.8")
 
 
@@ -2487,7 +2550,6 @@ def test_order_callbacks_run_after_wallet_update_in_order():
 
 def test_spot_order_callbacks_run_after_wallet_update_in_order():
     wallet = _wallet_with_spot_slot()
-    wallet.spot.free = 1_000.0
     events: list[str] = []
     svc = StrategyEngine()
     # For the spot variant we need a strategy declaring spot TESTUSDT and
@@ -2536,7 +2598,7 @@ def test_spot_order_callbacks_run_after_wallet_update_in_order():
         "user.on_order_response",
         "sync.on_order_callback",
     ]
-    assert wallet.spot.assets["TEST"].qty == Decimal("0.05")
+    assert wallet.spot.assets["TEST"].total == Decimal("0.05")
 
 
 def test_zero_qty_rejected_before_wallet():

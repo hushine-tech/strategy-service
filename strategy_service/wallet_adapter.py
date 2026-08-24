@@ -16,6 +16,8 @@ code must NOT read them (see ``CanonicalPortfolioState`` docstring).
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+import re
 from typing import Any
 
 from strategy_service.wallet.canonical import (
@@ -30,23 +32,38 @@ from strategy_service.wallet.canonical import (
 )
 
 
+_PLAIN_DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z")
+
+
+def _spot_decimal_text(value: Any, field_name: str, *, required: bool = True) -> str:
+    if not isinstance(value, str) or not value:
+        if not required and value in (None, ""):
+            return ""
+        raise ValueError(f"canonical contract error: missing SpotAsset.{field_name}")
+    if _PLAIN_DECIMAL.fullmatch(value) is None:
+        raise ValueError(f"canonical contract error: invalid SpotAsset.{field_name}")
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"canonical contract error: invalid SpotAsset.{field_name}") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError(f"canonical contract error: invalid SpotAsset.{field_name}")
+    return value
+
+
+def _spot_asset_code(value: Any) -> str:
+    asset = str(value or "")
+    if not asset or asset != asset.upper() or not asset.isalnum():
+        raise ValueError("canonical contract error: invalid SpotAsset.asset")
+    return asset
+
+
 def _strict_position_qty(pos: Any) -> float:
-    position_qty = float(getattr(pos, "position_qty", 0.0) or 0.0)
-    raw_qty = float(getattr(pos, "qty", 0.0) or 0.0)
-    if raw_qty != 0.0 and position_qty == 0.0:
-        raise ValueError(
-            f"canonical contract error: missing FuturesPosition.position_qty for {getattr(pos, 'symbol', '<unknown>')}"
-        )
-    return position_qty
+    return float(getattr(pos, "position_qty", 0.0) or 0.0)
 
 
 def _strict_margin_mode(pos: Any) -> str:
     margin_mode = str(getattr(pos, "margin_mode", "") or "").strip().lower()
-    raw_margin_type = str(getattr(pos, "margin_type", "") or "").strip().lower()
-    if raw_margin_type and not margin_mode:
-        raise ValueError(
-            f"canonical contract error: missing FuturesPosition.margin_mode for {getattr(pos, 'symbol', '<unknown>')}"
-        )
     if not margin_mode:
         raise ValueError(
             f"canonical contract error: empty FuturesPosition.margin_mode for {getattr(pos, 'symbol', '<unknown>')}"
@@ -158,22 +175,21 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
     spot_state = CanonicalSpotState()
     if sw is not None:
         spot_state = CanonicalSpotState(
-            free=float(sw.free),
-            locked=float(sw.locked),
             assets=[
                 CanonicalSpotAssetState(
-                    symbol=str(getattr(asset, "symbol", "") or ""),
-                    qty=float(asset.qty),
-                    locked=float(asset.locked),
-                    avg_entry_price=float(asset.avg_entry_price),
-                    price=float(asset.price) if asset.HasField("price") else None,
-                    asset=str(getattr(asset, "asset", "") or ""),
-                    free=(
-                        str(getattr(asset, "free_decimal", "") or "")
-                        or float(getattr(asset, "free", 0.0) or 0.0)
-                    ) if str(getattr(asset, "asset", "") or "") else None,
-                    free_decimal=str(getattr(asset, "free_decimal", "") or ""),
-                    locked_decimal=str(getattr(asset, "locked_decimal", "") or ""),
+                    asset=_spot_asset_code(asset.asset),
+                    free_decimal=_spot_decimal_text(asset.free_decimal, "free_decimal"),
+                    locked_decimal=_spot_decimal_text(asset.locked_decimal, "locked_decimal"),
+                    avg_entry_price_decimal=_spot_decimal_text(
+                        asset.avg_entry_price_decimal,
+                        "avg_entry_price_decimal",
+                        required=False,
+                    ),
+                    price_decimal=(
+                        _spot_decimal_text(asset.price_decimal, "price_decimal")
+                        if asset.HasField("price_decimal")
+                        else None
+                    ),
                 )
                 for asset in sw.assets
             ],

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import logging
-import math
 import re
 import threading
 import uuid
 from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -20,7 +19,7 @@ from strategy_service.inputs import (
     _normalize_market,
 )
 from strategy_service.notification import StrategyNotifier
-from strategy_service.order_client import OrderClient
+from strategy_service.order_client import OrderClient, canonical_decimal_text
 from strategy_service.types import MarketData, OrderDecision, OrderSide, OrderType, OrderUpdateEvent
 from strategy_service.wallet.order_types import ExecutionFeedback, OrderResponse
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
@@ -192,27 +191,12 @@ def _normalize_decisions(signal: object) -> list[OrderDecision]:
 
 
 def _parse_positive_decimal(value: object, field: str) -> Decimal:
-    if not isinstance(value, str):
-        raise ValueError(f"OrderDecision.{field} must be a string")
     try:
-        parsed = Decimal(value.strip())
-    except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"OrderDecision.{field} must be a decimal string") from exc
-    if not parsed.is_finite():
-        raise ValueError(f"OrderDecision.{field} must be finite")
-    try:
-        parsed_float = float(parsed)
-    except (OverflowError, ValueError) as exc:
-        raise ValueError(f"OrderDecision.{field} must be finite") from exc
-    if not math.isfinite(parsed_float):
-        raise ValueError(f"OrderDecision.{field} must be finite")
-    if parsed_float <= 0.0:
-        raise ValueError(f"OrderDecision.{field} must be finite")
-    try:
-        if parsed <= 0:
-            raise ValueError(f"OrderDecision.{field} must be > 0")
-    except InvalidOperation as exc:
-        raise ValueError(f"OrderDecision.{field} must be finite") from exc
+        parsed = Decimal(canonical_decimal_text(value))
+    except ValueError as exc:
+        raise ValueError(f"OrderDecision.{field} must be finite and non-negative") from exc
+    if parsed <= 0:
+        raise ValueError(f"OrderDecision.{field} must be > 0")
     return parsed
 
 
@@ -1289,9 +1273,9 @@ class BaseStrategy:
             market=sig_market,
             symbol=sig_sym,
             side=side,
-            qty=str(signal.qty).strip(),
+            qty=format(qty_dec, "f"),
             order_type=order_type,
-            price=str(signal.price).strip() if signal.price is not None else None,
+            price=format(price_dec, "f") if price_dec is not None else None,
         )
         trigger_key = (
             _norm_exchange(getattr(market_data, "exchange", "binance")),
@@ -1385,10 +1369,7 @@ class BaseStrategy:
             sw = getattr(route_wallet, "spot", None)
             if side_upper == OrderSide.SELL:
                 asset = sw.asset_for_symbol(sig_sym) if sw is not None else None
-                available_qty = (
-                    float(getattr(asset, "qty", 0.0)) - float(getattr(asset, "locked", 0.0))
-                    if asset else 0.0
-                )
+                available_qty = float(asset.free) if asset else 0.0
                 if available_qty < qty:
                     logger.debug(
                         "[Skip] insufficient spot qty to SELL: need %.6f, have %.6f %s",
@@ -1397,7 +1378,8 @@ class BaseStrategy:
                     return
             else:
                 need = qty * balance_check_price
-                free = float(sw.free) if sw is not None else 0.0
+                quote = sw.assets.get("USDT") if sw is not None else None
+                free = float(quote.free) if quote is not None else 0.0
                 if free < need:
                     logger.debug(
                         "[Skip] insufficient spot free USDT to BUY: need %.2f, have %.2f",

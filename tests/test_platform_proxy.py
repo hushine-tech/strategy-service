@@ -319,16 +319,19 @@ def test_proxy_order_client_places_order_without_direct_stub():
             symbol="ETHUSDT",
             side="BUY",
             status="FILLED",
-            orig_qty=1,
-            executed_qty=1,
-            avg_price=2000,
+            orig_qty_decimal="1",
+            executed_qty_decimal="1",
+            remaining_qty_decimal="0",
+            avg_price_decimal="2000",
+            cumulative_quote_qty_decimal="2000",
         ),
         fill_deltas=[
             order_service_pb2.OrderFillEntry(
-                qty=1,
-                fill_price=2000,
-                fee=0.8,
                 status="CONFIRMED",
+                qty_decimal="1",
+                fill_price_decimal="2000",
+                fee_decimal="0.8",
+                quote_qty_decimal="2000",
             )
         ],
     )
@@ -361,7 +364,8 @@ def test_proxy_order_client_places_order_without_direct_stub():
     assert req.exchange == 1
     assert req.market == 2
     assert req.position_side == 0
-    assert req.price == 1999.5
+    assert "price" not in req.DESCRIPTOR.fields_by_name
+    assert req.price_decimal == "1999.5"
     assert req.order_type == "LIMIT"
     assert req.time_in_force == "GTD"
     assert req.post_only is True
@@ -413,10 +417,20 @@ def test_proxy_order_client_reads_lifecycle_events_over_runtime_channel():
                 order_id="order-1",
                 fill_delta=order_service_pb2.FillDeltaEntry(
                     symbol="BTCUSDT",
-                    qty=0.01,
-                    fill_price=50_000,
-                    fee=0.5,
                     fee_asset="USDT",
+                    qty_decimal="0.01",
+                    fill_price_decimal="50000",
+                    fee_decimal="0.5",
+                    quote_qty_decimal="500",
+                ),
+                order_state=order_service_pb2.OrderStateEntry(
+                    symbol="BTCUSDT",
+                    status="FILLED",
+                    orig_qty_decimal="0.01",
+                    executed_qty_decimal="0.01",
+                    remaining_qty_decimal="0",
+                    avg_price_decimal="50000",
+                    cumulative_quote_qty_decimal="500",
                 ),
             ),
         ])

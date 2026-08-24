@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal, InvalidOperation
-from itertools import count
 from typing import Any, Mapping
 
 from .canonical import SpotSymbolMetadata, norm_symbol
@@ -75,62 +74,43 @@ def _norm_market(value: Any) -> str:
     return raw
 
 
-def _exact_field(source: Any, exact_name: str, legacy_name: str = "") -> Decimal:
+def _exact_field(source: Any, exact_name: str) -> Decimal:
     exact = getattr(source, exact_name, "")
-    if exact not in (None, ""):
-        return _nonnegative(exact, exact_name)
-    if legacy_name:
-        return _nonnegative(getattr(source, legacy_name, 0) or 0, legacy_name)
-    return ZERO
+    if exact in (None, ""):
+        raise ValueError(f"{exact_name} is required")
+    return _nonnegative(exact, exact_name)
 
 
-@dataclass(init=False)
+def _optional_exact_field(source: Any, exact_name: str) -> Decimal:
+    exact = getattr(source, exact_name, "")
+    if exact in (None, ""):
+        return ZERO
+    return _nonnegative(exact, exact_name)
+
+
+@dataclass
 class SpotAsset:
-    free: Decimal
-    locked: Decimal
-    avg_entry_price: Decimal
-    price: Decimal | None
+    free: Decimal = ZERO
+    locked: Decimal = ZERO
+    avg_entry_price: Decimal = ZERO
+    price: Decimal | None = None
 
-    def __init__(
-        self,
-        qty: Any = ZERO,
-        locked: Any = ZERO,
-        avg_entry_price: Any = ZERO,
-        price: Any | None = None,
-        *,
-        free: Any | None = None,
-    ) -> None:
-        locked_value = _nonnegative(locked, "locked")
-        if free is None:
-            total = _nonnegative(qty, "qty")
-            free_value = total - locked_value
-            if free_value < ZERO:
-                raise ValueError("spot asset locked balance exceeds total quantity")
-        else:
-            free_value = _nonnegative(free, "free")
-        self.free = free_value
-        self.locked = locked_value
-        self.avg_entry_price = _nonnegative(avg_entry_price, "avg_entry_price")
-        self.price = None if price is None else _nonnegative(price, "price")
+    def __post_init__(self) -> None:
+        self.free = _nonnegative(self.free, "free")
+        self.locked = _nonnegative(self.locked, "locked")
+        self.avg_entry_price = _nonnegative(self.avg_entry_price, "avg_entry_price")
+        self.price = None if self.price is None else _nonnegative(self.price, "price")
 
     @property
-    def qty(self) -> Decimal:
-        """Compatibility total: Binance ``free + locked``."""
+    def total(self) -> Decimal:
         return self.free + self.locked
-
-    @qty.setter
-    def qty(self, value: Any) -> None:
-        total = _nonnegative(value, "qty")
-        if total < self.locked:
-            raise ValueError("spot asset quantity cannot be below locked balance")
-        self.free = total - self.locked
 
     def get_unrealized_pnl(self, current_price: Any) -> Decimal:
         price = _nonnegative(current_price, "current_price")
-        return self.qty * (price - self.avg_entry_price)
+        return self.total * (price - self.avg_entry_price)
 
     def get_estimated_value(self, current_price: Any) -> Decimal:
-        return self.qty * _nonnegative(current_price, "current_price")
+        return self.total * _nonnegative(current_price, "current_price")
 
 
 @dataclass
@@ -179,12 +159,8 @@ class SpotWallet:
     applied_trade_ids: set[tuple[int, str, str, str, str, str]] = field(default_factory=set)
     recovery_pending_orders: set[tuple[int, str, str, str, str]] = field(default_factory=set)
     risk_facts: dict[tuple[int, str, str, str], dict[str, Any]] = field(default_factory=dict)
-    _synthetic_trade_ids: Any = field(default_factory=lambda: count(1), repr=False)
-
     def __init__(
         self,
-        free: Any = ZERO,
-        locked: Any = ZERO,
         assets: Mapping[str, SpotAsset] | None = None,
         open_orders: Mapping[Any, SpotOpenOrder] | None = None,
     ) -> None:
@@ -197,11 +173,6 @@ class SpotWallet:
                 self.assets[asset] = value
             else:
                 raise TypeError(f"unsupported SpotAsset value for {asset}: {type(value).__name__}")
-        quote = self.assets.get("USDT")
-        if quote is None:
-            self.assets["USDT"] = SpotAsset(free=free, locked=locked)
-        elif _decimal(free) != ZERO or _decimal(locked) != ZERO:
-            raise ValueError("USDT balance must be supplied either through assets or free/locked, not both")
         self.open_orders = dict(open_orders or {})
         self.symbol_metadata = {}
         self.symbol_prices = {}
@@ -209,23 +180,6 @@ class SpotWallet:
         self.applied_trade_ids = set()
         self.recovery_pending_orders = set()
         self.risk_facts = {}
-        self._synthetic_trade_ids = count(1)
-
-    @property
-    def free(self) -> Decimal:
-        return self.assets["USDT"].free
-
-    @free.setter
-    def free(self, value: Any) -> None:
-        self.assets.setdefault("USDT", SpotAsset()).free = _nonnegative(value, "free")
-
-    @property
-    def locked(self) -> Decimal:
-        return self.assets["USDT"].locked
-
-    @locked.setter
-    def locked(self, value: Any) -> None:
-        self.assets.setdefault("USDT", SpotAsset()).locked = _nonnegative(value, "locked")
 
     @classmethod
     def from_assets(cls, assets: Mapping[str, tuple[Any, Any] | SpotAsset]) -> "SpotWallet":
@@ -243,34 +197,20 @@ class SpotWallet:
     def from_canonical(cls, state: Any) -> "SpotWallet":
         normalized: dict[str, SpotAsset] = {}
         for item in getattr(state, "assets", []) or []:
-            asset_code = norm_symbol(getattr(item, "asset", "") or getattr(item, "symbol", ""))
+            asset_code = norm_symbol(getattr(item, "asset", ""))
             if not asset_code:
                 raise ValueError("canonical Spot asset is missing asset code")
-            # Compatibility for the old pseudo-asset snapshots. New snapshots
-            # always set ``asset`` and therefore never use this suffix rule.
-            if not getattr(item, "asset", "") and asset_code.endswith("USDT") and asset_code != "USDT":
-                asset_code = asset_code[:-4]
-            free_decimal = str(getattr(item, "free_decimal", "") or "")
-            locked_decimal = str(getattr(item, "locked_decimal", "") or "")
-            if free_decimal:
-                free = free_decimal
-            elif getattr(item, "free", None) is not None:
-                free = getattr(item, "free")
-            else:
-                total = _nonnegative(getattr(item, "qty", 0) or 0, "qty")
-                legacy_locked = _nonnegative(getattr(item, "locked", 0) or 0, "locked")
-                free = total - legacy_locked
-            locked = locked_decimal or getattr(item, "locked", 0) or 0
+            if asset_code in normalized:
+                raise ValueError(f"duplicate canonical Spot asset: {asset_code}")
+            free = _exact_field(item, "free_decimal")
+            locked = _exact_field(item, "locked_decimal")
+            avg_entry = getattr(item, "avg_entry_price_decimal", "") or "0"
+            price = getattr(item, "price_decimal", None)
             normalized[asset_code] = SpotAsset(
                 free=free,
                 locked=locked,
-                avg_entry_price=getattr(item, "avg_entry_price", 0) or 0,
-                price=getattr(item, "price", None),
-            )
-        if "USDT" not in normalized:
-            normalized["USDT"] = SpotAsset(
-                free=getattr(state, "free", 0) or 0,
-                locked=getattr(state, "locked", 0) or 0,
+                avg_entry_price=avg_entry,
+                price=price,
             )
         return cls(assets=normalized)
 
@@ -406,7 +346,7 @@ class SpotWallet:
     def get_unrealized_pnl(self) -> Decimal:
         total = ZERO
         for asset_code, asset in self.assets.items():
-            if asset_code == "USDT" or asset.qty == ZERO:
+            if asset_code == "USDT" or asset.total == ZERO:
                 continue
             if asset.price is None:
                 raise ValueError(f"spot mark price not set for asset {asset_code!r}")
@@ -414,9 +354,10 @@ class SpotWallet:
         return total
 
     def get_estimated_value(self) -> Decimal:
-        total = self.assets["USDT"].qty
+        quote = self.assets.get("USDT")
+        total = quote.total if quote is not None else ZERO
         for asset_code, asset in self.assets.items():
-            if asset_code == "USDT" or asset.qty == ZERO:
+            if asset_code == "USDT" or asset.total == ZERO:
                 continue
             if asset.price is None:
                 raise ValueError(f"spot mark price not set for asset {asset_code!r}")
@@ -505,7 +446,7 @@ class SpotWallet:
         if fee > ZERO:
             self._debit(planned, fee_asset, fee, prefer_locked=False)
 
-        previous_base_qty = self.assets.get(base, SpotAsset()).qty
+        previous_base_qty = self.assets.get(base, SpotAsset()).total
         for asset, (free, locked) in planned.items():
             entry = self.assets.setdefault(asset, SpotAsset())
             entry.free = free
@@ -520,7 +461,7 @@ class SpotWallet:
                 base_entry.avg_entry_price = (
                     base_entry.avg_entry_price * previous_base_qty + quote_qty
                 ) / gross_after
-        elif side == "SELL" and base_entry.qty == ZERO:
+        elif side == "SELL" and base_entry.total == ZERO:
             base_entry.avg_entry_price = ZERO
 
     def _release_order_locks(self, order: SpotOpenOrder, metadata: SpotSymbolMetadata) -> None:
@@ -587,30 +528,18 @@ class SpotWallet:
         order_key = (*route, order_identity)
         previous_state = self.order_states.get(order_key, _CumulativeOrderState(ZERO, ZERO, ""))
 
-        fill_qty = _exact_field(update, "qty_decimal", "qty")
-        fill_price = _exact_field(update, "fill_price_decimal", "fill_price")
+        fill_qty = _exact_field(update, "qty_decimal")
+        fill_price = _exact_field(update, "fill_price_decimal")
         fill_quote = _exact_field(update, "quote_qty_decimal")
         if fill_qty > ZERO and fill_quote == ZERO:
-            if fill_price <= ZERO:
-                raise ValueError("Spot fill requires exact quote quantity or fill price")
-            fill_quote = fill_qty * fill_price
-        fee = _exact_field(update, "fee_decimal", "fee")
+            raise ValueError("Spot fill requires exact quote quantity")
+        fee = _exact_field(update, "fee_decimal")
         fee_asset = norm_symbol(getattr(update, "fee_asset", "") or facts.quote_asset)
 
-        cumulative_qty_raw = getattr(update, "executed_qty_decimal", "")
-        cumulative_qty = (
-            _nonnegative(cumulative_qty_raw, "executed_qty_decimal")
-            if cumulative_qty_raw not in (None, "")
-            else _nonnegative(getattr(update, "executed_qty", 0) or 0, "executed_qty")
-        )
+        cumulative_qty = _exact_field(update, "executed_qty_decimal")
         if cumulative_qty == ZERO and fill_qty > ZERO:
             cumulative_qty = previous_state.executed_qty + fill_qty
-        cumulative_quote_raw = getattr(update, "cumulative_quote_qty_decimal", "")
-        cumulative_quote = (
-            _nonnegative(cumulative_quote_raw, "cumulative_quote_qty_decimal")
-            if cumulative_quote_raw not in (None, "")
-            else previous_state.cumulative_quote_qty + fill_quote
-        )
+        cumulative_quote = _exact_field(update, "cumulative_quote_qty_decimal")
 
         if (
             cumulative_qty < previous_state.executed_qty
@@ -660,13 +589,13 @@ class SpotWallet:
                     return False
                 fill_applied = True
 
-        orig_qty = _exact_field(update, "orig_qty_decimal", "orig_qty")
-        remaining_qty = _exact_field(update, "remaining_qty_decimal", "remaining_qty")
+        orig_qty = _exact_field(update, "orig_qty_decimal")
+        remaining_qty = _exact_field(update, "remaining_qty_decimal")
         if orig_qty == ZERO:
             orig_qty = cumulative_qty + remaining_qty
         if remaining_qty == ZERO and status in _ACTIVE_ORDER_STATUSES and orig_qty > cumulative_qty:
             remaining_qty = orig_qty - cumulative_qty
-        price = _exact_field(update, "price_decimal", "price")
+        price = _optional_exact_field(update, "price_decimal")
         if price == ZERO:
             price = fill_price
         existing = self.open_orders.get(order_key)
@@ -710,125 +639,57 @@ class SpotWallet:
             self.open_orders[order_key] = order
         return fill_applied
 
-    def _legacy_metadata(self, symbol: str, update: Any) -> SpotSymbolMetadata:
-        normalized = norm_symbol(symbol)
-        if not normalized.endswith("USDT") or normalized == "USDT":
-            raise ValueError(f"missing Spot metadata route for {normalized}")
-        return SpotSymbolMetadata(
-            venue_id=int(getattr(update, "venue_id", 0) or 1),
-            exchange=_norm_exchange(getattr(update, "exchange", "")) or "binance",
-            market=_norm_market(getattr(update, "market", "")) or "spot",
-            symbol=normalized,
-            status="TRADING",
-            base_asset=normalized[:-4],
-            quote_asset="USDT",
-            base_asset_precision=8,
-            quote_asset_precision=8,
-            spot_trading_allowed=True,
-            permission_sets=(("SPOT",),),
-            order_types=("LIMIT", "MARKET"),
-        )
-
     def on_order(self, symbol: str, order_resp: Any) -> None:
         status = self._status(order_resp)
         if status not in _SUPPORTED_ORDER_STATUSES:
             return
-        try:
-            metadata = self._resolve_metadata(symbol, None)
-        except ValueError:
-            # Read compatibility for old in-memory backtest fixtures. Production
-            # snapshots register authoritative metadata before this path.
-            metadata = self.register_metadata(self._legacy_metadata(symbol, order_resp))
+        metadata = self._resolve_metadata(symbol, None)
         identity = str(
             getattr(order_resp, "exchange_order_id", "")
             or getattr(order_resp, "order_id", "")
             or getattr(order_resp, "client_order_id", "")
             or ""
         ).strip()
-        if not identity and status == "FILLED":
-            identity = f"legacy-direct-{next(self._synthetic_trade_ids)}"
         if not identity:
             raise ValueError("Spot lifecycle order_id/exchange_order_id is required")
         trade_id = str(getattr(order_resp, "exchange_trade_id", "") or "").strip()
-        qty = _exact_field(order_resp, "qty_decimal", "qty")
+        qty = _exact_field(order_resp, "qty_decimal")
         if qty > ZERO and trade_id == "":
-            trade_id = f"legacy-{next(self._synthetic_trade_ids)}"
+            raise ValueError("Spot fill exchange_trade_id is required")
+        fill_price = _exact_field(order_resp, "fill_price_decimal")
+        fee = _exact_field(order_resp, "fee_decimal")
+        orig_qty = _exact_field(order_resp, "orig_qty_decimal")
+        executed_qty = _exact_field(order_resp, "executed_qty_decimal")
+        remaining_qty = _exact_field(order_resp, "remaining_qty_decimal")
+        price = _optional_exact_field(order_resp, "price_decimal")
         normalized = OrderResponse(
             symbol=norm_symbol(symbol),
             side=str(getattr(order_resp, "side", "") or ""),
             qty=float(qty),
-            fill_price=float(getattr(order_resp, "fill_price", 0) or getattr(order_resp, "price", 0) or 0),
+            fill_price=float(fill_price),
             status=status,
-            fee=float(getattr(order_resp, "fee", 0) or 0),
+            fee=float(fee),
             order_id=str(getattr(order_resp, "order_id", "") or identity),
-            orig_qty=float(getattr(order_resp, "orig_qty", 0) or 0),
-            executed_qty=float(getattr(order_resp, "executed_qty", 0) or 0),
-            remaining_qty=float(getattr(order_resp, "remaining_qty", 0) or 0),
-            price=float(getattr(order_resp, "price", 0) or getattr(order_resp, "fill_price", 0) or 0),
+            orig_qty=float(orig_qty),
+            executed_qty=float(executed_qty),
+            remaining_qty=float(remaining_qty),
+            price=float(price),
             venue_id=metadata.venue_id,
             exchange=metadata.exchange,
             market=metadata.market,
             exchange_order_id=identity,
             exchange_trade_id=trade_id,
             fee_asset=str(getattr(order_resp, "fee_asset", "") or metadata.quote_asset),
-            qty_decimal=str(getattr(order_resp, "qty_decimal", "") or qty),
-            fill_price_decimal=str(
-                getattr(order_resp, "fill_price_decimal", "")
-                or getattr(order_resp, "fill_price", 0)
-                or getattr(order_resp, "price", 0)
-                or ""
+            qty_decimal=str(qty),
+            fill_price_decimal=str(fill_price),
+            fee_decimal=str(fee),
+            quote_qty_decimal=str(_exact_field(order_resp, "quote_qty_decimal")),
+            orig_qty_decimal=str(orig_qty),
+            executed_qty_decimal=str(executed_qty),
+            remaining_qty_decimal=str(remaining_qty),
+            price_decimal=(str(price) if getattr(order_resp, "price_decimal", "") else ""),
+            cumulative_quote_qty_decimal=str(
+                _exact_field(order_resp, "cumulative_quote_qty_decimal")
             ),
-            fee_decimal=str(getattr(order_resp, "fee_decimal", "") or getattr(order_resp, "fee", 0) or "0"),
-            quote_qty_decimal=str(getattr(order_resp, "quote_qty_decimal", "") or ""),
-            orig_qty_decimal=str(getattr(order_resp, "orig_qty_decimal", "") or getattr(order_resp, "orig_qty", 0) or ""),
-            executed_qty_decimal=str(getattr(order_resp, "executed_qty_decimal", "") or getattr(order_resp, "executed_qty", 0) or ""),
-            remaining_qty_decimal=str(getattr(order_resp, "remaining_qty_decimal", "") or getattr(order_resp, "remaining_qty", 0) or ""),
-            cumulative_quote_qty_decimal=str(getattr(order_resp, "cumulative_quote_qty_decimal", "") or ""),
         )
         self.apply_order_update(normalized, metadata)
-
-    def on_fill(
-        self,
-        *,
-        symbol: str,
-        side: str,
-        qty: Any,
-        fill_price: Any,
-        fee: Any = ZERO,
-        fee_asset: str = "USDT",
-        metadata: SpotSymbolMetadata | None = None,
-    ) -> None:
-        if metadata is None:
-            try:
-                metadata = self._resolve_metadata(symbol, None)
-            except ValueError:
-                metadata = self.register_metadata(self._legacy_metadata(symbol, object()))
-        sequence = next(self._synthetic_trade_ids)
-        qty_exact = _nonnegative(qty, "qty")
-        price_exact = _nonnegative(fill_price, "fill_price")
-        self.apply_order_update(
-            OrderResponse(
-                symbol=norm_symbol(symbol),
-                side=str(side).strip().upper(),
-                qty=float(qty_exact),
-                fill_price=float(price_exact),
-                status="FILLED",
-                fee=float(_nonnegative(fee, "fee")),
-                order_id=f"local-fill-{sequence}",
-                venue_id=metadata.venue_id,
-                exchange=metadata.exchange,
-                market=metadata.market,
-                exchange_order_id=f"local-fill-{sequence}",
-                exchange_trade_id=str(sequence),
-                fee_asset=fee_asset,
-                qty_decimal=str(qty_exact),
-                fill_price_decimal=str(price_exact),
-                quote_qty_decimal=str(qty_exact * price_exact),
-                fee_decimal=str(_nonnegative(fee, "fee")),
-                orig_qty_decimal=str(qty_exact),
-                executed_qty_decimal=str(qty_exact),
-                remaining_qty_decimal="0",
-                cumulative_quote_qty_decimal=str(qty_exact * price_exact),
-            ),
-            metadata,
-        )

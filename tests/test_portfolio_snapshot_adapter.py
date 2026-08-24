@@ -182,14 +182,29 @@ def test_demo_wallet_ignores_simulated_target_leverage_overlay():
     assert not hasattr(metadata, "leverage_source")
 
 
-def _spot_wallet(*, free: float = 90.0, locked: float = 10.0, assets=None):
+def _spot_asset(
+    asset: str,
+    *,
+    free_decimal: str,
+    locked_decimal: str = "0",
+    avg_entry_price_decimal: str = "",
+    price_decimal: str | None = None,
+):
+    value = portfolio_service_pb2.SpotAsset(
+        asset=asset,
+        free_decimal=free_decimal,
+        locked_decimal=locked_decimal,
+        avg_entry_price_decimal=avg_entry_price_decimal,
+    )
+    if price_decimal is not None:
+        value.price_decimal = price_decimal
+    return value
+
+
+def _spot_wallet(*, assets):
     return portfolio_service_pb2.PortfolioWalletState(
         environment=1,
-        spot=portfolio_service_pb2.SpotWallet(
-            free=free,
-            locked=locked,
-            assets=list(assets or []),
-        ),
+        spot=portfolio_service_pb2.SpotWallet(assets=list(assets)),
     )
 
 
@@ -207,13 +222,11 @@ def _futures_position(
         symbol=symbol,
         position_side=position_side,
         position_qty=position_qty,
-        qty=position_qty,
         entry_price=entry_price,
         mark_price=mark_price,
         unrealized_pnl=unrealized_pnl,
         leverage=leverage,
         margin_mode="cross",
-        margin_type="cross",
         liquidation_price=liquidation_price,
     )
 
@@ -284,14 +297,9 @@ def test_build_portfolio_wallet_from_spot_and_futures_venues():
                 _balance("BTC", wallet_balance=0.5, available_balance=0.4, locked=0.1),
             ],
             wallet=_spot_wallet(
-                free=90.0,
-                locked=10.0,
                 assets=[
-                    portfolio_service_pb2.SpotAsset(
-                        symbol="BTC",
-                        qty=0.5,
-                        locked=0.1,
-                    )
+                    _spot_asset("USDT", free_decimal="90", locked_decimal="10"),
+                    _spot_asset("BTC", free_decimal="0.4", locked_decimal="0.1"),
                 ],
             ),
         ),
@@ -320,9 +328,9 @@ def test_build_portfolio_wallet_from_spot_and_futures_venues():
     assert isinstance(spot, BinanceWalletRuntime)
     assert isinstance(futures, BinanceWalletRuntime)
     assert spot is not futures
-    assert spot.spot.free == pytest.approx(90.0)
-    assert spot.spot.locked == pytest.approx(10.0)
-    assert spot.spot.assets["BTC"].qty == Decimal("0.5")
+    assert spot.spot.assets["USDT"].free == Decimal("90")
+    assert spot.spot.assets["USDT"].locked == Decimal("10")
+    assert spot.spot.assets["BTC"].total == Decimal("0.5")
     assert spot.spot.assets["BTC"].locked == Decimal("0.1")
     assert futures.get_wallet_balance() == pytest.approx(1000.0)
     assert futures.futures.oracle_available_balance == pytest.approx(800.0)
@@ -354,21 +362,9 @@ def test_spot_snapshot_loads_asset_codes_metadata_and_preflight_risk_facts():
             market=MARKET_SPOT,
             spot_symbols=[metadata],
             wallet=_spot_wallet(
-                free=0,
-                locked=0,
                 assets=[
-                    portfolio_service_pb2.SpotAsset(
-                        asset="USDT",
-                        free=1000,
-                        free_decimal="1000.00000000",
-                        locked_decimal="0.00000000",
-                    ),
-                    portfolio_service_pb2.SpotAsset(
-                        asset="BTC",
-                        free=0,
-                        free_decimal="0.00000000",
-                        locked_decimal="0.00000000",
-                    ),
+                    _spot_asset("USDT", free_decimal="1000.00000000"),
+                    _spot_asset("BTC", free_decimal="0.00000000"),
                 ],
             ),
         )
@@ -512,13 +508,11 @@ def test_futures_venue_uses_full_canonical_wallet_instead_of_compact_position_de
                     symbol="ETHUSDT",
                     position_side="BOTH",
                     position_qty=0.3,
-                    qty=0.3,
                     entry_price=3000.0,
                     mark_price=3050.0,
                     unrealized_pnl=15.0,
                     leverage=20.0,
                     margin_mode="cross",
-                    margin_type="cross",
                     initial_margin=45.75,
                     position_initial_margin=45.75,
                 )
@@ -702,8 +696,16 @@ def test_declared_route_missing_from_snapshot_fails_closed_on_get():
 
 def test_duplicate_route_keeps_portfolio_runtime_ambiguous_fail_closed():
     snapshot = _snapshot(
-        _venue(venue_id=10, market=MARKET_SPOT, wallet=_spot_wallet(free=1.0, locked=0.0)),
-        _venue(venue_id=11, market=MARKET_SPOT, wallet=_spot_wallet(free=2.0, locked=0.0)),
+        _venue(
+            venue_id=10,
+            market=MARKET_SPOT,
+            wallet=_spot_wallet(assets=[_spot_asset("USDT", free_decimal="1")]),
+        ),
+        _venue(
+            venue_id=11,
+            market=MARKET_SPOT,
+            wallet=_spot_wallet(assets=[_spot_asset("USDT", free_decimal="2")]),
+        ),
     )
 
     wallet = build_portfolio_wallet_from_snapshot(

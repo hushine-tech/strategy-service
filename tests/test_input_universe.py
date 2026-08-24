@@ -537,8 +537,10 @@ class MyStrategy:
 def test_order_guard_rejects_undeclared_market():
     raw_wallet = make_backtest_wallet(
         margin_mode="isolated",
-        spot_assets=[{"symbol": "TESTUSDT", "qty": 100.0, "price": 1.0}],
-        spot_free=1_000.0,
+        spot_assets=[
+            {"asset": "USDT", "free_decimal": "1000", "locked_decimal": "0"},
+            {"asset": "TEST", "free_decimal": "100", "locked_decimal": "0", "price_decimal": "1"},
+        ],
     )
     svc = StrategyEngine()
     code = """

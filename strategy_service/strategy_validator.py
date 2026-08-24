@@ -511,8 +511,14 @@ def _validate_order_decision_call(node: ast.Call, issues: list[StrategyValidatio
         if field not in keywords:
             continue
         ok, value = _try_literal_eval_phase3(keywords[field])
-        if ok and value is not None and not isinstance(value, str):
-            _append_order_decision_issue(issues, node, f"OrderDecision {field} must be a string")
+        if ok and value is not None and (
+            isinstance(value, bool) or not isinstance(value, (str, int, float))
+        ):
+            _append_order_decision_issue(
+                issues,
+                node,
+                f"OrderDecision {field} must be decimal-compatible",
+            )
             return
 
 

@@ -54,7 +54,7 @@ def _wallet_proto(
             display_margin_balance_usd=display_margin_balance_usd,
             display_unrealized_pnl_usd=display_unrealized_pnl_usd,
         ),
-        spot=portfolio_service_pb2.SpotWallet(free=0.0, locked=0.0, assets=[]),
+        spot=portfolio_service_pb2.SpotWallet(assets=[]),
     )
 
 
@@ -75,12 +75,11 @@ def _runtime_snapshot(wallet) -> dict:
             for key, pos in fw.positions.items()
         },
         "spot": {
-            "free": wallet.spot.free,
-            "locked": wallet.spot.locked,
             "assets": {
                 sym: {
-                    "qty": a.qty,
+                    "free": a.free,
                     "locked": a.locked,
+                    "total": a.total,
                     "price": a.price,
                 }
                 for sym, a in wallet.spot.assets.items()

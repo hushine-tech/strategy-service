@@ -8,7 +8,9 @@ import pytest
 from strategy_service.portfolio_client import _serialize_future_wallet
 from strategy_service.gen import portfolio_service_pb2
 from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
+from strategy_service.types import OrderResponse
 from strategy_service.wallet import BinanceWalletRuntime
+from strategy_service.wallet.canonical import SpotSymbolMetadata
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet_factory import (
     RUNTIME_REGISTRY,
@@ -52,12 +54,10 @@ def _wallet_proto(*, environment: int) -> portfolio_service_pb2.PortfolioWalletS
                     leverage=10.0,
                     fee_rate=0.0004,
                     mark_price=110.0,
-                    qty=0.1,
                     position_qty=0.1,
                     entry_price=100.0,
                     unrealized_pnl=1.0,
                     position_side="BOTH",
-                    margin_type="cross",
                     margin_mode="cross",
                     notional=11.0,
                     initial_margin=1.1,
@@ -69,10 +69,13 @@ def _wallet_proto(*, environment: int) -> portfolio_service_pb2.PortfolioWalletS
                 ),
             ],
         ),
-        spot=portfolio_service_pb2.SpotWallet(
-            free=9.0,
-            locked=0.0,
-        ),
+        spot=portfolio_service_pb2.SpotWallet(assets=[
+            portfolio_service_pb2.SpotAsset(
+                asset="USDT",
+                free_decimal="9",
+                locked_decimal="0",
+            ),
+        ]),
     )
 
 
@@ -102,12 +105,10 @@ def _isolated_wallet_proto_with_metadata() -> portfolio_service_pb2.PortfolioWal
                     leverage=10.0,
                     fee_rate=0.0004,
                     mark_price=110.0,
-                    qty=0.1,
                     position_qty=0.1,
                     entry_price=100.0,
                     unrealized_pnl=1.0,
                     position_side="BOTH",
-                    margin_type="isolated",
                     margin_mode="isolated",
                     notional=11.0,
                     initial_margin=1.1,
@@ -168,22 +169,6 @@ def test_proto_to_portfolio_spec_requires_canonical_fields():
     assert pos.direction_key == 0
 
 
-def test_proto_to_portfolio_spec_rejects_qty_alias_without_position_qty():
-    wallet = _wallet_proto(environment=1)
-    wallet.futures.positions[0].position_qty = 0.0
-
-    with pytest.raises(ValueError, match="position_qty"):
-        proto_to_portfolio_spec(wallet)
-
-
-def test_proto_to_portfolio_spec_rejects_margin_type_alias_without_margin_mode():
-    wallet = _wallet_proto(environment=1)
-    wallet.futures.positions[0].margin_mode = ""
-
-    with pytest.raises(ValueError, match="margin_mode"):
-        proto_to_portfolio_spec(wallet)
-
-
 def test_build_wallet_from_portfolio_mode0_uses_binance_parity_runtime_after_c2a():
     """C2a cutover: environment=0 backtest now routes to BinanceWalletRuntime.
     Position hydration (qty / entry / mark) must still work via the parity
@@ -217,7 +202,7 @@ def test_build_wallet_from_http_backtest_dict_uses_binance_runtime_after_c2a():
                 }
             ],
         },
-        "spot": {"free": 0.0, "locked": 0.0, "assets": {}},
+        "spot": {"assets": []},
     })
 
     assert isinstance(wallet, BinanceWalletRuntime)
@@ -248,7 +233,7 @@ def test_http_backtest_wallet_installs_resolved_target_leverage_metadata():
                 "position_mode": "one_way",
                 "initial_balance": 1000.0,
             },
-            "spot": {"free": 0.0, "locked": 0.0, "assets": {}},
+            "spot": {"assets": []},
         },
         simulated_order_targets=targets,
     )
@@ -283,11 +268,9 @@ def test_backtest_leverage_overlay_refreshes_position_order_and_portfolio_risk_f
                     direction=0,
                     leverage=20.0,
                     mark_price=100_000.0,
-                    qty=0.1,
                     position_qty=0.1,
                     entry_price=100_000.0,
                     position_side="BOTH",
-                    margin_type="cross",
                     margin_mode="cross",
                     notional=10_000.0,
                     initial_margin=500.0,
@@ -636,12 +619,10 @@ def test_cross_long_liquidation_clamps_to_zero_when_wallet_balance_covers_positi
                     leverage=5.0,
                     fee_rate=0.0004,
                     mark_price=2_318.47,
-                    qty=0.021,
                     position_qty=0.021,
                     entry_price=2_316.94,
                     unrealized_pnl=0.03213,
                     position_side="BOTH",
-                    margin_type="cross",
                     margin_mode="cross",
                     notional=48.68787,
                     initial_margin=9.737574,
@@ -708,12 +689,10 @@ def test_cross_short_liquidation_is_estimated_when_exchange_price_and_brackets_a
                     leverage=5.0,
                     fee_rate=0.0004,
                     mark_price=1_900.0,
-                    qty=-0.5,
                     position_qty=-0.5,
                     entry_price=2_000.0,
                     unrealized_pnl=50.0,
                     position_side="BOTH",
-                    margin_type="cross",
                     margin_mode="cross",
                     notional=-950.0,
                     initial_margin=190.0,
@@ -788,14 +767,12 @@ def test_binance_wallet_ignores_provider_display_spot_estimate_when_prices_missi
             margin_balance=1_001.0,
         ),
         spot=portfolio_service_pb2.SpotWallet(
-            free=0.0,
-            locked=0.0,
             assets=[
                 portfolio_service_pb2.SpotAsset(
-                    symbol="ETHUSDT",
-                    qty=1.0,
-                    locked=0.0,
-                    avg_entry_price=50.0,
+                    asset="ETH",
+                    free_decimal="1",
+                    locked_decimal="0",
+                    avg_entry_price_decimal="50",
                     # No `price` set → canonical estimate cannot price this
                     # asset. Runtime must fall back to cash-only, NOT to the
                     # upstream display total.
@@ -807,7 +784,8 @@ def test_binance_wallet_ignores_provider_display_spot_estimate_when_prices_missi
     wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
     out = wallet.to_canonical_state()
 
-    # Display-ingress value (55.0) was ignored. Canonical fallback = free+locked = 0.
+    # Display-ingress value (55.0) was ignored. Unpriced canonical assets do not
+    # contribute to the estimate.
     assert out.spot_estimated_value == pytest.approx(0.0)
     # total_value = futures.margin_balance (canonical-recomputed from
     # wallet_balance + local unrealized_pnl = 1000.0 + 0.0 since no positions
@@ -1067,12 +1045,10 @@ def _mode2_eth_snapshot_without_position_leverage(*, include_risk_metadata: bool
                     leverage=0.0,
                     fee_rate=0.0,
                     mark_price=2304.55582809,
-                    qty=-0.105,
                     position_qty=-0.105,
                     entry_price=2322.030550747,
                     unrealized_pnl=1.83484587,
                     position_side="BOTH",
-                    margin_type="cross",
                     margin_mode="cross",
                     notional=-241.97836194,
                     initial_margin=12.0989181,
@@ -1665,102 +1641,91 @@ def test_binance_parity_wallet_spot_lock_lifecycle_tracks_buy_and_sell_orders():
             total_margin_balance=1_000.0,
             margin_balance=1_000.0,
         ),
-        spot=portfolio_service_pb2.SpotWallet(
-            free=1_000.0,
-            locked=0.0,
-            assets=[
-                portfolio_service_pb2.SpotAsset(
-                    symbol="BTCUSDT",
-                    qty=1.0,
-                    locked=0.0,
-                    avg_entry_price=90.0,
-                    price=100.0,
-                ),
-            ],
-        ),
+        spot=portfolio_service_pb2.SpotWallet(assets=[
+            portfolio_service_pb2.SpotAsset(
+                asset="USDT", free_decimal="1000", locked_decimal="0",
+            ),
+            portfolio_service_pb2.SpotAsset(
+                asset="BTC", free_decimal="1", locked_decimal="0",
+                avg_entry_price_decimal="90", price_decimal="100",
+            ),
+        ]),
     )
     wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
+    for symbol, base in (("ETHUSDT", "ETH"), ("BTCUSDT", "BTC")):
+        wallet.spot.register_metadata(SpotSymbolMetadata(
+            venue_id=1, exchange="binance", market="spot", symbol=symbol,
+            status="TRADING", base_asset=base, quote_asset="USDT",
+            base_asset_precision=8, quote_asset_precision=8,
+            spot_trading_allowed=True,
+        ))
 
-    class NewBuy:
-        order_id = "buy-1"
-        status = "NEW"
-        side = "BUY"
-        orig_qty = 1.0
-        remaining_qty = 1.0
-        price = 100.0
+    def update(
+        *, order_id: str, symbol: str, status: str, side: str,
+        orig: str, executed: str, remaining: str, price: str,
+        fill_qty: str = "0", fill_price: str = "0", fee: str = "0",
+        cumulative_quote: str = "0", trade_id: str = "",
+    ) -> OrderResponse:
+        quote = str(Decimal(fill_qty) * Decimal(fill_price))
+        return OrderResponse(
+            symbol=symbol, side=side, qty=float(fill_qty), fill_price=float(fill_price),
+            status=status, fee=float(fee), order_id=order_id,
+            exchange_order_id=order_id, exchange_trade_id=trade_id,
+            venue_id=1, exchange="binance", market="spot", fee_asset="USDT",
+            qty_decimal=fill_qty, fill_price_decimal=fill_price,
+            fee_decimal=fee, quote_qty_decimal=quote,
+            orig_qty_decimal=orig, executed_qty_decimal=executed,
+            remaining_qty_decimal=remaining, price_decimal=price,
+            cumulative_quote_qty_decimal=cumulative_quote,
+        )
 
-    wallet.on_order("ETHUSDT", "spot", NewBuy())
-    assert wallet.spot.free == pytest.approx(900.0)
-    assert wallet.spot.locked == pytest.approx(100.0)
+    wallet.on_order("ETHUSDT", "spot", update(
+        order_id="buy-1", symbol="ETHUSDT", status="NEW", side="BUY",
+        orig="1", executed="0", remaining="1", price="100",
+    ))
+    assert wallet.spot.assets["USDT"].free == Decimal("900")
+    assert wallet.spot.assets["USDT"].locked == Decimal("100")
 
-    class PartialBuy:
-        order_id = "buy-1"
-        status = "PARTIALLY_FILLED"
-        side = "BUY"
-        qty = 0.4
-        orig_qty = 1.0
-        executed_qty = 0.4
-        remaining_qty = 0.6
-        price = 100.0
-        fill_price = 95.0
-        fee = 1.0
-
-    wallet.on_order("ETHUSDT", "spot", PartialBuy())
-    assert wallet.spot.free == pytest.approx(901.0)
-    assert wallet.spot.locked == pytest.approx(60.0)
-    assert wallet.spot.assets["ETH"].qty == Decimal("0.4")
+    wallet.on_order("ETHUSDT", "spot", update(
+        order_id="buy-1", symbol="ETHUSDT", status="PARTIALLY_FILLED", side="BUY",
+        orig="1", executed="0.4", remaining="0.6", price="100",
+        fill_qty="0.4", fill_price="95", fee="1", trade_id="buy-trade-1",
+        cumulative_quote="38",
+    ))
+    assert wallet.spot.assets["USDT"].free == Decimal("901")
+    assert wallet.spot.assets["USDT"].locked == Decimal("60")
+    assert wallet.spot.assets["ETH"].total == Decimal("0.4")
     assert wallet.spot.assets["ETH"].avg_entry_price == Decimal("95.0")
 
-    class CancelBuy:
-        order_id = "buy-1"
-        status = "CANCELED"
-        side = "BUY"
-        orig_qty = 1.0
-        executed_qty = 0.4
-        remaining_qty = 0.0
-        price = 100.0
+    wallet.on_order("ETHUSDT", "spot", update(
+        order_id="buy-1", symbol="ETHUSDT", status="CANCELED", side="BUY",
+        orig="1", executed="0.4", remaining="0", price="100",
+        cumulative_quote="38",
+    ))
+    assert wallet.spot.assets["USDT"].free == Decimal("961")
+    assert wallet.spot.assets["USDT"].locked == Decimal("0")
 
-    wallet.on_order("ETHUSDT", "spot", CancelBuy())
-    assert wallet.spot.free == pytest.approx(961.0)
-    assert wallet.spot.locked == pytest.approx(0.0)
-
-    class NewSell:
-        order_id = "sell-1"
-        status = "NEW"
-        side = "SELL"
-        orig_qty = 0.5
-        remaining_qty = 0.5
-        price = 100.0
-
-    wallet.on_order("BTCUSDT", "spot", NewSell())
+    wallet.on_order("BTCUSDT", "spot", update(
+        order_id="sell-1", symbol="BTCUSDT", status="NEW", side="SELL",
+        orig="0.5", executed="0", remaining="0.5", price="100",
+    ))
     assert wallet.spot.assets["BTC"].locked == Decimal("0.5")
 
-    class PartialSell:
-        order_id = "sell-1"
-        status = "PARTIALLY_FILLED"
-        side = "SELL"
-        qty = 0.2
-        orig_qty = 0.5
-        executed_qty = 0.2
-        remaining_qty = 0.3
-        price = 100.0
-        fill_price = 100.0
-
-    wallet.on_order("BTCUSDT", "spot", PartialSell())
-    assert wallet.spot.assets["BTC"].qty == Decimal("0.8")
+    wallet.on_order("BTCUSDT", "spot", update(
+        order_id="sell-1", symbol="BTCUSDT", status="PARTIALLY_FILLED", side="SELL",
+        orig="0.5", executed="0.2", remaining="0.3", price="100",
+        fill_qty="0.2", fill_price="100", trade_id="sell-trade-1",
+        cumulative_quote="20",
+    ))
+    assert wallet.spot.assets["BTC"].total == Decimal("0.8")
     assert wallet.spot.assets["BTC"].locked == Decimal("0.3")
-    assert wallet.spot.free == pytest.approx(981.0)
+    assert wallet.spot.assets["USDT"].free == Decimal("981")
 
-    class ExpireSell:
-        order_id = "sell-1"
-        status = "EXPIRED"
-        side = "SELL"
-        orig_qty = 0.5
-        executed_qty = 0.2
-        remaining_qty = 0.0
-        price = 100.0
-
-    wallet.on_order("BTCUSDT", "spot", ExpireSell())
+    wallet.on_order("BTCUSDT", "spot", update(
+        order_id="sell-1", symbol="BTCUSDT", status="EXPIRED", side="SELL",
+        orig="0.5", executed="0.2", remaining="0", price="100",
+        cumulative_quote="20",
+    ))
     assert wallet.spot.assets["BTC"].locked == Decimal("0")
 
 
@@ -1780,19 +1745,32 @@ def test_binance_parity_wallet_spot_lifecycle_requires_order_id():
             total_margin_balance=1_000.0,
             margin_balance=1_000.0,
         ),
-        spot=portfolio_service_pb2.SpotWallet(
-            free=1_000.0,
-            locked=0.0,
-        ),
+        spot=portfolio_service_pb2.SpotWallet(assets=[
+            portfolio_service_pb2.SpotAsset(
+                asset="USDT", free_decimal="1000", locked_decimal="0",
+            ),
+        ]),
     )
     wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
+    wallet.spot.register_metadata(SpotSymbolMetadata(
+        venue_id=1, exchange="binance", market="spot", symbol="ETHUSDT",
+        status="TRADING", base_asset="ETH", quote_asset="USDT",
+        base_asset_precision=8, quote_asset_precision=8,
+        spot_trading_allowed=True,
+    ))
 
     class NewBuy:
         status = "NEW"
         side = "BUY"
-        orig_qty = 1.0
-        remaining_qty = 1.0
-        price = 100.0
+        qty_decimal = "0"
+        fill_price_decimal = "0"
+        fee_decimal = "0"
+        quote_qty_decimal = "0"
+        orig_qty_decimal = "1"
+        executed_qty_decimal = "0"
+        remaining_qty_decimal = "1"
+        price_decimal = "100"
+        cumulative_quote_qty_decimal = "0"
 
     with pytest.raises(ValueError, match="order_id"):
         wallet.on_order("ETHUSDT", "spot", NewBuy())

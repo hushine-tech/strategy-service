@@ -43,6 +43,22 @@ def _make_fake_client(cls, addr: str):
         return cls()
 
 
+def test_spot_wallet_sync_state_is_defined_only_by_canonical_assets() -> None:
+    empty = portfolio_service_pb2.SpotWallet()
+    populated = portfolio_service_pb2.SpotWallet(assets=[
+        portfolio_service_pb2.SpotAsset(
+            asset="USDT",
+            free_decimal="0",
+            locked_decimal="0",
+        )
+    ])
+
+    assert "free" not in empty.DESCRIPTOR.fields_by_name
+    assert "locked" not in empty.DESCRIPTOR.fields_by_name
+    assert grpc_server._spot_wallet_has_state(empty) is False
+    assert grpc_server._spot_wallet_has_state(populated) is True
+
+
 def _prepare_strategy_code_for_test(path: str, code: str):
     gate = gate_strategy_source(
         resolve_strategy_source(path, code),
@@ -457,12 +473,10 @@ def make_portfolio_snapshot_with_binance_perp_and_spot(
                     symbol="BTCUSDT",
                     position_side="BOTH",
                     position_qty=0.0,
-                    qty=0.0,
                     entry_price=0.0,
                     mark_price=50_000.0,
                     leverage=20.0,
                     margin_mode="cross",
-                    margin_type="cross",
                 )
             ],
         ),
@@ -470,19 +484,15 @@ def make_portfolio_snapshot_with_binance_perp_and_spot(
     spot_wallet = portfolio_service_pb2.PortfolioWalletState(
         environment=environment,
         total_value=1000.0,
-        spot=portfolio_service_pb2.SpotWallet(
-            free=900.0,
-            locked=100.0,
-            assets=[
-                portfolio_service_pb2.SpotAsset(
-                    symbol="ETH",
-                    qty=1.0,
-                    locked=0.0,
-                    avg_entry_price=2000.0,
-                    price=2000.0,
-                )
-            ],
-        ),
+        spot=portfolio_service_pb2.SpotWallet(assets=[
+            portfolio_service_pb2.SpotAsset(
+                asset="USDT", free_decimal="900", locked_decimal="100",
+            ),
+            portfolio_service_pb2.SpotAsset(
+                asset="ETH", free_decimal="1", locked_decimal="0",
+                avg_entry_price_decimal="2000", price_decimal="2000",
+            ),
+        ]),
     )
     perp_venue = portfolio_service_pb2.VenueSnapshot(
         venue_id=1001,
@@ -4256,14 +4266,13 @@ def test_max_loss_guard_ignores_unowned_position_drawdown(monkeypatch):
 
 def test_stop_strategy_spot_exit_fails_structurally_when_core_close_unavailable(monkeypatch):
     route_wallet = make_testnet_wallet(
-        spot_assets=[{
-            "symbol": "BTC",
-            "qty": 0.01,
-            "locked": 0.0,
-            "avg_entry_price": 70000.0,
-            "price": 71000.0,
-        }],
-        spot_free=1000.0,
+        spot_assets=[
+            {"asset": "USDT", "free_decimal": "1000", "locked_decimal": "0"},
+            {
+                "asset": "BTC", "free_decimal": "0.01", "locked_decimal": "0",
+                "avg_entry_price_decimal": "70000", "price_decimal": "71000",
+            },
+        ],
     )
     wallet = PortfolioWalletRuntime(
         portfolio_id=707,
@@ -4331,13 +4340,11 @@ def _spot_close_final_snapshot(*, venue_id: int, environment: int, btc_free: str
         spot=portfolio_service_pb2.SpotWallet(assets=[
             portfolio_service_pb2.SpotAsset(
                 asset="BTC",
-                free=float(btc_free),
                 free_decimal=btc_free,
                 locked_decimal="0",
             ),
             portfolio_service_pb2.SpotAsset(
                 asset="USDT",
-                free=float(usdt_free),
                 free_decimal=usdt_free,
                 locked_decimal="0",
             ),
@@ -4349,14 +4356,13 @@ def _spot_close_final_snapshot(*, venue_id: int, environment: int, btc_free: str
 def _spot_stop_wallet(*, environment: int, portfolio_id: int, venue_id: int):
     factory = make_backtest_wallet if environment == 0 else make_testnet_wallet
     route_wallet = factory(
-        spot_assets=[{
-            "symbol": "BTC",
-            "qty": 0.01,
-            "locked": 0.0,
-            "avg_entry_price": 50_000.0,
-            "price": 51_000.0,
-        }],
-        spot_free=1_000.0,
+        spot_assets=[
+            {"asset": "USDT", "free_decimal": "1000", "locked_decimal": "0"},
+            {
+                "asset": "BTC", "free_decimal": "0.01", "locked_decimal": "0",
+                "avg_entry_price_decimal": "50000", "price_decimal": "51000",
+            },
+        ],
     )
     route_wallet.spot.register_metadata(SpotSymbolMetadata(
         venue_id=venue_id,
@@ -5859,14 +5865,13 @@ def test_live_spot_guard_runs_before_any_mixed_route_close_side_effect(monkeypat
         "margin_mode": "cross",
     }])
     spot_wallet = make_testnet_wallet(
-        spot_assets=[{
-            "symbol": "BTC",
-            "qty": 0.01,
-            "locked": 0.0,
-            "avg_entry_price": 50_000.0,
-            "price": 51_000.0,
-        }],
-        spot_free=1000.0,
+        spot_assets=[
+            {"asset": "USDT", "free_decimal": "1000", "locked_decimal": "0"},
+            {
+                "asset": "BTC", "free_decimal": "0.01", "locked_decimal": "0",
+                "avg_entry_price_decimal": "50000", "price_decimal": "51000",
+            },
+        ],
     )
     wallet = PortfolioWalletRuntime(
         portfolio_id=7102,

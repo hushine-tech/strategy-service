@@ -55,12 +55,10 @@ def _apply_futures_position(
     p.symbol = symbol
     p.position_side = position_side
     p.position_qty = float(position_qty)
-    p.qty = abs(float(position_qty))  # legacy alias preserved on wire
     p.entry_price = float(entry_price)
     p.mark_price = float(mark_price)
     p.leverage = float(leverage)
     p.margin_mode = effective_margin_mode
-    p.margin_type = effective_margin_mode
     if initial_balance:
         p.initial_balance = float(initial_balance)
     if initial_margin:
@@ -82,11 +80,11 @@ def _apply_futures_position(
 def _apply_spot_asset(
     spot_proto: portfolio_service_pb2.SpotWallet,
     *,
-    symbol: str,
-    qty: float = 0.0,
-    locked: float = 0.0,
-    avg_entry_price: float = 0.0,
-    price: float | None = None,
+    asset: str,
+    free_decimal: str = "0",
+    locked_decimal: str = "0",
+    avg_entry_price_decimal: str = "0",
+    price_decimal: str | None = None,
 ) -> None:
     """Append one asset entry to a SpotWallet proto.
 
@@ -94,12 +92,12 @@ def _apply_spot_asset(
     each call appends one entry via ``add()``.
     """
     a = spot_proto.assets.add()
-    a.symbol = symbol
-    a.qty = float(qty)
-    a.locked = float(locked)
-    a.avg_entry_price = float(avg_entry_price)
-    if price is not None:
-        a.price = float(price)
+    a.asset = str(asset).strip().upper()
+    a.free_decimal = str(free_decimal)
+    a.locked_decimal = str(locked_decimal)
+    a.avg_entry_price_decimal = str(avg_entry_price_decimal)
+    if price_decimal is not None:
+        a.price_decimal = str(price_decimal)
 
 
 def _build_wallet_proto(
@@ -114,8 +112,6 @@ def _build_wallet_proto(
     withdrawal_sum: float,
     futures_positions: Iterable[dict[str, Any]] | None,
     spot_assets: Iterable[dict[str, Any]] | None,
-    spot_free: float,
-    spot_locked: float,
 ) -> portfolio_service_pb2.PortfolioWalletState:
     available = wallet_balance if available_balance is None else available_balance
     futures = portfolio_service_pb2.FuturesWallet(
@@ -137,7 +133,7 @@ def _build_wallet_proto(
         # requires FuturesPosition.margin_mode to be non-empty).
         _apply_futures_position(futures, portfolio_margin_mode=margin_mode, **pos)
 
-    spot = portfolio_service_pb2.SpotWallet(free=spot_free, locked=spot_locked)
+    spot = portfolio_service_pb2.SpotWallet()
     for asset in spot_assets or []:
         _apply_spot_asset(spot, **asset)
 
@@ -162,8 +158,6 @@ def make_backtest_wallet(
     withdrawal_sum: float = 0.0,
     futures_positions: Iterable[dict[str, Any]] | None = None,
     spot_assets: Iterable[dict[str, Any]] | None = None,
-    spot_free: float = 0.0,
-    spot_locked: float = 0.0,
 ) -> BinanceWalletRuntime:
     """Build a environment=0 backtest wallet runtime via the canonical path.
 
@@ -191,8 +185,6 @@ def make_backtest_wallet(
         withdrawal_sum=withdrawal_sum,
         futures_positions=futures_positions,
         spot_assets=spot_assets,
-        spot_free=spot_free,
-        spot_locked=spot_locked,
     )
     return build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
 
@@ -208,8 +200,6 @@ def make_demo_wallet(
     withdrawal_sum: float = 0.0,
     futures_positions: Iterable[dict[str, Any]] | None = None,
     spot_assets: Iterable[dict[str, Any]] | None = None,
-    spot_free: float = 0.0,
-    spot_locked: float = 0.0,
 ) -> BinanceWalletRuntime:
     """Build an environment=1 demo wallet runtime via the canonical path.
 
@@ -228,8 +218,6 @@ def make_demo_wallet(
         withdrawal_sum=withdrawal_sum,
         futures_positions=futures_positions,
         spot_assets=spot_assets,
-        spot_free=spot_free,
-        spot_locked=spot_locked,
     )
     return build_wallet_from_portfolio(proto_to_portfolio_spec(wallet_proto))
 

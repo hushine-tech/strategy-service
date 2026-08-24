@@ -28,7 +28,11 @@ from strategy_service.portfolio_client import (
     _serialize_future_wallet,
     _serialize_spot_wallet,
 )
-from strategy_service.order_client import OrderClient, _market_time_to_proto
+from strategy_service.order_client import (
+    OrderClient,
+    _market_time_to_proto,
+    canonical_decimal_text,
+)
 from strategy_service.types import ExecutionFeedback, OrderDecision
 
 logger = logging.getLogger(__name__)
@@ -650,20 +654,17 @@ class ProxyOrderClient(OrderClient):
                 portfolio_id=int(portfolio_id),
                 symbol=symbol,
                 side=decision.side,
-                qty=float(decision.qty),
-                mark_price=float(mark_price),
                 strategy_id=int(strategy_id),
                 market=market_code,
                 session_id=session_id,
                 intent_id=intent,
                 exchange=exchange_code,
                 position_side=position_side_code,
-                qty_decimal=str(decision.qty).strip(),
-                mark_price_decimal=str(mark_price).strip(),
+                qty_decimal=canonical_decimal_text(decision.qty),
+                mark_price_decimal=canonical_decimal_text(mark_price),
             )
             if decision.price is not None:
-                kwargs["price"] = float(decision.price)
-                kwargs["price_decimal"] = str(decision.price).strip()
+                kwargs["price_decimal"] = canonical_decimal_text(decision.price)
             order_type = str(getattr(decision, "order_type", None) or "").strip().upper()
             if not order_type:
                 order_type = "LIMIT" if decision.price is not None else "MARKET"

@@ -444,13 +444,11 @@ def _serialize_future_wallet(fw: Any):
             leverage=float(getattr(pos, "leverage", 1.0) or 1.0),
             fee_rate=float(getattr(pos, "fee_rate", 0.0004) or 0.0004),
             mark_price=float(mark_price) if mark_price is not None else 0.0,
-            qty=net_qty,
             position_qty=position_qty,
             entry_price=float(getattr(pos, "avg_entry_price", getattr(pos, "entry_price", 0.0)) or 0.0),
             unrealized_pnl=unrealized_pnl,
             position_side=position_side,
             margin_mode=str(getattr(pos, "margin_mode", "") or ""),
-            margin_type=str(getattr(pos, "margin_type", getattr(pos, "margin_mode", "")) or ""),
             notional=float(getattr(pos, "notional", 0.0) or 0.0),
             initial_margin=float(getattr(pos, "initial_margin", 0.0) or 0.0),
             position_initial_margin=float(getattr(pos, "position_initial_margin", 0.0) or 0.0),
@@ -532,24 +530,16 @@ def _serialize_spot_wallet(sw: Any):
     assets = []
     for asset_code, asset in sw.assets.items():
         kwargs: dict = dict(
-            symbol=asset_code,
-            qty=float(asset.qty),
-            locked=float(asset.locked),
-            avg_entry_price=float(asset.avg_entry_price),
             asset=asset_code,
-            free=float(asset.free),
             free_decimal=_plain_unsigned_spot_decimal(asset.free),
             locked_decimal=_plain_unsigned_spot_decimal(asset.locked),
+            avg_entry_price_decimal=_plain_unsigned_spot_decimal(asset.avg_entry_price),
         )
         if asset.price is not None:
-            kwargs["price"] = float(asset.price)
+            kwargs["price_decimal"] = _plain_unsigned_spot_decimal(asset.price)
         assets.append(portfolio_service_pb2.SpotAsset(**kwargs))
 
-    return portfolio_service_pb2.SpotWallet(
-        free=float(sw.free),
-        locked=float(sw.locked),
-        assets=assets,
-    )
+    return portfolio_service_pb2.SpotWallet(assets=assets)
 
 
 def _compute_total_value(
@@ -563,5 +553,6 @@ def _compute_total_value(
         try:
             total += float(sw.get_estimated_value())
         except ValueError:
-            total += float(sw.free + sw.locked)
+            quote = sw.assets.get("USDT")
+            total += float(quote.total if quote is not None else 0.0)
     return total

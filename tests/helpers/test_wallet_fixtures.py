@@ -92,15 +92,26 @@ def test_helper_hedge_positions_keyed_by_direction():
 
 def test_helper_spot_assets_hydrated():
     wallet = make_testnet_wallet(
-        spot_free=500.0,
         spot_assets=[
-            {"symbol": "BTCUSDT", "qty": 0.01, "avg_entry_price": 40_000.0, "price": 45_000.0},
+            {
+                "asset": "USDT",
+                "free_decimal": "500.0",
+                "locked_decimal": "0",
+            },
+            {
+                "asset": "BTC",
+                "free_decimal": "0.01",
+                "locked_decimal": "0",
+                "avg_entry_price_decimal": "40000.0",
+                "price_decimal": "45000.0",
+            },
         ],
     )
     assert "BTC" in wallet.spot.assets
     assert "BTCUSDT" not in wallet.spot.assets
     asset = wallet.spot.assets["BTC"]
-    assert asset.qty == Decimal("0.01")
+    assert asset.free == Decimal("0.01")
+    assert asset.locked == Decimal("0")
     assert asset.avg_entry_price == Decimal("40000.0")
 
 

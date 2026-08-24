@@ -122,6 +122,10 @@ def test_spot_duplicate_fill_can_advance_terminal_order_state_without_double_deb
             exchange="binance",
             market="spot",
             exchange_order_id="42",
+            qty_decimal="0",
+            fill_price_decimal="0",
+            fee_decimal="0",
+            quote_qty_decimal="0",
             orig_qty_decimal="0.02",
             executed_qty_decimal="0",
             remaining_qty_decimal="0.02",
@@ -201,6 +205,10 @@ def test_spot_late_new_cannot_regress_a_terminal_order_or_reopen_locks():
             exchange="binance",
             market="spot",
             exchange_order_id="42",
+            qty_decimal="0",
+            fill_price_decimal="0",
+            fee_decimal="0",
+            quote_qty_decimal="0",
             orig_qty_decimal="0.02",
             executed_qty_decimal="0.01",
             remaining_qty_decimal="0.01",
@@ -233,9 +241,15 @@ def test_spot_cumulative_advance_without_fill_delta_stays_recovery_pending():
             exchange="binance",
             market="spot",
             exchange_order_id="42",
+            qty_decimal="0",
+            fill_price_decimal="0",
+            fee_decimal="0",
+            quote_qty_decimal="0",
             orig_qty_decimal="0.02",
+            executed_qty_decimal="0",
             remaining_qty_decimal="0.02",
             price_decimal="50000",
+            cumulative_quote_qty_decimal="0",
         ),
         metadata,
     )
@@ -252,6 +266,10 @@ def test_spot_cumulative_advance_without_fill_delta_stays_recovery_pending():
             exchange="binance",
             market="spot",
             exchange_order_id="42",
+            qty_decimal="0",
+            fill_price_decimal="0",
+            fee_decimal="0",
+            quote_qty_decimal="0",
             orig_qty_decimal="0.02",
             executed_qty_decimal="0.01",
             remaining_qty_decimal="0.01",
@@ -289,7 +307,8 @@ def test_spot_wallet_serialization_emits_asset_codes_and_exact_balances():
     assert by_asset["USDT"].free_decimal == "1000.00000000"
     assert by_asset["USDT"].locked_decimal == "2.00000000"
     assert by_asset["BTC"].free_decimal == "0.01000000"
-    assert all(not item.symbol.endswith("USDTUSDT") for item in payload.assets)
+    assert "symbol" not in payload.assets[0].DESCRIPTOR.fields_by_name
+    assert "qty" not in payload.assets[0].DESCRIPTOR.fields_by_name
 
 
 def test_spot_wallet_serialization_emits_scaled_zero_as_plain_decimal():

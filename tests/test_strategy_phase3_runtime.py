@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -331,13 +332,64 @@ def _order_update_event(
             qty=0.02,
             fill_price=2500.0,
             fee=0.0,
+            qty_decimal="0.02",
+            fill_price_decimal="2500",
+            fee_decimal="0",
+            quote_qty_decimal="50.00",
         ),
         orig_qty=0.02,
         executed_qty=0.02,
         remaining_qty=0.0,
         avg_price=2500.0,
         event_source="binance_user_data",
+        orig_qty_decimal="0.02",
+        executed_qty_decimal="0.02",
+        remaining_qty_decimal="0",
+        price_decimal="2500",
+        cumulative_quote_qty_decimal="50.00",
     )
+
+
+def _exact_order_update_fill(
+    symbol: str,
+    qty: str,
+    fill_price: str,
+    *,
+    fee: str = "0",
+) -> OrderUpdateFill:
+    return OrderUpdateFill(
+        symbol=symbol,
+        qty=float(qty),
+        fill_price=float(fill_price),
+        fee=float(fee),
+        qty_decimal=qty,
+        fill_price_decimal=fill_price,
+        fee_decimal=fee,
+        quote_qty_decimal=format(Decimal(qty) * Decimal(fill_price), "f"),
+    )
+
+
+def _exact_order_state(
+    *,
+    orig: str,
+    executed: str,
+    remaining: str,
+    price: str,
+) -> dict[str, object]:
+    return {
+        "orig_qty": float(orig),
+        "executed_qty": float(executed),
+        "remaining_qty": float(remaining),
+        "avg_price": float(price),
+        "orig_qty_decimal": orig,
+        "executed_qty_decimal": executed,
+        "remaining_qty_decimal": remaining,
+        "price_decimal": price,
+        "cumulative_quote_qty_decimal": format(
+            Decimal(executed) * Decimal(price),
+            "f",
+        ),
+    }
 
 
 def test_base_strategy_requires_portfolio_wallet_runtime() -> None:
@@ -730,9 +782,9 @@ def test_invalid_decision_return_type_fails_closed() -> None:
 
 @pytest.mark.parametrize(
     "qty",
-    [0.01, "0", "-1"],
+    ["0", "-1"],
 )
-def test_qty_must_be_positive_decimal_string(qty: object) -> None:
+def test_qty_must_be_positive_decimal(qty: object) -> None:
     client = StubOrderClient()
     svc = _base_strategy(
         "inline.py",
@@ -750,11 +802,28 @@ def test_qty_must_be_positive_decimal_string(qty: object) -> None:
     assert client.orders == []
 
 
+def test_numeric_qty_is_canonicalized_at_worker_order_boundary() -> None:
+    client = StubOrderClient()
+    svc = _base_strategy(
+        "inline.py",
+        _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
+        client,
+        portfolio_id=1,
+        strategy_code=_strategy(
+            '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty=0.01, order_type=OrderType.MARKET)\n'
+        ),
+    )
+
+    svc.running_strategy(_tick())
+
+    assert client.orders[0][0].qty == "0.01"
+
+
 @pytest.mark.parametrize(
     "price",
-    [2500.0, "0", "-1"],
+    ["0", "-1"],
 )
-def test_price_when_present_must_be_positive_decimal_string(price: object) -> None:
+def test_price_when_present_must_be_positive_decimal(price: object) -> None:
     client = StubOrderClient()
     svc = _base_strategy(
         "inline.py",
@@ -770,6 +839,23 @@ def test_price_when_present_must_be_positive_decimal_string(price: object) -> No
     with pytest.raises(ValueError, match="OrderDecision.price"):
         svc.running_strategy(_tick())
     assert client.orders == []
+
+
+def test_numeric_price_is_canonicalized_at_worker_order_boundary() -> None:
+    client = StubOrderClient()
+    svc = _base_strategy(
+        "inline.py",
+        _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES)),
+        client,
+        portfolio_id=1,
+        strategy_code=_strategy(
+            '        return OrderDecision(exchange=Exchange.BINANCE, market=Market.PERPETUAL_FUTURES, symbol="ETHUSDT", side=OrderSide.BUY, qty="0.01", order_type=OrderType.LIMIT, price=2500.0)\n'
+        ),
+    )
+
+    svc.running_strategy(_tick())
+
+    assert client.orders[0][0].price == "2500.0"
 
 
 @pytest.mark.parametrize("value", ["NaN", "Infinity", "1e999999"])
@@ -845,10 +931,8 @@ def test_lifecycle_fill_missing_route_does_not_update_wallet_or_unblock() -> Non
         event_type="fill",
         order_status="FILLED",
         order_id="order-1",
-        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.1, fill_price=2500.0),
-        orig_qty=0.1,
-        executed_qty=0.1,
-        remaining_qty=0.0,
+        fill=_exact_order_update_fill("ETHUSDT", "0.1", "2500"),
+        **_exact_order_state(orig="0.1", executed="0.1", remaining="0", price="2500"),
     )
     wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
     svc = _base_strategy(
@@ -882,10 +966,10 @@ def test_lifecycle_updates_settle_into_matching_venue_wallets() -> None:
             event_type="fill",
             order_status="FILLED",
             order_id="perp-order",
-            fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.1, fill_price=2500.0),
-            orig_qty=0.1,
-            executed_qty=0.1,
-            remaining_qty=0.0,
+            fill=_exact_order_update_fill("ETHUSDT", "0.1", "2500"),
+            **_exact_order_state(
+                orig="0.1", executed="0.1", remaining="0", price="2500",
+            ),
         ),
         OrderUpdateEvent(
             event_id=2,
@@ -899,10 +983,8 @@ def test_lifecycle_updates_settle_into_matching_venue_wallets() -> None:
             event_type="fill",
             order_status="FILLED",
             order_id="spot-order",
-            fill=OrderUpdateFill(symbol="ETHUSDT", qty=1.0, fill_price=2501.0),
-            orig_qty=1.0,
-            executed_qty=1.0,
-            remaining_qty=0.0,
+            fill=_exact_order_update_fill("ETHUSDT", "1", "2501"),
+            **_exact_order_state(orig="1", executed="1", remaining="0", price="2501"),
         ),
     ]
     wallet = _portfolio(
@@ -942,10 +1024,10 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
             event_type="fill",
             order_status="PARTIALLY_FILLED",
             order_id="order-1",
-            fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.04, fill_price=2500.0),
-            orig_qty=0.1,
-            executed_qty=0.04,
-            remaining_qty=0.06,
+            fill=_exact_order_update_fill("ETHUSDT", "0.04", "2500"),
+            **_exact_order_state(
+                orig="0.1", executed="0.04", remaining="0.06", price="2500",
+            ),
         ),
         OrderUpdateEvent(
             event_id=2,
@@ -959,10 +1041,8 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
             event_type="fill",
             order_status="FILLED",
             order_id="order-1",
-            fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.06, fill_price=2510.0),
-            orig_qty=0.1,
-            executed_qty=0.1,
-            remaining_qty=0.0,
+            fill=_exact_order_update_fill("ETHUSDT", "0.06", "2510"),
+            **_exact_order_state(orig="0.1", executed="0.1", remaining="0", price="2510"),
         ),
     ]
     wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
@@ -994,10 +1074,8 @@ def test_lifecycle_replay_of_synchronous_fill_is_not_settled_twice() -> None:
         event_type="fill",
         order_status="FILLED",
         order_id="order-sync",
-        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.1, fill_price=2500.0),
-        orig_qty=0.1,
-        executed_qty=0.1,
-        remaining_qty=0.0,
+        fill=_exact_order_update_fill("ETHUSDT", "0.1", "2500"),
+        **_exact_order_state(orig="0.1", executed="0.1", remaining="0", price="2500"),
     )
 
     class SyncThenLifecycleClient(LifecycleOrderClient):
@@ -1067,10 +1145,8 @@ def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
         event_type="fill",
         order_status="PARTIALLY_FILLED",
         order_id="order-partial",
-        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.2, fill_price=2510.0),
-        orig_qty=0.2,
-        executed_qty=0.2,
-        remaining_qty=0.0,
+        fill=_exact_order_update_fill("ETHUSDT", "0.2", "2510"),
+        **_exact_order_state(orig="0.2", executed="0.2", remaining="0", price="2510"),
     )
 
     class PartialThenLifecycleClient(LifecycleOrderClient):
@@ -1141,10 +1217,8 @@ def test_lifecycle_after_partial_close_short_applies_rest_recovery_fill() -> Non
         event_source="rest_recovery",
         order_status="FILLED",
         order_id="order-close-short",
-        fill=OrderUpdateFill(symbol="ETHUSDT", qty=0.016, fill_price=2510.0),
-        orig_qty=0.02,
-        executed_qty=0.02,
-        remaining_qty=0.0,
+        fill=_exact_order_update_fill("ETHUSDT", "0.016", "2510"),
+        **_exact_order_state(orig="0.02", executed="0.02", remaining="0", price="2510"),
     )
 
     class PartialCloseThenRecoveryClient(LifecycleOrderClient):

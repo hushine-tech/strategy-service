@@ -170,11 +170,7 @@ def _validated_full_wallet_for_market(venue: Any, market: str) -> Any | None:
 def _spot_wallet_has_content(spot: Any) -> bool:
     if spot is None:
         return False
-    return (
-        _float_field(spot, "free") != 0.0
-        or _float_field(spot, "locked") != 0.0
-        or bool(list(getattr(spot, "assets", []) or []))
-    )
+    return bool(list(getattr(spot, "assets", []) or []))
 
 
 def _futures_wallet_has_content(futures: Any) -> bool:

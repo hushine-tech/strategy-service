@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from strategy_service.types import ExecutionFeedback, OrderResponse
 
 
@@ -43,6 +45,12 @@ class FilledOrderClient:
         if route_market != "spot" and side == "SELL":
             wallet_qty = -raw_qty
         fill_price = float(decision.price) if decision.price is not None else float(mark_price)
+        qty_decimal = format(Decimal(str(raw_qty)), "f")
+        fill_price_decimal = format(Decimal(str(fill_price)), "f")
+        quote_qty_decimal = format(
+            Decimal(qty_decimal) * Decimal(fill_price_decimal),
+            "f",
+        )
         order = OrderResponse(
             symbol=symbol,
             side=decision.side,
@@ -54,6 +62,23 @@ class FilledOrderClient:
             orig_qty=raw_qty,
             executed_qty=raw_qty,
             remaining_qty=0.0,
+            exchange="binance",
+            market=route_market,
+            exchange_order_id="test-exchange-order",
+            exchange_trade_id="test-trade",
+            qty_decimal=qty_decimal,
+            fill_price_decimal=fill_price_decimal,
+            fee_decimal="0",
+            quote_qty_decimal=quote_qty_decimal,
+            orig_qty_decimal=qty_decimal,
+            executed_qty_decimal=qty_decimal,
+            remaining_qty_decimal="0",
+            price_decimal=(
+                format(Decimal(str(decision.price)), "f")
+                if decision.price is not None
+                else ""
+            ),
+            cumulative_quote_qty_decimal=quote_qty_decimal,
         )
         return ExecutionFeedback(
             intent_id=intent_id,

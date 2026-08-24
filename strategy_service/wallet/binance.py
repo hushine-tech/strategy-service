@@ -1018,7 +1018,7 @@ class BinanceWalletRuntime:
         This is purely a display-projection — runtime risk / precheck /
         reconciliation code MUST NOT read it. The authoritative futures
         risk value is ``get_available_balance``; the authoritative spot
-        balance is ``spot.free`` + ``spot.locked`` + priced assets.
+        balance is derived from canonical asset ``free`` + ``locked`` balances.
         """
         spot_value = self._spot_estimated_value()
         return self.futures.get_margin_balance() + float(spot_value)
@@ -1037,7 +1037,8 @@ class BinanceWalletRuntime:
         try:
             return float(self.spot.get_estimated_value())
         except ValueError:
-            return float(self.spot.free + self.spot.locked)
+            quote = self.spot.assets.get("USDT")
+            return float(quote.total if quote is not None else 0.0)
 
     def get_wallet_balance(self) -> float:
         return self.futures.get_wallet_balance()
@@ -1070,19 +1071,13 @@ class BinanceWalletRuntime:
             environment=self.environment_code,
             futures=self.futures.to_canonical(),
             spot=CanonicalSpotState(
-                free=float(self.spot.free),
-                locked=float(self.spot.locked),
                 assets=[
                     CanonicalSpotAssetState(
-                        symbol="",
-                        qty=float(asset.qty),
-                        locked=float(asset.locked),
-                        avg_entry_price=float(asset.avg_entry_price),
-                        price=float(asset.price) if asset.price is not None else None,
                         asset=symbol,
-                        free=asset.free,
                         free_decimal=str(asset.free),
                         locked_decimal=str(asset.locked),
+                        avg_entry_price_decimal=str(asset.avg_entry_price),
+                        price_decimal=(str(asset.price) if asset.price is not None else None),
                     )
                     for symbol, asset in self.spot.assets.items()
                 ],

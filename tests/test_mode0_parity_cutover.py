@@ -1,12 +1,7 @@
 """C2a cutover smoke tests: environment=0 backtest routed through BinanceWalletRuntime.
 
-These tests drive the registry-based path (canonical state → build_wallet_from_portfolio)
-which is what RunStrategy actually uses in production. The legacy-backed
-test_strategy_engine.py fixtures bypass this path by constructing wallet objects
-directly; this file closes that gap by exercising the actual cutover contract.
-
-After C2b (legacy removal), the tests in this file become the primary backtest
-smoke. They MUST continue to pass.
+These tests drive the registry-based path (canonical state →
+build_wallet_from_portfolio) used by RunStrategy in production.
 """
 
 from __future__ import annotations
@@ -60,12 +55,10 @@ def _canonical_mode0(
             fp.symbol = p["symbol"]
             fp.position_side = p.get("position_side", "BOTH")
             fp.position_qty = float(p.get("position_qty", 0.0))
-            fp.qty = fp.position_qty  # legacy alias
             fp.entry_price = float(p.get("entry_price", 0.0))
             fp.mark_price = float(p.get("mark_price", 0.0))
             fp.leverage = float(p.get("leverage", 10.0))
             fp.margin_mode = p.get("margin_mode", margin_mode)
-            fp.margin_type = fp.margin_mode
     return portfolio_service_pb2.PortfolioWalletState(
         environment=0,
         total_value=wallet_balance,
