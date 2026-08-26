@@ -5,6 +5,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
 
 def _load_script():
     script = Path(__file__).resolve().parents[1] / "scripts" / "restart_bare_worker_session.py"
@@ -79,6 +81,24 @@ def test_build_restart_payload_omits_empty_optional_values() -> None:
         "session_id": "sess-old",
         "max_loss_close_pct": 0.25,
     }
+
+
+def test_validate_restart_result_requires_new_session_identity() -> None:
+    mod = _load_script()
+
+    assert mod.validate_restart_result("sess-old", {
+        "old_session_id": "sess-old",
+        "new_session_id": "sess-new",
+        "runtime_id": "rt-1",
+    })["new_session_id"] == "sess-new"
+
+    for invalid in (
+        {"old_session_id": "sess-other", "new_session_id": "sess-new"},
+        {"old_session_id": "sess-old", "new_session_id": ""},
+        {"old_session_id": "sess-old", "new_session_id": "sess-old"},
+    ):
+        with pytest.raises(ValueError, match="Session"):
+            mod.validate_restart_result("sess-old", invalid)
 
 
 def test_default_state_file_discovers_latest_runtime_when_user_id_is_empty(tmp_path: Path) -> None:

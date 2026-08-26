@@ -310,6 +310,25 @@ def test_begin_stopping_atomically_closes_strategy_decision_admission():
     assert state.wait_for_strategy_decisions(timeout_seconds=0) is True
 
 
+def test_platform_wallet_control_never_overlaps_user_callback_or_stop_snapshot():
+    state = SessionState(status="running")
+
+    assert state.try_enter_strategy_decision() is True
+    assert state.try_enter_platform_control() is False
+    state.leave_strategy_decision()
+
+    assert state.try_enter_platform_control() is True
+    assert state.try_enter_strategy_decision() is False
+    started, _operation_id = state.begin_stopping(operation_id="stop-income")
+
+    assert started is True
+    assert state.wait_for_strategy_decisions(timeout_seconds=0) is False
+
+    state.leave_platform_control()
+
+    assert state.wait_for_strategy_decisions(timeout_seconds=0) is True
+
+
 def test_manager_has_no_id_only_restore_escape_hatch():
     assert not hasattr(SessionManager, "restore")
 

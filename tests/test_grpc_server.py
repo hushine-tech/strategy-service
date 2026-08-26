@@ -1764,6 +1764,382 @@ def test_run_live_initializes_runtime_channel_delivery(monkeypatch):
     assert state.status == "stopped"
 
 
+def _demo_income_wallet(venue_id: int, *, wallet_balance: float = 100.0):
+    route_wallet = make_testnet_wallet(
+        wallet_balance=wallet_balance,
+        futures_positions=[{
+            "symbol": "BTCUSDT",
+            "position_side": "BOTH",
+            "position_qty": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 100.0,
+            "margin_mode": "cross",
+        }],
+    )
+    route_wallet.futures.venue_id = venue_id
+    return route_wallet
+
+
+def _demo_income_entry(
+    session_id: str,
+    entry_id: int,
+    venue_id: int,
+    amount: str,
+):
+    entry = portfolio_service_pb2.VenueIncomeEntry(
+        income_entry_id=entry_id,
+        session_id=session_id,
+        venue_id=venue_id,
+        income_type="funding_fee",
+        source="exchange",
+        external_transaction_id=f"demo-income-{entry_id}",
+        settlement_key=f"demo-settlement-{entry_id}",
+        symbol="BTCUSDT",
+        asset="USDT",
+        calculated_amount_decimal=amount,
+        exchange_amount_decimal=amount,
+        applied_amount_decimal=amount,
+        reconciliation_delta_decimal="0",
+        calculation_details_json=json.dumps([{
+            "symbol": "BTCUSDT",
+            "position_side": "BOTH",
+            "margin_mode": "cross",
+            "signed_qty_decimal": "1",
+            "funding_rate_decimal": "0.0001",
+            "mark_price_decimal": "100",
+            "calculated_amount_decimal": amount,
+            "applied_amount_decimal": amount,
+            "calculator_version": "binance-usdm-linear-v1",
+        }], separators=(",", ":")),
+        status="confirmed",
+    )
+    entry.occurred_at.FromMilliseconds(1_780_000_000_000 + entry_id)
+    return entry
+
+
+def _demo_income_event(
+    entry,
+    *,
+    sequence: int,
+    batch_end: bool,
+):
+    return SimpleNamespace(
+        kind="income",
+        payload=entry,
+        stream_key=f"income/{entry.session_id}",
+        session_id=entry.session_id,
+        sequence=sequence,
+        batch_end=batch_end,
+    )
+
+
+def _income_live_servicer(monkeypatch, delivery, portfolio_client):
+    class FakeProxy:
+        def portfolio_client(self):
+            return portfolio_client
+
+        def marketdata_client(self):
+            return _NoopMarketDataClient()
+
+        def order_client(self):
+            return _NoopOrderClient()
+
+    servicer = StrategyServiceServicer(
+        "", "", {}, "",
+        platform_proxy=FakeProxy(),
+        market_data_policy={"lease_management_enabled": False},
+        restore_running_sessions=False,
+    )
+    servicer.set_runtime_data_source(delivery)
+    monkeypatch.setattr(
+        servicer,
+        "_install_indicator_collection",
+        lambda *_args, **_kwargs: lambda: None,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "strategy_service.marketdata_adapter",
+        types.SimpleNamespace(_adapt_kline=lambda kline, _market=None: kline),
+    )
+    return servicer
+
+
+def test_demo_income_is_control_flow_routes_multiple_venues_and_acks_stale_replay(
+    monkeypatch,
+):
+    session_id = "a" * 32
+    venue_11 = _demo_income_wallet(11, wallet_balance=100.0)
+    venue_22 = _demo_income_wallet(22, wallet_balance=200.0)
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={
+            ("binance", "perpetual_futures", 11): venue_11,
+            ("binance", "perpetual_futures", 22): venue_22,
+        },
+    )
+    first = _demo_income_entry(session_id, 7, 22, "-2")
+    final = _demo_income_entry(session_id, 8, 11, "1")
+    events = [
+        _demo_income_event(first, sequence=8, batch_end=False),
+        _demo_income_event(final, sequence=8, batch_end=True),
+        _demo_income_event(first, sequence=8, batch_end=False),
+        _demo_income_event(final, sequence=8, batch_end=True),
+        SimpleNamespace(
+            kind="kline",
+            payload=SimpleNamespace(
+                symbol="BTCUSDT", interval="1m", close=100.0, market="futures"
+            ),
+        ),
+    ]
+
+    class Delivery:
+        acks = []
+
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            return iter(events)
+
+        @classmethod
+        def acknowledge_income_applied(cls, event):
+            cls.acks.append((event.session_id, event.sequence))
+
+    class PortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            return True
+
+        @staticmethod
+        def update_portfolio_wallet_state(**_kwargs):
+            raise AssertionError("Demo Income must not use portfolio-wide wallet persistence")
+
+    observations = []
+
+    class Engine:
+        @staticmethod
+        def running_strategy(_market_data):
+            observations.append((
+                venue_11.futures.wallet_balance,
+                venue_22.futures.wallet_balance,
+                venue_11.futures.last_applied_income_entry_id,
+                venue_22.futures.last_applied_income_entry_id,
+            ))
+            return True
+
+    state = SessionState(environment=1)
+    state.configure_stop_runtime(wallet=portfolio)
+    servicer = _income_live_servicer(monkeypatch, Delivery(), PortfolioClient())
+
+    servicer._run_live_via_platform_proxy(session_id, state, Engine())
+
+    assert observations == [(101.0, 198.0, 8, 7)]
+    assert Delivery.acks == [(session_id, 8), (session_id, 8)]
+
+
+def test_demo_income_rejects_spot_and_wrong_session_without_ack(monkeypatch):
+    session_id = "b" * 32
+    spot_wallet = make_testnet_wallet(
+        wallet_balance=0.0,
+        spot_assets=[{"asset": "USDT", "free_decimal": "100", "locked_decimal": "0"}],
+    )
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "spot")},
+        wallets={("binance", "spot", 33): spot_wallet},
+    )
+    wrong_session_entry = _demo_income_entry("c" * 32, 9, 33, "1")
+
+    class Delivery:
+        acks = []
+
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            yield _demo_income_event(wrong_session_entry, sequence=9, batch_end=True)
+
+        @classmethod
+        def acknowledge_income_applied(cls, event):
+            cls.acks.append(event.sequence)
+
+    state = SessionState(environment=1)
+    state.configure_stop_runtime(wallet=portfolio)
+    servicer = _income_live_servicer(
+        monkeypatch,
+        Delivery(),
+        SimpleNamespace(update_session=lambda **_kwargs: True),
+    )
+
+    with pytest.raises(ValueError, match="Session"):
+        servicer._run_live_via_platform_proxy(session_id, state, object())
+    assert Delivery.acks == []
+
+    spot_entry = _demo_income_entry(session_id, 10, 33, "1")
+    delivery = Delivery()
+    delivery.iter_session_events = lambda **_kwargs: iter([
+        _demo_income_event(spot_entry, sequence=10, batch_end=True)
+    ])
+    servicer.set_runtime_data_source(delivery)
+    with pytest.raises(ValueError, match="Futures"):
+        servicer._run_live_via_platform_proxy(session_id, state, object())
+    assert Delivery.acks == []
+
+
+def test_demo_income_apply_failure_keeps_batch_unacked(monkeypatch):
+    session_id = "d" * 32
+    route_wallet = _demo_income_wallet(11)
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    entry = _demo_income_entry(session_id, 11, 11, "1")
+    entry.calculation_details_json = "[]"
+
+    class Delivery:
+        acks = []
+
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            yield _demo_income_event(entry, sequence=11, batch_end=True)
+
+        @classmethod
+        def acknowledge_income_applied(cls, event):
+            cls.acks.append(event.sequence)
+
+    state = SessionState(environment=1)
+    state.configure_stop_runtime(wallet=portfolio)
+    servicer = _income_live_servicer(
+        monkeypatch,
+        Delivery(),
+        SimpleNamespace(update_session=lambda **_kwargs: True),
+    )
+
+    with pytest.raises(ValueError, match="must contain legs"):
+        servicer._run_live_via_platform_proxy(session_id, state, object())
+    assert route_wallet.futures.last_applied_income_entry_id == 0
+    assert Delivery.acks == []
+
+
+def test_demo_income_restored_venue_cursor_makes_crash_replay_noop_and_ack(
+    monkeypatch,
+):
+    session_id = "f" * 32
+    route_wallet = _demo_income_wallet(11)
+    route_wallet.futures.last_applied_income_entry_id = 15
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    stale = _demo_income_entry(session_id, 15, 11, "1")
+
+    class Delivery:
+        acks = []
+
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            yield _demo_income_event(stale, sequence=15, batch_end=True)
+
+        @classmethod
+        def acknowledge_income_applied(cls, event):
+            cls.acks.append(event.sequence)
+
+    state = SessionState(environment=1)
+    state.configure_stop_runtime(wallet=portfolio)
+    servicer = _income_live_servicer(
+        monkeypatch,
+        Delivery(),
+        SimpleNamespace(update_session=lambda **_kwargs: True),
+    )
+
+    servicer._run_live_via_platform_proxy(session_id, state, object())
+
+    assert route_wallet.futures.wallet_balance == 100.0
+    assert route_wallet.futures.last_applied_income_entry_id == 15
+    assert Delivery.acks == [15]
+
+
+def test_blocked_strategy_delays_income_without_concurrent_wallet_mutation(
+    monkeypatch,
+):
+    session_id = "e" * 32
+    route_wallet = _demo_income_wallet(11)
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    entry = _demo_income_entry(session_id, 12, 11, "1")
+    callback_entered = threading.Event()
+    callback_release = threading.Event()
+    second_callback = threading.Event()
+
+    class Delivery:
+        acks = []
+
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            yield SimpleNamespace(kind="kline", payload=SimpleNamespace(
+                symbol="BTCUSDT", interval="1m", close=100.0, market="futures"
+            ))
+            yield _demo_income_event(entry, sequence=12, batch_end=True)
+            yield SimpleNamespace(kind="kline", payload=SimpleNamespace(
+                symbol="BTCUSDT", interval="1m", close=101.0, market="futures"
+            ))
+
+        @classmethod
+        def acknowledge_income_applied(cls, event):
+            cls.acks.append(event.sequence)
+
+    class Engine:
+        calls = 0
+
+        @classmethod
+        def running_strategy(cls, _market_data):
+            cls.calls += 1
+            if cls.calls == 1:
+                callback_entered.set()
+                assert callback_release.wait(timeout=2)
+            else:
+                assert route_wallet.futures.last_applied_income_entry_id == 12
+                second_callback.set()
+            return True
+
+    class PortfolioClient:
+        @staticmethod
+        def update_session(**_kwargs):
+            return True
+
+        @staticmethod
+        def update_portfolio_wallet_state(**_kwargs):
+            raise AssertionError("Income must not persist through the legacy wallet update")
+
+    state = SessionState(environment=1)
+    state.configure_stop_runtime(wallet=portfolio)
+    servicer = _income_live_servicer(monkeypatch, Delivery(), PortfolioClient())
+    errors = []
+
+    def run_live():
+        try:
+            servicer._run_live_via_platform_proxy(session_id, state, Engine())
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    thread = threading.Thread(target=run_live)
+    thread.start()
+    assert callback_entered.wait(timeout=2)
+    assert route_wallet.futures.last_applied_income_entry_id == 0
+    assert Delivery.acks == []
+
+    callback_release.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert second_callback.is_set()
+    assert route_wallet.futures.last_applied_income_entry_id == 12
+    assert Delivery.acks == [12]
+
+
 def test_run_live_uses_resolved_stream_bindings_instead_of_declared_inputs(monkeypatch):
     events: list[tuple] = []
 

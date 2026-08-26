@@ -68,6 +68,20 @@ def build_restart_payload(session_id: str, max_loss_close_pct: float) -> dict[st
     return payload
 
 
+def validate_restart_result(
+    requested_session_id: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    old_session_id = str(result.get("old_session_id", "") or "").strip()
+    new_session_id = str(result.get("new_session_id", "") or "").strip()
+    requested_session_id = str(requested_session_id or "").strip()
+    if not old_session_id or (requested_session_id and old_session_id != requested_session_id):
+        raise ValueError("restart result old Session does not match the request")
+    if not new_session_id or new_session_id == old_session_id:
+        raise ValueError("restart result must create a new Session")
+    return result
+
+
 def discover_latest_state_file(base_dir: Path | None = None) -> Path | None:
     if base_dir is None:
         base_dir = Path(tempfile.gettempdir())
@@ -130,9 +144,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         result = post_restart(control_url, payload, timeout=float(args.timeout))
+        result = validate_restart_result(str(payload.get("session_id", "")), result)
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         print(f"restart request failed: HTTP {exc.code} {body}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"restart request failed: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:
         print(f"restart request failed: {exc}", file=sys.stderr)

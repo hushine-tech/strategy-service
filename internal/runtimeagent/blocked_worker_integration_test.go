@@ -35,8 +35,8 @@ import (
 const blockedWorkerRuntimeID = "bare-6-blocked-worker"
 
 func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
-	blockSeconds := blockedWorkerDuration(t, "HUSHINE_BLOCKED_WORKER_SECONDS", 660)
-	observeSeconds := blockedWorkerDuration(t, "HUSHINE_BLOCKED_WORKER_OBSERVE_SECONDS", 600)
+	blockSeconds := blockedWorkerDuration(t, "HUSHINE_BLOCKED_WORKER_SECONDS", 8)
+	observeSeconds := blockedWorkerDuration(t, "HUSHINE_BLOCKED_WORKER_OBSERVE_SECONDS", 3)
 	if blockSeconds <= observeSeconds {
 		t.Fatalf(
 			"HUSHINE_BLOCKED_WORKER_SECONDS=%v must exceed observation=%v",
@@ -398,6 +398,23 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 	assertManagedWorkerAlive(t, workerManager, restartResult.NewSessionID)
+	if err := agent.HandleRuntimeData(
+		context.Background(),
+		blockedWorkerIncomeRuntimeFrame(oldSessionID, 12, "0.030000000000000001"),
+	); err == nil {
+		t.Fatal("old-Session Income attached after user-command restart")
+	}
+	agent.mu.Lock()
+	oldPending := agent.pendingIncome[oldSessionID]
+	newPending := agent.pendingIncome[restartResult.NewSessionID]
+	agent.mu.Unlock()
+	if oldPending != nil || newPending != nil {
+		t.Fatalf(
+			"post-restart old Income retained old=%+v new=%+v",
+			oldPending,
+			newPending,
+		)
+	}
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(
 		context.Background(),

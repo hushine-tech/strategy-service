@@ -111,6 +111,7 @@ class SessionState:
     _decision_condition: threading.Condition = field(init=False, repr=False, compare=False)
     _strategy_decision_admission_open: bool = field(default=True, init=False, repr=False, compare=False)
     _strategy_decisions_inflight: int = field(default=0, init=False, repr=False, compare=False)
+    _platform_controls_inflight: int = field(default=0, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self._decision_condition = threading.Condition(self._lock)
@@ -226,7 +227,11 @@ class SessionState:
     def try_enter_strategy_decision(self) -> bool:
         """Enter one strategy callback only while the Session still admits decisions."""
         with self._decision_condition:
-            if self.status != "running" or not self._strategy_decision_admission_open:
+            if (
+                self.status != "running"
+                or not self._strategy_decision_admission_open
+                or self._platform_controls_inflight > 0
+            ):
                 return False
             self._strategy_decisions_inflight += 1
             return True
@@ -239,12 +244,35 @@ class SessionState:
             if self._strategy_decisions_inflight == 0:
                 self._decision_condition.notify_all()
 
+    def try_enter_platform_control(self) -> bool:
+        """Serialize a platform wallet mutation outside all user callbacks."""
+        with self._decision_condition:
+            if (
+                self.status != "running"
+                or not self._strategy_decision_admission_open
+                or self._strategy_decisions_inflight > 0
+                or self._platform_controls_inflight > 0
+            ):
+                return False
+            self._platform_controls_inflight = 1
+            return True
+
+    def leave_platform_control(self) -> None:
+        with self._decision_condition:
+            if self._platform_controls_inflight != 1:
+                raise RuntimeError("platform control admission underflow")
+            self._platform_controls_inflight = 0
+            self._decision_condition.notify_all()
+
     def wait_for_strategy_decisions(self, *, timeout_seconds: float) -> bool:
-        """Wait until callbacks admitted before stop have returned."""
+        """Wait until callbacks and platform wallet controls have returned."""
         timeout = max(0.0, float(timeout_seconds))
         deadline = time.monotonic() + timeout
         with self._decision_condition:
-            while self._strategy_decisions_inflight > 0:
+            while (
+                self._strategy_decisions_inflight > 0
+                or self._platform_controls_inflight > 0
+            ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False

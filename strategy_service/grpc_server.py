@@ -3563,10 +3563,27 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             for event in live_events:
                 if callable(fatal_check):
                     fatal_check()
+                event_kind = str(getattr(event, "kind", "") or "").strip().lower()
+                if event_kind == "income":
+                    if stop_event.is_set() or not state.try_enter_platform_control():
+                        break
+                    try:
+                        self._apply_runtime_income_event(session_id, state, event)
+                        if bool(getattr(event, "batch_end", False)):
+                            acknowledge = getattr(
+                                data_source, "acknowledge_income_applied", None
+                            )
+                            if not callable(acknowledge):
+                                raise RuntimeError(
+                                    "platform Income delivery cannot acknowledge a safe batch"
+                                )
+                            acknowledge(event)
+                    finally:
+                        state.leave_platform_control()
+                    continue
                 if stop_event.is_set() or not state.try_enter_strategy_decision():
                     break
                 try:
-                    event_kind = str(getattr(event, "kind", "") or "").strip().lower()
                     if event_kind == "order_update":
                         handler = getattr(engine, "handle_order_update", None)
                         if callable(handler):
@@ -3574,6 +3591,10 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                         if callable(fatal_check):
                             fatal_check()
                         continue
+                    if event_kind != "kline":
+                        raise RuntimeError(
+                            f"unsupported Demo/Live session event: {event_kind or '<empty>'}"
+                        )
                     kline = getattr(event, "payload", event)
                     routed = engine.running_strategy(_adapt_kline(
                         kline,
@@ -3609,6 +3630,59 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
         if callable(fatal_check):
             fatal_check()
+
+    @staticmethod
+    def _apply_runtime_income_event(
+        session_id: str,
+        state: SessionState,
+        event: object,
+    ) -> None:
+        if state.environment not in {1, 2}:
+            raise ValueError("Runtime Income requires a Demo/Live Session")
+        entry = getattr(event, "payload", None)
+        event_session_id = str(getattr(event, "session_id", "") or "").strip()
+        entry_session_id = str(getattr(entry, "session_id", "") or "").strip()
+        exact_session_id = str(session_id or "").strip()
+        if (
+            not exact_session_id
+            or event_session_id != exact_session_id
+            or entry_session_id != exact_session_id
+        ):
+            raise ValueError("Runtime Income Session does not match the Worker Session")
+        if str(getattr(event, "stream_key", "") or "").strip() != (
+            f"income/{exact_session_id}"
+        ):
+            raise ValueError("Runtime Income stream does not match the Worker Session")
+        sequence = int(getattr(event, "sequence", 0) or 0)
+        entry_id = int(getattr(entry, "income_entry_id", 0) or 0)
+        if sequence <= 0 or entry_id <= 0 or entry_id > sequence:
+            raise ValueError("Runtime Income sequence is invalid")
+        if bool(getattr(event, "batch_end", False)) and entry_id != sequence:
+            raise ValueError("final Runtime Income entry does not match its batch")
+        if str(getattr(entry, "source", "") or "").strip().lower() != "exchange":
+            raise ValueError("Demo/Live Runtime Income must be exchange-confirmed")
+        if str(getattr(entry, "status", "") or "").strip().lower() != "confirmed":
+            raise ValueError("Demo/Live Runtime Income must be confirmed")
+
+        wallet = state.wallet
+        if not isinstance(wallet, PortfolioWalletRuntime):
+            raise ValueError("Runtime Income requires the exact Session portfolio wallet")
+        venue_id = int(getattr(entry, "venue_id", 0) or 0)
+        matches = sorted(
+            key for key in wallet.wallets
+            if key[2] == venue_id
+        )
+        if len(matches) != 1:
+            raise ValueError("Runtime Income Venue does not resolve to one exact Session route")
+        exchange, market, exact_venue_id = matches[0]
+        if market != "perpetual_futures":
+            raise ValueError("Runtime Funding Income requires an exact Futures Venue route")
+        wallet.apply_funding_income_entry(
+            exchange,
+            market,
+            exact_venue_id,
+            entry,
+        )
 
     def _renew_stream_leases_once(self, session_id: str, state: SessionState) -> bool:
         if state.environment != 1 or not state.required_streams:
