@@ -7,6 +7,7 @@
 package controlpanelv1
 
 import (
+	portfoliov1 "github.com/hushine-tech/core-service/gen/portfoliov1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -49,6 +50,7 @@ const (
 	FrameType_FRAME_TYPE_RESUME             FrameType = 19
 	FrameType_FRAME_TYPE_HEARTBEAT_ACK      FrameType = 20
 	FrameType_FRAME_TYPE_ORDER_UPDATE_BATCH FrameType = 21
+	FrameType_FRAME_TYPE_INCOME_BATCH       FrameType = 22
 )
 
 // Enum value maps for FrameType.
@@ -76,6 +78,7 @@ var (
 		19: "FRAME_TYPE_RESUME",
 		20: "FRAME_TYPE_HEARTBEAT_ACK",
 		21: "FRAME_TYPE_ORDER_UPDATE_BATCH",
+		22: "FRAME_TYPE_INCOME_BATCH",
 	}
 	FrameType_value = map[string]int32{
 		"FRAME_TYPE_UNSPECIFIED":        0,
@@ -100,6 +103,7 @@ var (
 		"FRAME_TYPE_RESUME":             19,
 		"FRAME_TYPE_HEARTBEAT_ACK":      20,
 		"FRAME_TYPE_ORDER_UPDATE_BATCH": 21,
+		"FRAME_TYPE_INCOME_BATCH":       22,
 	}
 )
 
@@ -2932,6 +2936,7 @@ type RuntimeFrame struct {
 	//	*RuntimeFrame_Resume
 	//	*RuntimeFrame_HeartbeatAck
 	//	*RuntimeFrame_OrderUpdateBatch
+	//	*RuntimeFrame_IncomeBatch
 	Payload       isRuntimeFrame_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3184,6 +3189,15 @@ func (x *RuntimeFrame) GetOrderUpdateBatch() *RuntimeOrderUpdateBatch {
 	return nil
 }
 
+func (x *RuntimeFrame) GetIncomeBatch() *RuntimeIncomeBatch {
+	if x != nil {
+		if x, ok := x.Payload.(*RuntimeFrame_IncomeBatch); ok {
+			return x.IncomeBatch
+		}
+	}
+	return nil
+}
+
 type isRuntimeFrame_Payload interface {
 	isRuntimeFrame_Payload()
 }
@@ -3272,6 +3286,10 @@ type RuntimeFrame_OrderUpdateBatch struct {
 	OrderUpdateBatch *RuntimeOrderUpdateBatch `protobuf:"bytes,30,opt,name=order_update_batch,json=orderUpdateBatch,proto3,oneof"`
 }
 
+type RuntimeFrame_IncomeBatch struct {
+	IncomeBatch *RuntimeIncomeBatch `protobuf:"bytes,31,opt,name=income_batch,json=incomeBatch,proto3,oneof"`
+}
+
 func (*RuntimeFrame_Hello) isRuntimeFrame_Payload() {}
 
 func (*RuntimeFrame_Request) isRuntimeFrame_Payload() {}
@@ -3313,6 +3331,8 @@ func (*RuntimeFrame_Resume) isRuntimeFrame_Payload() {}
 func (*RuntimeFrame_HeartbeatAck) isRuntimeFrame_Payload() {}
 
 func (*RuntimeFrame_OrderUpdateBatch) isRuntimeFrame_Payload() {}
+
+func (*RuntimeFrame_IncomeBatch) isRuntimeFrame_Payload() {}
 
 type RuntimeHello struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -4676,6 +4696,74 @@ func (x *RuntimeOrderUpdateBatch) GetEvents() []*anypb.Any {
 	return nil
 }
 
+type RuntimeIncomeBatch struct {
+	state         protoimpl.MessageState          `protogen:"open.v1"`
+	SessionId     string                          `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	StreamKey     string                          `protobuf:"bytes,2,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`
+	Sequence      int64                           `protobuf:"varint,3,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Entries       []*portfoliov1.VenueIncomeEntry `protobuf:"bytes,4,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuntimeIncomeBatch) Reset() {
+	*x = RuntimeIncomeBatch{}
+	mi := &file_control_panel_service_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeIncomeBatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeIncomeBatch) ProtoMessage() {}
+
+func (x *RuntimeIncomeBatch) ProtoReflect() protoreflect.Message {
+	mi := &file_control_panel_service_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeIncomeBatch.ProtoReflect.Descriptor instead.
+func (*RuntimeIncomeBatch) Descriptor() ([]byte, []int) {
+	return file_control_panel_service_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *RuntimeIncomeBatch) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *RuntimeIncomeBatch) GetStreamKey() string {
+	if x != nil {
+		return x.StreamKey
+	}
+	return ""
+}
+
+func (x *RuntimeIncomeBatch) GetSequence() int64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *RuntimeIncomeBatch) GetEntries() []*portfoliov1.VenueIncomeEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
 type RuntimeDataAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -4687,7 +4775,7 @@ type RuntimeDataAck struct {
 
 func (x *RuntimeDataAck) Reset() {
 	*x = RuntimeDataAck{}
-	mi := &file_control_panel_service_proto_msgTypes[56]
+	mi := &file_control_panel_service_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4699,7 +4787,7 @@ func (x *RuntimeDataAck) String() string {
 func (*RuntimeDataAck) ProtoMessage() {}
 
 func (x *RuntimeDataAck) ProtoReflect() protoreflect.Message {
-	mi := &file_control_panel_service_proto_msgTypes[56]
+	mi := &file_control_panel_service_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4712,7 +4800,7 @@ func (x *RuntimeDataAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeDataAck.ProtoReflect.Descriptor instead.
 func (*RuntimeDataAck) Descriptor() ([]byte, []int) {
-	return file_control_panel_service_proto_rawDescGZIP(), []int{56}
+	return file_control_panel_service_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *RuntimeDataAck) GetSessionId() string {
@@ -4748,7 +4836,7 @@ type RuntimeDataBackpressure struct {
 
 func (x *RuntimeDataBackpressure) Reset() {
 	*x = RuntimeDataBackpressure{}
-	mi := &file_control_panel_service_proto_msgTypes[57]
+	mi := &file_control_panel_service_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4760,7 +4848,7 @@ func (x *RuntimeDataBackpressure) String() string {
 func (*RuntimeDataBackpressure) ProtoMessage() {}
 
 func (x *RuntimeDataBackpressure) ProtoReflect() protoreflect.Message {
-	mi := &file_control_panel_service_proto_msgTypes[57]
+	mi := &file_control_panel_service_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4773,7 +4861,7 @@ func (x *RuntimeDataBackpressure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeDataBackpressure.ProtoReflect.Descriptor instead.
 func (*RuntimeDataBackpressure) Descriptor() ([]byte, []int) {
-	return file_control_panel_service_proto_rawDescGZIP(), []int{57}
+	return file_control_panel_service_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *RuntimeDataBackpressure) GetSessionId() string {
@@ -4815,7 +4903,7 @@ type RuntimeDataEnd struct {
 
 func (x *RuntimeDataEnd) Reset() {
 	*x = RuntimeDataEnd{}
-	mi := &file_control_panel_service_proto_msgTypes[58]
+	mi := &file_control_panel_service_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4827,7 +4915,7 @@ func (x *RuntimeDataEnd) String() string {
 func (*RuntimeDataEnd) ProtoMessage() {}
 
 func (x *RuntimeDataEnd) ProtoReflect() protoreflect.Message {
-	mi := &file_control_panel_service_proto_msgTypes[58]
+	mi := &file_control_panel_service_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4840,7 +4928,7 @@ func (x *RuntimeDataEnd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeDataEnd.ProtoReflect.Descriptor instead.
 func (*RuntimeDataEnd) Descriptor() ([]byte, []int) {
-	return file_control_panel_service_proto_rawDescGZIP(), []int{58}
+	return file_control_panel_service_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *RuntimeDataEnd) GetSessionId() string {
@@ -4868,7 +4956,7 @@ var File_control_panel_service_proto protoreflect.FileDescriptor
 
 const file_control_panel_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1bcontrol_panel_service.proto\x12\x0fcontrolpanel.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19google/protobuf/any.proto\x1a\x16strategy_service.proto\"\xb0\n" +
+	"\x1bcontrol_panel_service.proto\x12\x0fcontrolpanel.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19google/protobuf/any.proto\x1a\x17portfolio_service.proto\x1a\x16strategy_service.proto\"\xb0\n" +
 	"\n" +
 	"\aRuntime\x12\x1d\n" +
 	"\n" +
@@ -5127,7 +5215,7 @@ const file_control_panel_service_proto_rawDesc = "" +
 	"credential\x18\x01 \x01(\v2\".controlpanel.v1.RuntimeCredentialR\n" +
 	"credential\x12%\n" +
 	"\x0estreams_closed\x18\x02 \x01(\x05R\rstreamsClosed\x12%\n" +
-	"\x0eruntimes_ended\x18\x03 \x01(\x05R\rruntimesEnded\"\xc1\f\n" +
+	"\x0eruntimes_ended\x18\x03 \x01(\x05R\rruntimesEnded\"\x8b\r\n" +
 	"\fRuntimeFrame\x12%\n" +
 	"\x0ecorrelation_id\x18\x01 \x01(\tR\rcorrelationId\x129\n" +
 	"\n" +
@@ -5155,7 +5243,8 @@ const file_control_panel_service_proto_rawDesc = "" +
 	"\thello_ack\x18\x1b \x01(\v2 .controlpanel.v1.RuntimeHelloAckH\x00R\bhelloAck\x128\n" +
 	"\x06resume\x18\x1c \x01(\v2\x1e.controlpanel.v1.RuntimeResumeH\x00R\x06resume\x12K\n" +
 	"\rheartbeat_ack\x18\x1d \x01(\v2$.controlpanel.v1.RuntimeHeartbeatAckH\x00R\fheartbeatAck\x12X\n" +
-	"\x12order_update_batch\x18\x1e \x01(\v2(.controlpanel.v1.RuntimeOrderUpdateBatchH\x00R\x10orderUpdateBatchB\t\n" +
+	"\x12order_update_batch\x18\x1e \x01(\v2(.controlpanel.v1.RuntimeOrderUpdateBatchH\x00R\x10orderUpdateBatch\x12H\n" +
+	"\fincome_batch\x18\x1f \x01(\v2#.controlpanel.v1.RuntimeIncomeBatchH\x00R\vincomeBatchB\t\n" +
 	"\apayload\"\x88\x04\n" +
 	"\fRuntimeHello\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x12\x1d\n" +
@@ -5278,7 +5367,14 @@ const file_control_panel_service_proto_rawDesc = "" +
 	"\n" +
 	"stream_key\x18\x02 \x01(\tR\tstreamKey\x12\x1a\n" +
 	"\bsequence\x18\x03 \x01(\x03R\bsequence\x12,\n" +
-	"\x06events\x18\x04 \x03(\v2\x14.google.protobuf.AnyR\x06events\"j\n" +
+	"\x06events\x18\x04 \x03(\v2\x14.google.protobuf.AnyR\x06events\"\xa8\x01\n" +
+	"\x12RuntimeIncomeBatch\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
+	"\n" +
+	"stream_key\x18\x02 \x01(\tR\tstreamKey\x12\x1a\n" +
+	"\bsequence\x18\x03 \x01(\x03R\bsequence\x128\n" +
+	"\aentries\x18\x04 \x03(\v2\x1e.portfolio.v1.VenueIncomeEntryR\aentries\"j\n" +
 	"\x0eRuntimeDataAck\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
@@ -5297,7 +5393,7 @@ const file_control_panel_service_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
 	"\n" +
 	"stream_key\x18\x02 \x01(\tR\tstreamKey\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason*\xdb\x04\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason*\xf8\x04\n" +
 	"\tFrameType\x12\x1a\n" +
 	"\x16FRAME_TYPE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10FRAME_TYPE_HELLO\x10\x01\x12\x16\n" +
@@ -5321,7 +5417,8 @@ const file_control_panel_service_proto_rawDesc = "" +
 	"\x14FRAME_TYPE_HELLO_ACK\x10\x12\x12\x15\n" +
 	"\x11FRAME_TYPE_RESUME\x10\x13\x12\x1c\n" +
 	"\x18FRAME_TYPE_HEARTBEAT_ACK\x10\x14\x12!\n" +
-	"\x1dFRAME_TYPE_ORDER_UPDATE_BATCH\x10\x152\xcd\x12\n" +
+	"\x1dFRAME_TYPE_ORDER_UPDATE_BATCH\x10\x15\x12\x1b\n" +
+	"\x17FRAME_TYPE_INCOME_BATCH\x10\x162\xcd\x12\n" +
 	"\x13ControlPanelService\x12[\n" +
 	"\fListRuntimes\x12$.controlpanel.v1.ListRuntimesRequest\x1a%.controlpanel.v1.ListRuntimesResponse\x12U\n" +
 	"\n" +
@@ -5360,7 +5457,7 @@ func file_control_panel_service_proto_rawDescGZIP() []byte {
 }
 
 var file_control_panel_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_control_panel_service_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
+var file_control_panel_service_proto_msgTypes = make([]protoimpl.MessageInfo, 61)
 var file_control_panel_service_proto_goTypes = []any{
 	(FrameType)(0),                                    // 0: controlpanel.v1.FrameType
 	(*Runtime)(nil),                                   // 1: controlpanel.v1.Runtime
@@ -5419,35 +5516,37 @@ var file_control_panel_service_proto_goTypes = []any{
 	(*RuntimeDatasetChunk)(nil),                       // 54: controlpanel.v1.RuntimeDatasetChunk
 	(*RuntimeLiveKlineBatch)(nil),                     // 55: controlpanel.v1.RuntimeLiveKlineBatch
 	(*RuntimeOrderUpdateBatch)(nil),                   // 56: controlpanel.v1.RuntimeOrderUpdateBatch
-	(*RuntimeDataAck)(nil),                            // 57: controlpanel.v1.RuntimeDataAck
-	(*RuntimeDataBackpressure)(nil),                   // 58: controlpanel.v1.RuntimeDataBackpressure
-	(*RuntimeDataEnd)(nil),                            // 59: controlpanel.v1.RuntimeDataEnd
-	nil,                                               // 60: controlpanel.v1.StrategyRequest.TraceContextEntry
-	(*timestamppb.Timestamp)(nil),                     // 61: google.protobuf.Timestamp
-	(*strategyv1.RuntimeDependencyProfile)(nil),       // 62: strategy.v1.RuntimeDependencyProfile
-	(*strategyv1.RuntimeDependencyError)(nil),         // 63: strategy.v1.RuntimeDependencyError
-	(*anypb.Any)(nil),                                 // 64: google.protobuf.Any
-	(*strategyv1.RunStrategyRequest)(nil),             // 65: strategy.v1.RunStrategyRequest
-	(*strategyv1.PreviewRunStrategyRequest)(nil),      // 66: strategy.v1.PreviewRunStrategyRequest
-	(*strategyv1.ValidateStrategySourceRequest)(nil),  // 67: strategy.v1.ValidateStrategySourceRequest
-	(*strategyv1.StopStrategyRequest)(nil),            // 68: strategy.v1.StopStrategyRequest
-	(*strategyv1.GetStrategyStatusRequest)(nil),       // 69: strategy.v1.GetStrategyStatusRequest
-	(*strategyv1.RunStrategyResponse)(nil),            // 70: strategy.v1.RunStrategyResponse
-	(*strategyv1.PreviewRunStrategyResponse)(nil),     // 71: strategy.v1.PreviewRunStrategyResponse
-	(*strategyv1.ValidateStrategySourceResponse)(nil), // 72: strategy.v1.ValidateStrategySourceResponse
-	(*strategyv1.StopStrategyResponse)(nil),           // 73: strategy.v1.StopStrategyResponse
-	(*strategyv1.GetStrategyStatusResponse)(nil),      // 74: strategy.v1.GetStrategyStatusResponse
+	(*RuntimeIncomeBatch)(nil),                        // 57: controlpanel.v1.RuntimeIncomeBatch
+	(*RuntimeDataAck)(nil),                            // 58: controlpanel.v1.RuntimeDataAck
+	(*RuntimeDataBackpressure)(nil),                   // 59: controlpanel.v1.RuntimeDataBackpressure
+	(*RuntimeDataEnd)(nil),                            // 60: controlpanel.v1.RuntimeDataEnd
+	nil,                                               // 61: controlpanel.v1.StrategyRequest.TraceContextEntry
+	(*timestamppb.Timestamp)(nil),                     // 62: google.protobuf.Timestamp
+	(*strategyv1.RuntimeDependencyProfile)(nil),       // 63: strategy.v1.RuntimeDependencyProfile
+	(*strategyv1.RuntimeDependencyError)(nil),         // 64: strategy.v1.RuntimeDependencyError
+	(*anypb.Any)(nil),                                 // 65: google.protobuf.Any
+	(*portfoliov1.VenueIncomeEntry)(nil),              // 66: portfolio.v1.VenueIncomeEntry
+	(*strategyv1.RunStrategyRequest)(nil),             // 67: strategy.v1.RunStrategyRequest
+	(*strategyv1.PreviewRunStrategyRequest)(nil),      // 68: strategy.v1.PreviewRunStrategyRequest
+	(*strategyv1.ValidateStrategySourceRequest)(nil),  // 69: strategy.v1.ValidateStrategySourceRequest
+	(*strategyv1.StopStrategyRequest)(nil),            // 70: strategy.v1.StopStrategyRequest
+	(*strategyv1.GetStrategyStatusRequest)(nil),       // 71: strategy.v1.GetStrategyStatusRequest
+	(*strategyv1.RunStrategyResponse)(nil),            // 72: strategy.v1.RunStrategyResponse
+	(*strategyv1.PreviewRunStrategyResponse)(nil),     // 73: strategy.v1.PreviewRunStrategyResponse
+	(*strategyv1.ValidateStrategySourceResponse)(nil), // 74: strategy.v1.ValidateStrategySourceResponse
+	(*strategyv1.StopStrategyResponse)(nil),           // 75: strategy.v1.StopStrategyResponse
+	(*strategyv1.GetStrategyStatusResponse)(nil),      // 76: strategy.v1.GetStrategyStatusResponse
 }
 var file_control_panel_service_proto_depIdxs = []int32{
-	61, // 0: controlpanel.v1.Runtime.paired_at:type_name -> google.protobuf.Timestamp
-	61, // 1: controlpanel.v1.Runtime.heartbeat_at:type_name -> google.protobuf.Timestamp
-	61, // 2: controlpanel.v1.Runtime.created_at:type_name -> google.protobuf.Timestamp
-	61, // 3: controlpanel.v1.Runtime.updated_at:type_name -> google.protobuf.Timestamp
-	61, // 4: controlpanel.v1.Runtime.started_at:type_name -> google.protobuf.Timestamp
-	61, // 5: controlpanel.v1.Runtime.ended_at:type_name -> google.protobuf.Timestamp
-	61, // 6: controlpanel.v1.Runtime.connection_owner_acquired_at:type_name -> google.protobuf.Timestamp
-	61, // 7: controlpanel.v1.Runtime.connection_owner_heartbeat_at:type_name -> google.protobuf.Timestamp
-	61, // 8: controlpanel.v1.Runtime.cleanup_at:type_name -> google.protobuf.Timestamp
+	62, // 0: controlpanel.v1.Runtime.paired_at:type_name -> google.protobuf.Timestamp
+	62, // 1: controlpanel.v1.Runtime.heartbeat_at:type_name -> google.protobuf.Timestamp
+	62, // 2: controlpanel.v1.Runtime.created_at:type_name -> google.protobuf.Timestamp
+	62, // 3: controlpanel.v1.Runtime.updated_at:type_name -> google.protobuf.Timestamp
+	62, // 4: controlpanel.v1.Runtime.started_at:type_name -> google.protobuf.Timestamp
+	62, // 5: controlpanel.v1.Runtime.ended_at:type_name -> google.protobuf.Timestamp
+	62, // 6: controlpanel.v1.Runtime.connection_owner_acquired_at:type_name -> google.protobuf.Timestamp
+	62, // 7: controlpanel.v1.Runtime.connection_owner_heartbeat_at:type_name -> google.protobuf.Timestamp
+	62, // 8: controlpanel.v1.Runtime.cleanup_at:type_name -> google.protobuf.Timestamp
 	2,  // 9: controlpanel.v1.Runtime.debug_workspace:type_name -> controlpanel.v1.DebugWorkspaceState
 	3,  // 10: controlpanel.v1.Runtime.debug_dataset:type_name -> controlpanel.v1.DebugDatasetState
 	2,  // 11: controlpanel.v1.PrepareDebugWorkspaceResponse.workspace:type_name -> controlpanel.v1.DebugWorkspaceState
@@ -5459,20 +5558,20 @@ var file_control_panel_service_proto_depIdxs = []int32{
 	1,  // 17: controlpanel.v1.EndRuntimeResponse.runtime:type_name -> controlpanel.v1.Runtime
 	1,  // 18: controlpanel.v1.ResolveRuntimeRouteResponse.runtime:type_name -> controlpanel.v1.Runtime
 	1,  // 19: controlpanel.v1.EnsureHostedRuntimeResponse.runtime:type_name -> controlpanel.v1.Runtime
-	61, // 20: controlpanel.v1.IssueRuntimeCredentialResponse.created_at:type_name -> google.protobuf.Timestamp
-	61, // 21: controlpanel.v1.IssueRuntimeCredentialResponse.client_cert_expires_at:type_name -> google.protobuf.Timestamp
-	61, // 22: controlpanel.v1.BootstrapBareRuntimeCertificateResponse.client_cert_expires_at:type_name -> google.protobuf.Timestamp
+	62, // 20: controlpanel.v1.IssueRuntimeCredentialResponse.created_at:type_name -> google.protobuf.Timestamp
+	62, // 21: controlpanel.v1.IssueRuntimeCredentialResponse.client_cert_expires_at:type_name -> google.protobuf.Timestamp
+	62, // 22: controlpanel.v1.BootstrapBareRuntimeCertificateResponse.client_cert_expires_at:type_name -> google.protobuf.Timestamp
 	33, // 23: controlpanel.v1.ListRuntimeCredentialsResponse.credentials:type_name -> controlpanel.v1.RuntimeCredential
 	32, // 24: controlpanel.v1.ListRuntimeAdmissionFailuresResponse.failures:type_name -> controlpanel.v1.RuntimeAdmissionFailure
-	61, // 25: controlpanel.v1.RuntimeAdmissionFailure.first_seen_at:type_name -> google.protobuf.Timestamp
-	61, // 26: controlpanel.v1.RuntimeAdmissionFailure.last_seen_at:type_name -> google.protobuf.Timestamp
-	61, // 27: controlpanel.v1.RuntimeCredential.created_at:type_name -> google.protobuf.Timestamp
-	61, // 28: controlpanel.v1.RuntimeCredential.last_used_at:type_name -> google.protobuf.Timestamp
-	61, // 29: controlpanel.v1.RuntimeCredential.revoked_at:type_name -> google.protobuf.Timestamp
-	61, // 30: controlpanel.v1.RuntimeCredential.downloaded_at:type_name -> google.protobuf.Timestamp
-	61, // 31: controlpanel.v1.RuntimeCredential.consumed_at:type_name -> google.protobuf.Timestamp
-	61, // 32: controlpanel.v1.RuntimeCredential.expires_at:type_name -> google.protobuf.Timestamp
-	61, // 33: controlpanel.v1.RuntimeCredential.client_cert_expires_at:type_name -> google.protobuf.Timestamp
+	62, // 25: controlpanel.v1.RuntimeAdmissionFailure.first_seen_at:type_name -> google.protobuf.Timestamp
+	62, // 26: controlpanel.v1.RuntimeAdmissionFailure.last_seen_at:type_name -> google.protobuf.Timestamp
+	62, // 27: controlpanel.v1.RuntimeCredential.created_at:type_name -> google.protobuf.Timestamp
+	62, // 28: controlpanel.v1.RuntimeCredential.last_used_at:type_name -> google.protobuf.Timestamp
+	62, // 29: controlpanel.v1.RuntimeCredential.revoked_at:type_name -> google.protobuf.Timestamp
+	62, // 30: controlpanel.v1.RuntimeCredential.downloaded_at:type_name -> google.protobuf.Timestamp
+	62, // 31: controlpanel.v1.RuntimeCredential.consumed_at:type_name -> google.protobuf.Timestamp
+	62, // 32: controlpanel.v1.RuntimeCredential.expires_at:type_name -> google.protobuf.Timestamp
+	62, // 33: controlpanel.v1.RuntimeCredential.client_cert_expires_at:type_name -> google.protobuf.Timestamp
 	33, // 34: controlpanel.v1.RevokeRuntimeCredentialResponse.credential:type_name -> controlpanel.v1.RuntimeCredential
 	0,  // 35: controlpanel.v1.RuntimeFrame.frame_type:type_name -> controlpanel.v1.FrameType
 	37, // 36: controlpanel.v1.RuntimeFrame.hello:type_name -> controlpanel.v1.RuntimeHello
@@ -5489,77 +5588,79 @@ var file_control_panel_service_proto_depIdxs = []int32{
 	53, // 47: controlpanel.v1.RuntimeFrame.shutdown:type_name -> controlpanel.v1.RuntimeShutdown
 	54, // 48: controlpanel.v1.RuntimeFrame.dataset_chunk:type_name -> controlpanel.v1.RuntimeDatasetChunk
 	55, // 49: controlpanel.v1.RuntimeFrame.live_kline_batch:type_name -> controlpanel.v1.RuntimeLiveKlineBatch
-	57, // 50: controlpanel.v1.RuntimeFrame.data_ack:type_name -> controlpanel.v1.RuntimeDataAck
-	58, // 51: controlpanel.v1.RuntimeFrame.data_backpressure:type_name -> controlpanel.v1.RuntimeDataBackpressure
-	59, // 52: controlpanel.v1.RuntimeFrame.data_end:type_name -> controlpanel.v1.RuntimeDataEnd
+	58, // 50: controlpanel.v1.RuntimeFrame.data_ack:type_name -> controlpanel.v1.RuntimeDataAck
+	59, // 51: controlpanel.v1.RuntimeFrame.data_backpressure:type_name -> controlpanel.v1.RuntimeDataBackpressure
+	60, // 52: controlpanel.v1.RuntimeFrame.data_end:type_name -> controlpanel.v1.RuntimeDataEnd
 	40, // 53: controlpanel.v1.RuntimeFrame.hello_ack:type_name -> controlpanel.v1.RuntimeHelloAck
 	41, // 54: controlpanel.v1.RuntimeFrame.resume:type_name -> controlpanel.v1.RuntimeResume
 	47, // 55: controlpanel.v1.RuntimeFrame.heartbeat_ack:type_name -> controlpanel.v1.RuntimeHeartbeatAck
 	56, // 56: controlpanel.v1.RuntimeFrame.order_update_batch:type_name -> controlpanel.v1.RuntimeOrderUpdateBatch
-	62, // 57: controlpanel.v1.RuntimeHello.dependency_profile:type_name -> strategy.v1.RuntimeDependencyProfile
-	63, // 58: controlpanel.v1.ReportRuntimeStartupFailureRequest.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
-	62, // 59: controlpanel.v1.ReportRuntimeStartupFailureRequest.actual_profile:type_name -> strategy.v1.RuntimeDependencyProfile
-	61, // 60: controlpanel.v1.RuntimeHelloAck.resume_token_expires_at:type_name -> google.protobuf.Timestamp
-	61, // 61: controlpanel.v1.RuntimeHelloAck.fingerprint_expires_at:type_name -> google.protobuf.Timestamp
-	62, // 62: controlpanel.v1.RuntimeResume.dependency_profile:type_name -> strategy.v1.RuntimeDependencyProfile
-	64, // 63: controlpanel.v1.StrategyRequest.request:type_name -> google.protobuf.Any
-	60, // 64: controlpanel.v1.StrategyRequest.trace_context:type_name -> controlpanel.v1.StrategyRequest.TraceContextEntry
-	64, // 65: controlpanel.v1.StrategyResponse.response:type_name -> google.protobuf.Any
-	64, // 66: controlpanel.v1.StrategyProgress.event:type_name -> google.protobuf.Any
-	61, // 67: controlpanel.v1.RuntimeHeartbeatAck.fingerprint_expires_at:type_name -> google.protobuf.Timestamp
-	63, // 68: controlpanel.v1.StreamError.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
-	64, // 69: controlpanel.v1.RuntimeCommandFrame.payload:type_name -> google.protobuf.Any
-	64, // 70: controlpanel.v1.RuntimeCommandResult.result:type_name -> google.protobuf.Any
-	64, // 71: controlpanel.v1.RuntimeStatusPatch.payload:type_name -> google.protobuf.Any
-	64, // 72: controlpanel.v1.RuntimeLiveKlineBatch.klines:type_name -> google.protobuf.Any
-	64, // 73: controlpanel.v1.RuntimeOrderUpdateBatch.events:type_name -> google.protobuf.Any
-	12, // 74: controlpanel.v1.ControlPanelService.ListRuntimes:input_type -> controlpanel.v1.ListRuntimesRequest
-	14, // 75: controlpanel.v1.ControlPanelService.GetRuntime:input_type -> controlpanel.v1.GetRuntimeRequest
-	16, // 76: controlpanel.v1.ControlPanelService.EndRuntime:input_type -> controlpanel.v1.EndRuntimeRequest
-	20, // 77: controlpanel.v1.ControlPanelService.ResolveRuntimeRouteByID:input_type -> controlpanel.v1.ResolveRuntimeRouteByIDRequest
-	22, // 78: controlpanel.v1.ControlPanelService.EnsureHostedRuntime:input_type -> controlpanel.v1.EnsureHostedRuntimeRequest
-	24, // 79: controlpanel.v1.ControlPanelService.IssueRuntimeCredential:input_type -> controlpanel.v1.IssueRuntimeCredentialRequest
-	26, // 80: controlpanel.v1.ControlPanelService.BootstrapBareRuntimeCertificate:input_type -> controlpanel.v1.BootstrapBareRuntimeCertificateRequest
-	28, // 81: controlpanel.v1.ControlPanelService.ListRuntimeCredentials:input_type -> controlpanel.v1.ListRuntimeCredentialsRequest
-	30, // 82: controlpanel.v1.ControlPanelService.ListRuntimeAdmissionFailures:input_type -> controlpanel.v1.ListRuntimeAdmissionFailuresRequest
-	34, // 83: controlpanel.v1.ControlPanelService.RevokeRuntimeCredential:input_type -> controlpanel.v1.RevokeRuntimeCredentialRequest
-	36, // 84: controlpanel.v1.ControlPanelService.RuntimeChannel:input_type -> controlpanel.v1.RuntimeFrame
-	38, // 85: controlpanel.v1.ControlPanelService.ReportRuntimeStartupFailure:input_type -> controlpanel.v1.ReportRuntimeStartupFailureRequest
-	4,  // 86: controlpanel.v1.ControlPanelService.PrepareDebugWorkspace:input_type -> controlpanel.v1.PrepareDebugWorkspaceRequest
-	6,  // 87: controlpanel.v1.ControlPanelService.LoadDebugDataset:input_type -> controlpanel.v1.LoadDebugDatasetRequest
-	8,  // 88: controlpanel.v1.ControlPanelService.GetRuntimeDebugDataset:input_type -> controlpanel.v1.GetRuntimeDebugDatasetRequest
-	18, // 89: controlpanel.v1.ControlPanelService.PublishRuntimeNotification:input_type -> controlpanel.v1.PublishRuntimeNotificationRequest
-	65, // 90: controlpanel.v1.ControlPanelService.RunStrategy:input_type -> strategy.v1.RunStrategyRequest
-	66, // 91: controlpanel.v1.ControlPanelService.PreviewRunStrategy:input_type -> strategy.v1.PreviewRunStrategyRequest
-	67, // 92: controlpanel.v1.ControlPanelService.ValidateStrategySource:input_type -> strategy.v1.ValidateStrategySourceRequest
-	68, // 93: controlpanel.v1.ControlPanelService.StopStrategy:input_type -> strategy.v1.StopStrategyRequest
-	69, // 94: controlpanel.v1.ControlPanelService.GetStrategyStatus:input_type -> strategy.v1.GetStrategyStatusRequest
-	13, // 95: controlpanel.v1.ControlPanelService.ListRuntimes:output_type -> controlpanel.v1.ListRuntimesResponse
-	15, // 96: controlpanel.v1.ControlPanelService.GetRuntime:output_type -> controlpanel.v1.GetRuntimeResponse
-	17, // 97: controlpanel.v1.ControlPanelService.EndRuntime:output_type -> controlpanel.v1.EndRuntimeResponse
-	21, // 98: controlpanel.v1.ControlPanelService.ResolveRuntimeRouteByID:output_type -> controlpanel.v1.ResolveRuntimeRouteResponse
-	23, // 99: controlpanel.v1.ControlPanelService.EnsureHostedRuntime:output_type -> controlpanel.v1.EnsureHostedRuntimeResponse
-	25, // 100: controlpanel.v1.ControlPanelService.IssueRuntimeCredential:output_type -> controlpanel.v1.IssueRuntimeCredentialResponse
-	27, // 101: controlpanel.v1.ControlPanelService.BootstrapBareRuntimeCertificate:output_type -> controlpanel.v1.BootstrapBareRuntimeCertificateResponse
-	29, // 102: controlpanel.v1.ControlPanelService.ListRuntimeCredentials:output_type -> controlpanel.v1.ListRuntimeCredentialsResponse
-	31, // 103: controlpanel.v1.ControlPanelService.ListRuntimeAdmissionFailures:output_type -> controlpanel.v1.ListRuntimeAdmissionFailuresResponse
-	35, // 104: controlpanel.v1.ControlPanelService.RevokeRuntimeCredential:output_type -> controlpanel.v1.RevokeRuntimeCredentialResponse
-	36, // 105: controlpanel.v1.ControlPanelService.RuntimeChannel:output_type -> controlpanel.v1.RuntimeFrame
-	39, // 106: controlpanel.v1.ControlPanelService.ReportRuntimeStartupFailure:output_type -> controlpanel.v1.ReportRuntimeStartupFailureResponse
-	5,  // 107: controlpanel.v1.ControlPanelService.PrepareDebugWorkspace:output_type -> controlpanel.v1.PrepareDebugWorkspaceResponse
-	7,  // 108: controlpanel.v1.ControlPanelService.LoadDebugDataset:output_type -> controlpanel.v1.LoadDebugDatasetResponse
-	9,  // 109: controlpanel.v1.ControlPanelService.GetRuntimeDebugDataset:output_type -> controlpanel.v1.GetRuntimeDebugDatasetResponse
-	19, // 110: controlpanel.v1.ControlPanelService.PublishRuntimeNotification:output_type -> controlpanel.v1.PublishRuntimeNotificationResponse
-	70, // 111: controlpanel.v1.ControlPanelService.RunStrategy:output_type -> strategy.v1.RunStrategyResponse
-	71, // 112: controlpanel.v1.ControlPanelService.PreviewRunStrategy:output_type -> strategy.v1.PreviewRunStrategyResponse
-	72, // 113: controlpanel.v1.ControlPanelService.ValidateStrategySource:output_type -> strategy.v1.ValidateStrategySourceResponse
-	73, // 114: controlpanel.v1.ControlPanelService.StopStrategy:output_type -> strategy.v1.StopStrategyResponse
-	74, // 115: controlpanel.v1.ControlPanelService.GetStrategyStatus:output_type -> strategy.v1.GetStrategyStatusResponse
-	95, // [95:116] is the sub-list for method output_type
-	74, // [74:95] is the sub-list for method input_type
-	74, // [74:74] is the sub-list for extension type_name
-	74, // [74:74] is the sub-list for extension extendee
-	0,  // [0:74] is the sub-list for field type_name
+	57, // 57: controlpanel.v1.RuntimeFrame.income_batch:type_name -> controlpanel.v1.RuntimeIncomeBatch
+	63, // 58: controlpanel.v1.RuntimeHello.dependency_profile:type_name -> strategy.v1.RuntimeDependencyProfile
+	64, // 59: controlpanel.v1.ReportRuntimeStartupFailureRequest.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	63, // 60: controlpanel.v1.ReportRuntimeStartupFailureRequest.actual_profile:type_name -> strategy.v1.RuntimeDependencyProfile
+	62, // 61: controlpanel.v1.RuntimeHelloAck.resume_token_expires_at:type_name -> google.protobuf.Timestamp
+	62, // 62: controlpanel.v1.RuntimeHelloAck.fingerprint_expires_at:type_name -> google.protobuf.Timestamp
+	63, // 63: controlpanel.v1.RuntimeResume.dependency_profile:type_name -> strategy.v1.RuntimeDependencyProfile
+	65, // 64: controlpanel.v1.StrategyRequest.request:type_name -> google.protobuf.Any
+	61, // 65: controlpanel.v1.StrategyRequest.trace_context:type_name -> controlpanel.v1.StrategyRequest.TraceContextEntry
+	65, // 66: controlpanel.v1.StrategyResponse.response:type_name -> google.protobuf.Any
+	65, // 67: controlpanel.v1.StrategyProgress.event:type_name -> google.protobuf.Any
+	62, // 68: controlpanel.v1.RuntimeHeartbeatAck.fingerprint_expires_at:type_name -> google.protobuf.Timestamp
+	64, // 69: controlpanel.v1.StreamError.dependency_error:type_name -> strategy.v1.RuntimeDependencyError
+	65, // 70: controlpanel.v1.RuntimeCommandFrame.payload:type_name -> google.protobuf.Any
+	65, // 71: controlpanel.v1.RuntimeCommandResult.result:type_name -> google.protobuf.Any
+	65, // 72: controlpanel.v1.RuntimeStatusPatch.payload:type_name -> google.protobuf.Any
+	65, // 73: controlpanel.v1.RuntimeLiveKlineBatch.klines:type_name -> google.protobuf.Any
+	65, // 74: controlpanel.v1.RuntimeOrderUpdateBatch.events:type_name -> google.protobuf.Any
+	66, // 75: controlpanel.v1.RuntimeIncomeBatch.entries:type_name -> portfolio.v1.VenueIncomeEntry
+	12, // 76: controlpanel.v1.ControlPanelService.ListRuntimes:input_type -> controlpanel.v1.ListRuntimesRequest
+	14, // 77: controlpanel.v1.ControlPanelService.GetRuntime:input_type -> controlpanel.v1.GetRuntimeRequest
+	16, // 78: controlpanel.v1.ControlPanelService.EndRuntime:input_type -> controlpanel.v1.EndRuntimeRequest
+	20, // 79: controlpanel.v1.ControlPanelService.ResolveRuntimeRouteByID:input_type -> controlpanel.v1.ResolveRuntimeRouteByIDRequest
+	22, // 80: controlpanel.v1.ControlPanelService.EnsureHostedRuntime:input_type -> controlpanel.v1.EnsureHostedRuntimeRequest
+	24, // 81: controlpanel.v1.ControlPanelService.IssueRuntimeCredential:input_type -> controlpanel.v1.IssueRuntimeCredentialRequest
+	26, // 82: controlpanel.v1.ControlPanelService.BootstrapBareRuntimeCertificate:input_type -> controlpanel.v1.BootstrapBareRuntimeCertificateRequest
+	28, // 83: controlpanel.v1.ControlPanelService.ListRuntimeCredentials:input_type -> controlpanel.v1.ListRuntimeCredentialsRequest
+	30, // 84: controlpanel.v1.ControlPanelService.ListRuntimeAdmissionFailures:input_type -> controlpanel.v1.ListRuntimeAdmissionFailuresRequest
+	34, // 85: controlpanel.v1.ControlPanelService.RevokeRuntimeCredential:input_type -> controlpanel.v1.RevokeRuntimeCredentialRequest
+	36, // 86: controlpanel.v1.ControlPanelService.RuntimeChannel:input_type -> controlpanel.v1.RuntimeFrame
+	38, // 87: controlpanel.v1.ControlPanelService.ReportRuntimeStartupFailure:input_type -> controlpanel.v1.ReportRuntimeStartupFailureRequest
+	4,  // 88: controlpanel.v1.ControlPanelService.PrepareDebugWorkspace:input_type -> controlpanel.v1.PrepareDebugWorkspaceRequest
+	6,  // 89: controlpanel.v1.ControlPanelService.LoadDebugDataset:input_type -> controlpanel.v1.LoadDebugDatasetRequest
+	8,  // 90: controlpanel.v1.ControlPanelService.GetRuntimeDebugDataset:input_type -> controlpanel.v1.GetRuntimeDebugDatasetRequest
+	18, // 91: controlpanel.v1.ControlPanelService.PublishRuntimeNotification:input_type -> controlpanel.v1.PublishRuntimeNotificationRequest
+	67, // 92: controlpanel.v1.ControlPanelService.RunStrategy:input_type -> strategy.v1.RunStrategyRequest
+	68, // 93: controlpanel.v1.ControlPanelService.PreviewRunStrategy:input_type -> strategy.v1.PreviewRunStrategyRequest
+	69, // 94: controlpanel.v1.ControlPanelService.ValidateStrategySource:input_type -> strategy.v1.ValidateStrategySourceRequest
+	70, // 95: controlpanel.v1.ControlPanelService.StopStrategy:input_type -> strategy.v1.StopStrategyRequest
+	71, // 96: controlpanel.v1.ControlPanelService.GetStrategyStatus:input_type -> strategy.v1.GetStrategyStatusRequest
+	13, // 97: controlpanel.v1.ControlPanelService.ListRuntimes:output_type -> controlpanel.v1.ListRuntimesResponse
+	15, // 98: controlpanel.v1.ControlPanelService.GetRuntime:output_type -> controlpanel.v1.GetRuntimeResponse
+	17, // 99: controlpanel.v1.ControlPanelService.EndRuntime:output_type -> controlpanel.v1.EndRuntimeResponse
+	21, // 100: controlpanel.v1.ControlPanelService.ResolveRuntimeRouteByID:output_type -> controlpanel.v1.ResolveRuntimeRouteResponse
+	23, // 101: controlpanel.v1.ControlPanelService.EnsureHostedRuntime:output_type -> controlpanel.v1.EnsureHostedRuntimeResponse
+	25, // 102: controlpanel.v1.ControlPanelService.IssueRuntimeCredential:output_type -> controlpanel.v1.IssueRuntimeCredentialResponse
+	27, // 103: controlpanel.v1.ControlPanelService.BootstrapBareRuntimeCertificate:output_type -> controlpanel.v1.BootstrapBareRuntimeCertificateResponse
+	29, // 104: controlpanel.v1.ControlPanelService.ListRuntimeCredentials:output_type -> controlpanel.v1.ListRuntimeCredentialsResponse
+	31, // 105: controlpanel.v1.ControlPanelService.ListRuntimeAdmissionFailures:output_type -> controlpanel.v1.ListRuntimeAdmissionFailuresResponse
+	35, // 106: controlpanel.v1.ControlPanelService.RevokeRuntimeCredential:output_type -> controlpanel.v1.RevokeRuntimeCredentialResponse
+	36, // 107: controlpanel.v1.ControlPanelService.RuntimeChannel:output_type -> controlpanel.v1.RuntimeFrame
+	39, // 108: controlpanel.v1.ControlPanelService.ReportRuntimeStartupFailure:output_type -> controlpanel.v1.ReportRuntimeStartupFailureResponse
+	5,  // 109: controlpanel.v1.ControlPanelService.PrepareDebugWorkspace:output_type -> controlpanel.v1.PrepareDebugWorkspaceResponse
+	7,  // 110: controlpanel.v1.ControlPanelService.LoadDebugDataset:output_type -> controlpanel.v1.LoadDebugDatasetResponse
+	9,  // 111: controlpanel.v1.ControlPanelService.GetRuntimeDebugDataset:output_type -> controlpanel.v1.GetRuntimeDebugDatasetResponse
+	19, // 112: controlpanel.v1.ControlPanelService.PublishRuntimeNotification:output_type -> controlpanel.v1.PublishRuntimeNotificationResponse
+	72, // 113: controlpanel.v1.ControlPanelService.RunStrategy:output_type -> strategy.v1.RunStrategyResponse
+	73, // 114: controlpanel.v1.ControlPanelService.PreviewRunStrategy:output_type -> strategy.v1.PreviewRunStrategyResponse
+	74, // 115: controlpanel.v1.ControlPanelService.ValidateStrategySource:output_type -> strategy.v1.ValidateStrategySourceResponse
+	75, // 116: controlpanel.v1.ControlPanelService.StopStrategy:output_type -> strategy.v1.StopStrategyResponse
+	76, // 117: controlpanel.v1.ControlPanelService.GetStrategyStatus:output_type -> strategy.v1.GetStrategyStatusResponse
+	97, // [97:118] is the sub-list for method output_type
+	76, // [76:97] is the sub-list for method input_type
+	76, // [76:76] is the sub-list for extension type_name
+	76, // [76:76] is the sub-list for extension extendee
+	0,  // [0:76] is the sub-list for field type_name
 }
 
 func init() { file_control_panel_service_proto_init() }
@@ -5589,6 +5690,7 @@ func file_control_panel_service_proto_init() {
 		(*RuntimeFrame_Resume)(nil),
 		(*RuntimeFrame_HeartbeatAck)(nil),
 		(*RuntimeFrame_OrderUpdateBatch)(nil),
+		(*RuntimeFrame_IncomeBatch)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -5596,7 +5698,7 @@ func file_control_panel_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_panel_service_proto_rawDesc), len(file_control_panel_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   60,
+			NumMessages:   61,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

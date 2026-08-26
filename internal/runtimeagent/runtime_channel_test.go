@@ -10,9 +10,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
+	portfoliov1 "github.com/hushine-tech/core-service/gen/portfoliov1"
 	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"google.golang.org/grpc"
@@ -468,6 +470,124 @@ func TestRuntimeChannelDataHandlerErrorDoesNotAckDroppedData(t *testing.T) {
 			t.Fatalf("sent DATA_ACK for dropped data: %+v", frame.GetDataAck())
 		}
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRuntimeChannelIncomeWaitsForWorkerAckInsteadOfAckingOnQueue(t *testing.T) {
+	called := false
+	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
+		DataHandler: func(_ context.Context, frame *cpv1.RuntimeFrame) error {
+			called = frame.GetIncomeBatch() != nil
+			return nil
+		},
+	})
+	outbound := make(chan *cpv1.RuntimeFrame, 1)
+
+	client.handleInboundFrame(context.Background(), runtimeIncomeFrameForTest("sess-income", 10), outbound)
+
+	if !called {
+		t.Fatal("Income frame did not enter the RuntimeChannel data handler")
+	}
+	select {
+	case frame := <-outbound:
+		t.Fatalf("Income queue admission emitted premature frame: %+v", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRuntimeChannelIncomeDeliveryFailureEmitsBackpressureWithoutAck(t *testing.T) {
+	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
+		DataHandler: func(context.Context, *cpv1.RuntimeFrame) error {
+			return errors.New("worker outbound queue is full")
+		},
+	})
+	outbound := make(chan *cpv1.RuntimeFrame, 1)
+
+	client.handleInboundFrame(context.Background(), runtimeIncomeFrameForTest("sess-income", 10), outbound)
+
+	select {
+	case frame := <-outbound:
+		backpressure := frame.GetDataBackpressure()
+		if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_DATA_BACKPRESSURE ||
+			backpressure.GetSessionId() != "sess-income" ||
+			backpressure.GetStreamKey() != "income/sess-income" ||
+			!strings.Contains(backpressure.GetReason(), "queue is full") {
+			t.Fatalf("Income failure frame = %+v", frame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Income delivery failure emitted no backpressure")
+	}
+}
+
+func TestRuntimeChannelIncomeBackpressureKeepsFakeTenMinuteHeartbeatAndAckFlow(t *testing.T) {
+	ticks := make(chan time.Time, 600)
+	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
+		HeartbeatTicks: ticks,
+		DataHandler: func(context.Context, *cpv1.RuntimeFrame) error {
+			return errors.New("Worker has been blocked for ten logical minutes")
+		},
+	})
+	outbound := make(chan *cpv1.RuntimeFrame, 602)
+	client.handleInboundFrame(context.Background(), runtimeIncomeFrameForTest("sess-income", 10), outbound)
+	if frame := <-outbound; frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_DATA_BACKPRESSURE {
+		t.Fatalf("blocked Worker frame = %+v, want backpressure", frame)
+	}
+	client.handleInboundFrame(context.Background(), &cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_HEARTBEAT_ACK,
+		Payload: &cpv1.RuntimeFrame_HeartbeatAck{HeartbeatAck: &cpv1.RuntimeHeartbeatAck{
+			RuntimeId: "rt-income", Fingerprint: "after-ten-minutes",
+		}},
+	}, outbound)
+	if frame := client.heartbeatFrame(); frame.GetHeartbeat().GetFingerprint() != "after-ten-minutes" {
+		t.Fatalf("heartbeat ACK was not processed while Income was blocked: %+v", frame)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		client.heartbeatLoop(ctx, outbound, stop)
+		close(done)
+	}()
+	for logicalSecond := 0; logicalSecond < 600; logicalSecond++ {
+		ticks <- time.Unix(int64(logicalSecond), 0)
+	}
+	close(ticks)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("fake ten-minute heartbeat loop did not finish")
+	}
+	cancel()
+	close(stop)
+	heartbeats := 0
+	for len(outbound) > 0 {
+		if frame := <-outbound; frame.GetFrameType() == cpv1.FrameType_FRAME_TYPE_HEARTBEAT {
+			heartbeats++
+		}
+	}
+	if heartbeats != 600 {
+		t.Fatalf("fake ten-minute heartbeats = %d, want 600", heartbeats)
+	}
+}
+
+func runtimeIncomeFrameForTest(sessionID string, sequence int64) *cpv1.RuntimeFrame {
+	return &cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_INCOME_BATCH,
+		Payload: &cpv1.RuntimeFrame_IncomeBatch{IncomeBatch: &cpv1.RuntimeIncomeBatch{
+			SessionId: sessionID,
+			StreamKey: "income/" + sessionID,
+			Sequence:  sequence,
+			Entries: []*portfoliov1.VenueIncomeEntry{{
+				IncomeEntryId: sequence,
+				SessionId:     sessionID,
+				VenueId:       23,
+				IncomeType:    "FUNDING_FEE",
+				Source:        "exchange",
+				Status:        "confirmed",
+			}},
+		}},
 	}
 }
 

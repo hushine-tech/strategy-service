@@ -18,7 +18,10 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-const RuntimeWorkerProtocolVersion uint32 = 2
+const (
+	RuntimeWorkerProtocolVersion uint32 = 6
+	IndicatorV2ProtocolVersion   uint32 = 2
+)
 
 type WorkerStarter interface {
 	StartSessionWorker(ctx context.Context, sessionID string, extraEnv []string) (*ManagedWorker, error)
@@ -46,6 +49,14 @@ type PlatformInvoker interface {
 
 type WorkerSender interface {
 	SendToWorker(sessionID string, frame *rwv1.AgentFrame) error
+}
+
+type WorkerGenerationSender interface {
+	SendToWorkerGeneration(identity WorkerIdentity, frame *rwv1.AgentFrame) error
+}
+
+type RuntimeFrameSender interface {
+	Send(frame *cpv1.RuntimeFrame) error
 }
 
 type RuntimeRequestError struct {
@@ -93,6 +104,7 @@ type Agent struct {
 	workerCallSession map[string]string
 	runRequests       map[string]*anypb.Any
 	restartCalls      map[string]*restartSessionCall
+	pendingIncome     map[string]*pendingIncomeBatch
 	shuttingDown      bool
 	shutdownRunning   bool
 	shutdownDone      chan struct{}
@@ -103,6 +115,15 @@ type Agent struct {
 	terminalRetries   map[string]TerminalRetryRecord
 	retryClaims       map[string]struct{}
 	retryInitErr      error
+}
+
+type pendingIncomeBatch struct {
+	frame                *rwv1.AgentFrame
+	streamKey            string
+	sequence             int64
+	deliveringGeneration uint64
+	deliveredGeneration  uint64
+	ackingGeneration     uint64
 }
 
 type restartSessionCall struct {
@@ -413,6 +434,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 		workerCallSession: map[string]string{},
 		runRequests:       map[string]*anypb.Any{},
 		restartCalls:      map[string]*restartSessionCall{},
+		pendingIncome:     map[string]*pendingIncomeBatch{},
 		terminalRetries:   map[string]TerminalRetryRecord{},
 		retryClaims:       map[string]struct{}{},
 	}
@@ -1844,6 +1866,7 @@ func (a *Agent) cleanupSessionState(sessionID string, reason string) {
 	delete(a.ready, sessionID)
 	delete(a.readyFailures, sessionID)
 	delete(a.runRequests, sessionID)
+	delete(a.pendingIncome, sessionID)
 	for callID, callSessionID := range a.workerCallSession {
 		if callSessionID != sessionID {
 			continue
@@ -1884,6 +1907,15 @@ func (a *Agent) HandleWorkerDisconnect(identity WorkerIdentity, cause error) err
 	generation.mu.Lock()
 	generation.connected = false
 	generation.mu.Unlock()
+	a.mu.Lock()
+	retainedIncome := a.pendingIncome[sessionID] != nil
+	a.mu.Unlock()
+	if retainedIncome {
+		// Keep the Session generation available for an authenticated replacement
+		// Worker. The retained exact Income batch is the handoff boundary until
+		// WorkerDataAck proves durable progress.
+		return nil
+	}
 	reason := "session worker disconnected"
 	if cause == nil {
 		reason = "session worker stream closed"
@@ -2442,10 +2474,13 @@ func (a *Agent) handleWorkerFrameForGeneration(
 			}
 		}
 		if pending != nil && send != nil {
-			return send(&rwv1.AgentFrame{
+			if err := send(&rwv1.AgentFrame{
 				Payload: &rwv1.AgentFrame_StartSession{StartSession: pending.start},
-			})
+			}); err != nil {
+				return err
+			}
 		}
+		return a.replayPendingIncome(identity)
 	case *rwv1.WorkerFrame_Progress:
 		progress := frame.GetProgress()
 		realSessionID := strings.TrimSpace(progress.GetSessionId())
@@ -2535,6 +2570,8 @@ func (a *Agent) handleWorkerFrameForGeneration(
 			default:
 			}
 		}
+	case *rwv1.WorkerFrame_DataAck:
+		return a.handleWorkerDataAck(identity, frame.GetDataAck())
 	case *rwv1.WorkerFrame_IndicatorFrameV2:
 		indicatorFrame := frame.GetIndicatorFrameV2()
 		if generation == nil {
@@ -2660,7 +2697,10 @@ func (a *Agent) HandleAuthenticatedWorkerFrame(
 		return fmt.Errorf("stale worker generation: %s", sessionID)
 	}
 	if generation != nil && !generation.bindAuthenticatedGeneration(identity.Generation) {
-		return fmt.Errorf("stale worker generation: %s", sessionID)
+		if frame.GetHello() == nil ||
+			!a.rebindDisconnectedIncomeWorker(sessionID, generation, identity.Generation) {
+			return fmt.Errorf("stale worker generation: %s", sessionID)
+		}
 	}
 	if generation != nil && frame.GetHello() != nil {
 		if !generation.markConnected() {
@@ -2833,9 +2873,15 @@ func (a *Agent) reconcileAmbiguousRunningPublication(
 
 func (a *Agent) HandleRuntimeData(ctx context.Context, frame *cpv1.RuntimeFrame) error {
 	_ = ctx
-	agentFrame, sessionID := workerDataFrameFromRuntime(frame)
+	agentFrame, sessionID, err := workerDataFrameFromRuntime(frame)
+	if err != nil {
+		return err
+	}
 	if agentFrame == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
+	}
+	if agentFrame.GetIncomeBatch() != nil {
+		return a.handleRuntimeIncome(sessionID, agentFrame)
 	}
 	a.mu.Lock()
 	sender := a.cfg.WorkerSender
@@ -2844,6 +2890,182 @@ func (a *Agent) HandleRuntimeData(ctx context.Context, frame *cpv1.RuntimeFrame)
 		return fmt.Errorf("worker sender is not configured")
 	}
 	return sender.SendToWorker(sessionID, agentFrame)
+}
+
+func (a *Agent) handleRuntimeIncome(sessionID string, frame *rwv1.AgentFrame) error {
+	sessionID = strings.TrimSpace(sessionID)
+	a.mu.Lock()
+	pending := a.pendingIncome[sessionID]
+	if pending == nil {
+		generation := a.generations[sessionID]
+		if generation == nil {
+			a.mu.Unlock()
+			return fmt.Errorf("worker Session is not active: %s", sessionID)
+		}
+		generation.mu.Lock()
+		active := !generation.closing
+		generation.mu.Unlock()
+		if !active {
+			a.mu.Unlock()
+			return fmt.Errorf("worker Session is closing: %s", sessionID)
+		}
+		batch := frame.GetIncomeBatch()
+		pending = &pendingIncomeBatch{
+			frame:     proto.Clone(frame).(*rwv1.AgentFrame),
+			streamKey: batch.GetStreamKey(),
+			sequence:  batch.GetSequence(),
+		}
+		a.pendingIncome[sessionID] = pending
+	} else if !proto.Equal(pending.frame, frame) {
+		a.mu.Unlock()
+		return fmt.Errorf("Income batch is already pending for Session %s", sessionID)
+	}
+	identity, ok := a.currentIncomeWorkerIdentityLocked(sessionID)
+	if !ok {
+		a.mu.Unlock()
+		return fmt.Errorf("worker is not connected: %s", sessionID)
+	}
+	if pending.deliveredGeneration == identity.Generation ||
+		pending.deliveringGeneration == identity.Generation {
+		a.mu.Unlock()
+		return nil
+	}
+	pending.deliveringGeneration = identity.Generation
+	pending.deliveredGeneration = identity.Generation
+	sender, ok := a.cfg.WorkerSender.(WorkerGenerationSender)
+	a.mu.Unlock()
+	if !ok {
+		a.finishIncomeDelivery(pending, identity.Generation, false)
+		return fmt.Errorf("worker sender does not support generation-bound Income delivery")
+	}
+	err := sender.SendToWorkerGeneration(
+		identity,
+		proto.Clone(pending.frame).(*rwv1.AgentFrame),
+	)
+	a.finishIncomeDelivery(pending, identity.Generation, err == nil)
+	return err
+}
+
+func (a *Agent) currentIncomeWorkerIdentityLocked(sessionID string) (WorkerIdentity, bool) {
+	generation := a.generations[sessionID]
+	if generation == nil {
+		return WorkerIdentity{}, false
+	}
+	generation.mu.Lock()
+	defer generation.mu.Unlock()
+	if !generation.connected || generation.closing || generation.authGeneration == 0 {
+		return WorkerIdentity{}, false
+	}
+	return WorkerIdentity{
+		SessionID:  sessionID,
+		Generation: generation.authGeneration,
+	}, true
+}
+
+func (a *Agent) finishIncomeDelivery(pending *pendingIncomeBatch, generation uint64, delivered bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	current := a.pendingIncome[pending.frame.GetIncomeBatch().GetSessionId()]
+	if current != pending || pending.deliveringGeneration != generation {
+		return
+	}
+	pending.deliveringGeneration = 0
+	if !delivered && pending.deliveredGeneration == generation {
+		pending.deliveredGeneration = 0
+	}
+}
+
+func (a *Agent) replayPendingIncome(identity WorkerIdentity) error {
+	sessionID := strings.TrimSpace(identity.SessionID)
+	a.mu.Lock()
+	pending := a.pendingIncome[sessionID]
+	current, ok := a.currentIncomeWorkerIdentityLocked(sessionID)
+	if pending == nil || !ok || current.Generation != identity.Generation {
+		a.mu.Unlock()
+		return nil
+	}
+	if pending.deliveredGeneration == identity.Generation ||
+		pending.deliveringGeneration == identity.Generation {
+		a.mu.Unlock()
+		return nil
+	}
+	pending.deliveringGeneration = identity.Generation
+	pending.deliveredGeneration = identity.Generation
+	sender, ok := a.cfg.WorkerSender.(WorkerGenerationSender)
+	a.mu.Unlock()
+	if !ok {
+		a.finishIncomeDelivery(pending, identity.Generation, false)
+		return fmt.Errorf("worker sender does not support generation-bound Income delivery")
+	}
+	err := sender.SendToWorkerGeneration(
+		identity,
+		proto.Clone(pending.frame).(*rwv1.AgentFrame),
+	)
+	a.finishIncomeDelivery(pending, identity.Generation, err == nil)
+	return err
+}
+
+func (a *Agent) handleWorkerDataAck(identity WorkerIdentity, ack *rwv1.WorkerDataAck) error {
+	if ack == nil {
+		return nil
+	}
+	sessionID := strings.TrimSpace(identity.SessionID)
+	a.mu.Lock()
+	pending := a.pendingIncome[sessionID]
+	current, ok := a.currentIncomeWorkerIdentityLocked(sessionID)
+	if pending == nil || !ok || current.Generation != identity.Generation ||
+		pending.deliveredGeneration != identity.Generation ||
+		strings.TrimSpace(ack.GetSessionId()) != sessionID ||
+		ack.GetStreamKey() != pending.streamKey || ack.GetSequence() != pending.sequence ||
+		pending.ackingGeneration != 0 {
+		a.mu.Unlock()
+		return nil
+	}
+	pending.ackingGeneration = identity.Generation
+	runtimeSender, ok := a.cfg.PlatformInvoker.(RuntimeFrameSender)
+	a.mu.Unlock()
+	if !ok {
+		a.finishIncomeAck(pending, identity.Generation, false)
+		return fmt.Errorf("runtime data ACK sender is not configured")
+	}
+	err := runtimeSender.Send(runtimeDataAckFrame(sessionID, pending.streamKey, pending.sequence))
+	a.finishIncomeAck(pending, identity.Generation, err == nil)
+	return err
+}
+
+func (a *Agent) finishIncomeAck(pending *pendingIncomeBatch, generation uint64, sent bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sessionID := pending.frame.GetIncomeBatch().GetSessionId()
+	if a.pendingIncome[sessionID] != pending || pending.ackingGeneration != generation {
+		return
+	}
+	pending.ackingGeneration = 0
+	if sent {
+		delete(a.pendingIncome, sessionID)
+	}
+}
+
+func (a *Agent) rebindDisconnectedIncomeWorker(
+	sessionID string,
+	generation *workerGeneration,
+	authGeneration uint64,
+) bool {
+	if authGeneration == 0 {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.generations[sessionID] != generation || a.pendingIncome[sessionID] == nil {
+		return false
+	}
+	generation.mu.Lock()
+	defer generation.mu.Unlock()
+	if generation.connected || generation.closing {
+		return false
+	}
+	generation.authGeneration = authGeneration
+	return true
 }
 
 func (a *Agent) invokeWorkerPlatformCall(ctx context.Context, call *rwv1.PlatformCall) *rwv1.PlatformCallResult {
@@ -3372,12 +3594,12 @@ func grpcCodeForError(err error) string {
 	}
 }
 
-func workerDataFrameFromRuntime(frame *cpv1.RuntimeFrame) (*rwv1.AgentFrame, string) {
+func workerDataFrameFromRuntime(frame *cpv1.RuntimeFrame) (*rwv1.AgentFrame, string, error) {
 	switch frame.GetFrameType() {
 	case cpv1.FrameType_FRAME_TYPE_LIVE_KLINE_BATCH:
 		batch := frame.GetLiveKlineBatch()
 		if batch == nil {
-			return nil, ""
+			return nil, "", nil
 		}
 		return &rwv1.AgentFrame{
 			Payload: &rwv1.AgentFrame_MarketDataBatch{MarketDataBatch: &rwv1.MarketDataBatch{
@@ -3386,11 +3608,11 @@ func workerDataFrameFromRuntime(frame *cpv1.RuntimeFrame) (*rwv1.AgentFrame, str
 				Sequence:  batch.GetSequence(),
 				Klines:    batch.GetKlines(),
 			}},
-		}, batch.GetSessionId()
+		}, batch.GetSessionId(), nil
 	case cpv1.FrameType_FRAME_TYPE_ORDER_UPDATE_BATCH:
 		batch := frame.GetOrderUpdateBatch()
 		if batch == nil {
-			return nil, ""
+			return nil, "", nil
 		}
 		return &rwv1.AgentFrame{
 			Payload: &rwv1.AgentFrame_OrderUpdateBatch{OrderUpdateBatch: &rwv1.OrderUpdateBatch{
@@ -3399,9 +3621,54 @@ func workerDataFrameFromRuntime(frame *cpv1.RuntimeFrame) (*rwv1.AgentFrame, str
 				Sequence:  batch.GetSequence(),
 				Events:    batch.GetEvents(),
 			}},
-		}, batch.GetSessionId()
+		}, batch.GetSessionId(), nil
+	case cpv1.FrameType_FRAME_TYPE_INCOME_BATCH:
+		batch := frame.GetIncomeBatch()
+		if batch == nil {
+			return nil, "", nil
+		}
+		sessionID := strings.TrimSpace(batch.GetSessionId())
+		if sessionID == "" {
+			return nil, "", fmt.Errorf("Income session_id is required")
+		}
+		if batch.GetStreamKey() != "income/"+sessionID {
+			return nil, "", fmt.Errorf("Income stream_key must equal income/%s", sessionID)
+		}
+		if batch.GetSequence() <= 0 || len(batch.GetEntries()) == 0 {
+			return nil, "", fmt.Errorf("Income sequence and entries are required")
+		}
+		entries := make([]*anypb.Any, 0, len(batch.GetEntries()))
+		lastID := int64(0)
+		for _, entry := range batch.GetEntries() {
+			if entry == nil || entry.GetSessionId() != sessionID ||
+				entry.GetIncomeEntryId() <= lastID {
+				return nil, "", fmt.Errorf("Income entries must be non-nil, exact-Session, and strictly ascending")
+			}
+			switch entry.GetStatus() {
+			case "confirmed", "calculated":
+			default:
+				return nil, "", fmt.Errorf("Income entries must be deliverable")
+			}
+			packed, err := anypb.New(entry)
+			if err != nil {
+				return nil, "", fmt.Errorf("pack VenueIncomeEntry %d: %w", entry.GetIncomeEntryId(), err)
+			}
+			entries = append(entries, packed)
+			lastID = entry.GetIncomeEntryId()
+		}
+		if batch.GetSequence() != lastID {
+			return nil, "", fmt.Errorf("Income sequence must equal final income_entry_id")
+		}
+		return &rwv1.AgentFrame{
+			Payload: &rwv1.AgentFrame_IncomeBatch{IncomeBatch: &rwv1.IncomeBatch{
+				SessionId: sessionID,
+				StreamKey: batch.GetStreamKey(),
+				Sequence:  batch.GetSequence(),
+				Entries:   entries,
+			}},
+		}, sessionID, nil
 	default:
-		return nil, ""
+		return nil, "", nil
 	}
 }
 

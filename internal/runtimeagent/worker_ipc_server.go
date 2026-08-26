@@ -35,7 +35,12 @@ type WorkerIPCServer struct {
 	handler    AuthenticatedWorkerFrameHandler
 	disconnect WorkerDisconnectHandler
 	mu         sync.Mutex
-	outbound   map[string]chan *rwv1.AgentFrame
+	outbound   map[string]workerOutbound
+}
+
+type workerOutbound struct {
+	identity WorkerIdentity
+	frames   chan *rwv1.AgentFrame
 }
 
 func NewWorkerIPCServer(registry *SessionRegistry, handler WorkerFrameHandler) *WorkerIPCServer {
@@ -60,7 +65,7 @@ func NewAuthenticatedWorkerIPCServer(
 		registry:   registry,
 		handler:    handler,
 		disconnect: disconnect,
-		outbound:   map[string]chan *rwv1.AgentFrame{},
+		outbound:   map[string]workerOutbound{},
 	}
 }
 
@@ -86,12 +91,12 @@ func (s *WorkerIPCServer) Connect(stream grpc.BidiStreamingServer[rwv1.WorkerFra
 	}
 	outbound := make(chan *rwv1.AgentFrame, 128)
 	s.mu.Lock()
-	s.outbound[sessionID] = outbound
+	s.outbound[sessionID] = workerOutbound{identity: identity, frames: outbound}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		for key, ch := range s.outbound {
-			if ch == outbound {
+		for key, candidate := range s.outbound {
+			if candidate.frames == outbound {
 				delete(s.outbound, key)
 			}
 		}
@@ -152,12 +157,34 @@ func (s *WorkerIPCServer) SendToWorker(sessionID string, frame *rwv1.AgentFrame)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	outbound := s.outbound[sessionID]
-	if outbound == nil {
+	outbound, ok := s.outbound[sessionID]
+	if !ok || outbound.frames == nil {
 		return fmt.Errorf("worker is not connected: %s", sessionID)
 	}
 	select {
-	case outbound <- frame:
+	case outbound.frames <- frame:
+		return nil
+	default:
+		return fmt.Errorf("worker outbound queue is full: %s", sessionID)
+	}
+}
+
+func (s *WorkerIPCServer) SendToWorkerGeneration(identity WorkerIdentity, frame *rwv1.AgentFrame) error {
+	sessionID := strings.TrimSpace(identity.SessionID)
+	if sessionID == "" || identity.Generation == 0 {
+		return fmt.Errorf("worker Session identity and generation are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	outbound, ok := s.outbound[sessionID]
+	if !ok || outbound.frames == nil {
+		return fmt.Errorf("worker is not connected: %s", sessionID)
+	}
+	if outbound.identity.Generation != identity.Generation {
+		return fmt.Errorf("stale worker generation: %s", sessionID)
+	}
+	select {
+	case outbound.frames <- frame:
 		return nil
 	default:
 		return fmt.Errorf("worker outbound queue is full: %s", sessionID)

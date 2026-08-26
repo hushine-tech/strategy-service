@@ -29,6 +29,7 @@ message WorkerFrame {
     WorkerError worker_error = 19;
     LogEvent log_event = 20;
     IndicatorFrameV2 indicator_frame_v2 = 21;
+    WorkerDataAck data_ack = 22;
   }
 }
 
@@ -44,6 +45,7 @@ message AgentFrame {
     PlatformCall platform_call = 15;
     PlatformCallResult platform_call_result = 16;
     AgentError error = 17;
+    IncomeBatch income_batch = 18;
   }
 }
 
@@ -82,6 +84,19 @@ message OrderUpdateBatch {
   string stream_key = 2;
   int64 sequence = 3;
   repeated google.protobuf.Any events = 4;
+}
+
+message IncomeBatch {
+  string session_id = 1;
+  string stream_key = 2;
+  int64 sequence = 3;
+  repeated google.protobuf.Any entries = 4;
+}
+
+message WorkerDataAck {
+  string session_id = 1;
+  string stream_key = 2;
+  int64 sequence = 3;
 }
 
 message StopSession {

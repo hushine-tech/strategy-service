@@ -934,7 +934,7 @@ func snapshotIndicatorFlushV2(
 						Unit:            definition.GetUnit(),
 						Description:     definition.GetDescription(),
 						ConfigJson:      definition.GetConfigJson(),
-						ProtocolVersion: RuntimeWorkerProtocolVersion,
+						ProtocolVersion: IndicatorV2ProtocolVersion,
 					},
 				)
 				flush.definitionSent = true
@@ -1059,6 +1059,6 @@ func syncPortfolioIndicatorChunkV2(
 		Markers:         markers,
 		Revision:        chunk.Revision,
 		Finalized:       false,
-		ProtocolVersion: RuntimeWorkerProtocolVersion,
+		ProtocolVersion: IndicatorV2ProtocolVersion,
 	}
 }

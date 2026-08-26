@@ -153,6 +153,8 @@ func TestRuntimeDependencyChannelProto(t *testing.T) {
 	}
 	workerFrame := requireTask7Message(t, workerFile, "WorkerFrame")
 	v2Indicator := workerFrame.Fields().ByName("indicator_frame_v2")
+	incomeBatchField := requireTask7Message(t, workerFile, "AgentFrame").Fields().ByName("income_batch")
+	workerDataAckField := workerFrame.Fields().ByName("data_ack")
 	workerHello := requireTask7Message(t, workerFile, "WorkerHello")
 	protocolVersion := workerHello.Fields().ByName("protocol_version")
 	if workerFrame.Fields().ByName("indicator_frame") != nil {
@@ -162,6 +164,20 @@ func TestRuntimeDependencyChannelProto(t *testing.T) {
 		v2Indicator == nil || v2Indicator.Number() != 21 {
 		t.Fatal("sealed Indicator V2 tags are invalid")
 	}
+	if incomeBatchField == nil || incomeBatchField.Number() != 18 ||
+		incomeBatchField.Message() == nil || incomeBatchField.Message().FullName() != "runtime.worker.v1.IncomeBatch" {
+		t.Fatal("AgentFrame.income_batch must be tag 18 IncomeBatch")
+	}
+	assertTask7Fields(t, requireTask7Message(t, workerFile, "IncomeBatch"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"session_id": 1, "stream_key": 2, "sequence": 3, "entries": 4,
+	})
+	if workerDataAckField == nil || workerDataAckField.Number() != 22 ||
+		workerDataAckField.Message() == nil || workerDataAckField.Message().FullName() != "runtime.worker.v1.WorkerDataAck" {
+		t.Fatal("WorkerFrame.data_ack must be tag 22 WorkerDataAck")
+	}
+	assertTask7Fields(t, requireTask7Message(t, workerFile, "WorkerDataAck"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"session_id": 1, "stream_key": 2, "sequence": 3,
+	})
 	if !workerFrame.ReservedRanges().Has(15) ||
 		!workerFrame.ReservedNames().Has("indicator_frame") {
 		t.Fatal("sealed Indicator V2 must reserve legacy indicator tag and name")
@@ -177,6 +193,11 @@ func TestRuntimeDependencyChannelProto(t *testing.T) {
 	}
 
 	controlFile := cpv1.File_control_panel_service_proto
+	incomeFrame := requireTask7Message(t, controlFile, "RuntimeFrame").Fields().ByName("income_batch")
+	if incomeFrame == nil || incomeFrame.Number() != 31 || incomeFrame.Message() == nil ||
+		incomeFrame.Message().FullName() != "controlpanel.v1.RuntimeIncomeBatch" {
+		t.Fatal("RuntimeFrame.income_batch must be tag 31 RuntimeIncomeBatch")
+	}
 	assertTask7MessageField(t, requireTask7Message(t, controlFile, "RuntimeHello"), "dependency_profile", 15, "strategy.v1.RuntimeDependencyProfile")
 	assertTask7MessageField(t, requireTask7Message(t, controlFile, "RuntimeResume"), "dependency_profile", 4, "strategy.v1.RuntimeDependencyProfile")
 	assertTask7MessageField(t, requireTask7Message(t, controlFile, "StreamError"), "dependency_error", 3, "strategy.v1.RuntimeDependencyError")

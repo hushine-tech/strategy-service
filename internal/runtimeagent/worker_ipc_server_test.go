@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,6 +138,35 @@ func TestWorkerIPCServerPassesImmutableGenerationAndDisconnectIdentity(t *testin
 	disconnected := <-disconnects
 	if disconnected.SessionID != identity.SessionID || disconnected.PID != identity.PID || disconnected.Generation != identity.Generation {
 		t.Fatalf("disconnect identity = %+v, frame identity = %+v", disconnected, identity)
+	}
+}
+
+func TestWorkerIPCServerIncomeDeliveryIsGenerationBound(t *testing.T) {
+	server := NewAuthenticatedWorkerIPCServer(NewSessionRegistry(), nil, nil)
+	outbound := make(chan *rwv1.AgentFrame, 1)
+	server.outbound["sess-income"] = workerOutbound{
+		identity: WorkerIdentity{SessionID: "sess-income", Generation: 7},
+		frames:   outbound,
+	}
+	frame := &rwv1.AgentFrame{Payload: &rwv1.AgentFrame_IncomeBatch{IncomeBatch: &rwv1.IncomeBatch{
+		SessionId: "sess-income", StreamKey: "income/sess-income", Sequence: 10,
+	}}}
+
+	if err := server.SendToWorkerGeneration(WorkerIdentity{
+		SessionID: "sess-income", Generation: 6,
+	}, frame); err == nil || !strings.Contains(err.Error(), "stale worker generation") {
+		t.Fatalf("stale Worker generation error = %v", err)
+	}
+	if len(outbound) != 0 {
+		t.Fatal("stale Worker generation received Income")
+	}
+	if err := server.SendToWorkerGeneration(WorkerIdentity{
+		SessionID: "sess-income", Generation: 7,
+	}, frame); err != nil {
+		t.Fatalf("current Worker generation Income delivery: %v", err)
+	}
+	if got := <-outbound; got != frame {
+		t.Fatalf("delivered frame = %+v, want original frame", got)
 	}
 }
 

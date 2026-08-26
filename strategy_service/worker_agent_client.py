@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Callable
 
 import grpc
@@ -17,9 +18,10 @@ from google.protobuf.message import Message
 from google.protobuf.struct_pb2 import Struct
 from strategy_service.gen import runtime_worker_pb2 as worker_pb2
 from strategy_service.gen import runtime_worker_pb2_grpc as worker_grpc
+from strategy_service.gen import portfolio_service_pb2 as portfolio_pb2
 
 WORKER_VERSION = "0.1.0"
-WORKER_PROTOCOL_VERSION = 2
+WORKER_PROTOCOL_VERSION = 6
 
 
 class FinalStatusRejected(RuntimeError):
@@ -217,6 +219,26 @@ class WorkerAgentClient:
                     bars_processed=int(bars_processed),
                     error=error,
                     dependency_error=dependency_error,
+                )
+            )
+        )
+
+    def send_data_ack(self, *, session_id: str, stream_key: str, sequence: int) -> None:
+        session_id = str(session_id or "").strip()
+        stream_key = str(stream_key or "").strip()
+        sequence = int(sequence)
+        if not session_id:
+            raise ValueError("Income data ACK session_id is required")
+        if stream_key != f"income/{session_id}":
+            raise ValueError("Income data ACK stream_key is invalid")
+        if sequence <= 0:
+            raise ValueError("Income data ACK sequence must be positive")
+        self._enqueue_outbound(
+            worker_pb2.WorkerFrame(
+                data_ack=worker_pb2.WorkerDataAck(
+                    session_id=session_id,
+                    stream_key=stream_key,
+                    sequence=sequence,
                 )
             )
         )
@@ -513,6 +535,9 @@ class RuntimeSessionEvent:
     kind: str
     payload: object
     stream_key: str = ""
+    session_id: str = ""
+    sequence: int = 0
+    batch_end: bool = False
 
 
 class WorkerAgentDataSource:
@@ -549,9 +574,36 @@ class WorkerAgentDataSource:
                     continue
                 for event in _decode_order_update_batch(batch):
                     yield RuntimeSessionEvent(kind="order_update", payload=event, stream_key=batch.stream_key)
+            elif payload == "income_batch":
+                batch = frame.income_batch
+                entries = _decode_income_batch(batch, expected_session_id=session_id)
+                for index, entry in enumerate(entries):
+                    yield RuntimeSessionEvent(
+                        kind="income",
+                        payload=entry,
+                        stream_key=batch.stream_key,
+                        session_id=batch.session_id,
+                        sequence=batch.sequence,
+                        batch_end=index == len(entries) - 1,
+                    )
             elif payload == "stop_session":
                 if frame.stop_session.session_id == session_id:
                     return
+
+    def acknowledge_income_applied(self, event: RuntimeSessionEvent) -> None:
+        if event.kind != "income" or not isinstance(
+            event.payload, portfolio_pb2.VenueIncomeEntry
+        ):
+            raise ValueError("acknowledgment requires a typed Income event")
+        if not event.batch_end:
+            raise ValueError("only the final Income event may acknowledge its batch")
+        if event.payload.income_entry_id != event.sequence:
+            raise ValueError("final Income event does not match batch sequence")
+        self._client.send_data_ack(
+            session_id=event.session_id,
+            stream_key=event.stream_key,
+            sequence=event.sequence,
+        )
 
     def iter_live_klines(
         self,
@@ -600,6 +652,86 @@ def _decode_market_data_batch(batch: worker_pb2.MarketDataBatch) -> list[object]
             )
         )
     return out
+
+
+def _decode_income_batch(
+    batch: worker_pb2.IncomeBatch,
+    *,
+    expected_session_id: str,
+) -> list[portfolio_pb2.VenueIncomeEntry]:
+    session_id = str(batch.session_id or "").strip()
+    if session_id != str(expected_session_id or "").strip():
+        raise ValueError("Income batch session_id does not match Worker Session")
+    if batch.stream_key != f"income/{session_id}":
+        raise ValueError("Income batch stream_key is invalid")
+    if batch.sequence <= 0:
+        raise ValueError("Income batch sequence must be positive")
+    if not batch.entries:
+        raise ValueError("Income batch entries are required")
+
+    entries: list[portfolio_pb2.VenueIncomeEntry] = []
+    last_id = 0
+    canonical_type_url = "type.googleapis.com/portfolio.v1.VenueIncomeEntry"
+    for packed in batch.entries:
+        if packed.type_url != canonical_type_url:
+            raise ValueError("Income entry type_url must be canonical VenueIncomeEntry")
+        entry = portfolio_pb2.VenueIncomeEntry()
+        try:
+            unpacked = packed.Unpack(entry)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("Income entry payload is malformed") from exc
+        if not unpacked:
+            raise ValueError("Income entry payload is malformed")
+        if entry.session_id != session_id:
+            raise ValueError("Income entry session_id does not match its batch")
+        if entry.income_entry_id <= last_id:
+            raise ValueError("Income entry IDs must be positive and strictly ascending")
+        if entry.venue_id <= 0:
+            raise ValueError("Income entry venue_id must be positive")
+        if not entry.income_type or not entry.source or not entry.settlement_key:
+            raise ValueError("Income entry identity fields are required")
+        if not entry.symbol or not entry.asset:
+            raise ValueError("Income entry route fields are required")
+        if not entry.HasField("occurred_at"):
+            raise ValueError("Income entry occurred_at is required")
+        try:
+            entry.occurred_at.ToDatetime()
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("Income entry occurred_at is invalid") from exc
+        for name in ("calculated_amount_decimal", "applied_amount_decimal"):
+            _validate_exact_decimal(getattr(entry, name), name=name, required=True)
+        for name in ("exchange_amount_decimal", "reconciliation_delta_decimal"):
+            _validate_exact_decimal(getattr(entry, name), name=name, required=False)
+        try:
+            details = json.loads(
+                entry.calculation_details_json,
+                parse_float=str,
+                parse_int=str,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Income entry calculation_details_json is invalid") from exc
+        if not isinstance(details, list):
+            raise ValueError("Income entry calculation_details_json must be an array")
+        if entry.status not in {"confirmed", "calculated"}:
+            raise ValueError("Income entry status is not deliverable")
+        entries.append(entry)
+        last_id = entry.income_entry_id
+    if batch.sequence != last_id:
+        raise ValueError("Income batch sequence must equal final income_entry_id")
+    return entries
+
+
+def _validate_exact_decimal(value: str, *, name: str, required: bool) -> None:
+    if value == "" and not required:
+        return
+    if not value or value != value.strip():
+        raise ValueError(f"Income entry {name} is invalid")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError(f"Income entry {name} is invalid") from exc
+    if not parsed.is_finite():
+        raise ValueError(f"Income entry {name} is invalid")
 
 
 def _decode_order_update_batch(batch: worker_pb2.OrderUpdateBatch) -> list[object]:

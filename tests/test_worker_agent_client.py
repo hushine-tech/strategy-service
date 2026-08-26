@@ -6,10 +6,12 @@ from google.protobuf.any_pb2 import Any
 
 from strategy_service.gen import strategy_service_pb2 as strategy_pb2
 from strategy_service.gen import runtime_worker_pb2 as worker_pb2
+from strategy_service.gen import portfolio_service_pb2 as portfolio_pb2
 from strategy_service import worker_agent_client as worker_agent_client_module
 from strategy_service.worker_agent_client import (
     FinalStatusRejected,
     WorkerAgentClient,
+    WorkerAgentDataSource,
     WorkerEnv,
     build_worker_hello_frame,
     load_worker_env,
@@ -262,7 +264,7 @@ def test_build_worker_hello_frame_contains_env_identity():
         token="token",
         worker_version="0.1.0",
         pid=123,
-        protocol_version=2,
+        protocol_version=6,
     )
 
 
@@ -619,6 +621,178 @@ def test_worker_agent_client_rejects_non_finite_indicator_marker_price(price):
         )
 
     assert client._outbound.empty()
+
+
+def test_income_decode_preserves_exact_entries_and_requires_explicit_durable_ack():
+    entries = [
+        portfolio_pb2.VenueIncomeEntry(
+            income_entry_id=9,
+            session_id="sess-income",
+            venue_id=23,
+            income_type="FUNDING_FEE",
+            source="exchange",
+            external_transaction_id="tran-9",
+            settlement_key="funding-v1-9",
+            symbol="BTCUSDT",
+            asset="USDT",
+            calculated_amount_decimal="-0.010000000000000002",
+            exchange_amount_decimal="-0.010000000000000001",
+            applied_amount_decimal="-0.010000000000000001",
+            reconciliation_delta_decimal="0.000000000000000001",
+            calculation_details_json='[{"quantity":"0.100000000000000001"}]',
+            status="confirmed",
+        ),
+        portfolio_pb2.VenueIncomeEntry(
+            income_entry_id=10,
+            session_id="sess-income",
+            venue_id=24,
+            income_type="FUNDING_FEE",
+            source="backtest",
+            settlement_key="funding-v1-10",
+            symbol="ETHUSDT",
+            asset="USDT",
+            calculated_amount_decimal="0.020000000000000001",
+            applied_amount_decimal="0.020000000000000001",
+            calculation_details_json='[{"quantity":"-0.200000000000000001"}]',
+            status="calculated",
+        ),
+    ]
+    for index, entry in enumerate(entries):
+        entry.occurred_at.FromMilliseconds(1_700_000_000_000 + index)
+    packed_entries = []
+    for entry in entries:
+        packed = Any()
+        packed.Pack(entry)
+        packed_entries.append(packed)
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-income"),
+        stub=_FakeWorkerStub([]),
+    )
+    client._handle_agent_frame(
+        worker_pb2.AgentFrame(
+            income_batch=worker_pb2.IncomeBatch(
+                session_id="sess-income",
+                stream_key="income/sess-income",
+                sequence=10,
+                entries=packed_entries,
+            )
+        )
+    )
+    source = WorkerAgentDataSource(client)
+
+    events = list(
+        source.iter_session_events(
+            session_id="sess-income",
+            required_streams=[],
+            stop_event=threading.Event(),
+            idle_timeout_seconds=0.01,
+            stop_when_idle=True,
+        )
+    )
+
+    assert [event.kind for event in events] == ["income", "income"]
+    assert [event.payload for event in events] == entries
+    assert [event.session_id for event in events] == ["sess-income", "sess-income"]
+    assert [event.stream_key for event in events] == [
+        "income/sess-income",
+        "income/sess-income",
+    ]
+    assert [event.sequence for event in events] == [10, 10]
+    assert [event.batch_end for event in events] == [False, True]
+    assert events[0].payload.applied_amount_decimal == "-0.010000000000000001"
+    assert client._outbound.empty(), "decode/queue must not ACK before durable apply"
+
+    with pytest.raises(ValueError, match="final Income event"):
+        source.acknowledge_income_applied(events[0])
+    assert client._outbound.empty()
+
+    source.acknowledge_income_applied(events[1])
+    ack = client._outbound.get_nowait().data_ack
+    assert ack == worker_pb2.WorkerDataAck(
+        session_id="sess-income",
+        stream_key="income/sess-income",
+        sequence=10,
+    )
+
+
+@pytest.mark.parametrize(
+    ("batch", "message"),
+    [
+        (
+            worker_pb2.IncomeBatch(
+                session_id="other-session",
+                stream_key="income/other-session",
+                sequence=1,
+                entries=[],
+            ),
+            "session_id",
+        ),
+        (
+            worker_pb2.IncomeBatch(
+                session_id="sess-income",
+                stream_key="",
+                sequence=1,
+                entries=[],
+            ),
+            "stream_key",
+        ),
+        (
+            worker_pb2.IncomeBatch(
+                session_id="sess-income",
+                stream_key="income/sess-income",
+                sequence=0,
+                entries=[],
+            ),
+            "sequence",
+        ),
+        (
+            worker_pb2.IncomeBatch(
+                session_id="sess-income",
+                stream_key="income/sess-income",
+                sequence=1,
+                entries=[Any(type_url="type.googleapis.com/google.protobuf.Struct")],
+            ),
+            "type_url",
+        ),
+        (
+            worker_pb2.IncomeBatch(
+                session_id="sess-income",
+                stream_key="income/sess-income",
+                sequence=1,
+                entries=[
+                    Any(
+                        type_url=(
+                            "type.googleapis.com/portfolio.v1.VenueIncomeEntry"
+                        ),
+                        value=b"\xff",
+                    )
+                ],
+            ),
+            "payload",
+        ),
+    ],
+)
+def test_income_decode_fails_closed_without_closing_agent_stream(batch, message):
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-income"),
+        stub=_FakeWorkerStub([]),
+    )
+    client._handle_agent_frame(worker_pb2.AgentFrame(income_batch=batch))
+    source = WorkerAgentDataSource(client)
+
+    with pytest.raises(ValueError, match=message):
+        list(
+            source.iter_session_events(
+                session_id="sess-income",
+                required_streams=[],
+                stop_event=threading.Event(),
+                idle_timeout_seconds=0.01,
+                stop_when_idle=True,
+            )
+        )
+
+    assert not client._closed.is_set()
+    assert client._error is None
 
 
 class _FakeWorkerStub:

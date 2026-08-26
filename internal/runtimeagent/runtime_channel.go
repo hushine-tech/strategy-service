@@ -55,6 +55,7 @@ type RuntimeChannelClientConfig struct {
 	Identity         RuntimeIdentity
 	Credential       *RuntimeCredential
 	HeartbeatSeconds int
+	HeartbeatTicks   <-chan time.Time
 	DialOptions      []grpc.DialOption
 	RequestHandler   RuntimeRequestHandler
 	DataHandler      RuntimeDataHandler
@@ -327,15 +328,23 @@ func (c *RuntimeChannelClient) heartbeatLoop(
 	outbound chan<- *cpv1.RuntimeFrame,
 	stop <-chan struct{},
 ) {
-	ticker := time.NewTicker(time.Duration(c.cfg.HeartbeatSeconds) * time.Second)
-	defer ticker.Stop()
+	ticks := c.cfg.HeartbeatTicks
+	var ticker *time.Ticker
+	if ticks == nil {
+		ticker = time.NewTicker(time.Duration(c.cfg.HeartbeatSeconds) * time.Second)
+		ticks = ticker.C
+		defer ticker.Stop()
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-stop:
 			return
-		case <-ticker.C:
+		case _, ok := <-ticks:
+			if !ok {
+				return
+			}
 			_ = c.sendOutbound(ctx, outbound, c.heartbeatFrame())
 		}
 	}
@@ -400,7 +409,8 @@ func (c *RuntimeChannelClient) handleInboundFrame(
 		}()
 	case cpv1.FrameType_FRAME_TYPE_DATASET_CHUNK,
 		cpv1.FrameType_FRAME_TYPE_LIVE_KLINE_BATCH,
-		cpv1.FrameType_FRAME_TYPE_ORDER_UPDATE_BATCH:
+		cpv1.FrameType_FRAME_TYPE_ORDER_UPDATE_BATCH,
+		cpv1.FrameType_FRAME_TYPE_INCOME_BATCH:
 		var err error
 		if c.cfg.DataHandler != nil {
 			err = c.cfg.DataHandler(ctx, frame)
@@ -411,6 +421,12 @@ func (c *RuntimeChannelClient) handleInboundFrame(
 			if backpressure := dataBackpressureForFrame(frame, err); backpressure != nil {
 				_ = c.sendOutbound(ctx, outbound, backpressure)
 			}
+			return
+		}
+		// Income remains pending in the Agent until the current authenticated
+		// Worker generation confirms durable application. Queue admission alone
+		// cannot advance the control-panel cursor across a Worker-only restart.
+		if frame.GetFrameType() == cpv1.FrameType_FRAME_TYPE_INCOME_BATCH {
 			return
 		}
 		if ack := dataAckForFrame(frame); ack != nil {
@@ -695,6 +711,12 @@ func dataAckForFrame(frame *cpv1.RuntimeFrame) *cpv1.RuntimeFrame {
 			streamKey = "order_lifecycle"
 		}
 		return runtimeDataAckFrame(batch.GetSessionId(), streamKey, batch.GetSequence())
+	case cpv1.FrameType_FRAME_TYPE_INCOME_BATCH:
+		batch := frame.GetIncomeBatch()
+		if batch == nil {
+			return nil
+		}
+		return runtimeDataAckFrame(batch.GetSessionId(), batch.GetStreamKey(), batch.GetSequence())
 	default:
 		return nil
 	}
@@ -739,6 +761,13 @@ func dataBackpressureForFrame(frame *cpv1.RuntimeFrame, cause error) *cpv1.Runti
 		}
 		sessionID = batch.GetSessionId()
 		streamKey = firstNonEmpty(batch.GetStreamKey(), "order_lifecycle")
+	case cpv1.FrameType_FRAME_TYPE_INCOME_BATCH:
+		batch := frame.GetIncomeBatch()
+		if batch == nil {
+			return nil
+		}
+		sessionID = batch.GetSessionId()
+		streamKey = batch.GetStreamKey()
 	default:
 		return nil
 	}

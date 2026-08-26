@@ -225,6 +225,16 @@ class PortfolioServiceStub:
                 request_serializer=portfolio__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
                 response_deserializer=portfolio__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
                 _registered_method=True)
+        self.ListVenueIncomeEntries = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/ListVenueIncomeEntries',
+                request_serializer=portfolio__service__pb2.ListVenueIncomeEntriesRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.ListVenueIncomeEntriesResponse.FromString,
+                _registered_method=True)
+        self.SettleBacktestFunding = channel.unary_unary(
+                '/portfolio.v1.PortfolioService/SettleBacktestFunding',
+                request_serializer=portfolio__service__pb2.SettleBacktestFundingRequest.SerializeToString,
+                response_deserializer=portfolio__service__pb2.SettleBacktestFundingResponse.FromString,
+                _registered_method=True)
         self.SaveStrategyIndicatorsV2 = channel.unary_unary(
                 '/portfolio.v1.PortfolioService/SaveStrategyIndicatorsV2',
                 request_serializer=portfolio__service__pb2.SaveStrategyIndicatorsV2Request.SerializeToString,
@@ -555,6 +565,21 @@ class PortfolioServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListVenueIncomeEntries(self, request, context):
+        """List deliverable Venue Income for one exact owning Session in ascending
+        income_entry_id order.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SettleBacktestFunding(self, request, context):
+        """Settle one historical Funding fact for an active Backtest Session.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SaveStrategyIndicatorsV2(self, request, context):
         """保存 typed V2 指标声明和未封块的 revision。
         """
@@ -819,6 +844,16 @@ def add_PortfolioServiceServicer_to_server(servicer, server):
                     servicer.GetSessionReconciliationSummary,
                     request_deserializer=portfolio__service__pb2.GetSessionReconciliationSummaryRequest.FromString,
                     response_serializer=portfolio__service__pb2.GetSessionReconciliationSummaryResponse.SerializeToString,
+            ),
+            'ListVenueIncomeEntries': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListVenueIncomeEntries,
+                    request_deserializer=portfolio__service__pb2.ListVenueIncomeEntriesRequest.FromString,
+                    response_serializer=portfolio__service__pb2.ListVenueIncomeEntriesResponse.SerializeToString,
+            ),
+            'SettleBacktestFunding': grpc.unary_unary_rpc_method_handler(
+                    servicer.SettleBacktestFunding,
+                    request_deserializer=portfolio__service__pb2.SettleBacktestFundingRequest.FromString,
+                    response_serializer=portfolio__service__pb2.SettleBacktestFundingResponse.SerializeToString,
             ),
             'SaveStrategyIndicatorsV2': grpc.unary_unary_rpc_method_handler(
                     servicer.SaveStrategyIndicatorsV2,
@@ -1898,6 +1933,60 @@ class PortfolioService:
             '/portfolio.v1.PortfolioService/GetSessionReconciliationSummary',
             portfolio__service__pb2.GetSessionReconciliationSummaryRequest.SerializeToString,
             portfolio__service__pb2.GetSessionReconciliationSummaryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListVenueIncomeEntries(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/ListVenueIncomeEntries',
+            portfolio__service__pb2.ListVenueIncomeEntriesRequest.SerializeToString,
+            portfolio__service__pb2.ListVenueIncomeEntriesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SettleBacktestFunding(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/portfolio.v1.PortfolioService/SettleBacktestFunding',
+            portfolio__service__pb2.SettleBacktestFundingRequest.SerializeToString,
+            portfolio__service__pb2.SettleBacktestFundingResponse.FromString,
             options,
             channel_credentials,
             insecure,

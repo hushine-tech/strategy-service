@@ -21,13 +21,13 @@ def test_worker_hello_carries_session_and_token():
         token="token-1",
         worker_version="test",
         pid=123,
-        protocol_version=2,
+        protocol_version=6,
     )
 
     assert msg.session_id == "sess-1"
     assert msg.token == "token-1"
     assert msg.pid == 123
-    assert msg.protocol_version == 2
+    assert msg.protocol_version == 6
 
 
 def test_indicator_v2_frame_carries_sequence_scalar_and_typed_markers():
@@ -79,6 +79,41 @@ def test_worker_frame_reserves_removed_v1_tag_and_name():
     )
     assert any(item.start <= 15 < item.end for item in worker_frame.reserved_range)
     assert "indicator_frame" in worker_frame.reserved_name
+
+
+def test_income_frames_preserve_replay_identity_in_protocol_v6():
+    agent_frame = pb2.AgentFrame.DESCRIPTOR
+    income_field = agent_frame.fields_by_name.get("income_batch")
+    assert income_field is not None
+    assert income_field.number == 18
+    assert income_field.message_type.full_name == "runtime.worker.v1.IncomeBatch"
+
+    income_batch = pb2.DESCRIPTOR.message_types_by_name.get("IncomeBatch")
+    assert income_batch is not None
+    assert {field.name: field.number for field in income_batch.fields} == {
+        "session_id": 1,
+        "stream_key": 2,
+        "sequence": 3,
+        "entries": 4,
+    }
+    assert income_batch.fields_by_name["entries"].is_repeated
+    assert income_batch.fields_by_name["entries"].message_type.full_name == (
+        "google.protobuf.Any"
+    )
+
+    worker_frame = pb2.WorkerFrame.DESCRIPTOR
+    data_ack_field = worker_frame.fields_by_name.get("data_ack")
+    assert data_ack_field is not None
+    assert data_ack_field.number == 22
+    assert data_ack_field.message_type.full_name == "runtime.worker.v1.WorkerDataAck"
+
+    data_ack = pb2.DESCRIPTOR.message_types_by_name.get("WorkerDataAck")
+    assert data_ack is not None
+    assert {field.name: field.number for field in data_ack.fields} == {
+        "session_id": 1,
+        "stream_key": 2,
+        "sequence": 3,
+    }
 
 
 def test_dependency_error_fields_survive_worker_progress():

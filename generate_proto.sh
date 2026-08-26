@@ -87,6 +87,7 @@ STRAT_PROTO_SRC="${SCRIPT_DIR}/proto"
 
 sed_in_place 's/^import control_panel_service_pb2/from . import control_panel_service_pb2/' "$OUT_DIR/control_panel_service_pb2_grpc.py"
 sed_in_place 's/^import strategy_service_pb2/from . import strategy_service_pb2/' "$OUT_DIR/control_panel_service_pb2.py"
+sed_in_place 's/^import portfolio_service_pb2/from . import portfolio_service_pb2/' "$OUT_DIR/control_panel_service_pb2.py"
 sed_in_place 's/^import strategy_service_pb2/from . import strategy_service_pb2/' "$OUT_DIR/control_panel_service_pb2_grpc.py"
 
 # Go stubs for the runtime-agent. Control-panel types stay local; imported

@@ -196,7 +196,7 @@ def test_worker_dependency_fields_and_indicator_evolution_are_exact():
     fields = frame.fields_by_name
     hello = _message(worker_pb2, "WorkerHello")
     assert hello.fields_by_name["protocol_version"].number == 5
-    assert worker_pb2.WorkerHello(protocol_version=2).protocol_version == 2
+    assert worker_pb2.WorkerHello(protocol_version=6).protocol_version == 6
     assert "indicator_frame" not in fields
     assert fields["indicator_frame_v2"].number == 21
     assert _descriptor_reserves("WorkerFrame", 15)
