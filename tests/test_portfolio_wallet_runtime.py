@@ -268,3 +268,73 @@ def test_futures_fill_rejects_configured_margin_mode_conflicting_with_restored_l
         runtime.on_order("binance", "perpetual_futures", 11, "BTCUSDT", "futures", fill)
 
     assert wallet.order_calls == []
+
+
+def test_futures_fill_rejects_configured_margin_mode_conflicting_with_canonical_position():
+    wallet = RecordingWallet()
+    wallet.futures = SimpleNamespace(
+        position_mode="one_way", margin_mode="cross",
+        risk_metadata={"BTCUSDT": SimpleNamespace(configured_margin_mode="isolated")},
+        positions={
+            ("BTCUSDT", 0): SimpleNamespace(symbol="BTCUSDT", margin_mode="cross"),
+        },
+    )
+    runtime = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): wallet},
+    )
+    fill = OrderResponse(
+        symbol="BTCUSDT", side="BUY", qty=0.1, fill_price=100.0, status="FILLED",
+        venue_id=11, exchange_trade_id="trade-1", qty_decimal="0.1", event_type="fill", occurred_at=100,
+    )
+
+    with pytest.raises(ValueError, match="margin_mode conflicts with canonical position"):
+        runtime.on_order("binance", "perpetual_futures", 11, "BTCUSDT", "futures", fill)
+
+    assert wallet.order_calls == []
+    assert runtime.funding_position_tracker.legs_for(11, "BTCUSDT") == []
+
+
+def test_futures_fill_accepts_configured_margin_mode_matching_canonical_position():
+    wallet = RecordingWallet()
+    wallet.futures = SimpleNamespace(
+        position_mode="one_way", margin_mode="cross",
+        risk_metadata={"BTCUSDT": SimpleNamespace(configured_margin_mode="isolated")},
+        positions={
+            ("BTCUSDT", 0): SimpleNamespace(symbol="BTCUSDT", margin_mode="isolated"),
+        },
+    )
+    runtime = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): wallet},
+    )
+    fill = OrderResponse(
+        symbol="BTCUSDT", side="BUY", qty=0.1, fill_price=100.0, status="FILLED",
+        venue_id=11, exchange_trade_id="trade-1", qty_decimal="0.1", event_type="fill", occurred_at=100,
+    )
+
+    runtime.on_order("binance", "perpetual_futures", 11, "BTCUSDT", "futures", fill)
+
+    assert wallet.order_calls == [("BTCUSDT", "futures", fill)]
+    assert runtime.funding_position_tracker.legs_for(11, "BTCUSDT")[0].margin_mode == "isolated"
+
+
+def test_futures_lifecycle_fill_requires_routed_wallet_futures_state_before_mutation():
+    wallet = RecordingWallet()
+    runtime = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): wallet},
+    )
+    fill = OrderResponse(
+        symbol="BTCUSDT", side="BUY", qty=0.1, fill_price=100.0, status="FILLED",
+        venue_id=11, exchange_trade_id="trade-1", qty_decimal="0.1", event_type="fill", occurred_at=100,
+    )
+
+    with pytest.raises(ValueError, match="Futures wallet"):
+        runtime.on_order("binance", "perpetual_futures", 11, "BTCUSDT", "futures", fill)
+
+    assert wallet.order_calls == []
+    assert runtime.funding_position_tracker.legs_for(11, "BTCUSDT") == []

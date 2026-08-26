@@ -4,6 +4,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -997,6 +998,9 @@ def test_lifecycle_updates_settle_into_matching_venue_wallets() -> None:
         (Exchange.BINANCE, Market.PERPETUAL_FUTURES),
         (Exchange.BINANCE, Market.SPOT),
     )
+    wallet.wallets[(Exchange.BINANCE, Market.PERPETUAL_FUTURES, 10)].futures = SimpleNamespace(
+        position_mode="one_way", margin_mode="cross", risk_metadata={}, positions={},
+    )
     svc = _base_strategy(
         "inline.py",
         wallet,
@@ -1056,6 +1060,9 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
         ),
     ]
     wallet = _portfolio((Exchange.BINANCE, Market.PERPETUAL_FUTURES))
+    wallet.wallets[(Exchange.BINANCE, Market.PERPETUAL_FUTURES, 10)].futures = SimpleNamespace(
+        position_mode="one_way", margin_mode="cross", risk_metadata={}, positions={},
+    )
     svc = _base_strategy(
         "inline.py",
         wallet,

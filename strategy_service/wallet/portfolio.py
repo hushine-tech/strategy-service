@@ -110,7 +110,7 @@ class PortfolioWalletRuntime:
             return
         futures = getattr(wallet, "futures", None)
         if futures is None:
-            return
+            raise ValueError("Futures lifecycle fill requires a Futures wallet")
         position_mode = str(getattr(futures, "position_mode", "") or "").strip().lower()
         if position_mode not in {"one_way", "hedge"}:
             raise ValueError("canonical Futures position_mode is missing or invalid")
@@ -120,6 +120,16 @@ class PortfolioWalletRuntime:
             getattr(metadata, "configured_margin_mode", "") or ""
         ).strip().lower()
         if configured_margin_mode in {"cross", "isolated"}:
+            for position in getattr(futures, "positions", {}).values():
+                if str(getattr(position, "symbol", "") or "").strip().upper() != normalized_symbol:
+                    continue
+                existing_margin_mode = str(
+                    getattr(position, "margin_mode", "") or ""
+                ).strip().lower()
+                if existing_margin_mode != configured_margin_mode:
+                    raise ValueError(
+                        "canonical Futures margin_mode conflicts with canonical position"
+                    )
             margin_mode = configured_margin_mode
         else:
             wallet_margin_mode = str(getattr(futures, "margin_mode", "") or "").strip().lower()
