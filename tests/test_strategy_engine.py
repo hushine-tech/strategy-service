@@ -244,6 +244,7 @@ def _exact_order_update_fill(
     fill_price: str,
     *,
     fee: str = "0",
+    trade_id: str = "trade-test",
 ) -> OrderUpdateFill:
     return OrderUpdateFill(
         symbol=symbol,
@@ -254,6 +255,8 @@ def _exact_order_update_fill(
         fill_price_decimal=fill_price,
         fee_decimal=fee,
         quote_qty_decimal=format(Decimal(qty) * Decimal(fill_price), "f"),
+        exchange_trade_id=trade_id,
+        trade_time=(1, 0),
     )
 
 
