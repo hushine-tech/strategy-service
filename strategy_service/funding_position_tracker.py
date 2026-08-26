@@ -15,12 +15,20 @@ class FundingPositionLegFact:
     signed_qty_decimal: str
 
 
+@dataclass(frozen=True, slots=True)
+class _LifecycleDelta:
+    key: tuple[int, str, str, str]
+    signed_qty: Decimal
+    time_key: tuple[int, int]
+    identity: tuple[int, str, str]
+
+
 class FundingPositionTracker:
     """Track exact Futures legs independently of float wallet presentation."""
 
     def __init__(self) -> None:
-        self._legs: dict[tuple[int, str, str, str], Decimal] = {}
-        self._processed_trade_ids: set[str] = set()
+        self._restored_legs: dict[tuple[int, str, str, str], Decimal] = {}
+        self._deltas: dict[tuple[int, str, str], _LifecycleDelta] = {}
 
     def on_lifecycle_fill(
         self,
@@ -39,10 +47,14 @@ class FundingPositionTracker:
         if not symbol:
             raise ValueError("symbol is required")
         trade_id = str(getattr(event, "exchange_trade_id", "") or "").strip()
-        if not trade_id:
+        if trade_id in {"", "0"}:
             raise ValueError("exchange_trade_id is required")
-        if trade_id in self._processed_trade_ids:
+        identity = (venue_id, symbol, trade_id)
+        if identity in self._deltas:
             return
+        time_key = _canonical_time_key(
+            getattr(event, "trade_time", None) or getattr(event, "occurred_at", None)
+        )
 
         mode = str(position_mode or "").strip().lower()
         if mode not in {"one_way", "hedge"}:
@@ -73,8 +85,7 @@ class FundingPositionTracker:
 
         signed_qty = qty if side == "BUY" else -qty
         key = (venue_id, symbol, position_side, margin)
-        self._legs[key] = self._legs.get(key, Decimal()) + signed_qty
-        self._processed_trade_ids.add(trade_id)
+        self._deltas[identity] = _LifecycleDelta(key, signed_qty, time_key, identity)
 
     def restore(self, venue_id: int, facts: Iterable[FundingPositionLegFact]) -> None:
         if int(venue_id) <= 0:
@@ -93,7 +104,7 @@ class FundingPositionTracker:
             if not qty.is_finite():
                 raise ValueError("FundingPositionLegFact.signed_qty_decimal is invalid")
             restored[(int(venue_id), symbol, side, margin)] = qty
-        self._legs.update(restored)
+        self._restored_legs.update(restored)
 
     def legs_for(
         self,
@@ -101,9 +112,14 @@ class FundingPositionTracker:
         symbol: str,
         funding_time: object | None = None,
     ) -> list[FundingPositionLegFact]:
-        del funding_time
         target_venue = int(venue_id)
         target_symbol = str(symbol or "").strip().upper()
+        cutoff = _canonical_time_key(funding_time) if funding_time is not None else None
+        legs = dict(self._restored_legs)
+        for delta in sorted(self._deltas.values(), key=lambda item: (item.time_key, item.identity)):
+            if cutoff is not None and delta.time_key > cutoff:
+                continue
+            legs[delta.key] = legs.get(delta.key, Decimal()) + delta.signed_qty
         return [
             FundingPositionLegFact(
                 symbol=leg_symbol,
@@ -111,6 +127,21 @@ class FundingPositionTracker:
                 margin_mode=margin_mode,
                 signed_qty_decimal=format(qty, "f"),
             )
-            for (_venue, leg_symbol, position_side, margin_mode), qty in sorted(self._legs.items())
+            for (_venue, leg_symbol, position_side, margin_mode), qty in sorted(legs.items())
             if _venue == target_venue and leg_symbol == target_symbol and qty != 0
         ]
+
+
+def _canonical_time_key(value: object) -> tuple[int, int]:
+    if isinstance(value, tuple) and len(value) == 2:
+        seconds, nanos = value
+        if (
+            type(seconds) is int
+            and type(nanos) is int
+            and seconds >= 0
+            and 0 <= nanos < 1_000_000_000
+        ):
+            return seconds, nanos
+    if type(value) is int and value >= 0:
+        return value, 0
+    raise ValueError("canonical lifecycle time is required")

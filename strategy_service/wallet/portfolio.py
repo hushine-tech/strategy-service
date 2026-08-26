@@ -81,6 +81,17 @@ class PortfolioWalletRuntime:
             raise ValueError(
                 f"missing wallet for route {route[0]}/{route[1]} venue {venue_id}"
             )
+        is_lifecycle_event = bool(str(getattr(order_resp, "event_type", "") or "").strip())
+        event_venue_id = int(getattr(order_resp, "venue_id", 0) or 0)
+        if is_lifecycle_event and event_venue_id <= 0:
+            raise ValueError("order lifecycle event venue_id is required")
+        if event_venue_id and event_venue_id != int(venue_id):
+            raise ValueError("order event venue_id does not match routed wallet")
+        event_symbol = str(getattr(order_resp, "symbol", "") or "").strip().upper()
+        if is_lifecycle_event and not event_symbol:
+            raise ValueError("order lifecycle event symbol is required")
+        if event_symbol and event_symbol != str(symbol or "").strip().upper():
+            raise ValueError("order event symbol does not match routed wallet")
         self._track_futures_fill_before_wallet_mutation(
             wallet, symbol, symbol_type, order_resp
         )
@@ -99,7 +110,7 @@ class PortfolioWalletRuntime:
             return
         futures = getattr(wallet, "futures", None)
         if futures is None:
-            raise ValueError("Futures lifecycle fill requires a Futures wallet")
+            return
         position_mode = str(getattr(futures, "position_mode", "") or "").strip().lower()
         if position_mode not in {"one_way", "hedge"}:
             raise ValueError("canonical Futures position_mode is missing or invalid")
@@ -129,6 +140,14 @@ class PortfolioWalletRuntime:
             ):
                 raise ValueError("canonical Futures margin_mode is missing or ambiguous")
             margin_mode = wallet_margin_mode
+        expected_side = (
+            "BOTH"
+            if position_mode == "one_way"
+            else str(getattr(order_resp, "position_side", "") or "").strip().upper()
+        )
+        for leg in self.funding_position_tracker.legs_for(int(getattr(order_resp, "venue_id", 0) or 0), normalized_symbol):
+            if leg.position_side == expected_side and leg.margin_mode != margin_mode:
+                raise ValueError("canonical Futures margin_mode conflicts with restored leg")
         self.funding_position_tracker.on_lifecycle_fill(
             order_resp, position_mode=position_mode, margin_mode=margin_mode
         )

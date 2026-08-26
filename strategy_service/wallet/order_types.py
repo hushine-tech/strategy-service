@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -47,6 +48,8 @@ class OrderResponse:
     source: str = ""
     error_code: str = ""
     event_type: str = ""
+    occurred_at: Any = None
+    trade_time: Any = None
 
 
 @dataclass

@@ -916,8 +916,8 @@ class BinanceFuturesBook:
         if income_entry_id <= self.last_applied_income_entry_id:
             return
         asset = str(getattr(event, "asset", "") or "").strip().upper()
-        if not asset:
-            raise ValueError("Funding ledger event asset is required")
+        if asset != "USDT":
+            raise ValueError("Funding ledger event asset must be USDT")
         raw_amount = getattr(event, "amount_decimal", "")
         if not isinstance(raw_amount, str) or not raw_amount:
             raise ValueError("Funding ledger event amount_decimal is required")
@@ -932,11 +932,9 @@ class BinanceFuturesBook:
             raise ValueError("Funding ledger event margin_mode is required")
 
         amount = float(exact_amount)
-        if margin_mode == "cross":
-            self.wallet_balance = float(self.wallet_balance) + amount
-
         symbol = str(getattr(event, "symbol", "") or "").strip()
         position_side = str(getattr(event, "position_side", "") or "").strip().upper()
+        pos = None
         if margin_mode == "isolated":
             if not symbol:
                 raise ValueError("isolated Funding ledger event symbol is required")
@@ -958,11 +956,25 @@ class BinanceFuturesBook:
                 pos = self.positions.get((norm_symbol(symbol), 0))
             if pos is None or pos.margin_mode != "isolated":
                 raise ValueError("isolated Funding ledger event has no matching isolated leg")
-            pos.isolated_wallet = float(pos.isolated_wallet or 0.0) + amount
-            pos.carry_cost = float(pos.carry_cost or 0.0) - amount
-            pos._refresh_derived_fields()
 
-        self._refresh_portfolio_fields()
+        prior_wallet_balance = float(self.wallet_balance)
+        prior_isolated_wallet = float(pos.isolated_wallet or 0.0) if pos is not None else None
+        prior_carry_cost = float(pos.carry_cost or 0.0) if pos is not None else None
+        try:
+            if margin_mode == "cross":
+                self.wallet_balance = prior_wallet_balance + amount
+            if pos is not None:
+                pos.isolated_wallet = prior_isolated_wallet + amount
+                pos.carry_cost = prior_carry_cost - amount
+                pos._refresh_derived_fields()
+            self._refresh_portfolio_fields()
+        except Exception:
+            self.wallet_balance = prior_wallet_balance
+            if pos is not None:
+                pos.isolated_wallet = prior_isolated_wallet
+                pos.carry_cost = prior_carry_cost
+                pos._refresh_derived_fields()
+            raise
         self.last_applied_income_entry_id = income_entry_id
 
     def to_canonical(self) -> CanonicalFuturesState:

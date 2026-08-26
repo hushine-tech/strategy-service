@@ -434,6 +434,8 @@ class OrderClient:
                 "order.cumulative_quote_qty_decimal",
             ),
             event_type=event_type,
+            occurred_at=getattr(event, "occurred_at", None),
+            trade_time=getattr(getattr(event, "fill", None), "trade_time", None),
         )
 
     @staticmethod
@@ -466,6 +468,7 @@ class OrderClient:
                     item.fill_delta.quote_qty_decimal,
                     "fill_delta.quote_qty_decimal",
                 ),
+                trade_time=_required_proto_time_key(item.fill_delta, "trade_time"),
             )
         order_state = item.order_state if item.HasField("order_state") else None
         event = OrderUpdateEvent(
@@ -510,6 +513,7 @@ class OrderClient:
                 order_state.cumulative_quote_qty_decimal,
                 "order_state.cumulative_quote_qty_decimal",
             ) if order_state is not None else "",
+            occurred_at=_required_proto_time_key(item, "occurred_at"),
         )
         return event
 
@@ -731,3 +735,14 @@ class OrderClient:
                 environment=int(getattr(fill, "environment", 0) or getattr(order, "environment", 0) or 0),
             ))
         return events
+
+
+def _required_proto_time_key(parent: object, field_name: str) -> tuple[int, int]:
+    if not getattr(parent, "HasField")(field_name):
+        raise ValueError(f"canonical lifecycle {field_name} is required")
+    value = getattr(parent, field_name)
+    seconds = int(getattr(value, "seconds", 0) or 0)
+    nanos = int(getattr(value, "nanos", 0) or 0)
+    if seconds < 0 or nanos < 0 or nanos >= 1_000_000_000:
+        raise ValueError("canonical lifecycle timestamp is invalid")
+    return seconds, nanos

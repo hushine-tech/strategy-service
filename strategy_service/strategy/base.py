@@ -873,7 +873,16 @@ class BaseStrategy:
                 if event_id <= 0 or event_id not in self._settled_lifecycle_event_ids:
                     event_exchange = _norm_exchange(getattr(event, "exchange", ""))
                     event_market = _norm_market(getattr(event, "market", ""))
-                    route_wallet = self.wallet.get(event_exchange, event_market)
+                    event_venue_id = int(getattr(event, "venue_id", 0) or 0)
+                    if event_venue_id <= 0:
+                        raise ValueError("order lifecycle event venue_id is required")
+                    route_wallet = self.wallet.wallets.get(
+                        (event_exchange, event_market, event_venue_id)
+                    )
+                    if route_wallet is None:
+                        raise ValueError(
+                            "order lifecycle event route has no exact Venue wallet"
+                        )
                     order_resp = self._adjust_lifecycle_order_response(order_resp, route_wallet)
                     if order_resp is None:
                         if event_id > 0:
@@ -888,7 +897,7 @@ class BaseStrategy:
                         event_market,
                         order_resp.symbol,
                         order_resp,
-                        venue_id=getattr(event, "venue_id", None),
+                        venue_id=event_venue_id,
                     )
                     self._record_order_settlement(order_resp)
                     if event_id > 0:

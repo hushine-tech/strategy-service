@@ -627,6 +627,7 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
         order_id="order-1",
         exchange_order_id="1001",
         exchange_trade_id="0",
+        occurred_at={"seconds": 100, "nanos": 7},
         fill_delta=order_service_pb2.FillDeltaEntry(
             symbol="ETHUSDT",
             fee_asset="USDT",
@@ -636,6 +637,7 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
             fill_price_decimal="2500.00",
             fee_decimal="0.02000000",
             quote_qty_decimal="250.00000000",
+            trade_time={"seconds": 99, "nanos": 3},
         ),
         order_state=order_service_pb2.OrderStateEntry(
             symbol="ETHUSDT",
@@ -656,9 +658,11 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
     assert event.position_side == "both"
     assert event.symbol == "ETHUSDT"
     assert event.event_type == "fill"
+    assert event.occurred_at == (100, 7)
     assert event.fill is not None
     assert event.fill.qty == pytest.approx(0.1)
     assert event.fill.fee == pytest.approx(0.02)
+    assert event.fill.trade_time == (99, 3)
     order_response = OrderClient.order_response_from_update(event)
     assert order_response is not None
     assert order_response.exchange_trade_id == "0"
@@ -668,6 +672,40 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
     assert order_response.quote_qty_decimal == "250.00000000"
     assert order_response.executed_qty_decimal == "0.10000000"
     assert order_response.cumulative_quote_qty_decimal == "250.00000000"
+
+
+def test_lifecycle_mapping_rejects_missing_canonical_time() -> None:
+    item = order_service_pb2.OrderLifecycleEventEntry(
+        event_id=1,
+        venue_id=11,
+        exchange=1,
+        market=2,
+        side="BUY",
+        position_side=0,
+        event_type="fill",
+        order_status="FILLED",
+        order_id="order-1",
+        fill_delta=order_service_pb2.FillDeltaEntry(
+            symbol="BTCUSDT",
+            exchange_trade_id="trade-1",
+            qty_decimal="1",
+            fill_price_decimal="1",
+            fee_decimal="0",
+            quote_qty_decimal="1",
+            trade_time={"seconds": 10},
+        ),
+        order_state=order_service_pb2.OrderStateEntry(
+            symbol="BTCUSDT",
+            orig_qty_decimal="1",
+            executed_qty_decimal="1",
+            remaining_qty_decimal="0",
+            avg_price_decimal="1",
+            cumulative_quote_qty_decimal="1",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="occurred_at"):
+        OrderClient.order_update_event_from_proto(item)
 
 
 def test_list_order_lifecycle_events_maps_route_facts_and_fill():
@@ -688,6 +726,7 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
                 event_source="force_close",
                 order_status="FILLED",
                 order_id="order-1",
+                occurred_at={"seconds": 101},
                 fill_delta=order_service_pb2.FillDeltaEntry(
                     symbol="ETHUSDT",
                     fee_asset="USDT",
@@ -696,6 +735,7 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
                     fill_price_decimal="3000",
                     fee_decimal="0.2",
                     quote_qty_decimal="300",
+                    trade_time={"seconds": 100},
                 ),
                 order_state=order_service_pb2.OrderStateEntry(
                     symbol="ETHUSDT",
@@ -768,12 +808,14 @@ def test_order_response_from_update_uses_lifecycle_order_state():
                 event_type="fill",
                 order_status="PARTIALLY_FILLED",
                 order_id="order-1",
+                occurred_at={"seconds": 201},
                 fill_delta=order_service_pb2.FillDeltaEntry(
                     symbol="ETHUSDT",
                     qty_decimal="0.02",
                     fill_price_decimal="3000",
                     fee_decimal="0.2",
                     quote_qty_decimal="60",
+                    trade_time={"seconds": 200},
                 ),
                 order_state=order_service_pb2.OrderStateEntry(
                     symbol="ETHUSDT",

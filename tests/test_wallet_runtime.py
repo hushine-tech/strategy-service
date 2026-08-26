@@ -879,6 +879,21 @@ def test_funding_income_cursor_replays_only_new_entries_and_serializes():
     assert _serialize_future_wallet(wallet.futures).last_applied_income_entry_id == 8
 
 
+def test_funding_income_cursor_survives_canonical_serialize_and_rebuild():
+    wallet = make_testnet_wallet(wallet_balance=100.0)
+    wallet.futures.venue_id = 11
+    wallet.on_ledger_event(LedgerEvent(
+        event_type="funding_fee", amount=0.0, income_entry_id=7,
+        venue_id=11, asset="USDT", amount_decimal="-0.1", margin_mode="cross",
+    ))
+    state = _wallet_proto(environment=1)
+    state.futures.CopyFrom(_serialize_future_wallet(wallet.futures))
+
+    rebuilt = build_wallet_from_portfolio(proto_to_portfolio_spec(state))
+
+    assert rebuilt.futures.last_applied_income_entry_id == 7
+
+
 def test_funding_income_isolated_updates_the_specific_leg_wallet():
     wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(_isolated_wallet_proto_with_metadata()))
     wallet.futures.venue_id = 11
@@ -898,6 +913,39 @@ def test_funding_income_isolated_updates_the_specific_leg_wallet():
 
     assert pos.isolated_wallet == pytest.approx(4.8)
     assert wallet.futures.last_applied_income_entry_id == 7
+
+
+def test_funding_income_rejects_non_usdt_without_mutating_wallet_or_cursor():
+    wallet = make_testnet_wallet(wallet_balance=100.0)
+    wallet.futures.venue_id = 11
+
+    with pytest.raises(ValueError, match="USDT"):
+        wallet.on_ledger_event(LedgerEvent(
+            event_type="funding_fee", amount=0.0, income_entry_id=7,
+            venue_id=11, asset="BTC", amount_decimal="-0.1", margin_mode="cross",
+        ))
+
+    assert wallet.get_wallet_balance() == pytest.approx(100.0)
+    assert wallet.futures.last_applied_income_entry_id == 0
+
+
+def test_funding_income_refresh_error_rolls_back_balance_and_cursor(monkeypatch: pytest.MonkeyPatch):
+    wallet = make_testnet_wallet(wallet_balance=100.0)
+    wallet.futures.venue_id = 11
+
+    def reject_refresh() -> None:
+        raise RuntimeError("refresh failed")
+
+    monkeypatch.setattr(wallet.futures, "_refresh_portfolio_fields", reject_refresh)
+
+    with pytest.raises(RuntimeError, match="refresh failed"):
+        wallet.on_ledger_event(LedgerEvent(
+            event_type="funding_fee", amount=0.0, income_entry_id=7,
+            venue_id=11, asset="USDT", amount_decimal="-0.1", margin_mode="cross",
+        ))
+
+    assert wallet.futures.wallet_balance == pytest.approx(100.0)
+    assert wallet.futures.last_applied_income_entry_id == 0
 
 
 def test_binance_wallet_ignores_provider_display_spot_estimate_when_prices_missing():

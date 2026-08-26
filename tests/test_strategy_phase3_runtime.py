@@ -327,6 +327,7 @@ def _order_update_event(
         order_id=f"order-{event_id}",
         exchange_order_id=f"exchange-order-{event_id}",
         exchange_trade_id=f"trade-{event_id}",
+        occurred_at=(event_id, 1),
         fill=OrderUpdateFill(
             symbol="ETHUSDT",
             qty=0.02,
@@ -336,6 +337,8 @@ def _order_update_event(
             fill_price_decimal="2500",
             fee_decimal="0",
             quote_qty_decimal="50.00",
+            exchange_trade_id=f"trade-{event_id}",
+            trade_time=(event_id, 0),
         ),
         orig_qty=0.02,
         executed_qty=0.02,
@@ -366,6 +369,7 @@ def _exact_order_update_fill(
         fill_price_decimal=fill_price,
         fee_decimal=fee,
         quote_qty_decimal=format(Decimal(qty) * Decimal(fill_price), "f"),
+        trade_time=(0, 0),
     )
 
 
@@ -966,6 +970,8 @@ def test_lifecycle_updates_settle_into_matching_venue_wallets() -> None:
             event_type="fill",
             order_status="FILLED",
             order_id="perp-order",
+            exchange_trade_id="perp-trade-1",
+            occurred_at=(1, 1),
             fill=_exact_order_update_fill("ETHUSDT", "0.1", "2500"),
             **_exact_order_state(
                 orig="0.1", executed="0.1", remaining="0", price="2500",
@@ -1024,6 +1030,8 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
             event_type="fill",
             order_status="PARTIALLY_FILLED",
             order_id="order-1",
+            exchange_trade_id="trade-1",
+            occurred_at=(1, 1),
             fill=_exact_order_update_fill("ETHUSDT", "0.04", "2500"),
             **_exact_order_state(
                 orig="0.1", executed="0.04", remaining="0.06", price="2500",
@@ -1041,6 +1049,8 @@ def test_lifecycle_fills_with_same_order_id_are_settled_by_event_id() -> None:
             event_type="fill",
             order_status="FILLED",
             order_id="order-1",
+            exchange_trade_id="trade-2",
+            occurred_at=(2, 1),
             fill=_exact_order_update_fill("ETHUSDT", "0.06", "2510"),
             **_exact_order_state(orig="0.1", executed="0.1", remaining="0", price="2510"),
         ),
@@ -1074,6 +1084,8 @@ def test_lifecycle_replay_of_synchronous_fill_is_not_settled_twice() -> None:
         event_type="fill",
         order_status="FILLED",
         order_id="order-sync",
+        exchange_trade_id="sync-trade-1",
+        occurred_at=(1, 1),
         fill=_exact_order_update_fill("ETHUSDT", "0.1", "2500"),
         **_exact_order_state(orig="0.1", executed="0.1", remaining="0", price="2500"),
     )
@@ -1145,6 +1157,8 @@ def test_lifecycle_after_synchronous_partial_settles_only_new_delta() -> None:
         event_type="fill",
         order_status="PARTIALLY_FILLED",
         order_id="order-partial",
+        exchange_trade_id="partial-trade-1",
+        occurred_at=(1, 1),
         fill=_exact_order_update_fill("ETHUSDT", "0.2", "2510"),
         **_exact_order_state(orig="0.2", executed="0.2", remaining="0", price="2510"),
     )
@@ -1217,6 +1231,8 @@ def test_lifecycle_after_partial_close_short_applies_rest_recovery_fill() -> Non
         event_source="rest_recovery",
         order_status="FILLED",
         order_id="order-close-short",
+        exchange_trade_id="close-short-trade-1",
+        occurred_at=(1, 1),
         fill=_exact_order_update_fill("ETHUSDT", "0.016", "2510"),
         **_exact_order_state(orig="0.02", executed="0.02", remaining="0", price="2510"),
     )
