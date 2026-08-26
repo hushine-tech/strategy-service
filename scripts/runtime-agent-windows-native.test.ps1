@@ -93,8 +93,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Windows bare restart helper tests failed"
     }
-    $env:HUSHINE_BLOCKED_WORKER_SECONDS = "30"
-    $env:HUSHINE_BLOCKED_WORKER_OBSERVE_SECONDS = "5"
+    $env:HUSHINE_BLOCKED_WORKER_SECONDS = "660"
     go test -tags=integration ./internal/runtimeagent `
         -run TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced `
         -count=1 -timeout 120s -v

@@ -530,3 +530,5 @@ def test_windows_native_acceptance_resolves_managed_uv_portably():
     assert "$IsWindows" not in script
     assert "\n    uv sync " not in script
     assert "\n    uv run " not in script
+    assert '$env:HUSHINE_BLOCKED_WORKER_SECONDS = "660"' in script
+    assert "HUSHINE_BLOCKED_WORKER_OBSERVE_SECONDS" not in script
