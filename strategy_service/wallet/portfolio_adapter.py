@@ -73,11 +73,14 @@ def _build_binance_wallet_from_venue_snapshot(
         venue_id = _venue_id(venue)
         for raw in getattr(venue, "spot_symbols", []) or []:
             runtime.spot.register_metadata(_spot_metadata_from_proto(raw, venue_id=venue_id))
+        runtime.futures.venue_id = _venue_id(venue)
         return runtime
     if market == "perpetual_futures":
         if wallet is None:
             raise ValueError("futures VenueSnapshot requires full canonical wallet")
-        return BinanceWalletRuntime.from_canonical(proto_to_portfolio_spec(wallet))
+        runtime = BinanceWalletRuntime.from_canonical(proto_to_portfolio_spec(wallet))
+        runtime.futures.venue_id = _venue_id(venue)
+        return runtime
     raise ValueError(f"unsupported portfolio wallet market for binance: {market}")
 
 
@@ -275,7 +278,14 @@ def apply_venue_wallet_snapshot(
             f"authoritative snapshot environment mismatch: got {environment}, "
             f"want {int(expected_environment)}"
         )
-    runtime.wallets[key] = _build_binance_wallet_from_venue_snapshot(venue, market=market)
+    existing_cursor = int(getattr(getattr(runtime.wallets[key], "futures", None), "last_applied_income_entry_id", 0) or 0)
+    replacement = _build_binance_wallet_from_venue_snapshot(venue, market=market)
+    if market == "perpetual_futures":
+        replacement.futures.last_applied_income_entry_id = max(
+            existing_cursor,
+            int(getattr(replacement.futures, "last_applied_income_entry_id", 0) or 0),
+        )
+    runtime.wallets[key] = replacement
     return key
 
 

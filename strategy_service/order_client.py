@@ -433,6 +433,7 @@ class OrderClient:
                 getattr(event, "cumulative_quote_qty_decimal", ""),
                 "order.cumulative_quote_qty_decimal",
             ),
+            event_type=event_type,
         )
 
     @staticmethod

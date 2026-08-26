@@ -794,6 +794,26 @@ def test_present_empty_spot_wallet_replaces_existing_assets_during_sync():
     assert routed.get("binance", "spot").spot.assets == {}
 
 
+def test_stale_futures_snapshot_cannot_lower_income_cursor():
+    current = _futures_wallet(wallet_balance=1000.0, available_balance=1000.0, margin_balance=1000.0)
+    current.futures.last_applied_income_entry_id = 8
+    routed = build_portfolio_wallet_from_snapshot(
+        _snapshot(_venue(venue_id=11, market=MARKET_PERPETUAL_FUTURES, wallet=current)),
+        allowed_routes={("binance", "perpetual_futures")},
+    )
+    stale = _venue(
+        venue_id=11,
+        market=MARKET_PERPETUAL_FUTURES,
+        wallet=_futures_wallet(wallet_balance=999.0, available_balance=999.0, margin_balance=999.0),
+    )
+    stale.environment = 1
+    stale.wallet.futures.last_applied_income_entry_id = 6
+
+    apply_venue_wallet_snapshot(routed, stale, expected_environment=1)
+
+    assert routed.get("binance", "perpetual_futures").futures.last_applied_income_entry_id == 8
+
+
 def test_futures_empty_compact_without_full_wallet_fails_closed():
     snapshot = _snapshot(
         _venue(

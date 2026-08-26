@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import math
 
 from .canonical import (
@@ -323,6 +324,8 @@ class BinanceFuturesBook:
         self.total_open_order_initial_margin = float(state.total_open_order_initial_margin or 0.0)
         self.total_cross_wallet_balance = float(state.total_cross_wallet_balance or 0.0)
         self.total_cross_un_pnl = float(state.total_cross_un_pnl or 0.0)
+        self.last_applied_income_entry_id = int(state.last_applied_income_entry_id or 0)
+        self.venue_id = 0
         self.total_maint_margin = float(state.total_maint_margin or 0.0)
         self.risk_metadata: dict[str, CanonicalFuturesRiskMetadata] = {
             item.normalized_symbol(): item
@@ -901,17 +904,42 @@ class BinanceFuturesBook:
             or getattr(event, "type", "")
             or ""
         ).strip().lower()
-        if not event_type:
-            raise ValueError("ledger event_type is required")
+        if event_type not in {"funding", "funding_fee"}:
+            raise ValueError("only Funding ledger events are supported")
 
-        amount = float(getattr(event, "amount", 0.0) or 0.0)
-        if event_type in {"transfer_out", "withdrawal"} and amount > 0.0:
-            amount = -amount
-        self.wallet_balance = float(self.wallet_balance) + amount
+        venue_id = int(getattr(event, "venue_id", 0) or 0)
+        if venue_id <= 0 or (self.venue_id > 0 and venue_id != self.venue_id):
+            raise ValueError("Funding ledger event venue does not match wallet")
+        income_entry_id = int(getattr(event, "income_entry_id", 0) or 0)
+        if income_entry_id <= 0:
+            raise ValueError("Funding ledger event income_entry_id is required")
+        if income_entry_id <= self.last_applied_income_entry_id:
+            return
+        asset = str(getattr(event, "asset", "") or "").strip().upper()
+        if not asset:
+            raise ValueError("Funding ledger event asset is required")
+        raw_amount = getattr(event, "amount_decimal", "")
+        if not isinstance(raw_amount, str) or not raw_amount:
+            raise ValueError("Funding ledger event amount_decimal is required")
+        try:
+            exact_amount = Decimal(raw_amount)
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("Funding ledger event amount_decimal is invalid") from exc
+        if not exact_amount.is_finite():
+            raise ValueError("Funding ledger event amount_decimal is invalid")
+        margin_mode = str(getattr(event, "margin_mode", "") or "").strip().lower()
+        if margin_mode not in {"cross", "isolated"}:
+            raise ValueError("Funding ledger event margin_mode is required")
+
+        amount = float(exact_amount)
+        if margin_mode == "cross":
+            self.wallet_balance = float(self.wallet_balance) + amount
 
         symbol = str(getattr(event, "symbol", "") or "").strip()
         position_side = str(getattr(event, "position_side", "") or "").strip().upper()
-        if symbol:
+        if margin_mode == "isolated":
+            if not symbol:
+                raise ValueError("isolated Funding ledger event symbol is required")
             # In hedge mode the per-position update requires an explicit
             # position_side. Portfolio-level ledger events (e.g. a funding_fee
             # or transfer that aren't bound to LONG vs SHORT) legitimately
@@ -919,8 +947,7 @@ class BinanceFuturesBook:
             # added to wallet_balance above) and skip per-position work,
             # rather than raising inside _position_key_from_order.
             if self.position_mode == "hedge" and position_side not in {"LONG", "SHORT"}:
-                self._refresh_portfolio_fields()
-                return
+                raise ValueError("isolated hedge Funding requires position_side")
             direction_key = self._position_key_from_order(
                 norm_symbol(symbol), position_side,
                 "BUY" if amount >= 0.0 else "SELL",
@@ -929,19 +956,14 @@ class BinanceFuturesBook:
             pos = self.positions.get(key)
             if pos is None and self.position_mode != "hedge":
                 pos = self.positions.get((norm_symbol(symbol), 0))
-            if pos is not None and pos.margin_mode == "isolated" and event_type in {
-                "funding_fee",
-                "transfer_in",
-                "transfer_out",
-                "deposit",
-                "withdrawal",
-            }:
-                pos.isolated_wallet = float(pos.isolated_wallet or 0.0) + amount
-            if pos is not None and event_type == "funding_fee" and pos.margin_mode == "isolated":
-                pos.carry_cost = float(pos.carry_cost or 0.0) - amount
-                pos._refresh_derived_fields()
+            if pos is None or pos.margin_mode != "isolated":
+                raise ValueError("isolated Funding ledger event has no matching isolated leg")
+            pos.isolated_wallet = float(pos.isolated_wallet or 0.0) + amount
+            pos.carry_cost = float(pos.carry_cost or 0.0) - amount
+            pos._refresh_derived_fields()
 
         self._refresh_portfolio_fields()
+        self.last_applied_income_entry_id = income_entry_id
 
     def to_canonical(self) -> CanonicalFuturesState:
         return CanonicalFuturesState(
@@ -962,6 +984,7 @@ class BinanceFuturesBook:
             total_maint_margin=self.total_maint_margin,
             total_cross_wallet_balance=self.total_cross_wallet_balance,
             total_cross_un_pnl=self.get_unrealized_pnl() if self.margin_mode == "cross" else self.total_cross_un_pnl,
+            last_applied_income_entry_id=self.last_applied_income_entry_id,
             risk_metadata=list(self.risk_metadata.values()),
         )
 

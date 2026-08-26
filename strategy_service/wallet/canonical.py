@@ -112,6 +112,7 @@ class CanonicalFuturesState:
     total_maint_margin: float = 0.0
     total_cross_wallet_balance: float = 0.0
     total_cross_un_pnl: float = 0.0
+    last_applied_income_entry_id: int = 0
     risk_metadata: list[CanonicalFuturesRiskMetadata] = field(default_factory=list)
 
 

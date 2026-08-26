@@ -46,6 +46,7 @@ class OrderResponse:
     retryable: bool = False
     source: str = ""
     error_code: str = ""
+    event_type: str = ""
 
 
 @dataclass
@@ -110,3 +111,8 @@ class LedgerEvent:
     amount: float
     symbol: str = ""
     position_side: str = ""
+    income_entry_id: int = 0
+    venue_id: int = 0
+    asset: str = ""
+    amount_decimal: str = ""
+    margin_mode: str = ""

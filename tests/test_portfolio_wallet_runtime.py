@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+from strategy_service.types import OrderResponse
 from strategy_service.wallet import PortfolioWalletRuntime
+from strategy_service.wallet import LedgerEvent
 
 
 class RecordingWallet:
@@ -134,3 +138,72 @@ def test_portfolio_runtime_has_no_legacy_single_wallet_shortcuts():
     assert not hasattr(runtime, "spot")
     assert not hasattr(runtime, "get_wallet_balance")
     assert not hasattr(runtime, "get_available_balance")
+
+
+def test_ledger_event_rejects_spot_route():
+    runtime = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "spot")},
+        wallets={("binance", "spot", 11): RecordingWallet()},
+    )
+
+    with pytest.raises(ValueError, match="Futures"):
+        runtime.on_ledger_event(
+            "binance", "spot", 11,
+            LedgerEvent("funding_fee", 0.0, income_entry_id=7, venue_id=11, asset="USDT", amount_decimal="1", margin_mode="cross"),
+        )
+
+
+def test_futures_fill_uses_symbol_isolated_metadata_before_wallet_mutation():
+    wallet = RecordingWallet()
+    wallet.futures = SimpleNamespace(
+        position_mode="hedge",
+        margin_mode="cross",
+        risk_metadata={
+            "BTCUSDT": SimpleNamespace(configured_margin_mode="isolated"),
+        },
+        positions={},
+    )
+    runtime = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): wallet},
+    )
+    fill = OrderResponse(
+        symbol="BTCUSDT", side="BUY", qty=0.1, fill_price=100.0, status="FILLED",
+        venue_id=11, exchange_trade_id="trade-1", qty_decimal="0.100000000000000001",
+        position_side="LONG", event_type="fill",
+    )
+
+    runtime.on_order("binance", "perpetual_futures", 11, "BTCUSDT", "futures", fill)
+
+    assert [
+        (leg.position_side, leg.margin_mode, leg.signed_qty_decimal)
+        for leg in runtime.funding_position_tracker.legs_for(11, "BTCUSDT")
+    ] == [("LONG", "isolated", "0.100000000000000001")]
+    assert wallet.order_calls == [("BTCUSDT", "futures", fill)]
+
+
+def test_futures_fill_rejects_ambiguous_or_missing_mode_facts():
+    wallet = RecordingWallet()
+    wallet.futures = SimpleNamespace(
+        position_mode="hedge",
+        margin_mode="",
+        risk_metadata={},
+        positions={},
+    )
+    runtime = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): wallet},
+    )
+    fill = OrderResponse(
+        symbol="BTCUSDT", side="BUY", qty=0.1, fill_price=100.0, status="FILLED",
+        venue_id=11, exchange_trade_id="trade-1", qty_decimal="0.1", position_side="LONG",
+        event_type="fill",
+    )
+
+    with pytest.raises(ValueError, match="margin_mode"):
+        runtime.on_order("binance", "perpetual_futures", 11, "BTCUSDT", "futures", fill)
+
+    assert wallet.order_calls == []

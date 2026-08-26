@@ -169,6 +169,7 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
             total_maint_margin=float(getattr(fw, "total_maint_margin", 0.0) or 0.0),
             total_cross_wallet_balance=float(getattr(fw, "total_cross_wallet_balance", 0.0) or 0.0),
             total_cross_un_pnl=float(getattr(fw, "total_cross_un_pnl", 0.0) or 0.0),
+            last_applied_income_entry_id=int(getattr(fw, "last_applied_income_entry_id", 0) or 0),
             risk_metadata=risk_metadata,
         )
 

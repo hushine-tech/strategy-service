@@ -9,7 +9,7 @@ from strategy_service.portfolio_client import _serialize_future_wallet
 from strategy_service.gen import portfolio_service_pb2
 from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
 from strategy_service.types import OrderResponse
-from strategy_service.wallet import BinanceWalletRuntime
+from strategy_service.wallet import BinanceWalletRuntime, LedgerEvent
 from strategy_service.wallet.canonical import SpotSymbolMetadata
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet_factory import (
@@ -859,6 +859,47 @@ def test_serialize_future_wallet_preserves_risk_metadata_from_parity_runtime():
     assert proto_fw.risk_metadata[0].brackets[0].maint_margin_ratio == pytest.approx(0.1)
 
 
+def test_funding_income_cursor_replays_only_new_entries_and_serializes():
+    wallet = make_testnet_wallet(wallet_balance=100.0)
+    wallet.futures.venue_id = 11
+
+    for entry_id, amount in ((7, "-0.1"), (7, "-0.1"), (6, "-0.1"), (8, "0.2")):
+        wallet.on_ledger_event(LedgerEvent(
+            event_type="funding_fee",
+            amount=0.0,
+            income_entry_id=entry_id,
+            venue_id=11,
+            asset="USDT",
+            amount_decimal=amount,
+            margin_mode="cross",
+        ))
+
+    assert wallet.get_wallet_balance() == pytest.approx(100.1)
+    assert wallet.futures.last_applied_income_entry_id == 8
+    assert _serialize_future_wallet(wallet.futures).last_applied_income_entry_id == 8
+
+
+def test_funding_income_isolated_updates_the_specific_leg_wallet():
+    wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(_isolated_wallet_proto_with_metadata()))
+    wallet.futures.venue_id = 11
+    pos = wallet.futures.positions[("BTCUSDT", 0)]
+
+    wallet.on_ledger_event(LedgerEvent(
+        event_type="funding_fee",
+        amount=0.0,
+        income_entry_id=7,
+        venue_id=11,
+        asset="USDT",
+        amount_decimal="-0.2",
+        symbol="BTCUSDT",
+        position_side="BOTH",
+        margin_mode="isolated",
+    ))
+
+    assert pos.isolated_wallet == pytest.approx(4.8)
+    assert wallet.futures.last_applied_income_entry_id == 7
+
+
 def test_binance_wallet_ignores_provider_display_spot_estimate_when_prices_missing():
     """canonical-wallet-display-boundary: the upstream proto's
     ``spot_estimated_value`` is a DISPLAY projection and MUST NOT feed
@@ -1014,10 +1055,15 @@ def test_binance_parity_wallet_applies_ledger_events_and_local_isolated_state():
         amount = -0.2
         symbol = "BTCUSDT"
         position_side = "BOTH"
+        income_entry_id = 1
+        venue_id = 11
+        asset = "USDT"
+        amount_decimal = "-0.2"
+        margin_mode = "isolated"
 
     wallet.on_ledger_event(Funding())
 
-    assert wallet.get_wallet_balance() == pytest.approx(before_wb - 0.2)
+    assert wallet.get_wallet_balance() == pytest.approx(before_wb)
     assert pos.isolated_wallet == pytest.approx(4.8)
     assert pos.break_even_price == pytest.approx(102.04)
     assert pos.liquidation_price == pytest.approx(52.22)
@@ -1527,6 +1573,11 @@ def test_binance_break_even_cross_funding_without_position_attribution_changes_w
         event_type = "funding_fee"
         amount = -0.2
         symbol = "BTCUSDT"
+        income_entry_id = 1
+        venue_id = 11
+        asset = "USDT"
+        amount_decimal = "-0.2"
+        margin_mode = "cross"
         # no position_side: mirrors cross PORTFOLIO_UPDATE funding behavior
 
     wallet.on_ledger_event(CrossFunding())
@@ -1683,6 +1734,11 @@ def test_hedge_mode_ledger_event_without_position_side_does_not_crash():
         event_type = "funding_fee"
         amount = -0.25
         symbol = "BTCUSDT"
+        income_entry_id = 1
+        venue_id = 11
+        asset = "USDT"
+        amount_decimal = "-0.25"
+        margin_mode = "cross"
         # intentionally no position_side — this is the crash case pre-fix
 
     # Must NOT raise.
@@ -1732,11 +1788,16 @@ def test_hedge_mode_ledger_event_with_explicit_position_side_still_routes():
         amount = -0.1
         symbol = "BTCUSDT"
         position_side = "SHORT"
+        income_entry_id = 1
+        venue_id = 11
+        asset = "USDT"
+        amount_decimal = "-0.1"
+        margin_mode = "isolated"
 
     wallet.on_ledger_event(ShortSideFunding())
 
     # Wallet-level delta applied.
-    assert wallet.get_wallet_balance() == pytest.approx(before_wb - 0.1)
+    assert wallet.get_wallet_balance() == pytest.approx(before_wb)
     # Per-position isolated_wallet decremented (isolated funding_fee routing).
     assert pos.isolated_wallet == pytest.approx(before_iso - 0.1)
 
