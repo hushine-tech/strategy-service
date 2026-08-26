@@ -319,33 +319,24 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 	if oldWorker == nil || oldWorker.Cmd == nil || oldWorker.Cmd.Process == nil {
 		t.Fatalf("old managed worker process is unavailable: %s", oldSessionID)
 	}
-	if err := oldWorker.Cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		t.Fatalf("kill blocked worker before Income ACK: %v", err)
-	}
-	waitForManagedWorkerRemoval(t, workerManager, oldSessionID, oldWorker, 10*time.Second)
-	assertExactPendingIncome(t, agent, oldSessionID, expectedWorkerFrame)
-
 	agent.mu.Lock()
-	generation := agent.generations[oldSessionID]
 	wantStart := proto.Clone(agent.sessionStarts[oldSessionID])
 	agent.mu.Unlock()
-	if generation == nil || wantStart == nil {
-		t.Fatalf("replacement replay state is unavailable: generation=%p start=%v", generation, wantStart != nil)
+	if wantStart == nil {
+		t.Fatal("replacement replay StartSession is unavailable")
 	}
 	workerManager.mu.Lock()
 	workerManager.cfg.WorkerModule = "strategy_service.runtime_income_replay_testworker"
 	workerManager.mu.Unlock()
-	replacementCtx, cancelReplacement := context.WithTimeout(context.Background(), 20*time.Second)
-	replacementWorker, err := workerManager.StartSessionWorker(
-		replacementCtx,
-		oldSessionID,
-		agent.workerEnv(),
-	)
-	cancelReplacement()
-	if err != nil {
-		t.Fatalf("start same-Session replacement Worker: %v", err)
+	if err := oldWorker.Cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Fatalf("kill blocked worker before Income ACK: %v", err)
 	}
-	agent.watchWorkerGeneration(oldSessionID, generation, replacementWorker)
+	select {
+	case <-oldWorker.processExitedSignal():
+	case <-time.After(10 * time.Second):
+		t.Fatalf("blocked worker process did not exit: %s", oldSessionID)
+	}
+	assertExactPendingIncome(t, agent, oldSessionID, expectedWorkerFrame)
 	waitForWorkerFile(t, replayStartPath)
 	waitForWorkerFile(t, replayBatchPath)
 	waitForWorkerFile(t, replayEventsPath)
@@ -527,36 +518,6 @@ func assertManagedWorkerAlive(
 	case <-worker.processExitedSignal():
 		t.Fatalf("managed worker exited unexpectedly: %s", sessionID)
 	default:
-	}
-}
-
-func waitForManagedWorkerRemoval(
-	t *testing.T,
-	manager *WorkerManager,
-	sessionID string,
-	worker *ManagedWorker,
-	timeout time.Duration,
-) {
-	t.Helper()
-	select {
-	case <-worker.processExitedSignal():
-	case <-time.After(timeout):
-		t.Fatalf("managed worker process did not exit: %s", sessionID)
-	}
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			_, registered := manager.Registry().ActiveWorker(sessionID)
-			if manager.findWorker(sessionID) == nil && !registered {
-				return
-			}
-		case <-deadline.C:
-			t.Fatalf("managed worker cleanup did not finish: %s", sessionID)
-		}
 	}
 }
 

@@ -1257,13 +1257,18 @@ type lostRunningResponseScenario struct {
 	unguardedFailedAttempts int
 	generation              *workerGeneration
 	terminalRetryCount      int
+	agent                   *Agent
+	sessionID               string
+	exactStart              *rwv1.StartSession
 }
 
 func runLostRunningResponseScenario(
 	t *testing.T,
 	durableRunningStrategyID int64,
+	suppressRunningProgress ...bool,
 ) lostRunningResponseScenario {
 	t.Helper()
+	progressLost := len(suppressRunningProgress) > 0 && suppressRunningProgress[0]
 	recorder := &strategyStartRecorder{}
 	expectedStrategyID := int64(0)
 	platform := &strategyStartPlatform{
@@ -1275,10 +1280,14 @@ func runLostRunningResponseScenario(
 	sender := &strategyStartWorkerSender{
 		recorder: recorder, prepareOK: true, strategyID: &expectedStrategyID,
 	}
+	startTimeout := time.Second
+	if progressLost {
+		startTimeout = 100 * time.Millisecond
+	}
 	agent := NewAgent(AgentConfig{
 		RuntimeID: "rt-1", UserID: 6, WorkerStarter: starter, WorkerStopper: starter,
 		WorkerSender: sender, PlatformInvoker: platform,
-		StartTimeout: time.Second, RequestTimeout: 50 * time.Millisecond,
+		StartTimeout: startTimeout, RequestTimeout: 50 * time.Millisecond,
 	})
 	starter.agent = agent
 	sender.agent = agent
@@ -1298,6 +1307,9 @@ func runLostRunningResponseScenario(
 					Request: running, TimeoutMs: 50,
 				}}}, func(frame *rwv1.AgentFrame) error {
 				result := frame.GetPlatformCallResult()
+				if progressLost {
+					return nil
+				}
 				if result == nil || !result.GetOk() {
 					return agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
 						Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
@@ -1335,6 +1347,8 @@ func runLostRunningResponseScenario(
 		updates:                 updates,
 		unguardedFailedAttempts: unguardedFailedAttempts,
 		generation:              generation, terminalRetryCount: retryCount,
+		agent: agent, exactStart: starter.finalStart,
+		sessionID: generation.sessionID,
 	}
 }
 
@@ -1352,6 +1366,20 @@ func TestAgentRunStrategyReconcilesAcceptedRunningWithZeroStrategyID(t *testing.
 		t.Fatal("accepted running generation did not remain admitted")
 	}
 	generation.completePlatformCall()
+}
+
+func TestAgentDurableRunningWithLostReplyRetainsExactReplacementBootstrap(t *testing.T) {
+	result := runLostRunningResponseScenario(t, 0, true)
+	if result.frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_RESPONSE ||
+		result.status != "running" || result.generation == nil || result.exactStart == nil {
+		t.Fatalf("lost running reply scenario = %+v", result)
+	}
+	result.agent.mu.Lock()
+	cached := result.agent.sessionStarts[result.sessionID]
+	result.agent.mu.Unlock()
+	if cached == nil || !proto.Equal(cached, result.exactStart) {
+		t.Fatalf("accepted running bootstrap = %+v, want exact %+v", cached, result.exactStart)
+	}
 }
 
 func TestAgentRunStrategyRejectsLostRunningResponseForDifferentStrategyFromExpectedZero(t *testing.T) {
@@ -3999,14 +4027,14 @@ func TestAgentIncomeProcessExitAndDisconnectInterleavingsRetainPendingReplay(t *
 				if err := agent.HandleWorkerDisconnect(identity, errors.New("worker stream closed")); err != nil {
 					return err
 				}
-				agent.handleWorkerGenerationProcessExit(identity.SessionID, generation)
+				agent.handleWorkerGenerationProcessExit(identity, generation, nil)
 				return nil
 			},
 		},
 		{
 			name: "process exit before disconnect",
 			run: func(agent *Agent, identity WorkerIdentity, generation *workerGeneration) error {
-				agent.handleWorkerGenerationProcessExit(identity.SessionID, generation)
+				agent.handleWorkerGenerationProcessExit(identity, generation, nil)
 				return agent.HandleWorkerDisconnect(identity, errors.New("worker stream closed"))
 			},
 		},
@@ -4044,6 +4072,274 @@ func TestAgentIncomeProcessExitAndDisconnectInterleavingsRetainPendingReplay(t *
 				)
 			}
 		})
+	}
+}
+
+func TestAgentOldDisconnectCannotCleanupReplacementAfterIncomeAck(t *testing.T) {
+	const sessionID = "sess-income"
+	agent := NewAgent(AgentConfig{
+		WorkerSender: &incomeWorkerSender{}, PlatformInvoker: &incomeRuntimeSender{},
+	})
+	installIncomeWorkerGeneration(agent, sessionID, 7)
+	if err := agent.HandleRuntimeData(
+		context.Background(),
+		incomeRuntimeFrame(sessionID, 10, "1.000000000000000001"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	generation := agent.generations[sessionID]
+	generation.mu.Lock()
+	generation.connected = true
+	generation.authGeneration = 8
+	generation.bootstrapAuth = 8
+	generation.mu.Unlock()
+	delete(agent.pendingIncome, sessionID)
+	agent.mu.Unlock()
+
+	if err := agent.finishWorkerDisconnect(
+		WorkerIdentity{SessionID: sessionID, Generation: 7},
+		generation,
+		errors.New("late generation-7 disconnect"),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	agent.mu.Lock()
+	current := agent.generations[sessionID]
+	agent.mu.Unlock()
+	generation.mu.Lock()
+	connected := generation.connected
+	closing := generation.closing
+	authGeneration := generation.authGeneration
+	generation.mu.Unlock()
+	if current != generation || !connected || closing || authGeneration != 8 {
+		t.Fatalf(
+			"late disconnect changed replacement: current=%p want=%p connected=%v closing=%v auth=%d",
+			current,
+			generation,
+			connected,
+			closing,
+			authGeneration,
+		)
+	}
+}
+
+func TestAgentOldProcessExitSnapshotCannotCleanupReplacementAfterIncomeAck(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	const sessionID = "sess-income"
+	agent := NewAgent(AgentConfig{
+		WorkerSender: &incomeWorkerSender{}, PlatformInvoker: &incomeRuntimeSender{},
+	})
+	installIncomeWorkerGeneration(agent, sessionID, 7)
+	if err := agent.HandleRuntimeData(
+		context.Background(),
+		incomeRuntimeFrame(sessionID, 10, "1.000000000000000001"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	generation := agent.generations[sessionID]
+	generation.mu.Lock()
+	generation.connected = false
+	generation.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		agent.handleWorkerGenerationProcessExit(
+			WorkerIdentity{SessionID: sessionID, Generation: 7},
+			generation,
+			nil,
+		)
+		close(done)
+	}()
+	runtime.Gosched()
+
+	generation.mu.Lock()
+	generation.connected = true
+	generation.authGeneration = 8
+	generation.bootstrapAuth = 8
+	generation.mu.Unlock()
+	delete(agent.pendingIncome, sessionID)
+	agent.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("old process-exit cleanup did not complete")
+	}
+
+	agent.mu.Lock()
+	current := agent.generations[sessionID]
+	agent.mu.Unlock()
+	generation.mu.Lock()
+	connected := generation.connected
+	closing := generation.closing
+	authGeneration := generation.authGeneration
+	generation.mu.Unlock()
+	if current != generation || !connected || closing || authGeneration != 8 {
+		t.Fatalf(
+			"old process exit changed replacement: current=%p want=%p connected=%v closing=%v auth=%d",
+			current,
+			generation,
+			connected,
+			closing,
+			authGeneration,
+		)
+	}
+}
+
+func TestAgentManagedCrashWithPendingIncomeHasOneSameSessionRecoveryOwner(t *testing.T) {
+	const sessionID = "sess-income"
+	sender := &incomeWorkerSender{}
+	replayed := make(chan WorkerIdentity, 1)
+	sender.onSend = func(identity WorkerIdentity, frame *rwv1.AgentFrame) {
+		if identity.Generation == 8 && frame.GetIncomeBatch() != nil {
+			select {
+			case replayed <- identity:
+			default:
+			}
+		}
+	}
+	starter := newIncomeRecoveryStarter(false, true)
+	agent := NewAgent(AgentConfig{
+		WorkerStarter:   starter,
+		WorkerStopper:   starter,
+		WorkerSender:    sender,
+		PlatformInvoker: &incomeRuntimeSender{},
+		StartTimeout:    200 * time.Millisecond,
+		RequestTimeout:  100 * time.Millisecond,
+	})
+	starter.agent = agent
+	starter.sender = sender
+	installIncomeWorkerGeneration(agent, sessionID, 7)
+	if err := agent.HandleRuntimeData(
+		context.Background(),
+		incomeRuntimeFrame(sessionID, 10, "1.000000000000000001"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	generation := agent.generations[sessionID]
+	wantStart := proto.Clone(agent.sessionStarts[sessionID]).(*rwv1.StartSession)
+	generation.mu.Lock()
+	generation.connected = false
+	generation.mu.Unlock()
+	agent.mu.Unlock()
+	oldWorker := &ManagedWorker{
+		SessionID: sessionID,
+		Spec:      WorkerStartSpec{SessionID: sessionID, Generation: 7},
+	}
+	identity7 := WorkerIdentity{SessionID: sessionID, Generation: 7}
+	t.Cleanup(starter.release)
+
+	agent.handleWorkerGenerationProcessExit(identity7, generation, oldWorker)
+	agent.handleWorkerGenerationProcessExit(identity7, generation, oldWorker)
+	select {
+	case startedSessionID := <-starter.started:
+		if startedSessionID != sessionID {
+			t.Fatalf("recovery Session = %q, want %q", startedSessionID, sessionID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("managed crash did not start a same-Session Income recovery attempt")
+	}
+	if attempts, maximum := starter.snapshotAttempts(); attempts != 1 || maximum != 1 {
+		t.Fatalf("concurrent recovery attempts=%d max=%d, want 1/1", attempts, maximum)
+	}
+	starter.release()
+	select {
+	case identity := <-replayed:
+		if identity.SessionID != sessionID || identity.Generation != 8 {
+			t.Fatalf("replacement replay identity = %+v", identity)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("same-Session replacement did not receive retained Income")
+	}
+	frames := sender.snapshot()
+	if len(frames) != 3 || frames[1].generation != 8 ||
+		!proto.Equal(frames[1].frame.GetStartSession(), wantStart) ||
+		frames[2].generation != 8 || !proto.Equal(frames[0].frame, frames[2].frame) {
+		t.Fatalf("automatic replacement bootstrap/replay = %+v", frames)
+	}
+}
+
+func TestAgentPendingIncomeRecoveryHandshakeIsBoundedAndNeverAcksOrDrops(t *testing.T) {
+	const sessionID = "sess-income"
+	sender := &incomeWorkerSender{}
+	runtimeSender := &incomeRuntimeSender{}
+	starter := newIncomeRecoveryStarter(true, false)
+	agent := NewAgent(AgentConfig{
+		WorkerStarter:   starter,
+		WorkerStopper:   starter,
+		WorkerSender:    sender,
+		PlatformInvoker: runtimeSender,
+		StartTimeout:    20 * time.Millisecond,
+		RequestTimeout:  20 * time.Millisecond,
+	})
+	starter.agent = agent
+	starter.sender = sender
+	installIncomeWorkerGeneration(agent, sessionID, 7)
+	frame := incomeRuntimeFrame(sessionID, 10, "1.000000000000000001")
+	if err := agent.HandleRuntimeData(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	generation := agent.generations[sessionID]
+	generation.mu.Lock()
+	generation.connected = false
+	generation.mu.Unlock()
+	agent.mu.Unlock()
+	agent.handleWorkerGenerationProcessExit(
+		WorkerIdentity{SessionID: sessionID, Generation: 7},
+		generation,
+		&ManagedWorker{SessionID: sessionID, Spec: WorkerStartSpec{
+			SessionID: sessionID, Generation: 7,
+		}},
+	)
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		select {
+		case recoveredSessionID := <-starter.started:
+			if recoveredSessionID != sessionID {
+				t.Fatalf("attempt %d Session = %q", attempt, recoveredSessionID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for recovery attempt %d", attempt)
+		}
+	}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		agent.mu.Lock()
+		pending := agent.pendingIncome[sessionID]
+		finished := pending != nil && !pending.recoveryRunning &&
+			pending.recoveryAttempts == 3 && pending.recoveryErr != ""
+		agent.mu.Unlock()
+		if finished {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatal("bounded Income recovery owner did not finish")
+		}
+	}
+	if attempts, maximum := starter.snapshotAttempts(); attempts != 3 || maximum != 1 {
+		t.Fatalf("recovery attempts=%d max concurrent=%d, want 3/1", attempts, maximum)
+	}
+	if stops := starter.snapshotStops(); stops != 3 {
+		t.Fatalf("timed-out replacement stops = %d, want 3", stops)
+	}
+	agent.mu.Lock()
+	pending := agent.pendingIncome[sessionID]
+	agent.mu.Unlock()
+	if pending == nil || len(runtimeSender.snapshot()) != 0 {
+		t.Fatalf("exhausted recovery pending=%v Runtime ACKs=%+v", pending != nil, runtimeSender.snapshot())
+	}
+	if err := agent.HandleRuntimeData(context.Background(), proto.Clone(frame).(*cpv1.RuntimeFrame)); err == nil || !strings.Contains(err.Error(), "recovery") {
+		t.Fatalf("exhausted recovery backpressure error = %v", err)
 	}
 }
 
@@ -7128,6 +7424,128 @@ type capturedIncomeWorkerFrame struct {
 	sessionID  string
 	generation uint64
 	frame      *rwv1.AgentFrame
+}
+
+type incomeRecoveryStarter struct {
+	mu            sync.Mutex
+	agent         *Agent
+	sender        *incomeWorkerSender
+	started       chan string
+	releaseStart  chan struct{}
+	releaseOnce   sync.Once
+	suppressHello bool
+	attempts      int
+	concurrent    int
+	maximum       int
+	stops         int
+	activeExit    chan struct{}
+	activeExitOne *sync.Once
+}
+
+func newIncomeRecoveryStarter(
+	suppressHello bool,
+	blockStart bool,
+) *incomeRecoveryStarter {
+	starter := &incomeRecoveryStarter{
+		started:       make(chan string, 8),
+		releaseStart:  make(chan struct{}),
+		suppressHello: suppressHello,
+	}
+	if !blockStart {
+		starter.release()
+	}
+	return starter
+}
+
+func (s *incomeRecoveryStarter) release() {
+	s.releaseOnce.Do(func() { close(s.releaseStart) })
+}
+
+func (s *incomeRecoveryStarter) StartSessionWorker(
+	ctx context.Context,
+	sessionID string,
+	_ []string,
+) (*ManagedWorker, error) {
+	s.mu.Lock()
+	s.attempts++
+	attempt := s.attempts
+	s.concurrent++
+	if s.concurrent > s.maximum {
+		s.maximum = s.concurrent
+	}
+	release := s.releaseStart
+	s.mu.Unlock()
+	s.started <- sessionID
+	select {
+	case <-release:
+	case <-ctx.Done():
+		s.mu.Lock()
+		s.concurrent--
+		s.mu.Unlock()
+		return nil, ctx.Err()
+	}
+
+	exited := make(chan struct{})
+	exitOnce := &sync.Once{}
+	identity := WorkerIdentity{SessionID: sessionID, Generation: uint64(7 + attempt)}
+	worker := &ManagedWorker{
+		SessionID: sessionID,
+		Spec: WorkerStartSpec{
+			SessionID:  sessionID,
+			Generation: identity.Generation,
+		},
+		processExited: exited,
+	}
+	s.mu.Lock()
+	s.concurrent--
+	s.activeExit = exited
+	s.activeExitOne = exitOnce
+	s.mu.Unlock()
+	if !s.suppressHello {
+		go func() {
+			_ = s.agent.HandleAuthenticatedWorkerFrame(
+				context.Background(),
+				identity,
+				&rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_Hello{
+					Hello: &rwv1.WorkerHello{
+						SessionId: sessionID, ProtocolVersion: RuntimeWorkerProtocolVersion,
+					},
+				}},
+				func(frame *rwv1.AgentFrame) error {
+					return s.sender.SendToWorkerGeneration(identity, frame)
+				},
+			)
+		}()
+	}
+	return worker, nil
+}
+
+func (s *incomeRecoveryStarter) StopSessionWorker(
+	_ context.Context,
+	_ string,
+	_ time.Duration,
+) error {
+	s.mu.Lock()
+	s.stops++
+	exited := s.activeExit
+	exitOnce := s.activeExitOne
+	s.mu.Unlock()
+	if exited != nil && exitOnce != nil {
+		exitOnce.Do(func() { close(exited) })
+	}
+	return nil
+}
+
+func (s *incomeRecoveryStarter) snapshotAttempts() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attempts, s.maximum
+}
+
+func (s *incomeRecoveryStarter) snapshotStops() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stops
 }
 
 type incomeWorkerSender struct {

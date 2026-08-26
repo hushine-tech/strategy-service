@@ -125,7 +125,16 @@ type pendingIncomeBatch struct {
 	deliveringGeneration uint64
 	deliveredGeneration  uint64
 	ackingGeneration     uint64
+	recoveryRunning      bool
+	recoveryAttempts     int
+	recoveryErr          string
 }
+
+const (
+	incomeRecoveryMaxAttempts = 3
+	incomeRecoveryRetryDelay  = 100 * time.Millisecond
+	incomeRecoveryPollDelay   = 10 * time.Millisecond
+)
 
 type restartSessionCall struct {
 	done   chan struct{}
@@ -412,6 +421,22 @@ func (g *workerGeneration) markConnected() bool {
 	return true
 }
 
+func (g *workerGeneration) markDisconnected(authGeneration uint64) bool {
+	if g == nil || authGeneration == 0 {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.authGeneration == 0 {
+		g.authGeneration = authGeneration
+	}
+	if g.authGeneration != authGeneration {
+		return false
+	}
+	g.connected = false
+	return true
+}
+
 type pendingSessionStart struct {
 	started  chan string
 	failed   chan *RuntimeRequestError
@@ -695,6 +720,7 @@ func (a *Agent) handleRunStrategy(
 		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, "runtime request cancelled")
 		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
 			a.rememberRunRequest(sessionID, req.GetRequest())
+			a.rememberSessionStart(sessionID, start)
 			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
 		}
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Cancelled", ctx.Err().Error())
@@ -702,6 +728,7 @@ func (a *Agent) handleRunStrategy(
 		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, "session worker start timed out")
 		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
 			a.rememberRunRequest(sessionID, req.GetRequest())
+			a.rememberSessionStart(sessionID, start)
 			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
 		}
 		return runtimeErrorFrame(frame.GetCorrelationId(), "DeadlineExceeded", "session worker did not report started")
@@ -716,6 +743,7 @@ func (a *Agent) handleRunStrategy(
 			failureErr := a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
 			if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
 				a.rememberRunRequest(sessionID, req.GetRequest())
+				a.rememberSessionStart(sessionID, start)
 				return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
 			}
 			return runtimeRequestErrorFrame(frame.GetCorrelationId(), requestErr)
@@ -724,6 +752,7 @@ func (a *Agent) handleRunStrategy(
 		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, "session worker exited before reporting started")
 		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
 			a.rememberRunRequest(sessionID, req.GetRequest())
+			a.rememberSessionStart(sessionID, start)
 			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
 		}
 		return runtimeErrorFrame(frame.GetCorrelationId(), "Internal", managedWorkerExitError("reporting started", worker.processError()).Error())
@@ -736,6 +765,7 @@ func (a *Agent) handleRunStrategy(
 		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
 		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
 			a.rememberRunRequest(sessionID, req.GetRequest())
+			a.rememberSessionStart(sessionID, start)
 			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(sessionID, &commitResponse))
 		}
 		return runtimeRequestErrorFrame(frame.GetCorrelationId(), requestErr)
@@ -1379,29 +1409,68 @@ func (a *Agent) watchWorkerGeneration(
 	if worker == nil || worker.processExitedSignal() == nil {
 		return
 	}
+	authGeneration := worker.Spec.Generation
+	if authGeneration == 0 {
+		generation.mu.Lock()
+		authGeneration = generation.authGeneration
+		generation.mu.Unlock()
+	}
+	identity := WorkerIdentity{SessionID: sessionID, Generation: authGeneration}
 	go func() {
 		<-worker.processExitedSignal()
-		a.handleWorkerGenerationProcessExit(sessionID, generation)
+		a.handleWorkerGenerationProcessExit(identity, generation, worker)
 	}()
 }
 
 func (a *Agent) handleWorkerGenerationProcessExit(
-	sessionID string,
+	identity WorkerIdentity,
 	generation *workerGeneration,
+	worker *ManagedWorker,
 ) {
-	generation.mu.Lock()
-	connected := generation.connected
-	generation.mu.Unlock()
-	if connected {
-		return
-	}
+	sessionID := strings.TrimSpace(identity.SessionID)
 	a.mu.Lock()
-	retainedIncome := a.pendingIncome[sessionID] != nil
-	a.mu.Unlock()
-	if retainedIncome {
+	if a.generations[sessionID] != generation {
+		a.mu.Unlock()
 		return
 	}
-	_ = a.cleanupWorkerGeneration(sessionID, generation, "session worker process exited")
+	generation.mu.Lock()
+	if generation.authGeneration != identity.Generation {
+		generation.mu.Unlock()
+		a.mu.Unlock()
+		return
+	}
+	generation.connected = false
+	generation.mu.Unlock()
+	pending := a.pendingIncome[sessionID]
+	if pending != nil {
+		if pending.recoveryRunning || a.shuttingDown {
+			a.mu.Unlock()
+			return
+		}
+		if worker == nil || a.cfg.WorkerStarter == nil || a.cfg.WorkerStopper == nil {
+			pending.recoveryErr = "Income recovery is unavailable: managed Worker lifecycle is not configured"
+			a.mu.Unlock()
+			return
+		}
+		if pending.recoveryAttempts >= incomeRecoveryMaxAttempts {
+			pending.recoveryErr = fmt.Sprintf(
+				"Income recovery exhausted after %d attempts",
+				incomeRecoveryMaxAttempts,
+			)
+			a.mu.Unlock()
+			return
+		}
+		pending.recoveryRunning = true
+		a.mu.Unlock()
+		go a.recoverPendingIncomeWorker(sessionID, generation, pending)
+		return
+	}
+	a.mu.Unlock()
+	_ = a.cleanupDisconnectedWorkerGeneration(
+		identity,
+		generation,
+		"session worker process exited",
+	)
 }
 
 func (a *Agent) reserveWorkerGeneration() (
@@ -1918,25 +1987,47 @@ func (a *Agent) HandleWorkerDisconnect(identity WorkerIdentity, cause error) err
 	if generation == nil {
 		return nil
 	}
-	if !generation.bindAuthenticatedGeneration(identity.Generation) {
+	if !generation.markDisconnected(identity.Generation) {
 		return nil
 	}
-	generation.mu.Lock()
-	generation.connected = false
-	generation.mu.Unlock()
-	a.mu.Lock()
-	retainedIncome := a.pendingIncome[sessionID] != nil
-	a.mu.Unlock()
-	if retainedIncome {
-		// Keep the Session generation available for an authenticated replacement
-		// Worker. The retained exact Income batch is the handoff boundary until
-		// WorkerDataAck proves durable progress.
-		return nil
-	}
+	return a.finishWorkerDisconnect(identity, generation, cause)
+}
+
+func (a *Agent) finishWorkerDisconnect(
+	identity WorkerIdentity,
+	generation *workerGeneration,
+	cause error,
+) error {
 	reason := "session worker disconnected"
 	if cause == nil {
 		reason = "session worker stream closed"
 	}
+	return a.cleanupDisconnectedWorkerGeneration(identity, generation, reason)
+}
+
+func (a *Agent) cleanupDisconnectedWorkerGeneration(
+	identity WorkerIdentity,
+	generation *workerGeneration,
+	reason string,
+) error {
+	sessionID := strings.TrimSpace(identity.SessionID)
+	a.mu.Lock()
+	if a.generations[sessionID] != generation || a.pendingIncome[sessionID] != nil {
+		a.mu.Unlock()
+		return nil
+	}
+	generation.mu.Lock()
+	if generation.authGeneration != identity.Generation || generation.connected {
+		generation.mu.Unlock()
+		a.mu.Unlock()
+		return nil
+	}
+	generation.closing = true
+	if generation.inFlight == 0 {
+		generation.drainOnce.Do(func() { close(generation.drained) })
+	}
+	generation.mu.Unlock()
+	a.mu.Unlock()
 	return a.cleanupWorkerGeneration(sessionID, generation, reason)
 }
 
@@ -2957,6 +3048,10 @@ func (a *Agent) handleRuntimeIncome(sessionID string, frame *rwv1.AgentFrame) er
 	} else if !proto.Equal(pending.frame, frame) {
 		a.mu.Unlock()
 		return fmt.Errorf("Income batch is already pending for Session %s", sessionID)
+	} else if pending.recoveryErr != "" && !pending.recoveryRunning {
+		recoveryErr := pending.recoveryErr
+		a.mu.Unlock()
+		return fmt.Errorf("Income recovery backpressure for Session %s: %s", sessionID, recoveryErr)
 	}
 	identity, ok := a.currentIncomeWorkerIdentityLocked(sessionID)
 	if !ok {
@@ -3104,6 +3199,202 @@ func (a *Agent) rebindDisconnectedIncomeWorker(
 	}
 	generation.authGeneration = authGeneration
 	return true
+}
+
+func (a *Agent) recoverPendingIncomeWorker(
+	sessionID string,
+	generation *workerGeneration,
+	pending *pendingIncomeBatch,
+) {
+	for {
+		a.mu.Lock()
+		if a.generations[sessionID] != generation ||
+			a.pendingIncome[sessionID] != pending || !pending.recoveryRunning ||
+			a.shuttingDown {
+			a.mu.Unlock()
+			return
+		}
+		if pending.recoveryAttempts >= incomeRecoveryMaxAttempts {
+			pending.recoveryRunning = false
+			pending.recoveryErr = fmt.Sprintf(
+				"Income recovery exhausted after %d attempts",
+				incomeRecoveryMaxAttempts,
+			)
+			a.mu.Unlock()
+			return
+		}
+		pending.recoveryAttempts++
+		attempt := pending.recoveryAttempts
+		a.mu.Unlock()
+
+		startTimeout := a.cfg.StartTimeout
+		if startTimeout <= 0 {
+			startTimeout = 30 * time.Second
+		}
+		startCtx, cancelStart := context.WithTimeout(
+			context.Background(),
+			startTimeout,
+		)
+		worker, err := a.startPendingIncomeWorker(startCtx, sessionID)
+		cancelStart()
+		if err == nil {
+			if worker == nil || worker.Spec.Generation == 0 ||
+				strings.TrimSpace(worker.Spec.SessionID) != sessionID {
+				err = fmt.Errorf("replacement Worker returned an invalid generation identity")
+			} else {
+				a.watchWorkerGeneration(sessionID, generation, worker)
+				err = a.waitPendingIncomeRecoveryHandshake(
+					sessionID,
+					generation,
+					pending,
+					worker,
+					startTimeout,
+				)
+			}
+		}
+		if err == nil {
+			a.mu.Lock()
+			if a.pendingIncome[sessionID] == nil {
+				a.mu.Unlock()
+				return
+			}
+			current := a.generations[sessionID] == generation &&
+				a.pendingIncome[sessionID] == pending && pending.recoveryRunning
+			if current {
+				generation.mu.Lock()
+				current = generation.connected && !generation.closing &&
+					generation.authGeneration == worker.Spec.Generation &&
+					generation.bootstrapAuth == worker.Spec.Generation
+				generation.mu.Unlock()
+				current = current && pending.deliveredGeneration == worker.Spec.Generation &&
+					pending.deliveringGeneration == 0
+			}
+			if current {
+				pending.recoveryRunning = false
+				pending.recoveryErr = ""
+				a.mu.Unlock()
+				return
+			}
+			a.mu.Unlock()
+			err = fmt.Errorf("replacement Worker exited during Income replay handoff")
+		}
+
+		stopErr := error(nil)
+		if worker != nil {
+			stopErr = a.stopPendingIncomeRecoveryWorker(sessionID)
+		}
+		failure := errors.Join(err, stopErr)
+		a.mu.Lock()
+		if a.generations[sessionID] != generation || a.pendingIncome[sessionID] != pending {
+			a.mu.Unlock()
+			return
+		}
+		pending.recoveryErr = fmt.Sprintf(
+			"Income recovery attempt %d/%d failed: %v",
+			attempt,
+			incomeRecoveryMaxAttempts,
+			failure,
+		)
+		if stopErr != nil || attempt >= incomeRecoveryMaxAttempts || a.shuttingDown {
+			pending.recoveryRunning = false
+			a.mu.Unlock()
+			return
+		}
+		a.mu.Unlock()
+		time.Sleep(incomeRecoveryRetryDelay)
+	}
+}
+
+func (a *Agent) startPendingIncomeWorker(
+	ctx context.Context,
+	sessionID string,
+) (*ManagedWorker, error) {
+	for {
+		worker, err := a.cfg.WorkerStarter.StartSessionWorker(
+			ctx,
+			sessionID,
+			a.workerEnv(),
+		)
+		if !errors.Is(err, ErrWorkerAlreadyExists) {
+			return worker, err
+		}
+		timer := time.NewTimer(incomeRecoveryPollDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("wait for crashed Worker cleanup: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (a *Agent) waitPendingIncomeRecoveryHandshake(
+	sessionID string,
+	generation *workerGeneration,
+	pending *pendingIncomeBatch,
+	worker *ManagedWorker,
+	timeout time.Duration,
+) error {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(incomeRecoveryPollDelay)
+	defer ticker.Stop()
+	exited := worker.processExitedSignal()
+	for {
+		if exited != nil {
+			select {
+			case <-exited:
+				return fmt.Errorf("replacement Worker exited before Income replay handshake")
+			default:
+			}
+		}
+		a.mu.Lock()
+		currentGeneration := a.generations[sessionID]
+		currentPending := a.pendingIncome[sessionID]
+		if currentPending == nil {
+			a.mu.Unlock()
+			return nil
+		}
+		if currentGeneration != generation || currentPending != pending ||
+			!pending.recoveryRunning {
+			a.mu.Unlock()
+			return fmt.Errorf("Income recovery state changed during replacement handshake")
+		}
+		generation.mu.Lock()
+		currentWorker := generation.authGeneration == worker.Spec.Generation &&
+			generation.connected && !generation.closing &&
+			generation.bootstrapAuth == worker.Spec.Generation
+		generation.mu.Unlock()
+		replayed := pending.deliveredGeneration == worker.Spec.Generation &&
+			pending.deliveringGeneration == 0
+		a.mu.Unlock()
+		if currentWorker && replayed {
+			return nil
+		}
+		select {
+		case <-timer.C:
+			return fmt.Errorf(
+				"replacement Worker Income handshake timed out after %s",
+				timeout,
+			)
+		case <-ticker.C:
+		case <-exited:
+			return fmt.Errorf("replacement Worker exited before Income replay handshake")
+		}
+	}
+}
+
+func (a *Agent) stopPendingIncomeRecoveryWorker(sessionID string) error {
+	timeout := a.cfg.RequestTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return a.cfg.WorkerStopper.StopSessionWorker(ctx, sessionID, timeout)
 }
 
 func (a *Agent) invokeWorkerPlatformCall(ctx context.Context, call *rwv1.PlatformCall) *rwv1.PlatformCallResult {
