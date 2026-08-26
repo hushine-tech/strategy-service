@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
 from strategy_service.inputs import _normalize_exchange, _normalize_market
+from strategy_service.funding_position_tracker import FundingPositionLegFact
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.canonical import SpotSymbolFilter, SpotSymbolMetadata
@@ -82,6 +84,50 @@ def _build_binance_wallet_from_venue_snapshot(
         runtime.futures.venue_id = _venue_id(venue)
         return runtime
     raise ValueError(f"unsupported portfolio wallet market for binance: {market}")
+
+
+def _exact_funding_legs_from_venue(venue: Any) -> list[FundingPositionLegFact]:
+    venue_id = _venue_id(venue)
+    wallet = _validated_full_wallet_for_market(venue, "perpetual_futures")
+    if wallet is None:
+        raise ValueError("futures VenueSnapshot requires full canonical wallet")
+    futures = getattr(wallet, "futures", None)
+    position_mode = str(getattr(futures, "position_mode", "") or "").strip().lower()
+    if position_mode not in {"one_way", "hedge"}:
+        raise ValueError("canonical Futures position_mode is missing or invalid")
+    facts: list[FundingPositionLegFact] = []
+    identities: set[tuple[str, str]] = set()
+    for position in getattr(futures, "positions", ()) or ():
+        position_venue_id = int(getattr(position, "venue_id", 0) or 0)
+        if position_venue_id > 0 and position_venue_id != venue_id:
+            raise ValueError("Futures position venue_id conflicts with VenueSnapshot")
+        symbol = str(getattr(position, "symbol", "") or "").strip().upper()
+        side = str(getattr(position, "position_side", "") or "").strip().upper()
+        margin = str(getattr(position, "margin_mode", "") or "").strip().lower()
+        if not symbol or margin not in {"cross", "isolated"}:
+            raise ValueError("canonical Futures position route or margin_mode is invalid")
+        if position_mode == "one_way":
+            if side != "BOTH":
+                raise ValueError("one-way canonical Futures position must use BOTH")
+        elif side not in {"LONG", "SHORT"}:
+            raise ValueError("hedge canonical Futures position must use LONG or SHORT")
+        identity = (symbol, side)
+        if identity in identities:
+            raise ValueError("canonical Futures positions contain a duplicate leg")
+        identities.add(identity)
+        raw_quantity = getattr(position, "signed_qty_decimal", "")
+        if not isinstance(raw_quantity, str) or not raw_quantity:
+            raise ValueError("canonical Futures position signed_qty_decimal is required")
+        try:
+            quantity = Decimal(raw_quantity)
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("canonical Futures position signed_qty_decimal is invalid") from exc
+        if not quantity.is_finite():
+            raise ValueError("canonical Futures position signed_qty_decimal is invalid")
+        if quantity == 0:
+            continue
+        facts.append(FundingPositionLegFact(symbol, side, margin, raw_quantity))
+    return facts
 
 
 def _spot_metadata_from_proto(raw: Any, *, venue_id: int) -> SpotSymbolMetadata:
@@ -227,6 +273,7 @@ def build_portfolio_wallet_from_snapshot(
             raise ValueError(f"unsupported simulated target market: {route[1]}")
         simulated_futures_targets.setdefault(route, []).append(target)
     wallets: dict[tuple[str, str, int], Any] = {}
+    exact_funding_legs: dict[int, list[FundingPositionLegFact]] = {}
     for venue in getattr(snapshot, "venues", []) or []:
         exchange, market = _venue_route(venue)
         if (exchange, market) not in normalized_allowed_routes:
@@ -240,6 +287,8 @@ def build_portfolio_wallet_from_snapshot(
             venue,
             market=market,
         )
+        if market == "perpetual_futures":
+            exact_funding_legs[venue_id] = _exact_funding_legs_from_venue(venue)
         install_simulated_target_leverages(
             runtime,
             simulated_futures_targets.get((exchange, market), ()),
@@ -248,11 +297,14 @@ def build_portfolio_wallet_from_snapshot(
         )
         wallets[(exchange, market, venue_id)] = runtime
 
-    return PortfolioWalletRuntime(
+    portfolio = PortfolioWalletRuntime(
         portfolio_id=int(getattr(snapshot, "portfolio_id", 0) or 0),
         allowed_routes=normalized_allowed_routes,
         wallets=wallets,
     )
+    for venue_id, facts in sorted(exact_funding_legs.items()):
+        portfolio.funding_position_tracker.replace_venue_snapshot(venue_id, facts)
+    return portfolio
 
 
 def apply_venue_wallet_snapshot(
@@ -279,6 +331,11 @@ def apply_venue_wallet_snapshot(
             f"want {int(expected_environment)}"
         )
     existing_cursor = int(getattr(getattr(runtime.wallets[key], "futures", None), "last_applied_income_entry_id", 0) or 0)
+    funding_legs = (
+        _exact_funding_legs_from_venue(venue)
+        if market == "perpetual_futures"
+        else None
+    )
     replacement = _build_binance_wallet_from_venue_snapshot(venue, market=market)
     if market == "perpetual_futures":
         replacement.futures.last_applied_income_entry_id = max(
@@ -286,6 +343,8 @@ def apply_venue_wallet_snapshot(
             int(getattr(replacement.futures, "last_applied_income_entry_id", 0) or 0),
         )
     runtime.wallets[key] = replacement
+    if funding_legs is not None:
+        runtime.funding_position_tracker.replace_venue_snapshot(venue_id, funding_legs)
     return key
 
 

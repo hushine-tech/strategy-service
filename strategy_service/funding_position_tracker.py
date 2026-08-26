@@ -88,6 +88,31 @@ class FundingPositionTracker:
         self._deltas[identity] = _LifecycleDelta(key, signed_qty, time_key, identity)
 
     def restore(self, venue_id: int, facts: Iterable[FundingPositionLegFact]) -> None:
+        restored = self._validated_snapshot(venue_id, facts)
+        self._restored_legs.update(restored)
+
+    def replace_venue_snapshot(
+        self, venue_id: int, facts: Iterable[FundingPositionLegFact]
+    ) -> None:
+        """Atomically replace one Venue's authoritative exact baseline."""
+        target_venue = int(venue_id)
+        replacement = self._validated_snapshot(target_venue, facts)
+        self._restored_legs = {
+            key: quantity
+            for key, quantity in self._restored_legs.items()
+            if key[0] != target_venue
+        }
+        self._restored_legs.update(replacement)
+        self._deltas = {
+            identity: delta
+            for identity, delta in self._deltas.items()
+            if delta.key[0] != target_venue
+        }
+
+    @staticmethod
+    def _validated_snapshot(
+        venue_id: int, facts: Iterable[FundingPositionLegFact]
+    ) -> dict[tuple[int, str, str, str], Decimal]:
         if int(venue_id) <= 0:
             raise ValueError("venue_id is required")
         restored: dict[tuple[int, str, str, str], Decimal] = {}
@@ -103,8 +128,11 @@ class FundingPositionTracker:
                 raise ValueError("FundingPositionLegFact.signed_qty_decimal is invalid") from exc
             if not qty.is_finite():
                 raise ValueError("FundingPositionLegFact.signed_qty_decimal is invalid")
-            restored[(int(venue_id), symbol, side, margin)] = qty
-        self._restored_legs.update(restored)
+            key = (int(venue_id), symbol, side, margin)
+            if key in restored:
+                raise ValueError("FundingPositionLegFact contains a duplicate leg")
+            restored[key] = qty
+        return restored
 
     def legs_for(
         self,

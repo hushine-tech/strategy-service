@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import math
@@ -33,6 +35,14 @@ class SimulatedFuturesRiskMetadata(CanonicalFuturesRiskMetadata):
 
 
 _QTY_EPS = 1e-12
+
+
+@dataclass(frozen=True, slots=True)
+class _FundingAllocation:
+    symbol: str
+    position_side: str
+    margin_mode: str
+    amount: Decimal
 _ACTIVE_ORDER_STATUSES = {"NEW", "PARTIALLY_FILLED"}
 _TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELED", "EXPIRED"}
 _SUPPORTED_ORDER_STATUSES = _ACTIVE_ORDER_STATUSES | _TERMINAL_ORDER_STATUSES
@@ -907,73 +917,199 @@ class BinanceFuturesBook:
         if event_type not in {"funding", "funding_fee"}:
             raise ValueError("only Funding ledger events are supported")
 
-        venue_id = int(getattr(event, "venue_id", 0) or 0)
-        if venue_id <= 0 or (self.venue_id > 0 and venue_id != self.venue_id):
-            raise ValueError("Funding ledger event venue does not match wallet")
-        income_entry_id = int(getattr(event, "income_entry_id", 0) or 0)
-        if income_entry_id <= 0:
-            raise ValueError("Funding ledger event income_entry_id is required")
+        income_entry_id, venue_id = self._validated_income_identity(event)
         if income_entry_id <= self.last_applied_income_entry_id:
             return
-        asset = str(getattr(event, "asset", "") or "").strip().upper()
-        if asset != "USDT":
-            raise ValueError("Funding ledger event asset must be USDT")
-        raw_amount = getattr(event, "amount_decimal", "")
-        if not isinstance(raw_amount, str) or not raw_amount:
-            raise ValueError("Funding ledger event amount_decimal is required")
-        try:
-            exact_amount = Decimal(raw_amount)
-        except (InvalidOperation, ValueError) as exc:
-            raise ValueError("Funding ledger event amount_decimal is invalid") from exc
-        if not exact_amount.is_finite():
-            raise ValueError("Funding ledger event amount_decimal is invalid")
+        _, _, asset, exact_amount = self._validated_income_header(
+            event, amount_field="amount_decimal"
+        )
         margin_mode = str(getattr(event, "margin_mode", "") or "").strip().lower()
         if margin_mode not in {"cross", "isolated"}:
             raise ValueError("Funding ledger event margin_mode is required")
-
-        amount = float(exact_amount)
-        symbol = str(getattr(event, "symbol", "") or "").strip()
+        symbol = str(getattr(event, "symbol", "") or "").strip().upper()
         position_side = str(getattr(event, "position_side", "") or "").strip().upper()
-        pos = None
-        if margin_mode == "isolated":
-            if not symbol:
-                raise ValueError("isolated Funding ledger event symbol is required")
-            # In hedge mode the per-position update requires an explicit
-            # position_side. Portfolio-level ledger events (e.g. a funding_fee
-            # or transfer that aren't bound to LONG vs SHORT) legitimately
-            # arrive without it. Apply only the wallet-level delta (already
-            # added to wallet_balance above) and skip per-position work,
-            # rather than raising inside _position_key_from_order.
-            if self.position_mode == "hedge" and position_side not in {"LONG", "SHORT"}:
-                raise ValueError("isolated hedge Funding requires position_side")
-            direction_key = self._position_key_from_order(
-                norm_symbol(symbol), position_side,
-                "BUY" if amount >= 0.0 else "SELL",
-            ) if self.position_mode == "hedge" else 0
-            key = (norm_symbol(symbol), int(direction_key))
-            pos = self.positions.get(key)
-            if pos is None and self.position_mode != "hedge":
-                pos = self.positions.get((norm_symbol(symbol), 0))
-            if pos is None or pos.margin_mode != "isolated":
-                raise ValueError("isolated Funding ledger event has no matching isolated leg")
+        self._apply_funding_allocations(
+            income_entry_id=income_entry_id,
+            venue_id=venue_id,
+            asset=asset,
+            aggregate_amount=exact_amount,
+            allocations=[_FundingAllocation(symbol, position_side, margin_mode, exact_amount)],
+            require_cross_position=False,
+        )
 
-        prior_wallet_balance = float(self.wallet_balance)
-        prior_isolated_wallet = float(pos.isolated_wallet or 0.0) if pos is not None else None
-        prior_carry_cost = float(pos.carry_cost or 0.0) if pos is not None else None
+    def apply_funding_income_entry(self, entry: object) -> None:
+        """Apply one platform-calculated multi-leg Income atomically."""
+        income_entry_id, venue_id = self._validated_income_identity(entry)
+        if income_entry_id <= self.last_applied_income_entry_id:
+            return
+        income_type = str(getattr(entry, "income_type", "") or "").strip().lower()
+        status = str(getattr(entry, "status", "") or "").strip().lower()
+        if (
+            income_type not in {"funding", "funding_fee"}
+            or status not in {"calculated", "confirmed"}
+        ):
+            raise ValueError("Funding Income entry must be calculated or confirmed funding_fee")
+        _, _, asset, aggregate = self._validated_income_header(
+            entry, amount_field="applied_amount_decimal"
+        )
+        entry_symbol = str(getattr(entry, "symbol", "") or "").strip().upper()
+        if not entry_symbol:
+            raise ValueError("Funding Income entry symbol is required")
+        raw_details = getattr(entry, "calculation_details_json", "")
+        if not isinstance(raw_details, str) or not raw_details:
+            raise ValueError("Funding Income calculation details are required")
         try:
-            if margin_mode == "cross":
-                self.wallet_balance = prior_wallet_balance + amount
-            if pos is not None:
-                pos.isolated_wallet = prior_isolated_wallet + amount
-                pos.carry_cost = prior_carry_cost - amount
-                pos._refresh_derived_fields()
+            details = json.loads(raw_details)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Funding Income calculation details are invalid") from exc
+        if not isinstance(details, list) or not details:
+            raise ValueError("Funding Income calculation details must contain legs")
+        allocations: list[_FundingAllocation] = []
+        identities: set[tuple[str, str, str]] = set()
+        for detail in details:
+            if not isinstance(detail, dict):
+                raise ValueError("Funding Income calculation leg must be an object")
+            symbol = str(detail.get("symbol") or "").strip().upper()
+            side = str(detail.get("position_side") or "").strip().upper()
+            margin = str(detail.get("margin_mode") or "").strip().lower()
+            if symbol != entry_symbol or side not in {"BOTH", "LONG", "SHORT"} or margin not in {"cross", "isolated"}:
+                raise ValueError("Funding Income calculation leg route is invalid")
+            if self.position_mode == "one_way" and side != "BOTH":
+                raise ValueError("one-way Funding Income leg must use BOTH")
+            if self.position_mode == "hedge" and side not in {"LONG", "SHORT"}:
+                raise ValueError("hedge Funding Income leg must use LONG or SHORT")
+            identity = (symbol, side, margin)
+            if identity in identities:
+                raise ValueError("Funding Income calculation contains a duplicate leg")
+            identities.add(identity)
+            for field_name in (
+                "signed_qty_decimal",
+                "funding_rate_decimal",
+                "mark_price_decimal",
+                "calculated_amount_decimal",
+                "applied_amount_decimal",
+                "calculator_version",
+            ):
+                if not isinstance(detail.get(field_name), str) or not detail[field_name]:
+                    raise ValueError(f"Funding Income calculation leg {field_name} is required")
+            for field_name in (
+                "signed_qty_decimal",
+                "funding_rate_decimal",
+                "mark_price_decimal",
+                "calculated_amount_decimal",
+                "applied_amount_decimal",
+            ):
+                self._exact_decimal(detail[field_name], f"Funding Income calculation leg {field_name}")
+            amount = self._exact_decimal(
+                detail["applied_amount_decimal"],
+                "Funding Income calculation leg applied_amount_decimal",
+            )
+            allocations.append(_FundingAllocation(symbol, side, margin, amount))
+        if sum((item.amount for item in allocations), start=Decimal()) != aggregate:
+            raise ValueError("Funding Income leg allocations do not reconcile to aggregate")
+        self._apply_funding_allocations(
+            income_entry_id=income_entry_id,
+            venue_id=venue_id,
+            asset=asset,
+            aggregate_amount=aggregate,
+            allocations=allocations,
+            require_cross_position=True,
+        )
+
+    def _validated_income_header(
+        self, entry: object, *, amount_field: str
+    ) -> tuple[int, int, str, Decimal]:
+        income_entry_id, venue_id = self._validated_income_identity(entry)
+        asset = str(getattr(entry, "asset", "") or "").strip().upper()
+        if asset != "USDT":
+            raise ValueError("Funding Income asset must be USDT")
+        amount = self._exact_decimal(
+            getattr(entry, amount_field, ""), f"Funding Income {amount_field}"
+        )
+        return income_entry_id, venue_id, asset, amount
+
+    def _validated_income_identity(self, entry: object) -> tuple[int, int]:
+        venue_id = int(getattr(entry, "venue_id", 0) or 0)
+        if venue_id <= 0 or (self.venue_id > 0 and venue_id != self.venue_id):
+            raise ValueError("Funding Income venue does not match wallet")
+        income_entry_id = int(getattr(entry, "income_entry_id", 0) or 0)
+        if income_entry_id <= 0:
+            raise ValueError("Funding Income income_entry_id is required")
+        return income_entry_id, venue_id
+
+    @staticmethod
+    def _exact_decimal(raw: object, label: str) -> Decimal:
+        if not isinstance(raw, str) or not raw:
+            raise ValueError(f"{label} is required")
+        try:
+            value = Decimal(raw)
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError(f"{label} is invalid") from exc
+        if not value.is_finite():
+            raise ValueError(f"{label} is invalid")
+        return value
+
+    def _allocation_position(
+        self, allocation: _FundingAllocation, *, require_cross_position: bool
+    ) -> BinancePosition | None:
+        if self.position_mode == "hedge":
+            direction = 1 if allocation.position_side == "LONG" else -1
+        else:
+            direction = 0
+        position = self.positions.get((norm_symbol(allocation.symbol), direction))
+        if allocation.margin_mode == "isolated" or require_cross_position:
+            if position is None or position.margin_mode != allocation.margin_mode:
+                raise ValueError("Funding Income calculation leg has no matching wallet position")
+        return position
+
+    def _apply_funding_allocations(
+        self,
+        *,
+        income_entry_id: int,
+        venue_id: int,
+        asset: str,
+        aggregate_amount: Decimal,
+        allocations: list[_FundingAllocation],
+        require_cross_position: bool,
+    ) -> None:
+        del aggregate_amount
+        if venue_id <= 0 or asset != "USDT" or not allocations:
+            raise ValueError("Funding Income application facts are invalid")
+        targets = [
+            self._allocation_position(item, require_cross_position=require_cross_position)
+            for item in allocations
+        ]
+        book_snapshot = {
+            name: copy.deepcopy(value)
+            for name, value in self.__dict__.items()
+            if name != "positions"
+        }
+        position_snapshots = {
+            key: copy.deepcopy(position.__dict__)
+            for key, position in self.positions.items()
+        }
+        try:
+            cross_amount = sum(
+                (item.amount for item in allocations if item.margin_mode == "cross"),
+                start=Decimal(),
+            )
+            self.wallet_balance = float(Decimal(str(self.wallet_balance)) + cross_amount)
+            for allocation, position in zip(allocations, targets):
+                if allocation.margin_mode != "isolated":
+                    continue
+                assert position is not None
+                amount = float(allocation.amount)
+                position.isolated_wallet = float(position.isolated_wallet or 0.0) + amount
+                position.carry_cost = float(position.carry_cost or 0.0) - amount
+                position._refresh_derived_fields()
             self._refresh_portfolio_fields()
         except Exception:
-            self.wallet_balance = prior_wallet_balance
-            if pos is not None:
-                pos.isolated_wallet = prior_isolated_wallet
-                pos.carry_cost = prior_carry_cost
-                pos._refresh_derived_fields()
+            for name, value in book_snapshot.items():
+                setattr(self, name, value)
+            for key, snapshot in position_snapshots.items():
+                position = self.positions[key]
+                position.__dict__.clear()
+                position.__dict__.update(snapshot)
             raise
         self.last_applied_income_entry_id = income_entry_id
 
@@ -1100,6 +1236,9 @@ class BinanceWalletRuntime:
 
     def on_ledger_event(self, event: object) -> None:
         self.futures.on_ledger_event(event)
+
+    def apply_funding_income_entry(self, entry: object) -> None:
+        self.futures.apply_funding_income_entry(entry)
 
     def to_canonical_state(self) -> CanonicalPortfolioState:
         return CanonicalPortfolioState(

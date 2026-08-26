@@ -180,6 +180,30 @@ class PortfolioWalletRuntime:
             )
         wallet.on_ledger_event(event)
 
+    def apply_funding_income_entry(
+        self,
+        exchange: str,
+        market: str,
+        venue_id: int,
+        entry: object,
+    ) -> None:
+        route = self._normalize_route(exchange, market)
+        self._require_declared(route)
+        if route[1] != "perpetual_futures":
+            raise ValueError("Funding Income entries require a Futures route")
+        exact_venue_id = int(venue_id)
+        if int(getattr(entry, "venue_id", 0) or 0) != exact_venue_id:
+            raise ValueError("Funding Income entry venue does not match routed wallet")
+        wallet = self.wallets.get((route[0], route[1], exact_venue_id))
+        if wallet is None:
+            raise ValueError(
+                f"missing wallet for route {route[0]}/{route[1]} venue {exact_venue_id}"
+            )
+        apply_entry = getattr(wallet, "apply_funding_income_entry", None)
+        if not callable(apply_entry):
+            raise ValueError("routed Futures wallet cannot apply Funding Income")
+        apply_entry(entry)
+
     def _normalize_route(self, exchange: str, market: str) -> RouteKey:
         return (_normalize_exchange(exchange), _normalize_market(market))
 

@@ -32,6 +32,8 @@ from strategy_service.types import OrderUpdateEvent, OrderUpdateFill
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from strategy_service.wallet.order_types import OrderResponse
 from strategy_service.wallet.canonical import CanonicalFuturesRiskMetadata, SpotSymbolMetadata
+from strategy_service.funding_position_tracker import FundingPositionLegFact
+from strategy_service.platform_proxy import MarketFundingFact
 from tests.helpers.wallet_fixtures import make_testnet_wallet
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
@@ -497,10 +499,12 @@ def make_portfolio_snapshot_with_binance_perp_and_spot(
                     symbol="BTCUSDT",
                     position_side="BOTH",
                     position_qty=0.0,
+                    signed_qty_decimal="0",
                     entry_price=0.0,
                     mark_price=50_000.0,
                     leverage=20.0,
                     margin_mode="cross",
+                    venue_id=1001,
                 )
             ],
         ),
@@ -2497,7 +2501,8 @@ def test_run_session_backtest_persists_order_fill_before_strategy_end(monkeypatc
         def create_strategy(self, **_kwargs):
             return fake_user
 
-    def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs):
+    def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs, wallet):
+        del wallet
         assert [(i.market, i.symbol, i.interval) for i in declared_inputs] == [
             ("perpetual_futures", "BTCUSDT", "1m"),
         ]
@@ -2583,7 +2588,8 @@ def test_run_session_snapshot_failure_marks_session_recoverable(monkeypatch):
         def create_strategy(self, **_kwargs):
             return fake_user
 
-    def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs):
+    def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs, wallet):
+        del wallet
         inner_state.transition("finished", bars=9)
 
     servicer.set_platform_proxy(FakePlatformProxy())
@@ -3273,6 +3279,11 @@ def test_backtest_indicator_flush_baseexception_preserves_exact_user_fatal(
                     "1m",
                 )
             ],
+            wallet=PortfolioWalletRuntime(
+                portfolio_id=7,
+                allowed_routes={("binance", "perpetual_futures")},
+                wallets={("binance", "perpetual_futures", 11): make_backtest_wallet()},
+            ),
         )
 
     assert captured.value is fatal
@@ -3519,7 +3530,8 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
         def create_strategy(self, **_kwargs):
             return fake_user
 
-    def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs):
+    def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs, wallet):
+        del wallet
         raise RuntimeError("schema mismatch from downstream feed")
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
@@ -4924,8 +4936,9 @@ def test_stop_only_waits_for_inflight_strategy_decision_before_lifecycle_scan(mo
         user_id=17,
         portfolio_id=7071,
     )
+    stop_wallet = _spot_stop_wallet(environment=0, portfolio_id=7071, venue_id=221)
     state.configure_stop_runtime(
-        wallet=_spot_stop_wallet(environment=0, portfolio_id=7071, venue_id=221),
+        wallet=stop_wallet,
         order_client=FakeOrderClient(),
     )
 
@@ -4935,6 +4948,7 @@ def test_stop_only_waits_for_inflight_strategy_decision_before_lifecycle_scan(mo
         "engine": BlockingEngine(),
         "request": SimpleNamespace(start_time_ms=1, end_time_ms=2, user_id=17),
         "declared_inputs": [StrategyInput("binance", "spot", "BTCUSDT", "1m")],
+        "wallet": stop_wallet,
     })
     run_thread.start()
     assert callback_entered.wait(timeout=1)
@@ -8208,6 +8222,12 @@ def test_proxy_only_backtest_reads_paged_data_without_runtime_dataset_delivery()
     )
     state = SessionState(environment=0)
     engine = FakeEngine()
+    route_wallet = make_backtest_wallet(wallet_balance=100.0)
+    wallet = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
 
     servicer._run_backtest(
         "sess-1",
@@ -8215,6 +8235,7 @@ def test_proxy_only_backtest_reads_paged_data_without_runtime_dataset_delivery()
         engine,
         SimpleNamespace(start_time_ms=60_000, end_time_ms=60_000 * 2881),
         [StrategyInput(exchange="binance", market="perpetual_futures", symbol="ETHUSDT", interval="1m")],
+        wallet,
     )
 
     assert state.status == "finished"
@@ -8231,6 +8252,246 @@ def test_proxy_only_backtest_reads_paged_data_without_runtime_dataset_delivery()
         "start_after_time_ms": 0,
         "end_time_ms": 60_000 * 2881,
     }]
+
+
+def test_backtest_funding_expands_sorted_venues_and_updates_wallets_before_kline(monkeypatch):
+    from market_data.models import MarketKline
+    from strategy_service.inputs import StrategyInput
+
+    route_wallets = {}
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets=route_wallets,
+    )
+    for venue_id in (22, 11):
+        route_wallet = make_backtest_wallet(
+            wallet_balance=100.0,
+            futures_positions=[{
+                "symbol": "BTCUSDT",
+                "position_qty": 1.0,
+                "entry_price": 100.0,
+                "mark_price": 100.0,
+                "margin_mode": "cross",
+            }],
+        )
+        route_wallet.futures.venue_id = venue_id
+        portfolio.wallets[("binance", "perpetual_futures", venue_id)] = route_wallet
+        portfolio.funding_position_tracker.restore(venue_id, [
+            FundingPositionLegFact("BTCUSDT", "BOTH", "cross", "1.000000000000000001")
+        ])
+
+    fact = MarketFundingFact(
+        exchange="binance",
+        market="futures",
+        symbol="BTCUSDT",
+        funding_time_ms=32_400_000,
+        funding_rate_decimal="0.000100000000000001",
+        mark_price_decimal="100.000000000000000001",
+        settlement_asset="USDT",
+    )
+
+    class MarketDataClient:
+        @staticmethod
+        def fetch_backtest_page(**_kwargs):
+            return SimpleNamespace(
+                klines=[MarketKline(
+                    symbol="BTCUSDT", interval="1m",
+                    open_time=32_400_000, close_time=32_459_999,
+                    open=100.0, high=101.0, low=99.0, close=100.0,
+                    volume=1.0, timestamp=32_459_999, market="futures",
+                )],
+                funding_facts=[fact],
+                funding_coverage_complete=True,
+                next_cursor_time_ms=32_400_000,
+                has_more=False,
+            )
+
+    settlement_order = []
+
+    class PortfolioClient:
+        @staticmethod
+        def settle_backtest_funding(**kwargs):
+            venue_id = kwargs["fact"].venue_id
+            settlement_order.append(venue_id)
+            assert kwargs["position_legs"][0].signed_qty_decimal == "1.000000000000000001"
+            return portfolio_service_pb2.VenueIncomeEntry(
+                income_entry_id=venue_id,
+                session_id="sess-funding",
+                venue_id=venue_id,
+                income_type="funding_fee",
+                symbol="BTCUSDT",
+                asset="USDT",
+                applied_amount_decimal="-0.1",
+                calculation_details_json=json.dumps([{
+                    "symbol": "BTCUSDT",
+                    "position_side": "BOTH",
+                    "margin_mode": "cross",
+                    "signed_qty_decimal": "1.000000000000000001",
+                    "funding_rate_decimal": "0.000100000000000001",
+                    "mark_price_decimal": "100.000000000000000001",
+                    "calculated_amount_decimal": "-0.1",
+                    "applied_amount_decimal": "-0.1",
+                    "calculator_version": "binance-usdm-linear-v1",
+                }], separators=(",", ":")),
+                status="calculated",
+            )
+
+    callback_balances = []
+
+    class Engine:
+        strategies = {}
+
+        @staticmethod
+        def running_strategy(_market_data):
+            callback_balances.append([
+                portfolio.wallets[("binance", "perpetual_futures", venue_id)].futures.wallet_balance
+                for venue_id in (11, 22)
+            ])
+
+    servicer = StrategyServiceServicer(
+        "", "", {}, "", restore_running_sessions=False,
+    )
+    monkeypatch.setattr(servicer, "_marketdata_client", lambda: MarketDataClient())
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: PortfolioClient())
+    monkeypatch.setattr(servicer, "_install_indicator_collection", lambda *_args, **_kwargs: lambda: None)
+
+    servicer._run_backtest_via_platform_proxy(
+        session_id="sess-funding",
+        state=SessionState(environment=0, user_id=17),
+        engine=Engine(),
+        request=SimpleNamespace(start_time_ms=32_400_000, end_time_ms=32_460_000),
+        declared_inputs=[StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")],
+        wallet=portfolio,
+    )
+
+    assert settlement_order == [11, 22]
+    assert callback_balances == [[pytest.approx(99.9), pytest.approx(99.9)]]
+
+
+@pytest.mark.parametrize(
+    ("has_open_leg", "funding_coverage_complete"),
+    [(True, False), (True, None), (False, False)],
+)
+def test_backtest_incomplete_funding_coverage_is_typed_only_with_open_futures_leg(
+    monkeypatch,
+    has_open_leg,
+    funding_coverage_complete,
+):
+    from market_data.models import MarketKline
+    from strategy_service.backtest_pages import BacktestFundingDataGapError
+    from strategy_service.inputs import StrategyInput
+
+    route_wallet = make_backtest_wallet(wallet_balance=100.0)
+    route_wallet.futures.venue_id = 11
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    if has_open_leg:
+        portfolio.funding_position_tracker.restore(11, [
+            FundingPositionLegFact("ETHUSDT", "BOTH", "cross", "2")
+        ])
+
+    class MarketDataClient:
+        @staticmethod
+        def fetch_backtest_page(**_kwargs):
+            return SimpleNamespace(
+                klines=[MarketKline(
+                    symbol="ETHUSDT", interval="1m", open_time=1_000, close_time=1_999,
+                    open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0,
+                    timestamp=1_999, market="futures",
+                )],
+                funding_facts=[],
+                funding_coverage_complete=funding_coverage_complete,
+                next_cursor_time_ms=1_000, has_more=False,
+            )
+
+    class Engine:
+        strategies = {}
+        calls = 0
+
+        @classmethod
+        def running_strategy(cls, _market_data):
+            cls.calls += 1
+
+    servicer = StrategyServiceServicer("", "", {}, "", restore_running_sessions=False)
+    monkeypatch.setattr(servicer, "_marketdata_client", lambda: MarketDataClient())
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: SimpleNamespace())
+    monkeypatch.setattr(servicer, "_install_indicator_collection", lambda *_args, **_kwargs: lambda: None)
+    invoke = lambda: servicer._run_backtest_via_platform_proxy(
+        session_id="sess-gap",
+        state=SessionState(environment=0, user_id=17),
+        engine=Engine(),
+        request=SimpleNamespace(start_time_ms=1_000, end_time_ms=2_000),
+        declared_inputs=[StrategyInput("binance", "perpetual_futures", "ETHUSDT", "1m")],
+        wallet=portfolio,
+    )
+
+    if has_open_leg:
+        with pytest.raises(BacktestFundingDataGapError) as captured:
+            invoke()
+        assert captured.value.symbol == "ETHUSDT"
+        assert captured.value.venue_id == 11
+        assert Engine.calls == 0
+    else:
+        invoke()
+        assert Engine.calls == 1
+
+
+def test_spot_backtest_never_settles_funding(monkeypatch):
+    from market_data.models import MarketKline
+    from strategy_service.inputs import StrategyInput
+
+    route_wallet = make_backtest_wallet(wallet_balance=100.0)
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "spot")},
+        wallets={("binance", "spot", 11): route_wallet},
+    )
+
+    class MarketDataClient:
+        @staticmethod
+        def fetch_backtest_page(**_kwargs):
+            return SimpleNamespace(
+                klines=[MarketKline(
+                    symbol="ZECUSDT", interval="1m", open_time=1_000, close_time=1_999,
+                    open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0,
+                    timestamp=1_999, market="spot",
+                )],
+                funding_facts=[], funding_coverage_complete=None,
+                next_cursor_time_ms=1_000, has_more=False,
+            )
+
+    class PortfolioClient:
+        @staticmethod
+        def settle_backtest_funding(**_kwargs):
+            raise AssertionError("Spot must never settle Funding")
+
+    class Engine:
+        strategies = {}
+        calls = 0
+
+        @classmethod
+        def running_strategy(cls, _market_data):
+            cls.calls += 1
+
+    servicer = StrategyServiceServicer("", "", {}, "", restore_running_sessions=False)
+    monkeypatch.setattr(servicer, "_marketdata_client", lambda: MarketDataClient())
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: PortfolioClient())
+    monkeypatch.setattr(servicer, "_install_indicator_collection", lambda *_args, **_kwargs: lambda: None)
+
+    servicer._run_backtest_via_platform_proxy(
+        session_id="sess-spot",
+        state=SessionState(environment=0, user_id=17),
+        engine=Engine(),
+        request=SimpleNamespace(start_time_ms=1_000, end_time_ms=2_000),
+        declared_inputs=[StrategyInput("binance", "spot", "ZECUSDT", "1m")],
+        wallet=portfolio,
+    )
+
+    assert Engine.calls == 1
 
 
 def test_proxy_only_mode2_live_uses_runtime_delivery_not_fetch_klines():
@@ -8759,6 +9020,25 @@ def test_run_strategy_backtest_distinct_intervals_are_preserved(monkeypatch):
         ("perpetual_futures", "BTCUSDT", "1m"),
         ("perpetual_futures", "BTCUSDT", "5m"),
     ]
+
+
+def test_backtest_preflight_uses_declared_exchange():
+    calls = []
+
+    class Client:
+        @staticmethod
+        def fetch_klines(**kwargs):
+            calls.append(kwargs)
+            return [object()]
+
+    check = StrategyServiceServicer._proxy_backtest_availability(Client())
+
+    assert check(
+        grpc_server.StrategyInput("okx", "perpetual_futures", "ETHUSDT", "1m"),
+        1_000,
+        2_000,
+    ) is True
+    assert calls[0]["exchange"] == "okx"
 
 
 def test_preview_run_strategy_reports_backtest_availability(monkeypatch):

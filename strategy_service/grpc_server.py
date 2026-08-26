@@ -1010,6 +1010,13 @@ def _canonical_market_for_kline(
     return None
 
 
+def _funding_time_key(market_time_ms: int) -> tuple[int, int]:
+    value = int(market_time_ms)
+    if value < 0:
+        raise ValueError("Funding market time must be non-negative")
+    return value // 1000, (value % 1000) * 1_000_000
+
+
 def _interval_ms(interval: str) -> int:
     raw = str(interval or "1m").strip()
     if len(raw) < 2:
@@ -2629,7 +2636,9 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 engine_fatal_check()
 
             if environment == 0:
-                self._run_backtest(session_id, state, engine, request, declared_inputs)
+                self._run_backtest(
+                    session_id, state, engine, request, declared_inputs, wallet
+                )
             elif environment == 1:
                 self._run_live(session_id, state, engine, declared_inputs, strategy_id)
             else:
@@ -2948,7 +2957,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             if not callable(fetch):
                 raise RuntimeError("market-data proxy client does not support fetch_klines")
             return bool(fetch(
-                exchange="binance",
+                exchange=inp.exchange,
                 market=_marketdata_market(inp.market),
                 symbol=inp.symbol,
                 interval=inp.interval,
@@ -3227,6 +3236,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         engine: StrategyEngine,
         request: Any,
         declared_inputs: list[StrategyInput],
+        wallet: PortfolioWalletRuntime,
     ) -> None:
         self._run_backtest_via_platform_proxy(
             session_id=session_id,
@@ -3234,6 +3244,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             engine=engine,
             request=request,
             declared_inputs=declared_inputs,
+            wallet=wallet,
         )
 
     def _run_backtest_via_platform_proxy(
@@ -3244,6 +3255,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         engine: StrategyEngine,
         request: Any,
         declared_inputs: list[StrategyInput],
+        wallet: PortfolioWalletRuntime,
     ) -> None:
         start = int(getattr(request, "start_time_ms", 0) or 0)
         end = int(getattr(request, "end_time_ms", 0) or 0)
@@ -3256,7 +3268,7 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         required_streams = [
             StreamBinding(
                 stream_id=0,
-                exchange="binance",
+                exchange=inp.exchange,
                 market=_marketdata_market(inp.market),
                 kind="kline",
                 symbol=inp.symbol,
@@ -3265,13 +3277,13 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             )
             for inp in declared_inputs
         ]
-        canonical_by_stream = {
-            _stream_key(stream.market, stream.symbol, stream.interval): (
-                stream.canonical_market or stream.market
-            )
-            for stream in required_streams
-        }
-        from strategy_service.backtest_pages import BACKTEST_PAGE_SIZE, PagedBacktestDataSource
+        from strategy_service.backtest_pages import (
+            BACKTEST_PAGE_SIZE,
+            BacktestFundingDataGapError,
+            BacktestFundingSettlementError,
+            PagedBacktestDataSource,
+        )
+        from strategy_service.platform_proxy import FundingFact
 
         marketdata_client = self._marketdata_client()
         fetch_backtest_page = getattr(marketdata_client, "fetch_backtest_page", None)
@@ -3295,15 +3307,102 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         fatal_check = getattr(engine, "raise_if_user_code_fatal", None)
         primary_user_fatal: StrategyUserCodeFatalError | None = None
         try:
-            for kline in data_source.iter_klines():
+            for event in data_source.iter_timeline():
                 if callable(fatal_check):
                     fatal_check()
+                binding = required_streams[event.stream_index]
+                canonical_market = binding.canonical_market or binding.market
+                if event.kind == "funding":
+                    market_fact = event.payload
+                    if canonical_market == "spot":
+                        raise BacktestFundingSettlementError(
+                            symbol=market_fact.symbol,
+                            venue_id=0,
+                            funding_time_ms=market_fact.funding_time_ms,
+                            cause=ValueError("Spot Funding fact is invalid"),
+                        )
+                    route_wallets = self._backtest_funding_route_wallets(
+                        wallet, binding.exchange, canonical_market
+                    )
+                    for venue_id, route_wallet in route_wallets:
+                        legs = wallet.funding_position_tracker.legs_for(
+                            venue_id,
+                            market_fact.symbol,
+                            funding_time=_funding_time_key(market_fact.funding_time_ms),
+                        )
+                        if not legs:
+                            continue
+                        futures = getattr(route_wallet, "futures", None)
+                        position_mode = str(
+                            getattr(futures, "position_mode", "") or ""
+                        ).strip().lower()
+                        if position_mode not in {"one_way", "hedge"}:
+                            raise BacktestFundingSettlementError(
+                                symbol=market_fact.symbol,
+                                venue_id=venue_id,
+                                funding_time_ms=market_fact.funding_time_ms,
+                                cause=ValueError("canonical Futures position_mode is missing"),
+                            )
+                        fact = FundingFact(
+                            venue_id=venue_id,
+                            exchange=binding.exchange,
+                            market=canonical_market,
+                            symbol=market_fact.symbol,
+                            funding_time_ms=market_fact.funding_time_ms,
+                            funding_rate_decimal=market_fact.funding_rate_decimal,
+                            mark_price_decimal=market_fact.mark_price_decimal,
+                            settlement_asset=market_fact.settlement_asset,
+                        )
+                        try:
+                            entry = self._portfolio_client().settle_backtest_funding(
+                                session_id=session_id,
+                                user_id=state.user_id,
+                                fact=fact,
+                                position_mode=position_mode,
+                                position_legs=legs,
+                            )
+                            wallet.apply_funding_income_entry(
+                                binding.exchange,
+                                canonical_market,
+                                venue_id,
+                                entry,
+                            )
+                        except Exception as exc:
+                            raise BacktestFundingSettlementError(
+                                symbol=market_fact.symbol,
+                                venue_id=venue_id,
+                                funding_time_ms=market_fact.funding_time_ms,
+                                cause=exc,
+                            ) from exc
+                    continue
+                if event.kind != "kline":
+                    raise RuntimeError(f"unsupported Backtest timeline event: {event.kind}")
+                kline = event.payload
+                if (
+                    canonical_market == "perpetual_futures"
+                    and event.funding_coverage_complete is not True
+                ):
+                    for venue_id, _route_wallet in self._backtest_funding_route_wallets(
+                        wallet, binding.exchange, canonical_market
+                    ):
+                        if wallet.funding_position_tracker.legs_for(
+                            venue_id,
+                            kline.symbol,
+                            funding_time=_funding_time_key(event.market_time_ms),
+                        ):
+                            raise BacktestFundingDataGapError(
+                                exchange=binding.exchange,
+                                market=canonical_market,
+                                symbol=kline.symbol,
+                                venue_id=venue_id,
+                                market_time_ms=event.market_time_ms,
+                            )
                 if not state.try_enter_strategy_decision():
                     break
                 try:
-                    engine.running_strategy(_adapt_kline(
-                        kline,
-                        _canonical_market_for_kline(kline, canonical_by_stream),
+                    engine.running_strategy(replace(
+                        _adapt_kline(kline, canonical_market),
+                        exchange=binding.exchange,
                     ))
                 finally:
                     state.leave_strategy_decision()
@@ -3333,6 +3432,27 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         else:
             state.bars_processed = n
         logger.info("session %s finished via platform market-data proxy: %d bars", session_id, n)
+
+    @staticmethod
+    def _backtest_funding_route_wallets(
+        wallet: PortfolioWalletRuntime,
+        exchange: str,
+        market: str,
+    ) -> list[tuple[int, Any]]:
+        if not isinstance(wallet, PortfolioWalletRuntime):
+            raise TypeError("Backtest Funding requires PortfolioWalletRuntime")
+        route = (_normalize_exchange(exchange), _normalize_market(market))
+        wallet._require_declared(route)
+        matches = sorted(
+            (venue_id, route_wallet)
+            for (wallet_exchange, wallet_market, venue_id), route_wallet in wallet.wallets.items()
+            if (wallet_exchange, wallet_market) == route
+        )
+        if not matches:
+            raise ValueError(
+                f"missing wallet for route {route[0]}/{route[1]}"
+            )
+        return matches
 
     def _run_live(
         self,

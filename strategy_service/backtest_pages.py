@@ -4,14 +4,41 @@ import heapq
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from market_data.models import MarketKline
+from strategy_service.platform_proxy import MarketFundingFact
 
 BACKTEST_PAGE_SIZE = 8192
 
 
+class BacktestFundingDataGapError(RuntimeError):
+    code = "BACKTEST_FUNDING_DATA_GAP"
+
+    def __init__(self, *, exchange: str, market: str, symbol: str, venue_id: int, market_time_ms: int):
+        self.exchange = exchange
+        self.market = market
+        self.symbol = symbol
+        self.venue_id = int(venue_id)
+        self.market_time_ms = int(market_time_ms)
+        super().__init__(
+            f"{self.code}: missing Funding storage for open Futures leg "
+            f"{exchange}/{market}/{symbol} venue {venue_id} at {market_time_ms}"
+        )
+
+
+class BacktestFundingSettlementError(RuntimeError):
+    code = "BACKTEST_FUNDING_SETTLEMENT_FAILED"
+
+    def __init__(self, *, symbol: str, venue_id: int, funding_time_ms: int, cause: Exception):
+        self.symbol = symbol
+        self.venue_id = int(venue_id)
+        self.funding_time_ms = int(funding_time_ms)
+        super().__init__(
+            f"{self.code}: {symbol} venue {venue_id} at {funding_time_ms}: {cause}"
+        )
+
+
 def stream_key_for_binding(binding: Any) -> str:
     return "/".join([
-        str(getattr(binding, "exchange", "") or "binance"),
+        str(getattr(binding, "exchange", "")),
         str(getattr(binding, "market", "")),
         str(getattr(binding, "kind", "") or "kline"),
         str(getattr(binding, "symbol", "")),
@@ -19,14 +46,24 @@ def stream_key_for_binding(binding: Any) -> str:
     ])
 
 
+@dataclass(frozen=True, slots=True)
+class BacktestTimelineEvent:
+    kind: str
+    market_time_ms: int
+    stream_index: int
+    payload: Any
+    funding_coverage_complete: bool | None = None
+
+
 @dataclass
 class _Cursor:
     index: int
     binding: Any
     cursor_time_ms: int
-    rows: list[MarketKline] = field(default_factory=list)
-    row_index: int = 0
+    events: list[BacktestTimelineEvent] = field(default_factory=list)
+    event_index: int = 0
     exhausted: bool = False
+    seen_funding: set[tuple[str, str, str, int]] = field(default_factory=set)
 
 
 class PagedBacktestDataSource:
@@ -50,34 +87,45 @@ class PagedBacktestDataSource:
             for idx, stream in enumerate(streams)
         ]
 
-    def iter_klines(self) -> Iterator[MarketKline]:
-        heap: list[tuple[int, int, int, MarketKline, _Cursor]] = []
+    def iter_timeline(self) -> Iterator[BacktestTimelineEvent]:
+        heap: list[tuple[int, int, int, int, BacktestTimelineEvent, _Cursor]] = []
         sequence = 0
         for cursor in self._cursors:
             self._fill(cursor)
-            item = self._pop(cursor)
-            if item is not None:
-                heapq.heappush(heap, (int(item.open_time), cursor.index, sequence, item, cursor))
+            event = self._pop(cursor)
+            if event is not None:
+                heapq.heappush(heap, self._heap_item(event, sequence, cursor))
                 sequence += 1
 
         while heap:
-            _, _, _, item, cursor = heapq.heappop(heap)
-            yield item
+            _, _, _, _, event, cursor = heapq.heappop(heap)
+            yield event
 
-            next_item = self._pop(cursor)
-            if next_item is None and not cursor.exhausted:
+            next_event = self._pop(cursor)
+            if next_event is None and not cursor.exhausted:
                 self._fill(cursor)
-                next_item = self._pop(cursor)
-            if next_item is not None:
-                heapq.heappush(heap, (int(next_item.open_time), cursor.index, sequence, next_item, cursor))
+                next_event = self._pop(cursor)
+            if next_event is not None:
+                heapq.heappush(heap, self._heap_item(next_event, sequence, cursor))
                 sequence += 1
+
+    @staticmethod
+    def _heap_item(event: BacktestTimelineEvent, sequence: int, cursor: _Cursor):
+        return (
+            int(event.market_time_ms),
+            0 if event.kind == "funding" else 1,
+            int(event.stream_index),
+            int(sequence),
+            event,
+            cursor,
+        )
 
     def _fill(self, cursor: _Cursor) -> None:
         if cursor.exhausted:
             return
         binding = cursor.binding
         page = self._client.fetch_backtest_page(
-            exchange=str(getattr(binding, "exchange", "") or "binance"),
+            exchange=str(getattr(binding, "exchange", "")),
             market=str(getattr(binding, "market", "")),
             kind=str(getattr(binding, "kind", "") or "kline"),
             symbol=str(getattr(binding, "symbol", "")),
@@ -85,20 +133,67 @@ class PagedBacktestDataSource:
             start_after_time_ms=int(cursor.cursor_time_ms),
             end_time_ms=self._end_time_ms,
         )
-        rows = list(page.klines or [])
-        if not rows and bool(page.has_more):
+        klines = list(page.klines or [])
+        funding_facts = list(getattr(page, "funding_facts", ()) or ())
+        coverage = getattr(page, "funding_coverage_complete", None)
+        if not klines and not funding_facts and bool(page.has_more):
             raise RuntimeError(f"backtest page returned no rows before end: {stream_key_for_binding(binding)}")
-        cursor.rows = rows
-        cursor.row_index = 0
+
+        local: list[tuple[int, int, int, BacktestTimelineEvent]] = []
+        local_sequence = 0
+        for fact in funding_facts:
+            self._validate_funding_fact(binding, fact)
+            identity = (fact.exchange, fact.market, fact.symbol, int(fact.funding_time_ms))
+            if identity in cursor.seen_funding:
+                continue
+            cursor.seen_funding.add(identity)
+            event = BacktestTimelineEvent(
+                kind="funding",
+                market_time_ms=int(fact.funding_time_ms),
+                stream_index=cursor.index,
+                payload=fact,
+                funding_coverage_complete=coverage,
+            )
+            local.append((event.market_time_ms, 0, local_sequence, event))
+            local_sequence += 1
+        for row in klines:
+            event = BacktestTimelineEvent(
+                kind="kline",
+                market_time_ms=int(row.open_time),
+                stream_index=cursor.index,
+                payload=row,
+                funding_coverage_complete=coverage,
+            )
+            local.append((event.market_time_ms, 1, local_sequence, event))
+            local_sequence += 1
+        local.sort(key=lambda item: item[:3])
+        cursor.events = [item[3] for item in local]
+        cursor.event_index = 0
         cursor.cursor_time_ms = int(page.next_cursor_time_ms or cursor.cursor_time_ms)
         cursor.exhausted = not bool(page.has_more)
 
-    def _pop(self, cursor: _Cursor) -> MarketKline | None:
-        if cursor.row_index >= len(cursor.rows):
+    @staticmethod
+    def _validate_funding_fact(binding: Any, fact: MarketFundingFact) -> None:
+        expected = (
+            str(getattr(binding, "exchange", "")).strip().lower(),
+            str(getattr(binding, "market", "")).strip().lower(),
+            str(getattr(binding, "symbol", "")).strip().upper(),
+        )
+        actual = (
+            str(fact.exchange or "").strip().lower(),
+            str(fact.market or "").strip().lower(),
+            str(fact.symbol or "").strip().upper(),
+        )
+        if actual != expected:
+            raise ValueError("Backtest Funding fact does not match its declared input stream")
+
+    @staticmethod
+    def _pop(cursor: _Cursor) -> BacktestTimelineEvent | None:
+        if cursor.event_index >= len(cursor.events):
             return None
-        item = cursor.rows[cursor.row_index]
-        cursor.row_index += 1
-        return item
+        event = cursor.events[cursor.event_index]
+        cursor.event_index += 1
+        return event
 
 
 def _interval_step_ms(interval: str) -> int:

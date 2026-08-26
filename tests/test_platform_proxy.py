@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from google.protobuf.struct_pb2 import Struct
+from google.protobuf.timestamp_pb2 import Timestamp
 
 from strategy_service import platform_proxy
 from strategy_service.gen import (
@@ -18,6 +20,7 @@ from strategy_service.platform_proxy import (
     PORTFOLIO_GET_PORTFOLIO,
     PORTFOLIO_UPDATE_WALLET_STATE,
     PORTFOLIO_UPDATE_SESSION,
+    PORTFOLIO_SETTLE_BACKTEST_FUNDING,
     LOGS_EMIT,
     MARKETDATA_FETCH_BACKTEST_PAGE,
     MARKETDATA_FETCH_KLINES,
@@ -27,7 +30,9 @@ from strategy_service.platform_proxy import (
     ORDER_LIST_LIFECYCLE_EVENTS,
     RuntimeChannelLogHandler,
     RuntimeChannelPlatformProxy,
+    FundingFact,
 )
+from strategy_service.funding_position_tracker import FundingPositionLegFact
 from strategy_service.inputs import StrategyOrderTarget
 from strategy_service.types import OrderDecision
 
@@ -168,6 +173,74 @@ def test_proxy_portfolio_client_surfaces_wallet_state_update_errors():
             strategy_id=9,
             session_id="sess-1",
         )
+
+
+def test_proxy_portfolio_client_settles_exact_backtest_funding_facts():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[PORTFOLIO_SETTLE_BACKTEST_FUNDING] = (
+        portfolio_service_pb2.SettleBacktestFundingResponse(
+            entry=portfolio_service_pb2.VenueIncomeEntry(
+                income_entry_id=71,
+                session_id="sess-funding",
+                venue_id=41,
+                income_type="funding_fee",
+                symbol="BTCUSDT",
+                asset="USDT",
+                applied_amount_decimal="-0.020000000000000001",
+                calculation_details_json="[]",
+                status="calculated",
+            )
+        )
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    entry = proxy.portfolio_client().settle_backtest_funding(
+        session_id="sess-funding",
+        user_id=17,
+        fact=FundingFact(
+            venue_id=41,
+            exchange="binance",
+            market="perpetual_futures",
+            symbol="BTCUSDT",
+            funding_time_ms=1_788_000_000_123,
+            funding_rate_decimal="0.000100000000000001",
+            mark_price_decimal="50000.123456789012345678",
+            settlement_asset="USDT",
+        ),
+        position_mode="hedge",
+        position_legs=[
+            FundingPositionLegFact(
+                symbol="BTCUSDT",
+                position_side="LONG",
+                margin_mode="isolated",
+                signed_qty_decimal="0.100000000000000001",
+            ),
+            FundingPositionLegFact(
+                symbol="BTCUSDT",
+                position_side="SHORT",
+                margin_mode="isolated",
+                signed_qty_decimal="-0.02",
+            ),
+        ],
+    )
+
+    method, request = runtime.calls[-1]
+    assert method == PORTFOLIO_SETTLE_BACKTEST_FUNDING
+    assert request.session_id == "sess-funding"
+    assert request.user_id == 17
+    assert request.fact.venue_id == 41
+    assert request.fact.exchange == 1
+    assert request.fact.market == 2
+    assert request.fact.symbol == "BTCUSDT"
+    assert request.fact.funding_time.ToMilliseconds() == 1_788_000_000_123
+    assert request.fact.funding_rate_decimal == "0.000100000000000001"
+    assert request.fact.mark_price_decimal == "50000.123456789012345678"
+    assert request.position_mode == "hedge"
+    assert [leg.signed_qty_decimal for leg in request.position_legs] == [
+        "0.100000000000000001",
+        "-0.02",
+    ]
+    assert entry.income_entry_id == 71
 
 
 def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_channel():
@@ -408,7 +481,7 @@ def test_proxy_order_client_reads_lifecycle_events_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
     runtime.responses[ORDER_LIST_LIFECYCLE_EVENTS] = (
         order_service_pb2.ListOrderLifecycleEventsResponse(events=[
-            order_service_pb2.OrderLifecycleEventEntry(
+                order_service_pb2.OrderLifecycleEventEntry(
                 event_id=11,
                 session_id="sess-1",
                 portfolio_id=7,
@@ -418,15 +491,17 @@ def test_proxy_order_client_reads_lifecycle_events_over_runtime_channel():
                 side="BUY",
                 event_type="fill",
                 order_status="FILLED",
-                order_id="order-1",
-                fill_delta=order_service_pb2.FillDeltaEntry(
+                    order_id="order-1",
+                    occurred_at=Timestamp(seconds=1),
+                    fill_delta=order_service_pb2.FillDeltaEntry(
                     symbol="BTCUSDT",
                     fee_asset="USDT",
                     qty_decimal="0.01",
                     fill_price_decimal="50000",
                     fee_decimal="0.5",
-                    quote_qty_decimal="500",
-                ),
+                        quote_qty_decimal="500",
+                        trade_time=Timestamp(seconds=1),
+                    ),
                 order_state=order_service_pb2.OrderStateEntry(
                     symbol="BTCUSDT",
                     status="FILLED",
@@ -548,6 +623,16 @@ def test_proxy_marketdata_client_fetches_backtest_page_over_runtime_channel():
         "next_cursor_time_ms": 3000,
         "has_more": False,
         "limit": 8192,
+        "funding_coverage_complete": True,
+        "funding_facts": [{
+            "exchange": "binance",
+            "market": "futures",
+            "symbol": "ETHUSDT",
+            "funding_time_ms": 1000,
+            "funding_rate_decimal": "0.000100000000000001",
+            "mark_price_decimal": "2000.123456789012345678",
+            "settlement_asset": "USDT",
+        }],
         "klines": [{
             "exchange": "binance",
             "market": "futures",
@@ -586,6 +671,37 @@ def test_proxy_marketdata_client_fetches_backtest_page_over_runtime_channel():
     assert len(page.klines) == 1
     assert page.klines[0].open_time == 1000
     assert page.klines[0].market == "futures"
+    assert page.funding_coverage_complete is True
+    assert len(page.funding_facts) == 1
+    fact = page.funding_facts[0]
+    assert fact.funding_time_ms == 1000
+    assert fact.funding_rate_decimal == "0.000100000000000001"
+    assert fact.mark_price_decimal == "2000.123456789012345678"
+
+
+def test_proxy_marketdata_spot_page_has_no_funding_facts_or_coverage():
+    runtime = _FakeRuntimeChannel()
+    resp = Struct()
+    resp.update({
+        "stream_key": "binance/spot/kline/ZECUSDT/1s",
+        "next_cursor_time_ms": 1000,
+        "has_more": False,
+        "klines": [],
+    })
+    runtime.responses[MARKETDATA_FETCH_BACKTEST_PAGE] = resp
+
+    page = RuntimeChannelPlatformProxy(runtime).marketdata_client().fetch_backtest_page(
+        exchange="binance",
+        market="spot",
+        kind="kline",
+        symbol="ZECUSDT",
+        interval="1s",
+        start_after_time_ms=0,
+        end_time_ms=2_000,
+    )
+
+    assert page.funding_facts == []
+    assert page.funding_coverage_complete is None
 
 
 def test_proxy_log_client_emits_over_runtime_channel():

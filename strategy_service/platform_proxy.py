@@ -42,6 +42,7 @@ PORTFOLIO_GET_PORTFOLIO = "portfolio.GetPortfolioSnapshot"
 PORTFOLIO_UPDATE_WALLET_STATE = "portfolio.UpdatePortfolioWalletState"
 PORTFOLIO_PREFLIGHT_STRATEGY_SESSION = "portfolio.PreflightStrategySession"
 PORTFOLIO_COMMIT_STRATEGY_SESSION_START = "portfolio.CommitStrategySessionStart"
+PORTFOLIO_SETTLE_BACKTEST_FUNDING = "portfolio.SettleBacktestFunding"
 PORTFOLIO_GET_ACTIVE_STRATEGY = "portfolio.GetActiveStrategy"
 PORTFOLIO_UPDATE_SESSION = "portfolio.UpdateSession"
 ORDER_PLACE = "order.PlaceOrder"
@@ -228,6 +229,60 @@ class ProxyPortfolioClient:
             timeout_seconds=float(timeout_seconds),
         )
 
+    def settle_backtest_funding(
+        self,
+        *,
+        session_id: str,
+        user_id: int,
+        fact: "FundingFact",
+        position_mode: str,
+        position_legs: list[Any],
+    ):
+        """Settle one exact Venue-bound Backtest Funding fact."""
+        from google.protobuf.timestamp_pb2 import Timestamp
+        from strategy_service.gen import portfolio_service_pb2
+
+        funding_time_ms = int(fact.funding_time_ms)
+        if funding_time_ms <= 0:
+            raise ValueError("Funding fact funding_time_ms is required")
+        funding_time = Timestamp(
+            seconds=funding_time_ms // 1000,
+            nanos=(funding_time_ms % 1000) * 1_000_000,
+        )
+        request = portfolio_service_pb2.SettleBacktestFundingRequest(
+            session_id=str(session_id or "").strip(),
+            user_id=int(user_id),
+            fact=portfolio_service_pb2.FundingFact(
+                venue_id=int(fact.venue_id),
+                exchange=_exchange_enum(fact.exchange),
+                market=_market_enum(fact.market),
+                symbol=str(fact.symbol or "").strip().upper(),
+                funding_time=funding_time,
+                funding_rate_decimal=fact.funding_rate_decimal,
+                mark_price_decimal=fact.mark_price_decimal,
+                settlement_asset=str(fact.settlement_asset or "").strip().upper(),
+            ),
+            position_mode=str(position_mode or "").strip().lower(),
+            position_legs=[
+                portfolio_service_pb2.FundingPositionLegFact(
+                    symbol=str(leg.symbol or "").strip().upper(),
+                    position_side=str(leg.position_side or "").strip().upper(),
+                    margin_mode=str(leg.margin_mode or "").strip().lower(),
+                    signed_qty_decimal=leg.signed_qty_decimal,
+                )
+                for leg in position_legs
+            ],
+        )
+        response = self._proxy.invoke(
+            PORTFOLIO_SETTLE_BACKTEST_FUNDING,
+            request,
+            portfolio_service_pb2.SettleBacktestFundingResponse,
+            timeout_seconds=30.0,
+        )
+        if int(getattr(response.entry, "income_entry_id", 0) or 0) <= 0:
+            raise RuntimeError("SettleBacktestFunding returned no final Income entry")
+        return response.entry
+
     def get_active_strategy(self, portfolio_id: int):
         try:
             from strategy_service.gen import portfolio_service_pb2
@@ -283,10 +338,35 @@ class ProxyPortfolioClient:
         del runtime_id
         raise RuntimeError("self-hosted runtime recovery must be coordinated by control-panel")
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class MarketFundingFact:
+    exchange: str
+    market: str
+    symbol: str
+    funding_time_ms: int
+    funding_rate_decimal: str
+    mark_price_decimal: str
+    settlement_asset: str
+
+
+@dataclass(frozen=True, slots=True)
+class FundingFact:
+    venue_id: int
+    exchange: str
+    market: str
+    symbol: str
+    funding_time_ms: int
+    funding_rate_decimal: str
+    mark_price_decimal: str
+    settlement_asset: str
+
+
+@dataclass(frozen=True, slots=True)
 class BacktestPage:
     stream_key: str
     klines: list[Any]
+    funding_facts: list[MarketFundingFact]
+    funding_coverage_complete: bool | None
     next_cursor_time_ms: int
     has_more: bool
 
@@ -475,7 +555,7 @@ class ProxyMarketDataClient:
     def fetch_backtest_page(
         self,
         *,
-        exchange: str = "binance",
+        exchange: str,
         market: str,
         kind: str = "kline",
         symbol: str,
@@ -504,6 +584,12 @@ class ProxyMarketDataClient:
         return BacktestPage(
             stream_key=str(data.get("stream_key") or ""),
             klines=_klines_from_struct(resp, market=market, symbol=symbol, interval=interval),
+            funding_facts=_funding_facts_from_struct(data),
+            funding_coverage_complete=(
+                bool(data["funding_coverage_complete"])
+                if "funding_coverage_complete" in data
+                else None
+            ),
             next_cursor_time_ms=int(data.get("next_cursor_time_ms") or 0),
             has_more=bool(data.get("has_more") or False),
         )
@@ -575,6 +661,36 @@ def _klines_from_struct(resp: Struct, *, market: str, symbol: str, interval: str
             timestamp=int(item.get("timestamp") or item.get("close_time") or 0),
             market=str(item.get("market") or market),
         ))
+    return out
+
+
+def _funding_facts_from_struct(data: dict[str, Any]) -> list[MarketFundingFact]:
+    out: list[MarketFundingFact] = []
+    for item in data.get("funding_facts", []):
+        if not isinstance(item, dict):
+            raise ValueError("Backtest Funding fact must be an object")
+        rate = item.get("funding_rate_decimal")
+        mark = item.get("mark_price_decimal")
+        if not isinstance(rate, str) or not rate or not isinstance(mark, str) or not mark:
+            raise ValueError("Backtest Funding fact exact decimals are required")
+        fact = MarketFundingFact(
+            exchange=str(item.get("exchange") or "").strip().lower(),
+            market=str(item.get("market") or "").strip().lower(),
+            symbol=str(item.get("symbol") or "").strip().upper(),
+            funding_time_ms=int(item.get("funding_time_ms") or 0),
+            funding_rate_decimal=rate,
+            mark_price_decimal=mark,
+            settlement_asset=str(item.get("settlement_asset") or "").strip().upper(),
+        )
+        if (
+            not fact.exchange
+            or not fact.market
+            or not fact.symbol
+            or fact.funding_time_ms <= 0
+            or not fact.settlement_asset
+        ):
+            raise ValueError("Backtest Funding fact route and market time are required")
+        out.append(fact)
     return out
 
     def release_market_data_lease(self, *, session_id: str, stream_id: int) -> bool:
