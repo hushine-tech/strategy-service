@@ -2058,6 +2058,123 @@ def test_demo_income_restored_venue_cursor_makes_crash_replay_noop_and_ack(
     assert Delivery.acks == [15]
 
 
+def test_demo_income_stale_non_funding_entry_fails_closed_without_ack(monkeypatch):
+    session_id = "9" * 32
+    route_wallet = _demo_income_wallet(11)
+    route_wallet.futures.last_applied_income_entry_id = 15
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    stale_non_funding = _demo_income_entry(session_id, 15, 11, "1")
+    stale_non_funding.income_type = "REALIZED_PNL"
+
+    class Delivery:
+        acks = []
+
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            yield _demo_income_event(
+                stale_non_funding,
+                sequence=15,
+                batch_end=True,
+            )
+
+        @classmethod
+        def acknowledge_income_applied(cls, event):
+            cls.acks.append(event.sequence)
+
+    state = SessionState(environment=1)
+    state.configure_stop_runtime(wallet=portfolio)
+    servicer = _income_live_servicer(
+        monkeypatch,
+        Delivery(),
+        SimpleNamespace(update_session=lambda **_kwargs: True),
+    )
+
+    with pytest.raises(ValueError, match="Funding"):
+        servicer._run_live_via_platform_proxy(session_id, state, object())
+
+    assert route_wallet.futures.wallet_balance == 100.0
+    assert route_wallet.futures.last_applied_income_entry_id == 15
+    assert Delivery.acks == []
+
+
+def test_demo_income_partial_batch_replay_skips_safe_entry_and_applies_failed_entry_once(
+    monkeypatch,
+):
+    session_id = "8" * 32
+    venue_11 = _demo_income_wallet(11, wallet_balance=100.0)
+    venue_22 = _demo_income_wallet(22, wallet_balance=200.0)
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={
+            ("binance", "perpetual_futures", 11): venue_11,
+            ("binance", "perpetual_futures", 22): venue_22,
+        },
+    )
+    first = _demo_income_entry(session_id, 21, 11, "1")
+    final = _demo_income_entry(session_id, 22, 22, "2")
+    batch = [
+        _demo_income_event(first, sequence=22, batch_end=False),
+        _demo_income_event(final, sequence=22, batch_end=True),
+    ]
+
+    class Delivery:
+        def __init__(self):
+            self.acks = []
+
+        @staticmethod
+        def iter_session_events(**_kwargs):
+            return iter(batch)
+
+        def acknowledge_income_applied(self, event):
+            self.acks.append(event.sequence)
+
+    original_apply = PortfolioWalletRuntime.apply_funding_income_entry
+    fail_final_once = True
+
+    def transient_final_failure(self, exchange, market, venue_id, entry):
+        nonlocal fail_final_once
+        if entry.income_entry_id == 22 and fail_final_once:
+            fail_final_once = False
+            raise RuntimeError("transient final-entry failure")
+        return original_apply(self, exchange, market, venue_id, entry)
+
+    monkeypatch.setattr(
+        PortfolioWalletRuntime,
+        "apply_funding_income_entry",
+        transient_final_failure,
+    )
+    delivery = Delivery()
+    state = SessionState(environment=1)
+    state.configure_stop_runtime(wallet=portfolio)
+    servicer = _income_live_servicer(
+        monkeypatch,
+        delivery,
+        SimpleNamespace(update_session=lambda **_kwargs: True),
+    )
+
+    with pytest.raises(RuntimeError, match="transient final-entry failure"):
+        servicer._run_live_via_platform_proxy(session_id, state, object())
+
+    assert venue_11.futures.wallet_balance == pytest.approx(101.0)
+    assert venue_11.futures.last_applied_income_entry_id == 21
+    assert venue_22.futures.wallet_balance == pytest.approx(200.0)
+    assert venue_22.futures.last_applied_income_entry_id == 0
+    assert delivery.acks == []
+
+    servicer._run_live_via_platform_proxy(session_id, state, object())
+
+    assert venue_11.futures.wallet_balance == pytest.approx(101.0)
+    assert venue_11.futures.last_applied_income_entry_id == 21
+    assert venue_22.futures.wallet_balance == pytest.approx(202.0)
+    assert venue_22.futures.last_applied_income_entry_id == 22
+    assert delivery.acks == [22]
+
+
 def test_blocked_strategy_delays_income_without_concurrent_wallet_mutation(
     monkeypatch,
 ):

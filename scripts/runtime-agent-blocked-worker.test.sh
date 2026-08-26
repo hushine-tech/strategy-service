@@ -13,15 +13,10 @@ test -x ".venv/bin/python" || {
   exit 1
 }
 
-export HUSHINE_BLOCKED_WORKER_SECONDS="${HUSHINE_BLOCKED_WORKER_SECONDS:-8}"
-export HUSHINE_BLOCKED_WORKER_OBSERVE_SECONDS="${HUSHINE_BLOCKED_WORKER_OBSERVE_SECONDS:-3}"
+export HUSHINE_BLOCKED_WORKER_SECONDS="${HUSHINE_BLOCKED_WORKER_SECONDS:-660}"
 
-timeout_seconds="$(
-  awk -v block="${HUSHINE_BLOCKED_WORKER_SECONDS}" \
-    'BEGIN { printf "%d", block + 90 }'
-)"
 go test -tags=integration ./internal/runtimeagent \
   -run TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced \
   -count=1 \
-  -timeout "${timeout_seconds}s" \
+  -timeout 90s \
   -v

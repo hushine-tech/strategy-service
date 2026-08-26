@@ -3663,6 +3663,8 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
             raise ValueError("Demo/Live Runtime Income must be exchange-confirmed")
         if str(getattr(entry, "status", "") or "").strip().lower() != "confirmed":
             raise ValueError("Demo/Live Runtime Income must be confirmed")
+        if str(getattr(entry, "income_type", "") or "").strip().upper() != "FUNDING_FEE":
+            raise ValueError("Demo/Live Runtime Income must be Funding Income")
 
         wallet = state.wallet
         if not isinstance(wallet, PortfolioWalletRuntime):

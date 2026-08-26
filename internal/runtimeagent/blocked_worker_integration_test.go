@@ -35,13 +35,11 @@ import (
 const blockedWorkerRuntimeID = "bare-6-blocked-worker"
 
 func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
-	blockSeconds := blockedWorkerDuration(t, "HUSHINE_BLOCKED_WORKER_SECONDS", 8)
-	observeSeconds := blockedWorkerDuration(t, "HUSHINE_BLOCKED_WORKER_OBSERVE_SECONDS", 3)
-	if blockSeconds <= observeSeconds {
+	blockSeconds := blockedWorkerDuration(t, "HUSHINE_BLOCKED_WORKER_SECONDS", 660)
+	if blockSeconds <= 10*time.Minute {
 		t.Fatalf(
-			"HUSHINE_BLOCKED_WORKER_SECONDS=%v must exceed observation=%v",
+			"HUSHINE_BLOCKED_WORKER_SECONDS=%v must exceed ten logical minutes",
 			blockSeconds,
-			observeSeconds,
 		)
 	}
 
@@ -63,6 +61,7 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 	replayStartPath := filepath.Join(barrierRoot, "replacement-start.pb")
 	replayBatchPath := filepath.Join(barrierRoot, "replacement-income.pb")
 	replayEventsPath := filepath.Join(barrierRoot, "replacement-events.json")
+	replayApplyPath := filepath.Join(barrierRoot, "replacement-apply.json")
 	replayACKReleasePath := filepath.Join(barrierRoot, "release-income-ack")
 	replayACKEnqueuedPath := filepath.Join(barrierRoot, "income-ack-enqueued")
 	stateRoot := filepath.Join(t.TempDir(), "worker-state")
@@ -125,6 +124,7 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 			"HUSHINE_INCOME_REPLAY_START="+replayStartPath,
 			"HUSHINE_INCOME_REPLAY_BATCH="+replayBatchPath,
 			"HUSHINE_INCOME_REPLAY_EVENTS="+replayEventsPath,
+			"HUSHINE_INCOME_REPLAY_APPLY="+replayApplyPath,
 			"HUSHINE_INCOME_REPLAY_ACK_RELEASE="+replayACKReleasePath,
 			"HUSHINE_INCOME_REPLAY_ACK_ENQUEUED="+replayACKEnqueuedPath,
 		)
@@ -144,6 +144,7 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 
 	serviceCtx, cancelService := context.WithCancel(context.Background())
 	defer cancelService()
+	heartbeatTicks := make(chan time.Time)
 	var agent *Agent
 	runtimeClient := NewRuntimeChannelClient(RuntimeChannelClientConfig{
 		Address: controlListener.Addr().String(),
@@ -154,7 +155,7 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 			Name:              "blocked-worker-test",
 			DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile,
 		},
-		HeartbeatSeconds: 1,
+		HeartbeatTicks: heartbeatTicks,
 		DialOptions: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		},
@@ -286,29 +287,17 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 	}
 	control.assertNoRuntimeDataACK(t)
 
-	heartbeatTimes := observeBlockedWorkerHeartbeats(
+	advanceBlockedWorkerHeartbeatTicks(
 		t,
+		heartbeatTicks,
 		control,
 		runtimeDone,
-		observeSeconds,
+		600,
 	)
-	if observeSeconds >= 10*time.Minute && len(heartbeatTimes) < 500 {
+	if control.heartbeatACKCount() != 600 {
 		t.Fatalf(
-			"observed %d heartbeats during %v, want at least 500",
-			len(heartbeatTimes),
-			observeSeconds,
-		)
-	}
-	for index := 1; index < len(heartbeatTimes); index++ {
-		if gap := heartbeatTimes[index].Sub(heartbeatTimes[index-1]); gap > 5*time.Second {
-			t.Fatalf("heartbeat gap = %v, want <= 5s", gap)
-		}
-	}
-	if control.heartbeatACKCount() < len(heartbeatTimes) {
-		t.Fatalf(
-			"Runtime heartbeat ACKs = %d, want at least %d",
+			"Runtime heartbeat ACKs = %d, want exactly 600",
 			control.heartbeatACKCount(),
-			len(heartbeatTimes),
 		)
 	}
 	control.assertNoRuntimeDataACK(t)
@@ -340,6 +329,7 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 	waitForWorkerFile(t, replayStartPath)
 	waitForWorkerFile(t, replayBatchPath)
 	waitForWorkerFile(t, replayEventsPath)
+	waitForWorkerFile(t, replayApplyPath)
 	assertReplacementIncomeReplay(
 		t,
 		replayStartPath,
@@ -348,6 +338,7 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 		wantStart.(*rwv1.StartSession),
 		expectedWorkerFrame.GetIncomeBatch(),
 	)
+	assertReplacementIncomeApply(t, replayApplyPath)
 	control.assertNoRuntimeDataACK(t)
 	if err := os.WriteFile(replayACKReleasePath, []byte("durable\n"), 0o600); err != nil {
 		t.Fatalf("release durable Income ACK: %v", err)
@@ -479,45 +470,37 @@ func waitForBlockedWorkerMarker(
 	}
 }
 
-func observeBlockedWorkerHeartbeats(
+func advanceBlockedWorkerHeartbeatTicks(
 	t *testing.T,
+	ticks chan<- time.Time,
 	control *blockedWorkerControl,
 	runtimeDone <-chan error,
-	duration time.Duration,
-) []time.Time {
+	count int,
+) {
 	t.Helper()
-	deadline := time.NewTimer(duration)
-	defer deadline.Stop()
-	noHeartbeat := time.NewTimer(5 * time.Second)
-	defer noHeartbeat.Stop()
-	timestamps := make([]time.Time, 0, int(duration/time.Second)+1)
-	for {
+	logicalNow := time.Unix(1_780_000_000, 0)
+	for index := 0; index < count; index++ {
 		select {
-		case timestamp := <-control.heartbeats:
-			timestamps = append(timestamps, timestamp)
-			if !noHeartbeat.Stop() {
-				select {
-				case <-noHeartbeat.C:
-				default:
-				}
-			}
-			noHeartbeat.Reset(5 * time.Second)
+		case ticks <- logicalNow.Add(time.Duration(index) * time.Second):
 		case err := <-runtimeDone:
-			t.Fatalf("RuntimeChannel stopped while worker was blocked: %v", err)
-		case <-noHeartbeat.C:
+			t.Fatalf("RuntimeChannel stopped before logical tick %d: %v", index+1, err)
+		case <-time.After(5 * time.Second):
 			t.Fatalf(
-				"heartbeat stopped for 5 seconds while worker was blocked; observed=%d",
-				len(timestamps),
+				"RuntimeChannel did not accept logical heartbeat tick %d",
+				index+1,
 			)
-		case <-deadline.C:
-			if len(timestamps) < 3 {
-				t.Fatalf(
-					"observed %d heartbeats while worker was blocked, want at least 3",
-					len(timestamps),
-				)
-			}
-			return timestamps
 		}
+		select {
+		case <-control.heartbeats:
+		case err := <-runtimeDone:
+			t.Fatalf("RuntimeChannel stopped after logical tick %d: %v", index+1, err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("logical heartbeat %d was not observed", index+1)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for control.heartbeatACKCount() != count && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -563,6 +546,38 @@ type capturedIncomeEvent struct {
 	Sequence  int64  `json:"sequence"`
 	BatchEnd  bool   `json:"batch_end"`
 	EntryHex  string `json:"entry_hex"`
+}
+
+type capturedIncomeApply struct {
+	BalanceBefore string `json:"balance_before"`
+	BalanceAfter  string `json:"balance_after"`
+	CursorBefore  int64  `json:"cursor_before"`
+	CursorAfter   int64  `json:"cursor_after"`
+	EntryCount    int    `json:"entry_count"`
+	FinalSequence int64  `json:"final_sequence"`
+}
+
+func assertReplacementIncomeApply(t *testing.T, applyPath string) {
+	t.Helper()
+	body, err := os.ReadFile(applyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got capturedIncomeApply
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode replacement Income apply result: %v", err)
+	}
+	want := capturedIncomeApply{
+		BalanceBefore: "1000.0",
+		BalanceAfter:  "1000.0",
+		CursorBefore:  10,
+		CursorAfter:   10,
+		EntryCount:    2,
+		FinalSequence: 10,
+	}
+	if got != want {
+		t.Fatalf("replacement production Income apply = %+v, want %+v", got, want)
+	}
 }
 
 func assertReplacementIncomeReplay(
@@ -642,17 +657,18 @@ func blockedWorkerIncomeRuntimeFrame(
 			IncomeEntryId: sequence - 1, SessionId: sessionID, VenueId: 71,
 			IncomeType: "FUNDING_FEE", Source: "exchange", ExternalTransactionId: "income-external-1",
 			SettlementKey: "funding-v1-1", Symbol: "BTCUSDT", Asset: "USDT",
-			CalculatedAmountDecimal: "0.010000000000000002", ExchangeAmountDecimal: amount,
-			AppliedAmountDecimal: amount, ReconciliationDeltaDecimal: "-0.000000000000000001",
-			CalculationDetailsJson: `[{"quantity":"0.100000000000000001"}]`, Status: "confirmed",
+			CalculatedAmountDecimal: amount, ExchangeAmountDecimal: amount,
+			AppliedAmountDecimal: amount, ReconciliationDeltaDecimal: "0",
+			CalculationDetailsJson: `[{"symbol":"BTCUSDT","position_side":"BOTH","margin_mode":"cross","signed_qty_decimal":"0.100000000000000001","funding_rate_decimal":"0.000100000000000001","mark_price_decimal":"100.000000000000000001","calculated_amount_decimal":"0.010000000000000001","applied_amount_decimal":"0.010000000000000001","calculator_version":"binance-usdm-linear-v1"}]`, Status: "confirmed",
 			OccurredAt: timestamppb.New(time.UnixMilli(1_780_000_000_000)),
 		},
 		{
 			IncomeEntryId: sequence, SessionId: sessionID, VenueId: 71,
-			IncomeType: "FUNDING_FEE", Source: "backtest", SettlementKey: "funding-v1-2",
-			Symbol: "ETHUSDT", Asset: "USDT", CalculatedAmountDecimal: amount,
+			IncomeType: "FUNDING_FEE", Source: "exchange", ExternalTransactionId: "income-external-2",
+			SettlementKey: "funding-v1-2", Symbol: "BTCUSDT", Asset: "USDT",
+			CalculatedAmountDecimal: amount, ExchangeAmountDecimal: amount,
 			AppliedAmountDecimal: amount, ReconciliationDeltaDecimal: "0",
-			CalculationDetailsJson: `[{"quantity":"-0.200000000000000001"}]`, Status: "calculated",
+			CalculationDetailsJson: `[{"symbol":"BTCUSDT","position_side":"BOTH","margin_mode":"cross","signed_qty_decimal":"0.200000000000000001","funding_rate_decimal":"0.000100000000000001","mark_price_decimal":"100.000000000000000001","calculated_amount_decimal":"0.010000000000000001","applied_amount_decimal":"0.010000000000000001","calculator_version":"binance-usdm-linear-v1"}]`, Status: "confirmed",
 			OccurredAt: timestamppb.New(time.UnixMilli(1_780_000_060_000)),
 		},
 	}
@@ -1044,14 +1060,15 @@ func blockedWorkerPortfolioSnapshot() *portfoliov1.PortfolioSnapshot {
 		Environment: 0,
 		TotalValue:  1000,
 		Futures: &portfoliov1.FuturesWallet{
-			MarginMode:              "cross",
-			PositionMode:            "one_way",
-			InitialBalance:          1000,
-			WalletBalance:           1000,
-			AvailableBalance:        1000,
-			TotalMarginBalance:      1000,
-			TotalCrossWalletBalance: 1000,
-			MarginBalance:           1000,
+			MarginMode:               "cross",
+			PositionMode:             "one_way",
+			InitialBalance:           1000,
+			WalletBalance:            1000,
+			AvailableBalance:         1000,
+			TotalMarginBalance:       1000,
+			TotalCrossWalletBalance:  1000,
+			MarginBalance:            1000,
+			LastAppliedIncomeEntryId: 10,
 		},
 	}
 	return &portfoliov1.PortfolioSnapshot{

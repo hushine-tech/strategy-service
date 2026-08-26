@@ -7,6 +7,13 @@ import os
 import time
 from pathlib import Path
 
+from strategy_service.gen import strategy_service_pb2 as strategy_pb2
+from strategy_service.grpc_server import StrategyServiceServicer
+from strategy_service.platform_proxy import RuntimeChannelPlatformProxy
+from strategy_service.session import SessionState
+from strategy_service.wallet.portfolio_adapter import (
+    build_portfolio_wallet_from_snapshot,
+)
 from strategy_service.worker_agent_client import (
     WorkerAgentClient,
     WorkerAgentDataSource,
@@ -52,6 +59,7 @@ def main() -> None:
     start_path = _path("HUSHINE_INCOME_REPLAY_START")
     batch_path = _path("HUSHINE_INCOME_REPLAY_BATCH")
     events_path = _path("HUSHINE_INCOME_REPLAY_EVENTS")
+    apply_path = _path("HUSHINE_INCOME_REPLAY_APPLY")
     ack_release_path = _path("HUSHINE_INCOME_REPLAY_ACK_RELEASE")
     ack_enqueued_path = _path("HUSHINE_INCOME_REPLAY_ACK_ENQUEUED")
     client = _CapturingWorkerAgentClient(env, income_batch_path=batch_path)
@@ -59,6 +67,24 @@ def main() -> None:
     try:
         start = client.wait_for_start_session(timeout_seconds=15.0)
         _write(start_path, start.SerializeToString(deterministic=True))
+        request = strategy_pb2.RunStrategyRequest()
+        if not start.run_strategy_request.Unpack(request):
+            raise RuntimeError("StartSession run request is invalid")
+        snapshot = RuntimeChannelPlatformProxy(client).portfolio_client().get_portfolio_snapshot(
+            portfolio_id=request.portfolio_id,
+            user_id=request.user_id or start.user_id,
+        )
+        if snapshot is None:
+            raise RuntimeError("replacement Worker portfolio snapshot is unavailable")
+        wallet = build_portfolio_wallet_from_snapshot(
+            snapshot,
+            allowed_routes={("binance", "perpetual_futures")},
+        )
+        route_wallet = wallet.wallets[("binance", "perpetual_futures", 71)]
+        state = SessionState(environment=1)
+        state.configure_stop_runtime(wallet=wallet)
+        balance_before = str(route_wallet.futures.wallet_balance)
+        cursor_before = int(route_wallet.futures.last_applied_income_entry_id)
         source = WorkerAgentDataSource(client)
         decoded = []
         final_event = None
@@ -81,6 +107,11 @@ def main() -> None:
                     ).hex(),
                 }
             )
+            StrategyServiceServicer._apply_runtime_income_event(
+                env.session_id,
+                state,
+                event,
+            )
             if event.batch_end:
                 final_event = event
                 break
@@ -89,6 +120,22 @@ def main() -> None:
         _write(
             events_path,
             json.dumps(decoded, separators=(",", ":")).encode("utf-8"),
+        )
+        _write(
+            apply_path,
+            json.dumps(
+                {
+                    "balance_before": balance_before,
+                    "balance_after": str(route_wallet.futures.wallet_balance),
+                    "cursor_before": cursor_before,
+                    "cursor_after": int(
+                        route_wallet.futures.last_applied_income_entry_id
+                    ),
+                    "entry_count": len(decoded),
+                    "final_sequence": final_event.sequence,
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
         )
         _wait(ack_release_path)
         source.acknowledge_income_applied(final_event)
