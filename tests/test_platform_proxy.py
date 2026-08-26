@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -180,15 +181,45 @@ def test_proxy_portfolio_client_settles_exact_backtest_funding_facts():
     runtime.responses[PORTFOLIO_SETTLE_BACKTEST_FUNDING] = (
         portfolio_service_pb2.SettleBacktestFundingResponse(
             entry=portfolio_service_pb2.VenueIncomeEntry(
-                income_entry_id=71,
-                session_id="sess-funding",
-                venue_id=41,
-                income_type="funding_fee",
-                symbol="BTCUSDT",
-                asset="USDT",
-                applied_amount_decimal="-0.020000000000000001",
-                calculation_details_json="[]",
-                status="calculated",
+                    income_entry_id=71,
+                    session_id="sess-funding",
+                    venue_id=41,
+                    income_type="FUNDING_FEE",
+                    source="backtest",
+                    symbol="BTCUSDT",
+                    asset="USDT",
+                    occurred_at=Timestamp(
+                        seconds=1_788_000_000,
+                        nanos=123_000_000,
+                    ),
+                    calculated_amount_decimal="-0.020000000000000001",
+                    applied_amount_decimal="-0.020000000000000001",
+                    reconciliation_delta_decimal="0",
+                    calculation_details_json=json.dumps([
+                        {
+                            "symbol": "BTCUSDT",
+                            "position_side": "LONG",
+                            "margin_mode": "isolated",
+                            "signed_qty_decimal": "0.100000000000000001",
+                            "funding_rate_decimal": "0.000100000000000001",
+                            "mark_price_decimal": "50000.123456789012345678",
+                            "calculated_amount_decimal": "-0.03",
+                            "applied_amount_decimal": "-0.03",
+                            "calculator_version": "binance-usdm-linear-v1",
+                        },
+                        {
+                            "symbol": "BTCUSDT",
+                            "position_side": "SHORT",
+                            "margin_mode": "isolated",
+                            "signed_qty_decimal": "-0.02",
+                            "funding_rate_decimal": "0.000100000000000001",
+                            "mark_price_decimal": "50000.123456789012345678",
+                            "calculated_amount_decimal": "0.009999999999999999",
+                            "applied_amount_decimal": "0.009999999999999999",
+                            "calculator_version": "binance-usdm-linear-v1",
+                        },
+                    ], separators=(",", ":")),
+                    status="calculated",
             )
         )
     )

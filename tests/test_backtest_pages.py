@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from market_data.models import MarketKline
 
 from strategy_service.backtest_pages import PagedBacktestDataSource
@@ -97,7 +99,11 @@ def test_timeline_reads_page_boundary_funding_once_before_same_time_kline():
 
     events = list(source.iter_timeline())
 
-    assert [(event.kind, event.market_time_ms) for event in events] == [
+    assert [
+        (event.kind, event.market_time_ms)
+        for event in events
+        if event.kind != "coverage"
+    ] == [
         ("kline", 1_000),
         ("funding", 2_000),
         ("kline", 2_000),
@@ -136,6 +142,7 @@ def test_same_time_symbols_use_stream_order_with_funding_before_klines():
     assert [
         (event.kind, event.stream_index, event.payload.symbol)
         for event in events
+        if event.kind != "coverage"
     ] == [
         ("funding", 0, "ETHUSDT"),
         ("funding", 1, "ZECUSDT"),
@@ -164,3 +171,67 @@ def test_spot_timeline_contains_only_klines_and_no_funding_coverage_requirement(
         ("kline", None),
     ]
     assert not hasattr(source, "iter_klines")
+
+
+def test_same_funding_fact_across_1m_and_5m_inputs_is_emitted_once_globally():
+    repeated = funding("BTCUSDT", 9_000)
+    client = FakeMarketDataClient({
+        "binance/futures/kline/BTCUSDT/1m": [{
+            "klines": [kline("BTCUSDT", 9_000, interval="1m")],
+            "funding_facts": [repeated],
+            "funding_coverage_complete": True,
+        }],
+        "binance/futures/kline/BTCUSDT/5m": [{
+            "klines": [kline("BTCUSDT", 9_000, interval="5m")],
+            "funding_facts": [repeated],
+            "funding_coverage_complete": True,
+        }],
+    })
+    source = PagedBacktestDataSource(
+        client,
+        start_time_ms=9_000,
+        end_time_ms=10_000,
+        streams=[binding("BTCUSDT", "1m"), binding("BTCUSDT", "5m")],
+    )
+
+    funding_events = [
+        event for event in source.iter_timeline() if event.kind == "funding"
+    ]
+
+    assert [(event.stream_index, event.market_time_ms) for event in funding_events] == [
+        (0, 9_000),
+    ]
+
+
+def test_conflicting_funding_fact_across_inputs_fails_closed_as_ambiguous():
+    first = funding("BTCUSDT", 9_000)
+    conflict = MarketFundingFact(
+        exchange=first.exchange,
+        market=first.market,
+        symbol=first.symbol,
+        funding_time_ms=first.funding_time_ms,
+        funding_rate_decimal="0.0002",
+        mark_price_decimal=first.mark_price_decimal,
+        settlement_asset=first.settlement_asset,
+    )
+    client = FakeMarketDataClient({
+        "binance/futures/kline/BTCUSDT/1m": [{
+            "klines": [],
+            "funding_facts": [first],
+            "funding_coverage_complete": True,
+        }],
+        "binance/futures/kline/BTCUSDT/5m": [{
+            "klines": [],
+            "funding_facts": [conflict],
+            "funding_coverage_complete": True,
+        }],
+    })
+    source = PagedBacktestDataSource(
+        client,
+        start_time_ms=9_000,
+        end_time_ms=10_000,
+        streams=[binding("BTCUSDT", "1m"), binding("BTCUSDT", "5m")],
+    )
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        list(source.iter_timeline())

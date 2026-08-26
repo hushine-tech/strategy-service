@@ -3279,7 +3279,6 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         ]
         from strategy_service.backtest_pages import (
             BACKTEST_PAGE_SIZE,
-            BacktestFundingDataGapError,
             BacktestFundingSettlementError,
             PagedBacktestDataSource,
         )
@@ -3312,6 +3311,16 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     fatal_check()
                 binding = required_streams[event.stream_index]
                 canonical_market = binding.canonical_market or binding.market
+                if event.kind == "coverage":
+                    self._require_backtest_funding_coverage(
+                        wallet=wallet,
+                        exchange=binding.exchange,
+                        market=canonical_market,
+                        symbol=event.payload.symbol,
+                        market_time_ms=event.market_time_ms,
+                        coverage_complete=event.funding_coverage_complete,
+                    )
+                    continue
                 if event.kind == "funding":
                     market_fact = event.payload
                     if canonical_market == "spot":
@@ -3378,25 +3387,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 if event.kind != "kline":
                     raise RuntimeError(f"unsupported Backtest timeline event: {event.kind}")
                 kline = event.payload
-                if (
-                    canonical_market == "perpetual_futures"
-                    and event.funding_coverage_complete is not True
-                ):
-                    for venue_id, _route_wallet in self._backtest_funding_route_wallets(
-                        wallet, binding.exchange, canonical_market
-                    ):
-                        if wallet.funding_position_tracker.legs_for(
-                            venue_id,
-                            kline.symbol,
-                            funding_time=_funding_time_key(event.market_time_ms),
-                        ):
-                            raise BacktestFundingDataGapError(
-                                exchange=binding.exchange,
-                                market=canonical_market,
-                                symbol=kline.symbol,
-                                venue_id=venue_id,
-                                market_time_ms=event.market_time_ms,
-                            )
+                self._require_backtest_funding_coverage(
+                    wallet=wallet,
+                    exchange=binding.exchange,
+                    market=canonical_market,
+                    symbol=kline.symbol,
+                    market_time_ms=event.market_time_ms,
+                    coverage_complete=event.funding_coverage_complete,
+                )
                 if not state.try_enter_strategy_decision():
                     break
                 try:
@@ -3406,6 +3404,14 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     ))
                 finally:
                     state.leave_strategy_decision()
+                self._require_backtest_funding_coverage(
+                    wallet=wallet,
+                    exchange=binding.exchange,
+                    market=canonical_market,
+                    symbol=kline.symbol,
+                    market_time_ms=event.market_time_ms,
+                    coverage_complete=event.funding_coverage_complete,
+                )
                 if callable(fatal_check):
                     fatal_check()
                 n += 1
@@ -3432,6 +3438,37 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         else:
             state.bars_processed = n
         logger.info("session %s finished via platform market-data proxy: %d bars", session_id, n)
+
+    @staticmethod
+    def _require_backtest_funding_coverage(
+        *,
+        wallet: PortfolioWalletRuntime,
+        exchange: str,
+        market: str,
+        symbol: str,
+        market_time_ms: int,
+        coverage_complete: bool | None,
+    ) -> None:
+        from strategy_service.backtest_pages import BacktestFundingDataGapError
+
+        canonical_market = _normalize_market(market)
+        if canonical_market != "perpetual_futures" or coverage_complete is True:
+            return
+        for venue_id, _route_wallet in StrategyServiceServicer._backtest_funding_route_wallets(
+            wallet, exchange, canonical_market
+        ):
+            if wallet.funding_position_tracker.legs_for(
+                venue_id,
+                symbol,
+                funding_time=_funding_time_key(market_time_ms),
+            ):
+                raise BacktestFundingDataGapError(
+                    exchange=exchange,
+                    market=canonical_market,
+                    symbol=symbol,
+                    venue_id=venue_id,
+                    market_time_ms=market_time_ms,
+                )
 
     @staticmethod
     def _backtest_funding_route_wallets(

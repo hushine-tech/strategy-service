@@ -8,11 +8,13 @@ back over RuntimeChannel to control-panel-service.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import traceback
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 from google.protobuf.json_format import MessageToDict
@@ -279,9 +281,7 @@ class ProxyPortfolioClient:
             portfolio_service_pb2.SettleBacktestFundingResponse,
             timeout_seconds=30.0,
         )
-        if int(getattr(response.entry, "income_entry_id", 0) or 0) <= 0:
-            raise RuntimeError("SettleBacktestFunding returned no final Income entry")
-        return response.entry
+        return _validate_backtest_funding_response(response, request)
 
     def get_active_strategy(self, portfolio_id: int):
         try:
@@ -359,6 +359,176 @@ class FundingFact:
     funding_rate_decimal: str
     mark_price_decimal: str
     settlement_asset: str
+
+
+class BacktestFundingResponseError(ValueError):
+    code = "BACKTEST_FUNDING_RESPONSE_INVALID"
+
+    def __init__(self, message: str):
+        super().__init__(f"{self.code}: {message}")
+
+
+def _backtest_response_decimal(raw: object, field_name: str) -> Decimal:
+    if not isinstance(raw, str) or not raw or raw != raw.strip():
+        raise BacktestFundingResponseError(f"{field_name} must be an exact decimal string")
+    try:
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError) as exc:
+        raise BacktestFundingResponseError(f"{field_name} is invalid") from exc
+    if not value.is_finite():
+        raise BacktestFundingResponseError(f"{field_name} is invalid")
+    return value
+
+
+def _validate_backtest_funding_response(response: Any, request: Any):
+    if response is None:
+        raise BacktestFundingResponseError("settlement response is missing")
+    has_field = getattr(response, "HasField", None)
+    if not callable(has_field) or not response.HasField("entry"):
+        raise BacktestFundingResponseError("settlement entry is missing")
+    entry = response.entry
+    if int(entry.income_entry_id) <= 0:
+        raise BacktestFundingResponseError("income_entry_id is missing")
+    expected_fields = {
+        "session_id": request.session_id,
+        "venue_id": request.fact.venue_id,
+        "source": "backtest",
+        "status": "calculated",
+        "income_type": "FUNDING_FEE",
+        "symbol": request.fact.symbol,
+        "asset": request.fact.settlement_asset,
+    }
+    for field_name, expected in expected_fields.items():
+        if getattr(entry, field_name) != expected:
+            raise BacktestFundingResponseError(
+                f"entry {field_name} does not match the settlement request"
+            )
+    if not entry.HasField("occurred_at"):
+        raise BacktestFundingResponseError("entry occurred_at is missing")
+    if (
+        entry.occurred_at.seconds != request.fact.funding_time.seconds
+        or entry.occurred_at.nanos != request.fact.funding_time.nanos
+    ):
+        raise BacktestFundingResponseError(
+            "entry occurred_at does not match Funding market time"
+        )
+    if entry.external_transaction_id:
+        raise BacktestFundingResponseError(
+            "Backtest entry must not contain an exchange transaction ID"
+        )
+    if entry.exchange_amount_decimal:
+        raise BacktestFundingResponseError(
+            "Backtest entry must not contain an exchange amount"
+        )
+
+    requested_legs: dict[tuple[str, str, str], Decimal] = {}
+    for leg in request.position_legs:
+        identity = (leg.symbol, leg.position_side, leg.margin_mode)
+        if identity in requested_legs:
+            raise BacktestFundingResponseError(
+                "settlement request contains a duplicate position leg"
+            )
+        requested_legs[identity] = _backtest_response_decimal(
+            leg.signed_qty_decimal,
+            "requested leg signed_qty_decimal",
+        )
+    if not requested_legs:
+        raise BacktestFundingResponseError("settlement request contains no position legs")
+
+    try:
+        details = json.loads(entry.calculation_details_json)
+    except (TypeError, ValueError) as exc:
+        raise BacktestFundingResponseError("calculation details are invalid") from exc
+    if not isinstance(details, list) or not details:
+        raise BacktestFundingResponseError("calculation details must contain position legs")
+
+    response_legs: dict[tuple[str, str, str], Decimal] = {}
+    calculated_sum = Decimal()
+    applied_sum = Decimal()
+    for detail in details:
+        if not isinstance(detail, dict):
+            raise BacktestFundingResponseError("calculation leg must be an object")
+        symbol = detail.get("symbol")
+        position_side = detail.get("position_side")
+        margin_mode = detail.get("margin_mode")
+        identity = (symbol, position_side, margin_mode)
+        if not all(isinstance(value, str) and value for value in identity):
+            raise BacktestFundingResponseError("calculation leg identity is missing")
+        if identity in response_legs:
+            raise BacktestFundingResponseError(
+                "calculation details contain a duplicate position leg"
+            )
+        response_legs[identity] = _backtest_response_decimal(
+            detail.get("signed_qty_decimal"),
+            "calculation leg signed_qty_decimal",
+        )
+        if detail.get("funding_rate_decimal") != request.fact.funding_rate_decimal:
+            raise BacktestFundingResponseError(
+                "calculation leg Funding rate does not match the market fact"
+            )
+        if detail.get("mark_price_decimal") != request.fact.mark_price_decimal:
+            raise BacktestFundingResponseError(
+                "calculation leg mark price does not match the market fact"
+            )
+        if not isinstance(detail.get("calculator_version"), str) or not detail[
+            "calculator_version"
+        ]:
+            raise BacktestFundingResponseError(
+                "calculation leg calculator_version is missing"
+            )
+        calculated = _backtest_response_decimal(
+            detail.get("calculated_amount_decimal"),
+            "calculation leg calculated_amount_decimal",
+        )
+        applied = _backtest_response_decimal(
+            detail.get("applied_amount_decimal"),
+            "calculation leg applied_amount_decimal",
+        )
+        if applied != calculated:
+            raise BacktestFundingResponseError(
+                "Backtest calculation leg applied amount differs from calculated amount"
+            )
+        calculated_sum += calculated
+        applied_sum += applied
+
+    if response_legs.keys() != requested_legs.keys():
+        raise BacktestFundingResponseError(
+            "calculation leg identities do not match requested position legs"
+        )
+    if any(response_legs[key] != quantity for key, quantity in requested_legs.items()):
+        raise BacktestFundingResponseError(
+            "calculation leg quantities do not match requested position legs"
+        )
+
+    calculated_total = _backtest_response_decimal(
+        entry.calculated_amount_decimal,
+        "entry calculated_amount_decimal",
+    )
+    applied_total = _backtest_response_decimal(
+        entry.applied_amount_decimal,
+        "entry applied_amount_decimal",
+    )
+    reconciliation_delta = _backtest_response_decimal(
+        entry.reconciliation_delta_decimal,
+        "entry reconciliation_delta_decimal",
+    )
+    if calculated_sum != calculated_total:
+        raise BacktestFundingResponseError(
+            "calculation leg sum does not match entry calculated amount"
+        )
+    if applied_sum != applied_total:
+        raise BacktestFundingResponseError(
+            "calculation leg sum does not match entry applied amount"
+        )
+    if applied_total != calculated_total:
+        raise BacktestFundingResponseError(
+            "Backtest applied amount differs from calculated amount"
+        )
+    if reconciliation_delta != 0:
+        raise BacktestFundingResponseError(
+            "Backtest reconciliation delta must be zero"
+        )
+    return entry
 
 
 @dataclass(frozen=True, slots=True)

@@ -313,3 +313,36 @@ def test_portfolio_snapshot_rejects_float_only_initial_futures_position():
             ),
             allowed_routes={("binance", "perpetual_futures")},
         )
+
+
+@pytest.mark.parametrize("position_venue_id", [0, 22])
+def test_portfolio_snapshot_rejects_missing_or_mismatched_position_venue_identity(
+    position_venue_id,
+):
+    venue = portfolio_service_pb2.VenueSnapshot(
+        venue_id=11, exchange=1, environment=0, market=2,
+    )
+    venue.wallet.CopyFrom(portfolio_service_pb2.PortfolioWalletState(
+        environment=0,
+        futures=portfolio_service_pb2.FuturesWallet(
+            margin_mode="cross",
+            position_mode="one_way",
+            initial_balance=100.0,
+            positions=[portfolio_service_pb2.FuturesPosition(
+                symbol="BTCUSDT",
+                position_side="BOTH",
+                position_qty=1.0,
+                signed_qty_decimal="1",
+                venue_id=position_venue_id,
+                margin_mode="cross",
+            )],
+        ),
+    ))
+
+    with pytest.raises(ValueError, match="venue_id"):
+        build_portfolio_wallet_from_snapshot(
+            portfolio_service_pb2.PortfolioSnapshot(
+                portfolio_id=7, user_id=17, venues=[venue],
+            ),
+            allowed_routes={("binance", "perpetual_futures")},
+        )

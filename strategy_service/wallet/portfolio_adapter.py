@@ -99,7 +99,9 @@ def _exact_funding_legs_from_venue(venue: Any) -> list[FundingPositionLegFact]:
     identities: set[tuple[str, str]] = set()
     for position in getattr(futures, "positions", ()) or ():
         position_venue_id = int(getattr(position, "venue_id", 0) or 0)
-        if position_venue_id > 0 and position_venue_id != venue_id:
+        if position_venue_id <= 0:
+            raise ValueError("canonical Futures position venue_id is required")
+        if position_venue_id != venue_id:
             raise ValueError("Futures position venue_id conflicts with VenueSnapshot")
         symbol = str(getattr(position, "symbol", "") or "").strip().upper()
         side = str(getattr(position, "position_side", "") or "").strip().upper()

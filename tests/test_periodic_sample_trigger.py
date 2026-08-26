@@ -262,7 +262,10 @@ def test_periodic_sample_never_fires_on_mode_0(monkeypatch):
 
     captured_engine: list[Any] = []
 
-    def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs):
+    def fake_run_backtest(
+        session_id, inner_state, engine, req, declared_inputs, backtest_wallet
+    ):
+        assert backtest_wallet is wallet
         captured_engine.append(engine)
         # Simulate heavy bar traffic that WOULD fire PeriodicSample if the trigger
         # were wired (20 bars is well past the default 20-bar threshold).
