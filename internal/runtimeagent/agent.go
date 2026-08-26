@@ -103,6 +103,7 @@ type Agent struct {
 	workerCallReply   map[string]chan *rwv1.PlatformCallResult
 	workerCallSession map[string]string
 	runRequests       map[string]*anypb.Any
+	sessionStarts     map[string]*rwv1.StartSession
 	restartCalls      map[string]*restartSessionCall
 	pendingIncome     map[string]*pendingIncomeBatch
 	shuttingDown      bool
@@ -156,6 +157,7 @@ type workerGeneration struct {
 	cleanupDone        chan struct{}
 	cleanupErr         error
 	authGeneration     uint64
+	bootstrapAuth      uint64
 	protocolFailure    string
 	launchOperationID  string
 	userID             int64
@@ -433,6 +435,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 		workerCallReply:   map[string]chan *rwv1.PlatformCallResult{},
 		workerCallSession: map[string]string{},
 		runRequests:       map[string]*anypb.Any{},
+		sessionStarts:     map[string]*rwv1.StartSession{},
 		restartCalls:      map[string]*restartSessionCall{},
 		pendingIncome:     map[string]*pendingIncomeBatch{},
 		terminalRetries:   map[string]TerminalRetryRecord{},
@@ -1378,14 +1381,27 @@ func (a *Agent) watchWorkerGeneration(
 	}
 	go func() {
 		<-worker.processExitedSignal()
-		generation.mu.Lock()
-		connected := generation.connected
-		generation.mu.Unlock()
-		if connected {
-			return
-		}
-		_ = a.cleanupWorkerGeneration(sessionID, generation, "session worker process exited")
+		a.handleWorkerGenerationProcessExit(sessionID, generation)
 	}()
+}
+
+func (a *Agent) handleWorkerGenerationProcessExit(
+	sessionID string,
+	generation *workerGeneration,
+) {
+	generation.mu.Lock()
+	connected := generation.connected
+	generation.mu.Unlock()
+	if connected {
+		return
+	}
+	a.mu.Lock()
+	retainedIncome := a.pendingIncome[sessionID] != nil
+	a.mu.Unlock()
+	if retainedIncome {
+		return
+	}
+	_ = a.cleanupWorkerGeneration(sessionID, generation, "session worker process exited")
 }
 
 func (a *Agent) reserveWorkerGeneration() (
@@ -1866,6 +1882,7 @@ func (a *Agent) cleanupSessionState(sessionID string, reason string) {
 	delete(a.ready, sessionID)
 	delete(a.readyFailures, sessionID)
 	delete(a.runRequests, sessionID)
+	delete(a.sessionStarts, sessionID)
 	delete(a.pendingIncome, sessionID)
 	for callID, callSessionID := range a.workerCallSession {
 		if callSessionID != sessionID {
@@ -2414,22 +2431,8 @@ func (a *Agent) handleWorkerFrameForGeneration(
 		a.mu.Lock()
 		pending := a.pending[workerSessionID]
 		oneShotFailure := a.readyFailures[workerSessionID]
-		if pending != nil && pending.rejected == nil &&
-			gotProtocolVersion != RuntimeWorkerProtocolVersion {
-			pending.rejected = &RuntimeRequestError{
-				Code: "RUNTIME_WORKER_PROTOCOL_UNSUPPORTED",
-				Message: fmt.Sprintf(
-					"runtime worker protocol unsupported: required=%d received=%d",
-					RuntimeWorkerProtocolVersion,
-					gotProtocolVersion,
-				),
-			}
-		}
-		rejection := (*RuntimeRequestError)(nil)
-		if pending != nil {
-			rejection = pending.rejected
-		} else if oneShotFailure != nil &&
-			gotProtocolVersion != RuntimeWorkerProtocolVersion {
+		var rejection *RuntimeRequestError
+		if gotProtocolVersion != RuntimeWorkerProtocolVersion {
 			rejection = &RuntimeRequestError{
 				Code: "RUNTIME_WORKER_PROTOCOL_UNSUPPORTED",
 				Message: fmt.Sprintf(
@@ -2438,6 +2441,12 @@ func (a *Agent) handleWorkerFrameForGeneration(
 					gotProtocolVersion,
 				),
 			}
+			if pending != nil && pending.rejected == nil {
+				pending.rejected = rejection
+			}
+		}
+		if pending != nil && pending.rejected != nil {
+			rejection = pending.rejected
 		}
 		a.mu.Unlock()
 		if rejection != nil {
@@ -2478,6 +2487,23 @@ func (a *Agent) handleWorkerFrameForGeneration(
 				Payload: &rwv1.AgentFrame_StartSession{StartSession: pending.start},
 			}); err != nil {
 				return err
+			}
+			a.markWorkerGenerationBootstrapped(generation, identity.Generation)
+		} else if pending == nil {
+			start, err := a.incomeReplacementStart(workerSessionID, generation, identity)
+			if err != nil {
+				return err
+			}
+			if start != nil {
+				if send == nil {
+					return fmt.Errorf("replacement Worker bootstrap sender is unavailable")
+				}
+				if err := send(&rwv1.AgentFrame{
+					Payload: &rwv1.AgentFrame_StartSession{StartSession: start},
+				}); err != nil {
+					return err
+				}
+				a.markWorkerGenerationBootstrapped(generation, identity.Generation)
 			}
 		}
 		return a.replayPendingIncome(identity)
@@ -2530,6 +2556,7 @@ func (a *Agent) handleWorkerFrameForGeneration(
 					return nil
 				}
 				a.rememberRunRequest(realSessionID, pending.start.GetRunStrategyRequest())
+				a.rememberSessionStart(realSessionID, pending.start)
 				select {
 				case pending.started <- realSessionID:
 				default:
@@ -2695,6 +2722,17 @@ func (a *Agent) HandleAuthenticatedWorkerFrame(
 	a.mu.Unlock()
 	if generation == nil && !oneShot {
 		return fmt.Errorf("stale worker generation: %s", sessionID)
+	}
+	if hello := frame.GetHello(); hello != nil &&
+		hello.GetProtocolVersion() != RuntimeWorkerProtocolVersion {
+		return a.handleWorkerFrameForGeneration(
+			ctx,
+			sessionID,
+			generation,
+			identity,
+			frame,
+			send,
+		)
 	}
 	if generation != nil && !generation.bindAuthenticatedGeneration(identity.Generation) {
 		if frame.GetHello() == nil ||
@@ -3302,6 +3340,72 @@ func (a *Agent) rememberRunRequest(sessionID string, request *anypb.Any) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.runRequests[sessionID] = cloned
+}
+
+func (a *Agent) rememberSessionStart(sessionID string, start *rwv1.StartSession) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || start == nil {
+		return
+	}
+	cloned, ok := proto.Clone(start).(*rwv1.StartSession)
+	if !ok || cloned == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessionStarts[sessionID] = cloned
+}
+
+func (a *Agent) markWorkerGenerationBootstrapped(
+	generation *workerGeneration,
+	authGeneration uint64,
+) {
+	if generation == nil || authGeneration == 0 {
+		return
+	}
+	generation.mu.Lock()
+	defer generation.mu.Unlock()
+	if generation.authGeneration != authGeneration ||
+		!generation.connected || generation.closing {
+		return
+	}
+	generation.bootstrapAuth = authGeneration
+}
+
+func (a *Agent) incomeReplacementStart(
+	sessionID string,
+	generation *workerGeneration,
+	identity WorkerIdentity,
+) (*rwv1.StartSession, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	a.mu.Lock()
+	pendingIncome := a.pendingIncome[sessionID]
+	start := a.sessionStarts[sessionID]
+	if start != nil {
+		start = proto.Clone(start).(*rwv1.StartSession)
+	}
+	a.mu.Unlock()
+	if pendingIncome == nil {
+		return nil, nil
+	}
+	if generation == nil {
+		return nil, fmt.Errorf("replacement Worker generation is unavailable: %s", sessionID)
+	}
+	generation.mu.Lock()
+	current := generation.authGeneration == identity.Generation &&
+		generation.connected && !generation.closing
+	alreadyBootstrapped := generation.bootstrapAuth == identity.Generation
+	generation.mu.Unlock()
+	if !current {
+		return nil, fmt.Errorf("replacement Worker generation is stale: %s", sessionID)
+	}
+	if alreadyBootstrapped {
+		return nil, nil
+	}
+	if start == nil {
+		return nil, fmt.Errorf("replacement Worker bootstrap is unavailable: %s", sessionID)
+	}
+	return start, nil
 }
 
 func (a *Agent) restartRunRequest(session *portfoliov1.StrategySessionEntry, runtimeID string) *strategyv1.RunStrategyRequest {

@@ -653,6 +653,7 @@ def test_income_decode_preserves_exact_entries_and_requires_explicit_durable_ack
             asset="USDT",
             calculated_amount_decimal="0.020000000000000001",
             applied_amount_decimal="0.020000000000000001",
+            reconciliation_delta_decimal="0",
             calculation_details_json='[{"quantity":"-0.200000000000000001"}]',
             status="calculated",
         ),
@@ -713,6 +714,37 @@ def test_income_decode_preserves_exact_entries_and_requires_explicit_durable_ack
         stream_key="income/sess-income",
         sequence=10,
     )
+
+
+def test_income_decode_rejects_missing_required_reconciliation_delta():
+    entry = portfolio_pb2.VenueIncomeEntry(
+        income_entry_id=1,
+        session_id="sess-income",
+        venue_id=23,
+        income_type="FUNDING_FEE",
+        source="backtest",
+        settlement_key="funding-v1-1",
+        symbol="BTCUSDT",
+        asset="USDT",
+        calculated_amount_decimal="0.100000000000000001",
+        applied_amount_decimal="0.100000000000000001",
+        calculation_details_json="[]",
+        status="calculated",
+    )
+    entry.occurred_at.FromMilliseconds(1_700_000_000_000)
+    packed = Any()
+    packed.Pack(entry)
+
+    with pytest.raises(ValueError, match="reconciliation_delta_decimal"):
+        worker_agent_client_module._decode_income_batch(
+            worker_pb2.IncomeBatch(
+                session_id="sess-income",
+                stream_key="income/sess-income",
+                sequence=1,
+                entries=[packed],
+            ),
+            expected_session_id="sess-income",
+        )
 
 
 @pytest.mark.parametrize(

@@ -698,9 +698,13 @@ def _decode_income_batch(
             entry.occurred_at.ToDatetime()
         except (OverflowError, ValueError) as exc:
             raise ValueError("Income entry occurred_at is invalid") from exc
-        for name in ("calculated_amount_decimal", "applied_amount_decimal"):
+        for name in (
+            "calculated_amount_decimal",
+            "applied_amount_decimal",
+            "reconciliation_delta_decimal",
+        ):
             _validate_exact_decimal(getattr(entry, name), name=name, required=True)
-        for name in ("exchange_amount_decimal", "reconciliation_delta_decimal"):
+        for name in ("exchange_amount_decimal",):
             _validate_exact_decimal(getattr(entry, name), name=name, required=False)
         try:
             details = json.loads(

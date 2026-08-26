@@ -3,7 +3,10 @@
 package runtimeagent
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const blockedWorkerRuntimeID = "bare-6-blocked-worker"
@@ -54,7 +58,13 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read blocked worker strategy: %v", err)
 	}
-	markerPath := filepath.Join(t.TempDir(), "blocked-worker.marker")
+	barrierRoot := t.TempDir()
+	markerPath := filepath.Join(barrierRoot, "blocked-worker.marker")
+	replayStartPath := filepath.Join(barrierRoot, "replacement-start.pb")
+	replayBatchPath := filepath.Join(barrierRoot, "replacement-income.pb")
+	replayEventsPath := filepath.Join(barrierRoot, "replacement-events.json")
+	replayACKReleasePath := filepath.Join(barrierRoot, "release-income-ack")
+	replayACKEnqueuedPath := filepath.Join(barrierRoot, "income-ack-enqueued")
 	stateRoot := filepath.Join(t.TempDir(), "worker-state")
 
 	workerListener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -112,6 +122,11 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 				3,
 				64,
 			),
+			"HUSHINE_INCOME_REPLAY_START="+replayStartPath,
+			"HUSHINE_INCOME_REPLAY_BATCH="+replayBatchPath,
+			"HUSHINE_INCOME_REPLAY_EVENTS="+replayEventsPath,
+			"HUSHINE_INCOME_REPLAY_ACK_RELEASE="+replayACKReleasePath,
+			"HUSHINE_INCOME_REPLAY_ACK_ENQUEUED="+replayACKEnqueuedPath,
 		)
 		return env, sessionRoot, executable, nil
 	}
@@ -241,6 +256,35 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 		t.Fatalf("old worker identity is unavailable: %s", oldSessionID)
 	}
 	waitForBlockedWorkerMarker(t, markerPath, runtimeDone, 20*time.Second)
+	incomeFrame := blockedWorkerIncomeRuntimeFrame(
+		oldSessionID,
+		10,
+		"0.010000000000000001",
+	)
+	expectedWorkerFrame, mappedSessionID, err := workerDataFrameFromRuntime(incomeFrame)
+	if err != nil {
+		t.Fatalf("map expected Income frame: %v", err)
+	}
+	if mappedSessionID != oldSessionID || expectedWorkerFrame.GetIncomeBatch() == nil {
+		t.Fatalf("mapped expected Income = %+v session=%q", expectedWorkerFrame, mappedSessionID)
+	}
+	if err := control.send(incomeFrame); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.send(blockedWorkerIncomeRuntimeFrame(
+		oldSessionID,
+		11,
+		"0.020000000000000001",
+	)); err != nil {
+		t.Fatal(err)
+	}
+	backpressure := control.waitForDataBackpressure(t, 5*time.Second)
+	if backpressure.GetSessionId() != oldSessionID ||
+		backpressure.GetStreamKey() != "income/"+oldSessionID ||
+		!strings.Contains(backpressure.GetReason(), "already pending") {
+		t.Fatalf("blocked Income backpressure = %+v", backpressure)
+	}
+	control.assertNoRuntimeDataACK(t)
 
 	heartbeatTimes := observeBlockedWorkerHeartbeats(
 		t,
@@ -260,7 +304,80 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 			t.Fatalf("heartbeat gap = %v, want <= 5s", gap)
 		}
 	}
+	if control.heartbeatACKCount() < len(heartbeatTimes) {
+		t.Fatalf(
+			"Runtime heartbeat ACKs = %d, want at least %d",
+			control.heartbeatACKCount(),
+			len(heartbeatTimes),
+		)
+	}
+	control.assertNoRuntimeDataACK(t)
+	assertExactPendingIncome(t, agent, oldSessionID, expectedWorkerFrame)
 	assertManagedWorkerAlive(t, workerManager, oldSessionID)
+
+	oldWorker := workerManager.findWorker(oldSessionID)
+	if oldWorker == nil || oldWorker.Cmd == nil || oldWorker.Cmd.Process == nil {
+		t.Fatalf("old managed worker process is unavailable: %s", oldSessionID)
+	}
+	if err := oldWorker.Cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Fatalf("kill blocked worker before Income ACK: %v", err)
+	}
+	waitForManagedWorkerRemoval(t, workerManager, oldSessionID, oldWorker, 10*time.Second)
+	assertExactPendingIncome(t, agent, oldSessionID, expectedWorkerFrame)
+
+	agent.mu.Lock()
+	generation := agent.generations[oldSessionID]
+	wantStart := proto.Clone(agent.sessionStarts[oldSessionID])
+	agent.mu.Unlock()
+	if generation == nil || wantStart == nil {
+		t.Fatalf("replacement replay state is unavailable: generation=%p start=%v", generation, wantStart != nil)
+	}
+	workerManager.mu.Lock()
+	workerManager.cfg.WorkerModule = "strategy_service.runtime_income_replay_testworker"
+	workerManager.mu.Unlock()
+	replacementCtx, cancelReplacement := context.WithTimeout(context.Background(), 20*time.Second)
+	replacementWorker, err := workerManager.StartSessionWorker(
+		replacementCtx,
+		oldSessionID,
+		agent.workerEnv(),
+	)
+	cancelReplacement()
+	if err != nil {
+		t.Fatalf("start same-Session replacement Worker: %v", err)
+	}
+	agent.watchWorkerGeneration(oldSessionID, generation, replacementWorker)
+	waitForWorkerFile(t, replayStartPath)
+	waitForWorkerFile(t, replayBatchPath)
+	waitForWorkerFile(t, replayEventsPath)
+	assertReplacementIncomeReplay(
+		t,
+		replayStartPath,
+		replayBatchPath,
+		replayEventsPath,
+		wantStart.(*rwv1.StartSession),
+		expectedWorkerFrame.GetIncomeBatch(),
+	)
+	control.assertNoRuntimeDataACK(t)
+	if err := os.WriteFile(replayACKReleasePath, []byte("durable\n"), 0o600); err != nil {
+		t.Fatalf("release durable Income ACK: %v", err)
+	}
+	waitForWorkerFile(t, replayACKEnqueuedPath)
+	dataACK := control.waitForDataACK(t, 5*time.Second)
+	if dataACK.GetSessionId() != oldSessionID ||
+		dataACK.GetStreamKey() != "income/"+oldSessionID ||
+		dataACK.GetSequence() != 10 {
+		t.Fatalf("Runtime Income DATA_ACK = %+v", dataACK)
+	}
+	control.assertExactlyOneRuntimeDataACK(t)
+	agent.mu.Lock()
+	pendingAfterACK := agent.pendingIncome[oldSessionID]
+	agent.mu.Unlock()
+	if pendingAfterACK != nil {
+		t.Fatal("durable WorkerDataAck did not clear retained Income")
+	}
+	workerManager.mu.Lock()
+	workerManager.cfg.WorkerModule = "strategy_service.session_worker_entry"
+	workerManager.mu.Unlock()
 
 	restartCtx, cancelRestart := context.WithTimeout(
 		context.Background(),
@@ -413,6 +530,165 @@ func assertManagedWorkerAlive(
 	}
 }
 
+func waitForManagedWorkerRemoval(
+	t *testing.T,
+	manager *WorkerManager,
+	sessionID string,
+	worker *ManagedWorker,
+	timeout time.Duration,
+) {
+	t.Helper()
+	select {
+	case <-worker.processExitedSignal():
+	case <-time.After(timeout):
+		t.Fatalf("managed worker process did not exit: %s", sessionID)
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			_, registered := manager.Registry().ActiveWorker(sessionID)
+			if manager.findWorker(sessionID) == nil && !registered {
+				return
+			}
+		case <-deadline.C:
+			t.Fatalf("managed worker cleanup did not finish: %s", sessionID)
+		}
+	}
+}
+
+func assertExactPendingIncome(
+	t *testing.T,
+	agent *Agent,
+	sessionID string,
+	want *rwv1.AgentFrame,
+) {
+	t.Helper()
+	agent.mu.Lock()
+	pending := agent.pendingIncome[sessionID]
+	var got *rwv1.AgentFrame
+	if pending != nil {
+		got = proto.Clone(pending.frame).(*rwv1.AgentFrame)
+	}
+	agent.mu.Unlock()
+	if pending == nil || !proto.Equal(got, want) {
+		t.Fatalf("retained Income = %+v, want exact %+v", got, want)
+	}
+}
+
+type capturedIncomeEvent struct {
+	SessionID string `json:"session_id"`
+	StreamKey string `json:"stream_key"`
+	Sequence  int64  `json:"sequence"`
+	BatchEnd  bool   `json:"batch_end"`
+	EntryHex  string `json:"entry_hex"`
+}
+
+func assertReplacementIncomeReplay(
+	t *testing.T,
+	startPath string,
+	batchPath string,
+	eventsPath string,
+	wantStart *rwv1.StartSession,
+	wantBatch *rwv1.IncomeBatch,
+) {
+	t.Helper()
+	startBytes, err := os.ReadFile(startPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotStart rwv1.StartSession
+	if err := proto.Unmarshal(startBytes, &gotStart); err != nil {
+		t.Fatalf("decode replacement StartSession: %v", err)
+	}
+	if !proto.Equal(&gotStart, wantStart) {
+		t.Fatalf("replacement StartSession = %+v, want exact %+v", &gotStart, wantStart)
+	}
+	batchBytes, err := os.ReadFile(batchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBatchBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(wantBatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(batchBytes, wantBatchBytes) {
+		t.Fatalf("replacement Income bytes differ: got=%x want=%x", batchBytes, wantBatchBytes)
+	}
+	eventBytes, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []capturedIncomeEvent
+	if err := json.Unmarshal(eventBytes, &events); err != nil {
+		t.Fatalf("decode replacement Income events: %v", err)
+	}
+	if len(events) != len(wantBatch.GetEntries()) {
+		t.Fatalf("decoded replacement Income events = %d, want %d", len(events), len(wantBatch.GetEntries()))
+	}
+	for index, event := range events {
+		if event.SessionID != wantBatch.GetSessionId() ||
+			event.StreamKey != wantBatch.GetStreamKey() ||
+			event.Sequence != wantBatch.GetSequence() ||
+			event.BatchEnd != (index == len(events)-1) {
+			t.Fatalf("decoded Income event[%d] metadata = %+v", index, event)
+		}
+		entryBytes, err := hex.DecodeString(event.EntryHex)
+		if err != nil {
+			t.Fatalf("decode Income event[%d] bytes: %v", index, err)
+		}
+		var gotEntry portfoliov1.VenueIncomeEntry
+		if err := proto.Unmarshal(entryBytes, &gotEntry); err != nil {
+			t.Fatalf("unmarshal Income event[%d]: %v", index, err)
+		}
+		var wantEntry portfoliov1.VenueIncomeEntry
+		if err := wantBatch.GetEntries()[index].UnmarshalTo(&wantEntry); err != nil {
+			t.Fatalf("unmarshal expected Income event[%d]: %v", index, err)
+		}
+		if !proto.Equal(&gotEntry, &wantEntry) {
+			t.Fatalf("decoded Income event[%d] = %+v, want exact %+v", index, &gotEntry, &wantEntry)
+		}
+	}
+}
+
+func blockedWorkerIncomeRuntimeFrame(
+	sessionID string,
+	sequence int64,
+	amount string,
+) *cpv1.RuntimeFrame {
+	entries := []*portfoliov1.VenueIncomeEntry{
+		{
+			IncomeEntryId: sequence - 1, SessionId: sessionID, VenueId: 71,
+			IncomeType: "FUNDING_FEE", Source: "exchange", ExternalTransactionId: "income-external-1",
+			SettlementKey: "funding-v1-1", Symbol: "BTCUSDT", Asset: "USDT",
+			CalculatedAmountDecimal: "0.010000000000000002", ExchangeAmountDecimal: amount,
+			AppliedAmountDecimal: amount, ReconciliationDeltaDecimal: "-0.000000000000000001",
+			CalculationDetailsJson: `[{"quantity":"0.100000000000000001"}]`, Status: "confirmed",
+			OccurredAt: timestamppb.New(time.UnixMilli(1_780_000_000_000)),
+		},
+		{
+			IncomeEntryId: sequence, SessionId: sessionID, VenueId: 71,
+			IncomeType: "FUNDING_FEE", Source: "backtest", SettlementKey: "funding-v1-2",
+			Symbol: "ETHUSDT", Asset: "USDT", CalculatedAmountDecimal: amount,
+			AppliedAmountDecimal: amount, ReconciliationDeltaDecimal: "0",
+			CalculationDetailsJson: `[{"quantity":"-0.200000000000000001"}]`, Status: "calculated",
+			OccurredAt: timestamppb.New(time.UnixMilli(1_780_000_060_000)),
+		},
+	}
+	return &cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_INCOME_BATCH,
+		Payload: &cpv1.RuntimeFrame_IncomeBatch{IncomeBatch: &cpv1.RuntimeIncomeBatch{
+			SessionId: sessionID,
+			StreamKey: "income/" + sessionID,
+			Sequence:  sequence,
+			Entries:   entries,
+		}},
+	}
+}
+
 type blockedWorkerControl struct {
 	cpv1.UnimplementedControlPanelServiceServer
 
@@ -422,11 +698,15 @@ type blockedWorkerControl struct {
 	outbound     chan *cpv1.RuntimeFrame
 	results      chan *cpv1.RuntimeFrame
 	heartbeats   chan time.Time
+	dataACKs     chan *cpv1.RuntimeDataAck
+	backpressure chan *cpv1.RuntimeDataBackpressure
 
 	mu             sync.Mutex
 	events         []string
 	sessions       map[string]*portfoliov1.StrategySessionEntry
 	indicatorSaves map[string][]*portfoliov1.SaveStrategyIndicatorsV2Request
+	heartbeatACKs  int
+	dataACKCount   int
 }
 
 func newBlockedWorkerControl(strategyCode string) *blockedWorkerControl {
@@ -436,6 +716,8 @@ func newBlockedWorkerControl(strategyCode string) *blockedWorkerControl {
 		outbound:       make(chan *cpv1.RuntimeFrame, 16),
 		results:        make(chan *cpv1.RuntimeFrame, 16),
 		heartbeats:     make(chan time.Time, 1024),
+		dataACKs:       make(chan *cpv1.RuntimeDataAck, 16),
+		backpressure:   make(chan *cpv1.RuntimeDataBackpressure, 16),
 		sessions:       map[string]*portfoliov1.StrategySessionEntry{},
 		indicatorSaves: map[string][]*portfoliov1.SaveStrategyIndicatorsV2Request{},
 	}
@@ -496,6 +778,19 @@ func (s *blockedWorkerControl) RuntimeChannel(
 			switch frame.GetFrameType() {
 			case cpv1.FrameType_FRAME_TYPE_HEARTBEAT:
 				s.heartbeats <- time.Now()
+				if err := stream.Send(&cpv1.RuntimeFrame{
+					FrameType: cpv1.FrameType_FRAME_TYPE_HEARTBEAT_ACK,
+					Payload: &cpv1.RuntimeFrame_HeartbeatAck{
+						HeartbeatAck: &cpv1.RuntimeHeartbeatAck{
+							RuntimeId: blockedWorkerRuntimeID,
+						},
+					},
+				}); err != nil {
+					return err
+				}
+				s.mu.Lock()
+				s.heartbeatACKs++
+				s.mu.Unlock()
 			case cpv1.FrameType_FRAME_TYPE_REQUEST:
 				if err := stream.Send(s.platformResponse(frame)); err != nil {
 					return err
@@ -503,6 +798,16 @@ func (s *blockedWorkerControl) RuntimeChannel(
 			case cpv1.FrameType_FRAME_TYPE_RESPONSE,
 				cpv1.FrameType_FRAME_TYPE_ERROR:
 				s.results <- frame
+			case cpv1.FrameType_FRAME_TYPE_DATA_ACK:
+				ack := proto.Clone(frame.GetDataAck()).(*cpv1.RuntimeDataAck)
+				s.mu.Lock()
+				s.dataACKCount++
+				s.mu.Unlock()
+				s.dataACKs <- ack
+			case cpv1.FrameType_FRAME_TYPE_DATA_BACKPRESSURE:
+				s.backpressure <- proto.Clone(
+					frame.GetDataBackpressure(),
+				).(*cpv1.RuntimeDataBackpressure)
 			}
 		}
 	}
@@ -535,6 +840,58 @@ func (s *blockedWorkerControl) waitForResult(
 			t.Fatalf("timed out waiting for RuntimeChannel result %s", correlationID)
 		}
 	}
+}
+
+func (s *blockedWorkerControl) waitForDataBackpressure(
+	t *testing.T,
+	timeout time.Duration,
+) *cpv1.RuntimeDataBackpressure {
+	t.Helper()
+	select {
+	case backpressure := <-s.backpressure:
+		return backpressure
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for Income DATA_BACKPRESSURE")
+		return nil
+	}
+}
+
+func (s *blockedWorkerControl) waitForDataACK(
+	t *testing.T,
+	timeout time.Duration,
+) *cpv1.RuntimeDataAck {
+	t.Helper()
+	select {
+	case ack := <-s.dataACKs:
+		return ack
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for Income DATA_ACK")
+		return nil
+	}
+}
+
+func (s *blockedWorkerControl) assertNoRuntimeDataACK(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dataACKCount != 0 {
+		t.Fatalf("Runtime DATA_ACK count = %d before explicit WorkerDataAck", s.dataACKCount)
+	}
+}
+
+func (s *blockedWorkerControl) assertExactlyOneRuntimeDataACK(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dataACKCount != 1 {
+		t.Fatalf("Runtime DATA_ACK count = %d, want exactly 1", s.dataACKCount)
+	}
+}
+
+func (s *blockedWorkerControl) heartbeatACKCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.heartbeatACKs
 }
 
 func (s *blockedWorkerControl) platformResponse(

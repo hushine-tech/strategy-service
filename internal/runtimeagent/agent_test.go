@@ -3937,17 +3937,21 @@ func TestAgentIncomeCrashBeforeAckReplaysOnlyToCurrentSameSessionGeneration(t *t
 	hello := &rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
 		SessionId: "sess-income", ProtocolVersion: RuntimeWorkerProtocolVersion,
 	}}}
+	replacementIdentity := WorkerIdentity{SessionID: "sess-income", Generation: 8}
 	if err := agent.HandleAuthenticatedWorkerFrame(context.Background(), WorkerIdentity{
 		SessionID: "sess-income", Generation: 8,
-	}, hello, nil); err != nil {
+	}, hello, func(frame *rwv1.AgentFrame) error {
+		return sender.SendToWorkerGeneration(replacementIdentity, frame)
+	}); err != nil {
 		t.Fatalf("replacement Worker hello: %v", err)
 	}
 	forwarded := sender.snapshot()
-	if len(forwarded) != 2 || !proto.Equal(forwarded[0].frame, forwarded[1].frame) {
-		t.Fatalf("replacement Worker replay = %+v, want exact retained batch", forwarded)
+	if len(forwarded) != 3 || forwarded[1].frame.GetStartSession() == nil ||
+		!proto.Equal(forwarded[0].frame, forwarded[2].frame) {
+		t.Fatalf("replacement Worker replay = %+v, want StartSession then exact retained batch", forwarded)
 	}
-	if forwarded[0].generation != 7 || forwarded[1].generation != 8 {
-		t.Fatalf("Income delivery generations = %d,%d, want 7,8", forwarded[0].generation, forwarded[1].generation)
+	if forwarded[0].generation != 7 || forwarded[1].generation != 8 || forwarded[2].generation != 8 {
+		t.Fatalf("Worker frame generations = %d,%d,%d, want 7,8,8", forwarded[0].generation, forwarded[1].generation, forwarded[2].generation)
 	}
 
 	staleAck := &rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_DataAck{DataAck: &rwv1.WorkerDataAck{
@@ -3982,6 +3986,192 @@ func TestAgentIncomeCrashBeforeAckReplaysOnlyToCurrentSameSessionGeneration(t *t
 		t.Fatalf("current exact Worker ACK: %v", err)
 	}
 	assertSingleIncomeRuntimeAck(t, runtime.snapshot(), "sess-income", 10)
+}
+
+func TestAgentIncomeProcessExitAndDisconnectInterleavingsRetainPendingReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*Agent, WorkerIdentity, *workerGeneration) error
+	}{
+		{
+			name: "disconnect before process exit",
+			run: func(agent *Agent, identity WorkerIdentity, generation *workerGeneration) error {
+				if err := agent.HandleWorkerDisconnect(identity, errors.New("worker stream closed")); err != nil {
+					return err
+				}
+				agent.handleWorkerGenerationProcessExit(identity.SessionID, generation)
+				return nil
+			},
+		},
+		{
+			name: "process exit before disconnect",
+			run: func(agent *Agent, identity WorkerIdentity, generation *workerGeneration) error {
+				agent.handleWorkerGenerationProcessExit(identity.SessionID, generation)
+				return agent.HandleWorkerDisconnect(identity, errors.New("worker stream closed"))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &incomeWorkerSender{}
+			agent := NewAgent(AgentConfig{
+				WorkerSender: sender, PlatformInvoker: &incomeRuntimeSender{},
+			})
+			installIncomeWorkerGeneration(agent, "sess-income", 7)
+			if err := agent.HandleRuntimeData(
+				context.Background(),
+				incomeRuntimeFrame("sess-income", 10, "1.000000000000000001"),
+			); err != nil {
+				t.Fatal(err)
+			}
+			agent.mu.Lock()
+			generation := agent.generations["sess-income"]
+			agent.mu.Unlock()
+			identity := WorkerIdentity{SessionID: "sess-income", Generation: 7}
+			if err := tc.run(agent, identity, generation); err != nil {
+				t.Fatal(err)
+			}
+
+			agent.mu.Lock()
+			retainedGeneration := agent.generations["sess-income"]
+			retainedIncome := agent.pendingIncome["sess-income"]
+			agent.mu.Unlock()
+			if retainedGeneration != generation || retainedIncome == nil {
+				t.Fatalf(
+					"pre-ACK exit lost replay state: generation=%p want=%p pending=%v",
+					retainedGeneration,
+					generation,
+					retainedIncome != nil,
+				)
+			}
+		})
+	}
+}
+
+func TestAgentIncomeReplacementReceivesOriginalStartBeforeExactReplay(t *testing.T) {
+	const sessionID = "sess-income"
+	sender := &incomeWorkerSender{}
+	agent := NewAgent(AgentConfig{
+		WorkerSender: sender, PlatformInvoker: &incomeRuntimeSender{},
+	})
+	generation := newWorkerGeneration(sessionID, 1)
+	agent.generations[sessionID] = generation
+	runRequest, err := anypb.New(&strategyv1.RunStrategyRequest{
+		PortfolioId: 7, UserId: 6, RuntimeId: "rt-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := anypb.New(&strategyv1.StrategySessionBootstrap{
+		SessionId: sessionID, LaunchOperationId: "launch-income",
+		StrategySourceSha256: strings.Repeat("a", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := &rwv1.StartSession{
+		SessionId: sessionID, UserId: 6, RuntimeId: "rt-1",
+		RunStrategyRequest: runRequest, SessionBootstrap: bootstrap,
+	}
+	pendingStart := &pendingSessionStart{
+		started: make(chan string, 1), failed: make(chan *RuntimeRequestError, 1), start: start,
+	}
+	agent.pending[sessionID] = pendingStart
+	identity7 := WorkerIdentity{SessionID: sessionID, Generation: 7}
+	sendAs := func(identity WorkerIdentity) func(*rwv1.AgentFrame) error {
+		return func(frame *rwv1.AgentFrame) error {
+			return sender.SendToWorkerGeneration(identity, frame)
+		}
+	}
+	hello := func(version uint32) *rwv1.WorkerFrame {
+		return &rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+			SessionId: sessionID, ProtocolVersion: version,
+		}}}
+	}
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(), identity7, hello(RuntimeWorkerProtocolVersion), sendAs(identity7),
+	); err != nil {
+		t.Fatalf("initial Worker hello: %v", err)
+	}
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(), identity7,
+		&rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
+			SessionId: sessionID, Status: "running",
+		}}},
+		nil,
+	); err != nil {
+		t.Fatalf("initial Worker running: %v", err)
+	}
+	agent.mu.Lock()
+	delete(agent.pending, sessionID)
+	agent.mu.Unlock()
+	if err := agent.HandleRuntimeData(
+		context.Background(), incomeRuntimeFrame(sessionID, 10, "1.000000000000000001"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.HandleWorkerDisconnect(identity7, errors.New("worker crashed before Income ACK")); err != nil {
+		t.Fatal(err)
+	}
+
+	identity8 := WorkerIdentity{SessionID: sessionID, Generation: 8}
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(), identity8, hello(RuntimeWorkerProtocolVersion), sendAs(identity8),
+	); err != nil {
+		t.Fatalf("replacement Worker hello: %v", err)
+	}
+	frames := sender.snapshot()
+	if len(frames) != 4 {
+		t.Fatalf("Worker frames = %+v, want initial Start/Income then replacement Start/Income", frames)
+	}
+	if frames[0].generation != 7 || !proto.Equal(frames[0].frame.GetStartSession(), start) ||
+		frames[1].generation != 7 || frames[1].frame.GetIncomeBatch() == nil ||
+		frames[2].generation != 8 || !proto.Equal(frames[2].frame.GetStartSession(), start) ||
+		frames[3].generation != 8 || !proto.Equal(frames[1].frame, frames[3].frame) {
+		t.Fatalf("replacement bootstrap/replay order = %+v", frames)
+	}
+}
+
+func TestAgentIncomeReplacementRejectsWrongProtocolBeforeRebindOrReplay(t *testing.T) {
+	const sessionID = "sess-income"
+	sender := &incomeWorkerSender{}
+	agent := NewAgent(AgentConfig{
+		WorkerSender: sender, PlatformInvoker: &incomeRuntimeSender{},
+	})
+	installIncomeWorkerGeneration(agent, sessionID, 7)
+	if err := agent.HandleRuntimeData(
+		context.Background(), incomeRuntimeFrame(sessionID, 10, "1.000000000000000001"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	identity7 := WorkerIdentity{SessionID: sessionID, Generation: 7}
+	if err := agent.HandleWorkerDisconnect(identity7, errors.New("worker crashed before Income ACK")); err != nil {
+		t.Fatal(err)
+	}
+	var shutdown *rwv1.ShutdownWorker
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(),
+		WorkerIdentity{SessionID: sessionID, Generation: 8},
+		&rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_Hello{Hello: &rwv1.WorkerHello{
+			SessionId: sessionID, ProtocolVersion: 5,
+		}}},
+		func(frame *rwv1.AgentFrame) error { shutdown = frame.GetShutdownWorker(); return nil },
+	); err != nil {
+		t.Fatalf("wrong-protocol replacement hello: %v", err)
+	}
+	generation := agent.generations[sessionID]
+	generation.mu.Lock()
+	authGeneration := generation.authGeneration
+	connected := generation.connected
+	generation.mu.Unlock()
+	if shutdown == nil || !strings.Contains(shutdown.GetReason(), "required=6 received=5") {
+		t.Fatalf("wrong-protocol shutdown = %+v", shutdown)
+	}
+	if authGeneration != 7 || connected {
+		t.Fatalf("wrong protocol rebound generation: auth=%d connected=%v", authGeneration, connected)
+	}
+	if frames := sender.snapshot(); len(frames) != 1 || frames[0].generation != 7 {
+		t.Fatalf("wrong-protocol replacement received replay: %+v", frames)
+	}
 }
 
 func TestAgentIncomeKeepsOneExactPendingBatchPerSessionUnderBackpressure(t *testing.T) {
@@ -4060,9 +4250,15 @@ func TestAgentIncomeUnknownSessionDoesNotConsumePendingCapacity(t *testing.T) {
 func installIncomeWorkerGeneration(agent *Agent, sessionID string, generationNumber uint64) {
 	generation := newWorkerGeneration(sessionID, generationNumber)
 	generation.authGeneration = generationNumber
+	generation.bootstrapAuth = generationNumber
 	generation.connected = true
 	agent.mu.Lock()
 	agent.generations[sessionID] = generation
+	agent.sessionStarts[sessionID] = &rwv1.StartSession{
+		SessionId: sessionID,
+		UserId:    6,
+		RuntimeId: "rt-1",
+	}
 	agent.mu.Unlock()
 }
 
