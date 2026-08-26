@@ -238,6 +238,26 @@ func TestLoadEmbeddedRuntimeFactsRequiresEveryExactEnvironmentFact(t *testing.T)
 	}
 }
 
+func TestLoadEmbeddedRuntimeFactsAcceptsCurrentFourRepositoryImageBuildID(t *testing.T) {
+	expected := validEmbeddedRuntimeFacts("hosted")
+	expected.Profile.ImageBuildId = strings.Join([]string{
+		expected.Profile.GetStrategyServiceCommit()[:12],
+		expected.Profile.GetStrategyLibraryCommit()[:12],
+		strings.Repeat("d", 12),
+		strings.Repeat("e", 12),
+		expected.Profile.GetProfileVersion(),
+		"executor-coverage",
+	}, "-")
+
+	got, err := LoadEmbeddedRuntimeFacts("hosted", embeddedFactsEnvironment(expected.Profile))
+	if err != nil {
+		t.Fatalf("LoadEmbeddedRuntimeFacts rejected build_strategy_runtime.sh identity: %v", err)
+	}
+	if got.Profile.GetImageBuildId() != expected.Profile.GetImageBuildId() {
+		t.Fatalf("image build id = %q, want %q", got.Profile.GetImageBuildId(), expected.Profile.GetImageBuildId())
+	}
+}
+
 func TestLoadEmbeddedRuntimeFactsAllowsOnlyCompleteBareLocalDevIdentity(t *testing.T) {
 	profile := validEmbeddedRuntimeFacts("bare").Profile
 	profile.StrategyServiceCommit = "local-dev"
@@ -383,7 +403,11 @@ func validEmbeddedRuntimeFacts(source string) EmbeddedRuntimeFacts {
 			PublicImportRoots:     []string{"dateutil", "grpc", "numpy", "pandas", "pydantic", "requests", "yaml"},
 			StrategyServiceCommit: strings.Repeat("b", 40),
 			StrategyLibraryCommit: strings.Repeat("c", 40),
-			ImageBuildId:          strings.Repeat("b", 12) + "-" + strings.Repeat("c", 12) + "-" + strings.Repeat("d", 12) + "-1.0.0-executor",
+			ImageBuildId: strings.Join([]string{
+				strings.Repeat("b", 12), strings.Repeat("c", 12),
+				strings.Repeat("d", 12), strings.Repeat("e", 12),
+				"1.0.0", "executor",
+			}, "-"),
 		},
 	}
 }

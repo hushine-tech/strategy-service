@@ -37,7 +37,7 @@ var (
 	packagePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	semverPattern       = regexp.MustCompile(`^` + strictSemverPattern + `$`)
 	imageBuildIDPattern = regexp.MustCompile(
-		`^([0-9a-f]{12})-([0-9a-f]{12})-([0-9a-f]{12})-` +
+		`^([0-9a-f]{12})-([0-9a-f]{12})-([0-9a-f]{12})-([0-9a-f]{12})-` +
 			`(` + strictSemverPattern + `)-` +
 			`(executor(?:-coverage)?)(?:-dirty-[0-9a-f]{12})?$`,
 	)
@@ -352,7 +352,7 @@ func validateEmbeddedRuntimeFacts(expected EmbeddedRuntimeFacts) error {
 		return errors.New("invalid build identity")
 	}
 	match := imageBuildIDPattern.FindStringSubmatch(buildID)
-	if match == nil || match[1] != serviceCommit[:12] || match[2] != libraryCommit[:12] || match[4] != profile.GetProfileVersion() {
+	if match == nil || match[1] != serviceCommit[:12] || match[2] != libraryCommit[:12] || match[5] != profile.GetProfileVersion() {
 		return errors.New("invalid build identity")
 	}
 	return nil
