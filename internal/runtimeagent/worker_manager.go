@@ -334,6 +334,20 @@ func (m *WorkerManager) StopSessionWorker(ctx context.Context, sessionID string,
 	return m.stopWorker(ctx, worker, timeout)
 }
 
+func (m *WorkerManager) stopSessionWorkerAttempt(
+	ctx context.Context,
+	worker *ManagedWorker,
+	timeout time.Duration,
+) error {
+	if worker == nil || strings.TrimSpace(worker.SessionID) == "" {
+		return fmt.Errorf("managed Worker attempt is required")
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	return m.stopWorker(ctx, worker, timeout)
+}
+
 // WaitSessionWorker waits for a worker that has already been asked to stop by
 // the session protocol. It never sends a process signal, so the Python wrapper
 // can finish its final-status acknowledgement and coverage flush naturally.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -4343,6 +4344,162 @@ func TestAgentPendingIncomeRecoveryHandshakeIsBoundedAndNeverAcksOrDrops(t *test
 	}
 }
 
+func TestAgentFailedIncomeRecoveryAttemptStopsOnlyItsStartedWorker(t *testing.T) {
+	const sessionID = "sess-income"
+	sender := &incomeWorkerSender{}
+	replayed := make(chan WorkerIdentity, 1)
+	sender.onSend = func(identity WorkerIdentity, frame *rwv1.AgentFrame) {
+		if identity.Generation == 9 && frame.GetIncomeBatch() != nil {
+			select {
+			case replayed <- identity:
+			default:
+			}
+		}
+	}
+	starter := newIncomeRecoveryStarter(true, false)
+	stoppedWorker := make(chan *ManagedWorker, 1)
+	releaseStop := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseStop) }) }
+	manager := &WorkerManager{
+		active:          map[string]*ManagedWorker{},
+		cleanupFailures: map[string]error{},
+	}
+	manager.stopWorker = func(
+		ctx context.Context,
+		worker *ManagedWorker,
+		_ time.Duration,
+	) error {
+		stoppedWorker <- worker
+		select {
+		case <-releaseStop:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	runtimeSender := &incomeRuntimeSender{}
+	agent := NewAgent(AgentConfig{
+		WorkerStarter: starter, WorkerStopper: manager,
+		WorkerSender: sender, PlatformInvoker: runtimeSender,
+		StartTimeout: 30 * time.Millisecond, RequestTimeout: 200 * time.Millisecond,
+	})
+	starter.agent = agent
+	starter.sender = sender
+	installIncomeWorkerGeneration(agent, sessionID, 7)
+	frame := incomeRuntimeFrame(sessionID, 10, "1.000000000000000001")
+	if err := agent.HandleRuntimeData(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	generation := agent.generations[sessionID]
+	generation.mu.Lock()
+	generation.connected = false
+	generation.mu.Unlock()
+	agent.mu.Unlock()
+	agent.handleWorkerGenerationProcessExit(
+		WorkerIdentity{SessionID: sessionID, Generation: 7},
+		generation,
+		&ManagedWorker{SessionID: sessionID, Spec: WorkerStartSpec{
+			SessionID: sessionID, Generation: 7,
+		}},
+	)
+	select {
+	case <-starter.started:
+	case <-time.After(time.Second):
+		t.Fatal("recovery attempt Worker 8 did not start")
+	}
+	var worker8 *ManagedWorker
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for worker8 == nil {
+		worker8 = starter.snapshotActiveWorker()
+		if worker8 != nil {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatal("recovery attempt Worker 8 identity is unavailable")
+		}
+	}
+	worker9 := &ManagedWorker{
+		SessionID:     sessionID,
+		Spec:          WorkerStartSpec{SessionID: sessionID, Generation: 9},
+		Cmd:           &exec.Cmd{Process: &os.Process{Pid: 90009}},
+		processExited: make(chan struct{}),
+	}
+	manager.mu.Lock()
+	manager.active[sessionID] = worker9
+	manager.mu.Unlock()
+	identity9 := WorkerIdentity{SessionID: sessionID, Generation: 9}
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(),
+		identity9,
+		&rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_Hello{
+			Hello: &rwv1.WorkerHello{
+				SessionId: sessionID, ProtocolVersion: RuntimeWorkerProtocolVersion,
+			},
+		}},
+		func(frame *rwv1.AgentFrame) error {
+			return sender.SendToWorkerGeneration(identity9, frame)
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-replayed:
+	case <-time.After(time.Second):
+		t.Fatal("later Worker 9 did not receive retained Income")
+	}
+	t.Cleanup(func() {
+		_ = agent.HandleAuthenticatedWorkerFrame(
+			context.Background(), identity9,
+			&rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_DataAck{
+				DataAck: &rwv1.WorkerDataAck{
+					SessionId: sessionID, StreamKey: "income/" + sessionID, Sequence: 10,
+				},
+			}}, nil,
+		)
+		release()
+	})
+	var target *ManagedWorker
+	select {
+	case target = <-stoppedWorker:
+	case <-time.After(time.Second):
+		t.Fatal("failed recovery attempt did not enter cleanup")
+	}
+	if target != worker8 || target.Spec.Generation != 8 {
+		t.Fatalf(
+			"stale recovery stopped Worker generation %d (%p), want failed attempt 8 (%p)",
+			target.Spec.Generation,
+			target,
+			worker8,
+		)
+	}
+	if err := agent.HandleAuthenticatedWorkerFrame(
+		context.Background(), identity9,
+		&rwv1.WorkerFrame{Payload: &rwv1.WorkerFrame_DataAck{
+			DataAck: &rwv1.WorkerDataAck{
+				SessionId: sessionID, StreamKey: "income/" + sessionID, Sequence: 10,
+			},
+		}}, nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	select {
+	case <-worker9.processExitedSignal():
+		t.Fatal("stale Worker-8 cleanup stopped healthy Worker 9")
+	default:
+	}
+	if len(runtimeSender.snapshot()) != 1 {
+		t.Fatalf("Runtime Income ACKs = %+v, want exactly one", runtimeSender.snapshot())
+	}
+}
+
 func TestAgentIncomeReplacementReceivesOriginalStartBeforeExactReplay(t *testing.T) {
 	const sessionID = "sess-income"
 	sender := &incomeWorkerSender{}
@@ -7440,6 +7597,7 @@ type incomeRecoveryStarter struct {
 	stops         int
 	activeExit    chan struct{}
 	activeExitOne *sync.Once
+	activeWorker  *ManagedWorker
 }
 
 func newIncomeRecoveryStarter(
@@ -7500,6 +7658,7 @@ func (s *incomeRecoveryStarter) StartSessionWorker(
 	s.concurrent--
 	s.activeExit = exited
 	s.activeExitOne = exitOnce
+	s.activeWorker = worker
 	s.mu.Unlock()
 	if !s.suppressHello {
 		go func() {
@@ -7536,6 +7695,26 @@ func (s *incomeRecoveryStarter) StopSessionWorker(
 	return nil
 }
 
+func (s *incomeRecoveryStarter) stopSessionWorkerAttempt(
+	_ context.Context,
+	worker *ManagedWorker,
+	_ time.Duration,
+) error {
+	s.mu.Lock()
+	s.stops++
+	var exited chan struct{}
+	var exitOnce *sync.Once
+	if s.activeWorker == worker {
+		exited = s.activeExit
+		exitOnce = s.activeExitOne
+	}
+	s.mu.Unlock()
+	if exited != nil && exitOnce != nil {
+		exitOnce.Do(func() { close(exited) })
+	}
+	return nil
+}
+
 func (s *incomeRecoveryStarter) snapshotAttempts() (int, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -7546,6 +7725,12 @@ func (s *incomeRecoveryStarter) snapshotStops() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stops
+}
+
+func (s *incomeRecoveryStarter) snapshotActiveWorker() *ManagedWorker {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeWorker
 }
 
 type incomeWorkerSender struct {

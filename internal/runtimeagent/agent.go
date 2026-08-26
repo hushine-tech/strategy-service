@@ -31,6 +31,10 @@ type WorkerStopper interface {
 	StopSessionWorker(ctx context.Context, sessionID string, timeout time.Duration) error
 }
 
+type workerAttemptStopper interface {
+	stopSessionWorkerAttempt(ctx context.Context, worker *ManagedWorker, timeout time.Duration) error
+}
+
 type WorkerStopAll interface {
 	StopAll(ctx context.Context, timeout time.Duration) error
 }
@@ -1447,7 +1451,8 @@ func (a *Agent) handleWorkerGenerationProcessExit(
 			a.mu.Unlock()
 			return
 		}
-		if worker == nil || a.cfg.WorkerStarter == nil || a.cfg.WorkerStopper == nil {
+		_, exactStop := a.cfg.WorkerStopper.(workerAttemptStopper)
+		if worker == nil || a.cfg.WorkerStarter == nil || !exactStop {
 			pending.recoveryErr = "Income recovery is unavailable: managed Worker lifecycle is not configured"
 			a.mu.Unlock()
 			return
@@ -3281,7 +3286,7 @@ func (a *Agent) recoverPendingIncomeWorker(
 
 		stopErr := error(nil)
 		if worker != nil {
-			stopErr = a.stopPendingIncomeRecoveryWorker(sessionID)
+			stopErr = a.stopPendingIncomeRecoveryWorker(worker)
 		}
 		failure := errors.Join(err, stopErr)
 		a.mu.Lock()
@@ -3387,14 +3392,18 @@ func (a *Agent) waitPendingIncomeRecoveryHandshake(
 	}
 }
 
-func (a *Agent) stopPendingIncomeRecoveryWorker(sessionID string) error {
+func (a *Agent) stopPendingIncomeRecoveryWorker(worker *ManagedWorker) error {
 	timeout := a.cfg.RequestTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return a.cfg.WorkerStopper.StopSessionWorker(ctx, sessionID, timeout)
+	stopper, ok := a.cfg.WorkerStopper.(workerAttemptStopper)
+	if !ok {
+		return fmt.Errorf("exact Worker attempt stopper is not configured")
+	}
+	return stopper.stopSessionWorkerAttempt(ctx, worker, timeout)
 }
 
 func (a *Agent) invokeWorkerPlatformCall(ctx context.Context, call *rwv1.PlatformCall) *rwv1.PlatformCallResult {
