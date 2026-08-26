@@ -114,11 +114,16 @@ def test_timeline_reads_page_boundary_funding_once_before_same_time_kline():
     assert client.calls[1]["start_after_time_ms"] == 2_000
 
 
-def test_same_time_symbols_use_stream_order_with_funding_before_klines():
+def test_btc_eth_zec_same_time_funding_precedes_every_kline_in_stream_order():
     client = FakeMarketDataClient({
-        "okx/futures/kline/ETHUSDT/1s": [{
+        "binance/futures/kline/BTCUSDT/1s": [{
+            "klines": [kline("BTCUSDT", 9_000)],
+            "funding_facts": [funding("BTCUSDT", 9_000)],
+            "funding_coverage_complete": True,
+        }],
+        "binance/futures/kline/ETHUSDT/1s": [{
             "klines": [kline("ETHUSDT", 9_000)],
-            "funding_facts": [funding("ETHUSDT", 9_000, exchange="okx")],
+            "funding_facts": [funding("ETHUSDT", 9_000)],
             "funding_coverage_complete": True,
         }],
         "binance/futures/kline/ZECUSDT/1s": [{
@@ -132,7 +137,8 @@ def test_same_time_symbols_use_stream_order_with_funding_before_klines():
         start_time_ms=9_000,
         end_time_ms=10_000,
         streams=[
-            binding("ETHUSDT", exchange="okx"),
+            binding("BTCUSDT"),
+            binding("ETHUSDT"),
             binding("ZECUSDT"),
         ],
     )
@@ -144,12 +150,14 @@ def test_same_time_symbols_use_stream_order_with_funding_before_klines():
         for event in events
         if event.kind != "coverage"
     ] == [
-        ("funding", 0, "ETHUSDT"),
-        ("funding", 1, "ZECUSDT"),
-        ("kline", 0, "ETHUSDT"),
-        ("kline", 1, "ZECUSDT"),
+        ("funding", 0, "BTCUSDT"),
+        ("funding", 1, "ETHUSDT"),
+        ("funding", 2, "ZECUSDT"),
+        ("kline", 0, "BTCUSDT"),
+        ("kline", 1, "ETHUSDT"),
+        ("kline", 2, "ZECUSDT"),
     ]
-    assert [call["exchange"] for call in client.calls] == ["okx", "binance"]
+    assert [call["symbol"] for call in client.calls] == ["BTCUSDT", "ETHUSDT", "ZECUSDT"]
 
 
 def test_spot_timeline_contains_only_klines_and_no_funding_coverage_requirement():

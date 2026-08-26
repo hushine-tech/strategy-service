@@ -5,7 +5,7 @@ export UV
 PYTHONPATH_VAL=.:./strategy-library
 CONFIG?=./config.yaml
 PID_FILE=.run.pid
-DEV_NO_PROXY_HOSTS ?= 127.0.0.1,localhost,::1,192.168.88.10
+DEV_NO_PROXY_HOSTS ?= 127.0.0.1,localhost,::1
 DEV_NO_PROXY := env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY NO_PROXY=$(DEV_NO_PROXY_HOSTS),$${NO_PROXY} no_proxy=$(DEV_NO_PROXY_HOSTS),$${no_proxy}
 VERSION?=dev
 
