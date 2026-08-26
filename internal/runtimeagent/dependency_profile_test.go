@@ -485,7 +485,7 @@ func sha256Text(value string) string {
 }
 
 func embeddedFactsEnvironment(profile *strategyv1.RuntimeDependencyProfile) []string {
-	return []string{
+	environment := []string{
 		"HUSHINE_RUNTIME_PROFILE_NAME=" + profile.GetProfileName(),
 		"HUSHINE_RUNTIME_PROFILE_VERSION=" + profile.GetProfileVersion(),
 		"HUSHINE_RUNTIME_CONTRACT_SHA256=" + profile.GetContractSha256(),
@@ -495,4 +495,11 @@ func embeddedFactsEnvironment(profile *strategyv1.RuntimeDependencyProfile) []st
 		"HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT=" + profile.GetStrategyLibraryCommit(),
 		"HUSHINE_RUNTIME_IMAGE_BUILD_ID=" + profile.GetImageBuildId(),
 	}
+	if profile.GetImageBuildId() != "local-dev" {
+		environment = append(environment,
+			"HUSHINE_RUNTIME_GOLANG_LIB_COMMIT="+strings.Repeat("d", 40),
+			"HUSHINE_RUNTIME_CORE_SERVICE_COMMIT="+strings.Repeat("e", 40),
+		)
+	}
+	return environment
 }

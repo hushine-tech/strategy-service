@@ -106,6 +106,50 @@ func TestResolveWorkerLaunchSpecBuildsOneSanitizedImmutableInvocation(t *testing
 	}
 }
 
+func TestResolveWorkerLaunchSpecPreservesCurrentRuntimeBuildFacts(t *testing.T) {
+	venvPython := makeFakeWorkerVenvPython(t)
+	workDir := t.TempDir()
+	serviceCommit := strings.Repeat("a", 40)
+	libraryCommit := strings.Repeat("b", 40)
+	golangCommit := strings.Repeat("c", 40)
+	coreCommit := strings.Repeat("d", 40)
+	processEnv := []string{
+		"HUSHINE_RUNTIME_PROFILE_NAME=platform-python-3.13",
+		"HUSHINE_RUNTIME_PROFILE_VERSION=1.0.0",
+		"HUSHINE_RUNTIME_CONTRACT_SHA256=" + strings.Repeat("e", 64),
+		"HUSHINE_RUNTIME_HOSTED_PYTHON=3.13",
+		"HUSHINE_RUNTIME_PUBLIC_IMPORT_ROOTS=dateutil,grpc,numpy,pandas,pydantic,requests,yaml",
+		"HUSHINE_RUNTIME_STRATEGY_SERVICE_COMMIT=" + serviceCommit,
+		"HUSHINE_RUNTIME_STRATEGY_LIBRARY_COMMIT=" + libraryCommit,
+		"HUSHINE_RUNTIME_GOLANG_LIB_COMMIT=" + golangCommit,
+		"HUSHINE_RUNTIME_CORE_SERVICE_COMMIT=" + coreCommit,
+		"HUSHINE_RUNTIME_IMAGE_BUILD_ID=" + strings.Join([]string{
+			serviceCommit[:12], libraryCommit[:12], golangCommit[:12], coreCommit[:12],
+			"1.0.0", "executor-coverage",
+		}, "-"),
+	}
+
+	spec, err := ResolveWorkerLaunchSpec(WorkerManagerConfig{
+		PythonExecutable: venvPython,
+		WorkerModule:     "strategy_service.session_worker_entry",
+		AgentAddr:        "127.0.0.1:50000",
+		WorkDir:          workDir,
+		StateRoot:        filepath.Join(workDir, "state"),
+	}, "hosted", processEnv)
+	if err != nil {
+		t.Fatalf("ResolveWorkerLaunchSpec: %v", err)
+	}
+	childEnv := envMap(spec.Invocation.Env)
+	for key, want := range map[string]string{
+		"HUSHINE_RUNTIME_GOLANG_LIB_COMMIT":   golangCommit,
+		"HUSHINE_RUNTIME_CORE_SERVICE_COMMIT": coreCommit,
+	} {
+		if got := childEnv[key]; got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestResolveWorkerLaunchSpecRejectsEveryUnapprovedPythonPrefix(t *testing.T) {
 	venvPython := makeFakeWorkerVenvPython(t)
 	for _, value := range []string{
