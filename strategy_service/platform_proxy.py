@@ -422,6 +422,7 @@ def _validate_backtest_funding_response(response: Any, request: Any):
         )
 
     requested_legs: dict[tuple[str, str, str], Decimal] = {}
+    requested_leg_quantity_strings: dict[tuple[str, str, str], str] = {}
     for leg in request.position_legs:
         identity = (leg.symbol, leg.position_side, leg.margin_mode)
         if identity in requested_legs:
@@ -432,6 +433,7 @@ def _validate_backtest_funding_response(response: Any, request: Any):
             leg.signed_qty_decimal,
             "requested leg signed_qty_decimal",
         )
+        requested_leg_quantity_strings[identity] = leg.signed_qty_decimal
     if not requested_legs:
         raise BacktestFundingResponseError("settlement request contains no position legs")
 
@@ -443,6 +445,7 @@ def _validate_backtest_funding_response(response: Any, request: Any):
         raise BacktestFundingResponseError("calculation details must contain position legs")
 
     response_legs: dict[tuple[str, str, str], Decimal] = {}
+    response_leg_quantity_strings: dict[tuple[str, str, str], object] = {}
     calculated_sum = Decimal()
     applied_sum = Decimal()
     for detail in details:
@@ -458,10 +461,12 @@ def _validate_backtest_funding_response(response: Any, request: Any):
             raise BacktestFundingResponseError(
                 "calculation details contain a duplicate position leg"
             )
+        signed_qty_decimal = detail.get("signed_qty_decimal")
         response_legs[identity] = _backtest_response_decimal(
-            detail.get("signed_qty_decimal"),
+            signed_qty_decimal,
             "calculation leg signed_qty_decimal",
         )
+        response_leg_quantity_strings[identity] = signed_qty_decimal
         if detail.get("funding_rate_decimal") != request.fact.funding_rate_decimal:
             raise BacktestFundingResponseError(
                 "calculation leg Funding rate does not match the market fact"
@@ -498,6 +503,13 @@ def _validate_backtest_funding_response(response: Any, request: Any):
     if any(response_legs[key] != quantity for key, quantity in requested_legs.items()):
         raise BacktestFundingResponseError(
             "calculation leg quantities do not match requested position legs"
+        )
+    if any(
+        response_leg_quantity_strings[key] != quantity
+        for key, quantity in requested_leg_quantity_strings.items()
+    ):
+        raise BacktestFundingResponseError(
+            "calculation leg signed_qty_decimal does not exactly match the requested leg"
         )
 
     calculated_total = _backtest_response_decimal(

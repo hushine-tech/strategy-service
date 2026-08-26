@@ -274,6 +274,73 @@ def test_proxy_portfolio_client_settles_exact_backtest_funding_facts():
     assert entry.income_entry_id == 71
 
 
+def test_proxy_portfolio_client_rejects_lexically_different_leg_quantity():
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[PORTFOLIO_SETTLE_BACKTEST_FUNDING] = (
+        portfolio_service_pb2.SettleBacktestFundingResponse(
+            entry=portfolio_service_pb2.VenueIncomeEntry(
+                income_entry_id=72,
+                session_id="sess-funding",
+                venue_id=41,
+                income_type="FUNDING_FEE",
+                source="backtest",
+                symbol="BTCUSDT",
+                asset="USDT",
+                occurred_at=Timestamp(seconds=1_788_000_000),
+                calculated_amount_decimal="-0.01",
+                applied_amount_decimal="-0.01",
+                reconciliation_delta_decimal="0",
+                calculation_details_json=json.dumps(
+                    [
+                        {
+                            "symbol": "BTCUSDT",
+                            "position_side": "BOTH",
+                            "margin_mode": "cross",
+                            "signed_qty_decimal": "1.0",
+                            "funding_rate_decimal": "0.0001",
+                            "mark_price_decimal": "100",
+                            "calculated_amount_decimal": "-0.01",
+                            "applied_amount_decimal": "-0.01",
+                            "calculator_version": "binance-usdm-linear-v1",
+                        }
+                    ],
+                    separators=(",", ":"),
+                ),
+                status="calculated",
+            )
+        )
+    )
+    proxy = RuntimeChannelPlatformProxy(runtime)
+
+    with pytest.raises(
+        platform_proxy.BacktestFundingResponseError,
+        match="signed_qty_decimal does not exactly match",
+    ):
+        proxy.portfolio_client().settle_backtest_funding(
+            session_id="sess-funding",
+            user_id=17,
+            fact=FundingFact(
+                venue_id=41,
+                exchange="binance",
+                market="perpetual_futures",
+                symbol="BTCUSDT",
+                funding_time_ms=1_788_000_000_000,
+                funding_rate_decimal="0.0001",
+                mark_price_decimal="100",
+                settlement_asset="USDT",
+            ),
+            position_mode="one_way",
+            position_legs=[
+                FundingPositionLegFact(
+                    symbol="BTCUSDT",
+                    position_side="BOTH",
+                    margin_mode="cross",
+                    signed_qty_decimal="1.00",
+                )
+            ],
+        )
+
+
 def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
     runtime.responses[PORTFOLIO_PREFLIGHT_STRATEGY_SESSION] = (
