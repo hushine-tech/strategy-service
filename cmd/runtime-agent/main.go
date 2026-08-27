@@ -355,6 +355,7 @@ func runAgent(
 		RuntimeName:     identity.Name,
 		UserID:          identity.UserID,
 		StateRoot:       workerStateRoot,
+		StartTimeout:    runtimeAgentStartTimeout(parseDebugpyWait(os.Getenv("DEBUG_WAIT"))),
 		WorkerStarter:   workerManager,
 		WorkerStopper:   workerManager,
 		PlatformInvoker: runtimeClient,
@@ -772,6 +773,13 @@ func parseDebugpyWait(value string) bool {
 	default:
 		return true
 	}
+}
+
+func runtimeAgentStartTimeout(debugWait bool) time.Duration {
+	if debugWait {
+		return 24 * time.Hour
+	}
+	return 0
 }
 
 func workerPythonExecutable(debugPort int) string {

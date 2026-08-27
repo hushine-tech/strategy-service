@@ -395,6 +395,15 @@ func TestParseDebugpyWait(t *testing.T) {
 	}
 }
 
+func TestRuntimeAgentStartTimeoutAllowsDebuggerAttach(t *testing.T) {
+	if got := runtimeAgentStartTimeout(false); got != 0 {
+		t.Fatalf("normal runtime start timeout = %v, want default", got)
+	}
+	if got := runtimeAgentStartTimeout(true); got != 24*time.Hour {
+		t.Fatalf("debug runtime start timeout = %v, want 24h", got)
+	}
+}
+
 func TestPrepareRuntimeCoverageRootCreatesLanguageDirectories(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "runtime-coverage")
 

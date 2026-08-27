@@ -270,8 +270,22 @@ def _start_debugpy_if_requested(port: int) -> None:
     import debugpy  # type: ignore
 
     host = os.environ.get("HUSHINE_DEBUGPY_HOST", "127.0.0.1")
-    debugpy.listen((host, int(port)))
-    if os.environ.get("DEBUG_WAIT", "0").lower() not in {"0", "false", "no"}:
+    wait_requested = os.environ.get("DEBUG_WAIT", "0").strip().lower() not in {
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    debugpy.configure(subProcess=False)
+    try:
+        debugpy.listen((host, int(port)))
+    except RuntimeError:
+        if wait_requested:
+            raise
+        logger.warning("debugger unavailable on %s:%s; continuing without attach", host, port)
+        return
+    if wait_requested:
         logger.info("waiting for debugger attach on %s:%s", host, port)
         debugpy.wait_for_client()
 

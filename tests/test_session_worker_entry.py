@@ -1,3 +1,4 @@
+import importlib
 import sys
 import threading
 from types import SimpleNamespace
@@ -59,15 +60,28 @@ class _FinalClient:
 
 
 class _FakeDebugpy:
-    def __init__(self):
+    def __init__(self, listen_error=None):
+        self.configured = []
         self.listened = []
         self.wait_calls = 0
+        self.listen_error = listen_error
+
+    def configure(self, **kwargs):
+        self.configured.append(kwargs)
 
     def listen(self, address):
         self.listened.append(address)
+        if self.listen_error is not None:
+            raise self.listen_error
 
     def wait_for_client(self):
         self.wait_calls += 1
+
+
+def test_local_bare_runtime_can_import_real_debugpy():
+    debugpy = importlib.import_module("debugpy")
+
+    assert callable(debugpy.listen)
 
 
 def test_start_debugpy_does_not_wait_when_debug_wait_is_false(monkeypatch):
@@ -77,6 +91,7 @@ def test_start_debugpy_does_not_wait_when_debug_wait_is_false(monkeypatch):
 
     _start_debugpy_if_requested(5678)
 
+    assert fake_debugpy.configured == [{"subProcess": False}]
     assert fake_debugpy.listened == [("127.0.0.1", 5678)]
     assert fake_debugpy.wait_calls == 0
 
@@ -88,8 +103,21 @@ def test_start_debugpy_waits_when_debug_wait_is_true(monkeypatch):
 
     _start_debugpy_if_requested(5678)
 
+    assert fake_debugpy.configured == [{"subProcess": False}]
     assert fake_debugpy.listened == [("127.0.0.1", 5678)]
     assert fake_debugpy.wait_calls == 1
+
+
+def test_start_debugpy_does_not_block_non_waiting_worker_when_port_is_busy(monkeypatch):
+    fake_debugpy = _FakeDebugpy(RuntimeError("address already in use"))
+    monkeypatch.setitem(sys.modules, "debugpy", fake_debugpy)
+    monkeypatch.setenv("DEBUG_WAIT", "false")
+
+    _start_debugpy_if_requested(5678)
+
+    assert fake_debugpy.configured == [{"subProcess": False}]
+    assert fake_debugpy.listened == [("127.0.0.1", 5678)]
+    assert fake_debugpy.wait_calls == 0
 
 
 def test_poll_until_terminal_sends_final_status_and_waits_for_ack():

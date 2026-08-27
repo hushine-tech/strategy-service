@@ -34,6 +34,7 @@ coverage = [
     "coverage>=7.0.0,<8.0.0",
 ]
 dev = [
+    "debugpy>=1.8.0",
     "pytest>=8.0.0",
 ]
 
