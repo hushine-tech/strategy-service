@@ -87,6 +87,11 @@ type runtimeChannelPendingCall struct {
 	reply      chan runtimeChannelPendingResult
 }
 
+type retainedRuntimeDataACK struct {
+	revision uint64
+	frame    *cpv1.RuntimeFrame
+}
+
 type RuntimeChannelClient struct {
 	cfg RuntimeChannelClientConfig
 
@@ -97,7 +102,8 @@ type RuntimeChannelClient struct {
 	generation  uint64
 	current     *runtimeChannelGeneration
 	pending     map[string]*runtimeChannelPendingCall
-	retainedACK map[string]*cpv1.RuntimeFrame
+	ackRevision uint64
+	retainedACK map[string]*retainedRuntimeDataACK
 	readyChange chan struct{}
 	connected   chan struct{}
 	connectOnce sync.Once
@@ -124,7 +130,7 @@ func NewRuntimeChannelClient(cfg RuntimeChannelClientConfig) *RuntimeChannelClie
 	return &RuntimeChannelClient{
 		cfg:         cfg,
 		pending:     map[string]*runtimeChannelPendingCall{},
-		retainedACK: map[string]*cpv1.RuntimeFrame{},
+		retainedACK: map[string]*retainedRuntimeDataACK{},
 		readyChange: make(chan struct{}),
 		connected:   make(chan struct{}),
 	}
@@ -268,6 +274,7 @@ func (c *RuntimeChannelClient) runConnection(ctx context.Context, address string
 		authenticated = true
 		result = c.runAuthenticatedGeneration(runCtx, generation, sendDone, recvDone, &loops)
 	}
+	c.markGenerationUnready(generation)
 	cancel()
 	_ = conn.Close()
 	loops.Wait()
@@ -364,6 +371,16 @@ func (c *RuntimeChannelClient) finishGeneration(generation *runtimeChannelGenera
 	}
 }
 
+func (c *RuntimeChannelClient) markGenerationUnready(generation *runtimeChannelGeneration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current != generation || !generation.ready {
+		return
+	}
+	generation.ready = false
+	c.signalReadyChangeLocked()
+}
+
 func normalizeRuntimeChannelAddress(address string) string {
 	address = strings.TrimSpace(address)
 	if strings.HasPrefix(address, "ipv4:") && strings.Count(address, ":") == 2 {
@@ -406,14 +423,19 @@ func (c *RuntimeChannelClient) Send(frame *cpv1.RuntimeFrame) error {
 func (c *RuntimeChannelClient) retainAndSendDataACK(frame *cpv1.RuntimeFrame) error {
 	key := runtimeDataACKKey(frame.GetDataAck())
 	c.mu.Lock()
-	c.retainedACK[key] = proto.Clone(frame).(*cpv1.RuntimeFrame)
+	c.ackRevision++
+	entry := &retainedRuntimeDataACK{
+		revision: c.ackRevision,
+		frame:    proto.Clone(frame).(*cpv1.RuntimeFrame),
+	}
+	c.retainedACK[key] = entry
 	generation := c.current
 	ready := generation != nil && generation.ready
 	c.mu.Unlock()
 	if !ready {
 		return nil
 	}
-	if err := c.sendRetainedACK(context.Background(), generation, key, frame); err != nil {
+	if err := c.sendRetainedACK(context.Background(), generation, key, entry); err != nil {
 		return nil
 	}
 	return nil
@@ -430,10 +452,10 @@ func (c *RuntimeChannelClient) sendRetainedACK(
 	ctx context.Context,
 	generation *runtimeChannelGeneration,
 	key string,
-	frame *cpv1.RuntimeFrame,
+	entry *retainedRuntimeDataACK,
 ) error {
 	done := make(chan error, 1)
-	if err := c.enqueueGeneration(ctx, generation, frame, done); err != nil {
+	if err := c.enqueueGeneration(ctx, generation, entry.frame, done); err != nil {
 		return err
 	}
 	select {
@@ -446,7 +468,7 @@ func (c *RuntimeChannelClient) sendRetainedACK(
 			return err
 		}
 		c.mu.Lock()
-		if retained := c.retainedACK[key]; retained != nil && proto.Equal(retained, frame) {
+		if retained := c.retainedACK[key]; retained == entry && retained.revision == entry.revision {
 			delete(c.retainedACK, key)
 		}
 		c.mu.Unlock()
@@ -460,15 +482,15 @@ func (c *RuntimeChannelClient) replayRetainedACKs(
 ) error {
 	c.mu.Lock()
 	keys := make([]string, 0, len(c.retainedACK))
-	frames := make(map[string]*cpv1.RuntimeFrame, len(c.retainedACK))
-	for key, frame := range c.retainedACK {
+	entries := make(map[string]*retainedRuntimeDataACK, len(c.retainedACK))
+	for key, entry := range c.retainedACK {
 		keys = append(keys, key)
-		frames[key] = proto.Clone(frame).(*cpv1.RuntimeFrame)
+		entries[key] = entry
 	}
 	c.mu.Unlock()
 	sort.Strings(keys)
 	for _, key := range keys {
-		if err := c.sendRetainedACK(ctx, generation, key, frames[key]); err != nil {
+		if err := c.sendRetainedACK(ctx, generation, key, entries[key]); err != nil {
 			return err
 		}
 	}

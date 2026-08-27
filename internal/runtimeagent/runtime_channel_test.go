@@ -473,15 +473,53 @@ func TestRuntimeChannelReadyDropsDuringReconnectAndReturnsAfterResumeAck(t *test
 	defer server.Stop()
 
 	client := newSupervisorTestRuntimeClient(listener)
+	blockedSend := make(chan struct{})
+	releaseSend := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBlockedSend := func() { releaseOnce.Do(func() { close(releaseSend) }) }
+	defer releaseBlockedSend()
+	client.cfg.DialOptions = append(client.cfg.DialOptions, grpc.WithStreamInterceptor(
+		blockingFirstRequestStreamInterceptor(blockedSend, releaseSend),
+	))
 	client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = client.Run(ctx) }()
 	receiveRuntimeSignal(t, capture.firstAuthenticated, "first authentication")
 	waitForRuntimeReady(t, client, true)
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- client.Send(&cpv1.RuntimeFrame{
+			FrameType: cpv1.FrameType_FRAME_TYPE_REQUEST,
+			Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+				Method: "blocked-old-generation-send",
+			}},
+		})
+	}()
+	receiveRuntimeSignal(t, blockedSend, "blocked old-generation physical send")
 	close(capture.disconnectFirst)
-	receiveRuntimeSignal(t, capture.resumeReceived, "RESUME frame")
 	waitForRuntimeReady(t, client, false)
+	client.mu.Lock()
+	currentPreserved := client.current != nil && !client.current.ready
+	client.mu.Unlock()
+	if !currentPreserved {
+		t.Fatal("disconnect detection did not preserve unready generation ownership")
+	}
+	select {
+	case <-capture.resumeReceived:
+		t.Fatal("supervisor opened RESUME before the old send loop exited")
+	default:
+	}
+	releaseBlockedSend()
+	select {
+	case err := <-sendDone:
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("blocked old-generation send error = %v, want Unavailable", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked old-generation send did not exit")
+	}
+	receiveRuntimeSignal(t, capture.resumeReceived, "RESUME frame")
 	close(capture.allowResumeAck)
 	receiveRuntimeSignal(t, capture.resumeAckSent, "RESUME ACK send")
 	waitForRuntimeReady(t, client, true)
@@ -501,13 +539,16 @@ func TestRuntimeChannelSupervisorRetainsOnlyDataAckAcrossReconnect(t *testing.T)
 	defer server.Stop()
 
 	client := newSupervisorTestRuntimeClient(listener)
+	physicalFailure := make(chan struct{})
+	client.cfg.DialOptions = append(client.cfg.DialOptions, grpc.WithStreamInterceptor(
+		failFirstGenerationDataACKStreamInterceptor(physicalFailure),
+	))
 	client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = client.Run(ctx) }()
 	receiveRuntimeSignal(t, capture.firstAuthenticated, "first authentication")
-	receiveRuntimeSignal(t, capture.resumeReceived, "RESUME frame")
-	waitForRuntimeReady(t, client, false)
+	waitForRuntimeReady(t, client, true)
 
 	ack := &cpv1.RuntimeFrame{
 		FrameType: cpv1.FrameType_FRAME_TYPE_DATA_ACK,
@@ -516,8 +557,11 @@ func TestRuntimeChannelSupervisorRetainsOnlyDataAckAcrossReconnect(t *testing.T)
 		}},
 	}
 	if err := client.Send(ack); err != nil {
-		t.Fatalf("retain disconnected DATA_ACK: %v", err)
+		t.Fatalf("retain physically failed DATA_ACK: %v", err)
 	}
+	receiveRuntimeSignal(t, physicalFailure, "old-generation DATA_ACK physical failure")
+	receiveRuntimeSignal(t, capture.resumeReceived, "RESUME frame")
+	waitForRuntimeReady(t, client, false)
 	requestFrame := &cpv1.RuntimeFrame{FrameType: cpv1.FrameType_FRAME_TYPE_REQUEST}
 	if err := client.Send(requestFrame); status.Code(err) != codes.Unavailable {
 		t.Fatalf("disconnected non-ACK Send error = %v, want Unavailable", err)
@@ -535,6 +579,81 @@ func TestRuntimeChannelSupervisorRetainsOnlyDataAckAcrossReconnect(t *testing.T)
 	case duplicate := <-capture.ackFrames:
 		t.Fatalf("DATA_ACK replayed more than once: %+v", duplicate)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRuntimeChannelRetainedDataACKCompletionCannotDeleteNewerSameKeyEntry(t *testing.T) {
+	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{})
+	oldGeneration := &runtimeChannelGeneration{
+		id: 1, outbound: make(chan *runtimeChannelOutbound, 2), ready: true,
+	}
+	client.mu.Lock()
+	client.current = oldGeneration
+	client.mu.Unlock()
+	ack := &cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_DATA_ACK,
+		Payload: &cpv1.RuntimeFrame_DataAck{DataAck: &cpv1.RuntimeDataAck{
+			SessionId: "sess-income", StreamKey: "income/sess-income", Sequence: 11,
+		}},
+	}
+
+	oldSendDone := make(chan error, 1)
+	go func() { oldSendDone <- client.Send(proto.Clone(ack).(*cpv1.RuntimeFrame)) }()
+	oldPhysical := <-oldGeneration.outbound
+	newSendDone := make(chan error, 1)
+	go func() { newSendDone <- client.Send(proto.Clone(ack).(*cpv1.RuntimeFrame)) }()
+	newPhysical := <-oldGeneration.outbound
+
+	newPhysical.done <- status.Error(codes.Unavailable, "newer physical send failed")
+	if err := <-newSendDone; err != nil {
+		t.Fatalf("newer retained ACK ownership: %v", err)
+	}
+	key := runtimeDataACKKey(ack.GetDataAck())
+	client.mu.Lock()
+	newerEntry := client.retainedACK[key]
+	client.mu.Unlock()
+	if newerEntry == nil {
+		t.Fatal("newer failed ACK was not retained")
+	}
+	oldPhysical.done <- nil
+	if err := <-oldSendDone; err != nil {
+		t.Fatalf("older physical ACK completion: %v", err)
+	}
+
+	client.mu.Lock()
+	retained := client.retainedACK[key]
+	client.mu.Unlock()
+	if retained == nil {
+		t.Fatal("older protobuf-equal completion deleted newer failed ACK")
+	}
+	if retained != newerEntry || retained.revision != newerEntry.revision {
+		t.Fatalf(
+			"older protobuf-equal completion changed newer failed ACK: retained=%p rev=%d want=%p rev=%d",
+			retained, retained.revision, newerEntry, newerEntry.revision,
+		)
+	}
+
+	resumeGeneration := &runtimeChannelGeneration{
+		id: 2, outbound: make(chan *runtimeChannelOutbound, 1), ready: true,
+	}
+	client.mu.Lock()
+	client.current = resumeGeneration
+	client.mu.Unlock()
+	replayDone := make(chan error, 1)
+	go func() { replayDone <- client.replayRetainedACKs(context.Background(), resumeGeneration) }()
+	replayed := <-resumeGeneration.outbound
+	if !proto.Equal(replayed.frame, ack) {
+		t.Fatalf("RESUME replay = %+v, want retained ACK %+v", replayed.frame, ack)
+	}
+	replayed.done <- nil
+	if err := <-replayDone; err != nil {
+		t.Fatalf("replay retained newer ACK: %v", err)
+	}
+	client.mu.Lock()
+	retained = client.retainedACK[key]
+	client.mu.Unlock()
+	if retained != nil {
+		t.Fatal("successful RESUME replay did not clear exact retained ACK version")
 	}
 }
 
@@ -1097,6 +1216,85 @@ type gatedResumeRuntimeChannelServer struct {
 	calls              atomic.Int64
 }
 
+func blockingFirstRequestStreamInterceptor(
+	blocked chan<- struct{},
+	release <-chan struct{},
+) grpc.StreamClientInterceptor {
+	var streams atomic.Int64
+	var blockedOnce sync.Once
+	return func(
+		ctx context.Context,
+		desc *grpc.StreamDesc,
+		cc *grpc.ClientConn,
+		method string,
+		streamer grpc.Streamer,
+		opts ...grpc.CallOption,
+	) (grpc.ClientStream, error) {
+		stream, err := streamer(ctx, desc, cc, method, opts...)
+		if err != nil {
+			return nil, err
+		}
+		return &runtimeChannelTestClientStream{
+			ClientStream: stream,
+			generation:   streams.Add(1),
+			onSend: func(generation int64, frame *cpv1.RuntimeFrame) (bool, error) {
+				if generation != 1 || frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_REQUEST {
+					return false, nil
+				}
+				blockedOnce.Do(func() { close(blocked) })
+				<-release
+				return true, status.Error(codes.Unavailable, "old-generation physical send released after disconnect")
+			},
+		}, nil
+	}
+}
+
+func failFirstGenerationDataACKStreamInterceptor(
+	failed chan<- struct{},
+) grpc.StreamClientInterceptor {
+	var streams atomic.Int64
+	var failedOnce sync.Once
+	return func(
+		ctx context.Context,
+		desc *grpc.StreamDesc,
+		cc *grpc.ClientConn,
+		method string,
+		streamer grpc.Streamer,
+		opts ...grpc.CallOption,
+	) (grpc.ClientStream, error) {
+		stream, err := streamer(ctx, desc, cc, method, opts...)
+		if err != nil {
+			return nil, err
+		}
+		return &runtimeChannelTestClientStream{
+			ClientStream: stream,
+			generation:   streams.Add(1),
+			onSend: func(generation int64, frame *cpv1.RuntimeFrame) (bool, error) {
+				if generation != 1 || frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_DATA_ACK {
+					return false, nil
+				}
+				failedOnce.Do(func() { close(failed) })
+				return true, status.Error(codes.Unavailable, "injected old-generation DATA_ACK send failure")
+			},
+		}, nil
+	}
+}
+
+type runtimeChannelTestClientStream struct {
+	grpc.ClientStream
+	generation int64
+	onSend     func(int64, *cpv1.RuntimeFrame) (bool, error)
+}
+
+func (s *runtimeChannelTestClientStream) SendMsg(message any) error {
+	if frame, ok := message.(*cpv1.RuntimeFrame); ok && s.onSend != nil {
+		if handled, err := s.onSend(s.generation, frame); handled {
+			return err
+		}
+	}
+	return s.ClientStream.SendMsg(message)
+}
+
 func (s *gatedResumeRuntimeChannelServer) RuntimeChannel(
 	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
 ) error {
@@ -1152,7 +1350,11 @@ func (s *ackReplayRuntimeChannelServer) RuntimeChannel(
 			return err
 		}
 		close(s.firstAuthenticated)
-		return nil
+		for {
+			if _, recvErr := stream.Recv(); recvErr != nil {
+				return recvErr
+			}
+		}
 	}
 	if first.GetResume() == nil {
 		return status.Error(codes.InvalidArgument, "resume required")
