@@ -705,6 +705,15 @@ class OrderClient:
             if index < len(fill_deltas) - 1 and final_status == "FILLED":
                 status = "PARTIALLY_FILLED"
             wallet_qty = cls._wallet_qty(raw_qty, side, market)
+            exchange_trade_id = str(getattr(fill, "exchange_trade_id", "") or "")
+            trade_time = (
+                _required_proto_time_key(fill, "time")
+                if getattr(fill, "HasField")("time")
+                else None
+            )
+            exact_fill_event = bool(
+                exchange_trade_id not in {"", "0"} and trade_time is not None
+            )
             events.append(OrderResponse(
                 symbol=symbol,
                 side=side,
@@ -720,8 +729,11 @@ class OrderClient:
                 venue_id=int(getattr(fill, "venue_id", 0) or getattr(order, "venue_id", 0) or 0),
                 exchange=EXCHANGE_NAMES.get(int(getattr(fill, "exchange", 0) or getattr(order, "exchange", 0) or 0), ""),
                 market=MARKET_NAMES.get(int(getattr(fill, "market", 0) or getattr(order, "market", 0) or 0), market),
+                position_side=POSITION_SIDE_NAMES.get(
+                    int(getattr(fill, "position_side", 0) or 0), ""
+                ),
                 exchange_order_id=str(getattr(fill, "exchange_order_id", "") or getattr(order, "exchange_order_id", "") or ""),
-                exchange_trade_id=str(getattr(fill, "exchange_trade_id", "") or ""),
+                exchange_trade_id=exchange_trade_id,
                 fee_asset=str(getattr(fill, "fee_asset", "") or ""),
                 qty_decimal=str(raw_qty_decimal),
                 fill_price_decimal=fill_price_decimal,
@@ -733,6 +745,8 @@ class OrderClient:
                 price_decimal=price_decimal,
                 cumulative_quote_qty_decimal=str(cumulative_quote),
                 environment=int(getattr(fill, "environment", 0) or getattr(order, "environment", 0) or 0),
+                event_type="fill" if exact_fill_event else "",
+                trade_time=trade_time,
             ))
         return events
 

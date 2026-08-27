@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from google.protobuf.timestamp_pb2 import Timestamp
 
 from strategy_service.gen import order_service_pb2
 from strategy_service.order_client import OrderClient, canonical_decimal_text
@@ -201,6 +202,61 @@ def test_place_order_uses_canonical_symbol_and_emits_fill_events():
     assert feedback.fill_events[1].status == "FILLED"
     assert feedback.fill_events[1].executed_qty == pytest.approx(0.05)
     assert feedback.fill_events[1].remaining_qty == pytest.approx(0.0)
+
+
+def test_place_order_exact_fill_carries_funding_identity_and_market_time():
+    response = order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-funding",
+        attempt_id="attempt-funding",
+        attempt_status="ACCEPTED",
+        order=order_service_pb2.ExchangeOrderEntry(
+            order_id="order-funding",
+            exchange_order_id="exchange-order-funding",
+            symbol="ETHUSDT",
+            side="BUY",
+            orig_qty_decimal="0.001",
+            executed_qty_decimal="0.001",
+            remaining_qty_decimal="0",
+            avg_price_decimal="2500",
+            cumulative_quote_qty_decimal="2.5",
+            status="FILLED",
+            venue_id=10,
+            exchange=1,
+            market=2,
+        ),
+        fill_deltas=[
+            order_service_pb2.OrderFillEntry(
+                order_id="order-funding",
+                exchange_order_id="exchange-order-funding",
+                exchange_trade_id="trade-funding",
+                qty_decimal="0.001",
+                fill_price_decimal="2500",
+                fee_decimal="0.001",
+                quote_qty_decimal="2.5",
+                venue_id=10,
+                exchange=1,
+                market=2,
+                time=Timestamp(seconds=1_735_689_899, nanos=999_000_000),
+            )
+        ],
+    )
+    client = OrderClient("")
+    client._stub = _Stub(response)
+
+    feedback = client.place_order(
+        13,
+        _decision(),
+        2500.0,
+        portfolio_symbol="ETHUSDT",
+        market="perpetual_futures",
+        intent_id="intent-funding",
+    )
+
+    assert len(feedback.fill_events) == 1
+    fill = feedback.fill_events[0]
+    assert fill.event_type == "fill"
+    assert fill.exchange_trade_id == "trade-funding"
+    assert fill.trade_time == (1_735_689_899, 999_000_000)
 
 
 def test_place_order_ioc_partial_expired_emits_terminal_fill_event():
