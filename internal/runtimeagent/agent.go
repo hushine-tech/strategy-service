@@ -60,6 +60,9 @@ type WorkerGenerationSender interface {
 }
 
 type RuntimeFrameSender interface {
+	// Send takes ownership of an idempotent DATA_ACK once accepted. The
+	// RuntimeChannel client may retain that ACK across a transient disconnect;
+	// non-idempotent frames are generation-bound and fail instead of replaying.
 	Send(frame *cpv1.RuntimeFrame) error
 }
 

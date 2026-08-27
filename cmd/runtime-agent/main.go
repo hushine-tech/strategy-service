@@ -374,7 +374,9 @@ func runAgent(
 	agent.SetWorkerSender(workerServer)
 
 	if controlAddr := strings.TrimSpace(os.Getenv("RUNTIME_AGENT_CONTROL_ADDR")); controlAddr != "" && !strings.EqualFold(controlAddr, "off") && controlAddr != "0" {
-		addr, shutdown, err := runtimeagent.StartLocalControlServer(serviceCtx, controlAddr, agent)
+		addr, shutdown, err := runtimeagent.StartLocalControlServer(
+			serviceCtx, controlAddr, agent, runtimeClient,
+		)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "start local control: %v\n", err)
 			return 1

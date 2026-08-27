@@ -16,12 +16,21 @@ type SessionRestarter interface {
 	RestartSession(ctx context.Context, opts RestartSessionOptions) (RestartSessionResult, error)
 }
 
+type RuntimeChannelReadiness interface {
+	Ready() bool
+}
+
 type restartSessionHTTPRequest struct {
 	SessionID       string  `json:"session_id"`
 	MaxLossClosePct float64 `json:"max_loss_close_pct"`
 }
 
-func StartLocalControlServer(ctx context.Context, listenAddr string, restarter SessionRestarter) (net.Addr, func(context.Context) error, error) {
+func StartLocalControlServer(
+	ctx context.Context,
+	listenAddr string,
+	restarter SessionRestarter,
+	readiness ...RuntimeChannelReadiness,
+) (net.Addr, func(context.Context) error, error) {
 	if restarter == nil {
 		return nil, nil, fmt.Errorf("session restarter is required")
 	}
@@ -49,6 +58,20 @@ func StartLocalControlServer(ctx context.Context, listenAddr string, restarter S
 			return
 		}
 		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeLocalControlError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		ready := len(readiness) > 0 && readiness[0] != nil && readiness[0].Ready()
+		w.Header().Set("content-type", "application/json")
+		if !ready {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"ok":false}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 	mux.HandleFunc("/restart-worker-session", func(w http.ResponseWriter, r *http.Request) {

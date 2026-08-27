@@ -9,8 +9,12 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,7 +22,9 @@ import (
 	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -296,6 +302,239 @@ func TestRuntimeChannelClientWaitAuthenticatedRequiresHelloAck(t *testing.T) {
 	case <-runDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime channel did not stop after context cancel")
+	}
+}
+
+func TestRuntimeChannelSupervisorResumesSeriallyAndDoesNotReplayPendingCalls(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	capture := &resumeSupervisorRuntimeChannelServer{
+		firstAuthenticated:  make(chan struct{}),
+		firstRequest:        make(chan struct{}),
+		secondAuthenticated: make(chan struct{}),
+		secondFrames:        make(chan *cpv1.RuntimeFrame, 8),
+	}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := newSupervisorTestRuntimeClient(listener)
+	client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(ctx) }()
+	receiveRuntimeSignal(t, capture.firstAuthenticated, "first authentication")
+	waitForRuntimeReady(t, client, true)
+
+	request, err := anypb.New(&strategyv1.GetStrategyStatusRequest{SessionId: "sess-pending"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callDone := make(chan error, 1)
+	go func() {
+		_, callErr := client.InvokePlatformAny(context.Background(), "GetStrategyStatus", request, 5*time.Second)
+		callDone <- callErr
+	}()
+	receiveRuntimeSignal(t, capture.firstRequest, "first-generation request")
+
+	select {
+	case callErr := <-callDone:
+		if status.Code(callErr) != codes.Unavailable {
+			t.Fatalf("pending call error = %v, want Unavailable", callErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending call did not fail immediately on disconnect")
+	}
+	receiveRuntimeSignal(t, capture.secondAuthenticated, "RESUME authentication")
+	waitForRuntimeReady(t, client, true)
+
+	if got := capture.maxActive.Load(); got != 1 {
+		t.Fatalf("simultaneous RuntimeChannel streams = %d, want 1", got)
+	}
+	if got := capture.firstTypesSnapshot(); len(got) < 2 ||
+		got[0] != cpv1.FrameType_FRAME_TYPE_HELLO || got[1] != cpv1.FrameType_FRAME_TYPE_RESUME {
+		t.Fatalf("generation first frames = %v, want HELLO then RESUME", got)
+	}
+	select {
+	case frame := <-capture.secondFrames:
+		if frame.GetFrameType() == cpv1.FrameType_FRAME_TYPE_REQUEST {
+			t.Fatalf("old pending request replayed on RESUME: %+v", frame)
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run after cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("supervisor did not stop after cancellation")
+	}
+}
+
+func TestRuntimeChannelSupervisorDoesNotRetryPermanentStatus(t *testing.T) {
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.FailedPrecondition} {
+		t.Run(code.String(), func(t *testing.T) {
+			listener := bufconn.Listen(1024 * 1024)
+			server := grpc.NewServer()
+			capture := &permanentRuntimeChannelServer{code: code}
+			cpv1.RegisterControlPanelServiceServer(server, capture)
+			go func() { _ = server.Serve(listener) }()
+			defer server.Stop()
+
+			client := newSupervisorTestRuntimeClient(listener)
+			client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
+			err := client.Run(context.Background())
+			if status.Code(err) != code {
+				t.Fatalf("Run error = %v, want %s", err, code)
+			}
+			if got := capture.calls.Load(); got != 1 {
+				t.Fatalf("RuntimeChannel attempts = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestRuntimeChannelSupervisorBackoffStartsAt250MillisecondsAndCapsAt5Seconds(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	capture := &alwaysUnavailableRuntimeChannelServer{}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := newSupervisorTestRuntimeClient(listener)
+	client.cfg.ReconnectJitter = func(max time.Duration) time.Duration { return max }
+	var waits []time.Duration
+	client.cfg.ReconnectWait = func(_ context.Context, delay time.Duration) error {
+		waits = append(waits, delay)
+		if len(waits) == 6 {
+			return status.Error(codes.PermissionDenied, "stop test")
+		}
+		return nil
+	}
+	if err := client.Run(context.Background()); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Run error = %v, want test stop", err)
+	}
+	want := []time.Duration{
+		250 * time.Millisecond, 500 * time.Millisecond, time.Second,
+		2 * time.Second, 4 * time.Second, 5 * time.Second,
+	}
+	if !slices.Equal(waits, want) {
+		t.Fatalf("reconnect waits = %v, want %v", waits, want)
+	}
+}
+
+func TestRuntimeChannelSupervisorResetsBackoffAfterAuthenticatedResumeableGeneration(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	capture := &backoffResetRuntimeChannelServer{}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := newSupervisorTestRuntimeClient(listener)
+	client.cfg.ReconnectJitter = func(max time.Duration) time.Duration { return max }
+	var waits []time.Duration
+	client.cfg.ReconnectWait = func(_ context.Context, delay time.Duration) error {
+		waits = append(waits, delay)
+		return nil
+	}
+	err := client.Run(context.Background())
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Run error = %v, want rejected RESUME", err)
+	}
+	if want := []time.Duration{250 * time.Millisecond, 250 * time.Millisecond}; !slices.Equal(waits, want) {
+		t.Fatalf("reconnect waits = %v, want reset %v", waits, want)
+	}
+	if got := capture.firstTypesSnapshot(); len(got) != 3 ||
+		got[0] != cpv1.FrameType_FRAME_TYPE_HELLO ||
+		got[1] != cpv1.FrameType_FRAME_TYPE_HELLO ||
+		got[2] != cpv1.FrameType_FRAME_TYPE_RESUME {
+		t.Fatalf("generation first frames = %v, want HELLO, HELLO, RESUME", got)
+	}
+}
+
+func TestRuntimeChannelReadyDropsDuringReconnectAndReturnsAfterResumeAck(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	capture := &gatedResumeRuntimeChannelServer{
+		firstAuthenticated: make(chan struct{}),
+		disconnectFirst:    make(chan struct{}),
+		allowResumeAck:     make(chan struct{}),
+		resumeReceived:     make(chan struct{}),
+		resumeAckSent:      make(chan struct{}),
+	}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := newSupervisorTestRuntimeClient(listener)
+	client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = client.Run(ctx) }()
+	receiveRuntimeSignal(t, capture.firstAuthenticated, "first authentication")
+	waitForRuntimeReady(t, client, true)
+	close(capture.disconnectFirst)
+	receiveRuntimeSignal(t, capture.resumeReceived, "RESUME frame")
+	waitForRuntimeReady(t, client, false)
+	close(capture.allowResumeAck)
+	receiveRuntimeSignal(t, capture.resumeAckSent, "RESUME ACK send")
+	waitForRuntimeReady(t, client, true)
+}
+
+func TestRuntimeChannelSupervisorRetainsOnlyDataAckAcrossReconnect(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	capture := &ackReplayRuntimeChannelServer{
+		firstAuthenticated: make(chan struct{}),
+		resumeReceived:     make(chan struct{}),
+		allowResumeAck:     make(chan struct{}),
+		ackFrames:          make(chan *cpv1.RuntimeFrame, 2),
+	}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	client := newSupervisorTestRuntimeClient(listener)
+	client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = client.Run(ctx) }()
+	receiveRuntimeSignal(t, capture.firstAuthenticated, "first authentication")
+	receiveRuntimeSignal(t, capture.resumeReceived, "RESUME frame")
+	waitForRuntimeReady(t, client, false)
+
+	ack := &cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_DATA_ACK,
+		Payload: &cpv1.RuntimeFrame_DataAck{DataAck: &cpv1.RuntimeDataAck{
+			SessionId: "sess-income", StreamKey: "income/sess-income", Sequence: 11,
+		}},
+	}
+	if err := client.Send(ack); err != nil {
+		t.Fatalf("retain disconnected DATA_ACK: %v", err)
+	}
+	requestFrame := &cpv1.RuntimeFrame{FrameType: cpv1.FrameType_FRAME_TYPE_REQUEST}
+	if err := client.Send(requestFrame); status.Code(err) != codes.Unavailable {
+		t.Fatalf("disconnected non-ACK Send error = %v, want Unavailable", err)
+	}
+	close(capture.allowResumeAck)
+	select {
+	case got := <-capture.ackFrames:
+		if !proto.Equal(got, ack) {
+			t.Fatalf("replayed DATA_ACK = %+v, want %+v", got, ack)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retained DATA_ACK was not replayed after RESUME")
+	}
+	select {
+	case duplicate := <-capture.ackFrames:
+		t.Fatalf("DATA_ACK replayed more than once: %+v", duplicate)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -661,6 +900,289 @@ type platformRequestRuntimeChannelServer struct {
 type blockedRequestRuntimeChannelServer struct {
 	cpv1.UnimplementedControlPanelServiceServer
 	heartbeats chan time.Time
+}
+
+func newSupervisorTestRuntimeClient(listener *bufconn.Listener) *RuntimeChannelClient {
+	return NewRuntimeChannelClient(RuntimeChannelClientConfig{
+		Address: "bufnet",
+		Identity: RuntimeIdentity{
+			Source:            "bare",
+			UserID:            6,
+			RuntimeID:         "bare-6-supervisor",
+			DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile,
+		},
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+}
+
+func receiveRuntimeSignal(t *testing.T, ch <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
+
+func waitForRuntimeReady(t *testing.T, client *RuntimeChannelClient, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if client.Ready() == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("RuntimeChannel ready = %v, want %v", client.Ready(), want)
+}
+
+type resumeSupervisorRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+	firstAuthenticated  chan struct{}
+	firstRequest        chan struct{}
+	secondAuthenticated chan struct{}
+	secondFrames        chan *cpv1.RuntimeFrame
+	active              atomic.Int64
+	maxActive           atomic.Int64
+	mu                  sync.Mutex
+	firstTypes          []cpv1.FrameType
+}
+
+func (s *resumeSupervisorRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
+) error {
+	active := s.active.Add(1)
+	defer s.active.Add(-1)
+	for {
+		maximum := s.maxActive.Load()
+		if active <= maximum || s.maxActive.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.firstTypes = append(s.firstTypes, first.GetFrameType())
+	generation := len(s.firstTypes)
+	s.mu.Unlock()
+	if generation == 1 {
+		if first.GetHello() == nil {
+			return status.Error(codes.InvalidArgument, "first generation requires HELLO")
+		}
+		if err := stream.Send(runtimeChannelAckForTest("resume-token")); err != nil {
+			return err
+		}
+		close(s.firstAuthenticated)
+		for {
+			frame, recvErr := stream.Recv()
+			if recvErr != nil {
+				return recvErr
+			}
+			if frame.GetFrameType() == cpv1.FrameType_FRAME_TYPE_REQUEST {
+				close(s.firstRequest)
+				return nil
+			}
+		}
+	}
+	if first.GetResume() == nil || first.GetResume().GetFingerprint() != "resume-token" {
+		return status.Error(codes.PermissionDenied, "resume token mismatch")
+	}
+	if err := stream.Send(runtimeChannelAckForTest("resume-token")); err != nil {
+		return err
+	}
+	close(s.secondAuthenticated)
+	for {
+		frame, recvErr := stream.Recv()
+		if recvErr != nil {
+			return recvErr
+		}
+		s.secondFrames <- frame
+	}
+}
+
+func (s *resumeSupervisorRuntimeChannelServer) firstTypesSnapshot() []cpv1.FrameType {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]cpv1.FrameType(nil), s.firstTypes...)
+}
+
+type permanentRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+	code  codes.Code
+	calls atomic.Int64
+}
+
+type alwaysUnavailableRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+}
+
+func (s *alwaysUnavailableRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
+) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	return status.Error(codes.Unavailable, "transient test failure")
+}
+
+type backoffResetRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+	calls      atomic.Int64
+	mu         sync.Mutex
+	firstTypes []cpv1.FrameType
+}
+
+func (s *backoffResetRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
+) error {
+	call := s.calls.Add(1)
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.firstTypes = append(s.firstTypes, first.GetFrameType())
+	s.mu.Unlock()
+	switch call {
+	case 1:
+		return status.Error(codes.Unavailable, "pre-auth transient")
+	case 2:
+		if err := stream.Send(runtimeChannelAckForTest("reset-token")); err != nil {
+			return err
+		}
+		for {
+			frame, recvErr := stream.Recv()
+			if recvErr != nil {
+				return recvErr
+			}
+			if frame.GetFrameType() == cpv1.FrameType_FRAME_TYPE_HEARTBEAT {
+				return nil
+			}
+		}
+	default:
+		return status.Error(codes.PermissionDenied, "RESUME rejected")
+	}
+}
+
+func (s *backoffResetRuntimeChannelServer) firstTypesSnapshot() []cpv1.FrameType {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]cpv1.FrameType(nil), s.firstTypes...)
+}
+
+func (s *permanentRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
+) error {
+	s.calls.Add(1)
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	return status.Error(s.code, "terminal admission")
+}
+
+type gatedResumeRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+	firstAuthenticated chan struct{}
+	disconnectFirst    chan struct{}
+	resumeReceived     chan struct{}
+	allowResumeAck     chan struct{}
+	resumeAckSent      chan struct{}
+	calls              atomic.Int64
+}
+
+func (s *gatedResumeRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
+) error {
+	call := s.calls.Add(1)
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if call == 1 {
+		if err := stream.Send(runtimeChannelAckForTest("ready-token")); err != nil {
+			return err
+		}
+		close(s.firstAuthenticated)
+		<-s.disconnectFirst
+		return nil
+	}
+	if first.GetResume() == nil {
+		return status.Error(codes.InvalidArgument, "resume required")
+	}
+	close(s.resumeReceived)
+	select {
+	case <-stream.Context().Done():
+		return stream.Context().Err()
+	case <-s.allowResumeAck:
+	}
+	if err := stream.Send(runtimeChannelAckForTest("ready-token")); err != nil {
+		return err
+	}
+	close(s.resumeAckSent)
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
+
+type ackReplayRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+	firstAuthenticated chan struct{}
+	resumeReceived     chan struct{}
+	allowResumeAck     chan struct{}
+	ackFrames          chan *cpv1.RuntimeFrame
+	calls              atomic.Int64
+}
+
+func (s *ackReplayRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
+) error {
+	call := s.calls.Add(1)
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if call == 1 {
+		if err := stream.Send(runtimeChannelAckForTest("ack-token")); err != nil {
+			return err
+		}
+		close(s.firstAuthenticated)
+		return nil
+	}
+	if first.GetResume() == nil {
+		return status.Error(codes.InvalidArgument, "resume required")
+	}
+	close(s.resumeReceived)
+	<-s.allowResumeAck
+	if err := stream.Send(runtimeChannelAckForTest("ack-token")); err != nil {
+		return err
+	}
+	for {
+		frame, recvErr := stream.Recv()
+		if recvErr != nil {
+			if errors.Is(recvErr, io.EOF) {
+				return nil
+			}
+			return recvErr
+		}
+		if frame.GetFrameType() == cpv1.FrameType_FRAME_TYPE_DATA_ACK {
+			s.ackFrames <- frame
+		}
+	}
+}
+
+func runtimeChannelAckForTest(token string) *cpv1.RuntimeFrame {
+	return &cpv1.RuntimeFrame{
+		FrameType: cpv1.FrameType_FRAME_TYPE_HELLO_ACK,
+		Payload: &cpv1.RuntimeFrame_HelloAck{HelloAck: &cpv1.RuntimeHelloAck{
+			RuntimeId: "bare-6-supervisor", ResumeToken: token, Fingerprint: token,
+		}},
+	}
 }
 
 func (s *blockedRequestRuntimeChannelServer) RuntimeChannel(

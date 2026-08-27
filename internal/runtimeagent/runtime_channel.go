@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	mathrand "math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -18,7 +19,9 @@ import (
 	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -59,6 +62,29 @@ type RuntimeChannelClientConfig struct {
 	DialOptions      []grpc.DialOption
 	RequestHandler   RuntimeRequestHandler
 	DataHandler      RuntimeDataHandler
+	ReconnectJitter  func(time.Duration) time.Duration
+	ReconnectWait    func(context.Context, time.Duration) error
+}
+
+type runtimeChannelOutbound struct {
+	frame *cpv1.RuntimeFrame
+	done  chan error
+}
+
+type runtimeChannelGeneration struct {
+	id       uint64
+	outbound chan *runtimeChannelOutbound
+	ready    bool
+}
+
+type runtimeChannelPendingResult struct {
+	frame *cpv1.RuntimeFrame
+	err   error
+}
+
+type runtimeChannelPendingCall struct {
+	generation uint64
+	reply      chan runtimeChannelPendingResult
 }
 
 type RuntimeChannelClient struct {
@@ -66,9 +92,13 @@ type RuntimeChannelClient struct {
 
 	mu          sync.Mutex
 	runtimeID   string
+	resumeToken string
 	fingerprint string
-	outbound    chan *cpv1.RuntimeFrame
-	pending     map[string]chan *cpv1.RuntimeFrame
+	generation  uint64
+	current     *runtimeChannelGeneration
+	pending     map[string]*runtimeChannelPendingCall
+	retainedACK map[string]*cpv1.RuntimeFrame
+	readyChange chan struct{}
 	connected   chan struct{}
 	connectOnce sync.Once
 }
@@ -80,10 +110,23 @@ func NewRuntimeChannelClient(cfg RuntimeChannelClientConfig) *RuntimeChannelClie
 	if len(cfg.DialOptions) == 0 {
 		cfg.DialOptions = []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	}
+	if cfg.ReconnectJitter == nil {
+		cfg.ReconnectJitter = func(max time.Duration) time.Duration {
+			if max <= 0 {
+				return 0
+			}
+			return time.Duration(mathrand.Int64N(int64(max) + 1))
+		}
+	}
+	if cfg.ReconnectWait == nil {
+		cfg.ReconnectWait = waitRuntimeReconnect
+	}
 	return &RuntimeChannelClient{
-		cfg:       cfg,
-		pending:   map[string]chan *cpv1.RuntimeFrame{},
-		connected: make(chan struct{}),
+		cfg:         cfg,
+		pending:     map[string]*runtimeChannelPendingCall{},
+		retainedACK: map[string]*cpv1.RuntimeFrame{},
+		readyChange: make(chan struct{}),
+		connected:   make(chan struct{}),
 	}
 }
 
@@ -92,9 +135,44 @@ func (c *RuntimeChannelClient) Run(ctx context.Context) error {
 	if address == "" {
 		return fmt.Errorf("runtime channel address is required")
 	}
+	attempt := 0
+	for {
+		authenticated, err := c.runConnection(ctx, address)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err == nil {
+			err = status.Error(codes.Unavailable, "runtime channel disconnected")
+		}
+		if isPermanentRuntimeChannelError(err) {
+			return err
+		}
+		if authenticated {
+			attempt = 0
+		} else {
+			attempt++
+		}
+		maximum := runtimeReconnectMaximum(attempt)
+		delay := c.cfg.ReconnectJitter(maximum)
+		if delay < 0 {
+			delay = 0
+		}
+		if delay > maximum {
+			delay = maximum
+		}
+		if err := c.cfg.ReconnectWait(ctx, delay); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+func (c *RuntimeChannelClient) runConnection(ctx context.Context, address string) (bool, error) {
 	conn, err := grpc.DialContext(ctx, address, c.cfg.DialOptions...)
 	if err != nil {
-		return fmt.Errorf("dial runtime channel: %w", err)
+		return false, fmt.Errorf("dial runtime channel: %w", err)
 	}
 	defer conn.Close()
 
@@ -103,89 +181,186 @@ func (c *RuntimeChannelClient) Run(ctx context.Context) error {
 
 	stream, err := cpv1.NewControlPanelServiceClient(conn).RuntimeChannel(runCtx)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return fmt.Errorf("open runtime channel: %w", err)
+		return false, fmt.Errorf("open runtime channel: %w", err)
 	}
 
-	outbound := make(chan *cpv1.RuntimeFrame, 128)
 	c.mu.Lock()
-	c.outbound = outbound
+	c.generation++
+	generation := &runtimeChannelGeneration{
+		id: c.generation, outbound: make(chan *runtimeChannelOutbound, 128),
+	}
+	c.current = generation
+	c.signalReadyChangeLocked()
+	resumeToken := c.resumeToken
+	fingerprint := c.fingerprint
 	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		if c.outbound == outbound {
-			c.outbound = nil
-		}
-		c.mu.Unlock()
-	}()
+	defer c.finishGeneration(generation)
 
+	var initial *cpv1.RuntimeFrame
+	if resumeToken != "" || fingerprint != "" {
+		initial, err = BuildResumeRuntimeFrame(c.cfg.Identity, resumeToken, fingerprint)
+	} else {
+		initial, err = BuildInitialRuntimeFrame(c.cfg.Identity, c.cfg.Credential)
+	}
+	if err != nil {
+		return false, err
+	}
+
+	var loops sync.WaitGroup
 	sendDone := make(chan error, 1)
+	loops.Add(1)
 	go func() {
+		defer loops.Done()
 		for {
 			select {
 			case <-runCtx.Done():
 				sendDone <- nil
 				return
-			case frame, ok := <-outbound:
-				if !ok {
-					sendDone <- nil
-					return
-				}
-				if frame == nil {
+			case item := <-generation.outbound:
+				if item == nil || item.frame == nil {
 					continue
 				}
-				if err := stream.Send(frame); err != nil {
-					sendDone <- err
+				sendErr := stream.Send(item.frame)
+				if item.done != nil {
+					item.done <- sendErr
+				}
+				if sendErr != nil {
+					sendDone <- sendErr
 					return
 				}
 			}
 		}
 	}()
-
-	initial, err := BuildInitialRuntimeFrame(c.cfg.Identity, c.cfg.Credential)
-	if err != nil {
-		return err
-	}
-	if err := c.sendOutbound(runCtx, outbound, initial); err != nil {
-		return err
+	if err := c.enqueueGeneration(runCtx, generation, initial, nil); err != nil {
+		cancel()
+		loops.Wait()
+		return false, err
 	}
 
-	heartbeatStop := make(chan struct{})
-	go c.heartbeatLoop(runCtx, outbound, heartbeatStop)
-	defer close(heartbeatStop)
-
-	recvErr := make(chan error, 1)
+	recvDone := make(chan error, 1)
+	authenticatedCh := make(chan struct{}, 1)
+	loops.Add(1)
 	go func() {
+		defer loops.Done()
 		for {
-			frame, err := stream.Recv()
-			if err != nil {
-				recvErr <- err
+			frame, recvErr := stream.Recv()
+			if recvErr != nil {
+				recvDone <- recvErr
 				return
 			}
-			c.handleInboundFrame(runCtx, frame, outbound)
+			if c.handleGenerationInboundFrame(runCtx, generation, frame) {
+				select {
+				case authenticatedCh <- struct{}{}:
+				default:
+				}
+			}
 		}
 	}()
 
+	authenticated := false
+	var result error
 	select {
 	case <-ctx.Done():
-		cancel()
-		<-sendDone
+		result = nil
+	case result = <-sendDone:
+	case result = <-recvDone:
+	case <-authenticatedCh:
+		authenticated = true
+		result = c.runAuthenticatedGeneration(runCtx, generation, sendDone, recvDone, &loops)
+	}
+	cancel()
+	_ = conn.Close()
+	loops.Wait()
+	if ctx.Err() != nil {
+		return authenticated, nil
+	}
+	if result == nil || errorsIsEOF(result) {
+		return authenticated, status.Error(codes.Unavailable, "runtime channel disconnected")
+	}
+	return authenticated, result
+}
+
+func (c *RuntimeChannelClient) runAuthenticatedGeneration(
+	ctx context.Context,
+	generation *runtimeChannelGeneration,
+	sendDone <-chan error,
+	recvDone <-chan error,
+	loops *sync.WaitGroup,
+) error {
+	loops.Add(1)
+	go func() {
+		defer loops.Done()
+		c.generationHeartbeatLoop(ctx, generation)
+	}()
+	if err := c.enqueueGeneration(ctx, generation, c.heartbeatFrame(), nil); err != nil {
+		return err
+	}
+	if err := c.replayRetainedACKs(ctx, generation); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
 		return nil
 	case err := <-sendDone:
-		cancel()
-		if ctx.Err() != nil || err == io.EOF {
-			return nil
-		}
 		return err
-	case err := <-recvErr:
-		cancel()
-		<-sendDone
-		if ctx.Err() != nil || err == io.EOF {
-			return nil
-		}
+	case err := <-recvDone:
 		return err
+	}
+}
+
+func errorsIsEOF(err error) bool {
+	return err == io.EOF || status.Code(err) == codes.OK
+}
+
+func runtimeReconnectMaximum(attempt int) time.Duration {
+	maximum := 250 * time.Millisecond
+	for i := 1; i < attempt && maximum < 5*time.Second; i++ {
+		maximum *= 2
+	}
+	if maximum > 5*time.Second {
+		return 5 * time.Second
+	}
+	return maximum
+}
+
+func waitRuntimeReconnect(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func isPermanentRuntimeChannelError(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.Unauthenticated, codes.PermissionDenied,
+		codes.FailedPrecondition, codes.NotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *RuntimeChannelClient) finishGeneration(generation *runtimeChannelGeneration) {
+	unavailable := status.Error(codes.Unavailable, "runtime channel generation disconnected")
+	c.mu.Lock()
+	if c.current == generation {
+		c.current = nil
+		c.signalReadyChangeLocked()
+	}
+	failures := make([]chan runtimeChannelPendingResult, 0)
+	for correlationID, pending := range c.pending {
+		if pending.generation == generation.id {
+			delete(c.pending, correlationID)
+			failures = append(failures, pending.reply)
+		}
+	}
+	c.mu.Unlock()
+	for _, reply := range failures {
+		reply <- runtimeChannelPendingResult{err: unavailable}
 	}
 }
 
@@ -198,18 +373,142 @@ func normalizeRuntimeChannelAddress(address string) string {
 }
 
 func (c *RuntimeChannelClient) Send(frame *cpv1.RuntimeFrame) error {
+	if frame == nil {
+		return status.Error(codes.InvalidArgument, "runtime channel frame is required")
+	}
+	if frame.GetFrameType() == cpv1.FrameType_FRAME_TYPE_DATA_ACK && frame.GetDataAck() != nil {
+		return c.retainAndSendDataACK(frame)
+	}
 	c.mu.Lock()
-	outbound := c.outbound
+	generation := c.current
+	ready := generation != nil && generation.ready
 	c.mu.Unlock()
-	if outbound == nil {
-		return fmt.Errorf("runtime channel is not connected")
+	if !ready {
+		return status.Error(codes.Unavailable, "runtime channel is not authenticated")
+	}
+	done := make(chan error, 1)
+	select {
+	case generation.outbound <- &runtimeChannelOutbound{frame: frame, done: done}:
+	default:
+		return status.Error(codes.ResourceExhausted, "runtime channel outbound queue is full")
 	}
 	select {
-	case outbound <- frame:
+	case err := <-done:
+		if err != nil {
+			return status.Errorf(codes.Unavailable, "send runtime channel frame: %v", err)
+		}
 		return nil
-	default:
-		return fmt.Errorf("runtime channel outbound queue is full")
+	case <-c.generationDone(generation):
+		return status.Error(codes.Unavailable, "runtime channel generation disconnected")
 	}
+}
+
+func (c *RuntimeChannelClient) retainAndSendDataACK(frame *cpv1.RuntimeFrame) error {
+	key := runtimeDataACKKey(frame.GetDataAck())
+	c.mu.Lock()
+	c.retainedACK[key] = proto.Clone(frame).(*cpv1.RuntimeFrame)
+	generation := c.current
+	ready := generation != nil && generation.ready
+	c.mu.Unlock()
+	if !ready {
+		return nil
+	}
+	if err := c.sendRetainedACK(context.Background(), generation, key, frame); err != nil {
+		return nil
+	}
+	return nil
+}
+
+func runtimeDataACKKey(ack *cpv1.RuntimeDataAck) string {
+	if ack == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s\x00%s\x00%d", ack.GetSessionId(), ack.GetStreamKey(), ack.GetSequence())
+}
+
+func (c *RuntimeChannelClient) sendRetainedACK(
+	ctx context.Context,
+	generation *runtimeChannelGeneration,
+	key string,
+	frame *cpv1.RuntimeFrame,
+) error {
+	done := make(chan error, 1)
+	if err := c.enqueueGeneration(ctx, generation, frame, done); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.generationDone(generation):
+		return status.Error(codes.Unavailable, "runtime channel generation disconnected")
+	case err := <-done:
+		if err != nil {
+			return err
+		}
+		c.mu.Lock()
+		if retained := c.retainedACK[key]; retained != nil && proto.Equal(retained, frame) {
+			delete(c.retainedACK, key)
+		}
+		c.mu.Unlock()
+		return nil
+	}
+}
+
+func (c *RuntimeChannelClient) replayRetainedACKs(
+	ctx context.Context,
+	generation *runtimeChannelGeneration,
+) error {
+	c.mu.Lock()
+	keys := make([]string, 0, len(c.retainedACK))
+	frames := make(map[string]*cpv1.RuntimeFrame, len(c.retainedACK))
+	for key, frame := range c.retainedACK {
+		keys = append(keys, key)
+		frames[key] = proto.Clone(frame).(*cpv1.RuntimeFrame)
+	}
+	c.mu.Unlock()
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := c.sendRetainedACK(ctx, generation, key, frames[key]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *RuntimeChannelClient) enqueueGeneration(
+	ctx context.Context,
+	generation *runtimeChannelGeneration,
+	frame *cpv1.RuntimeFrame,
+	done chan error,
+) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case generation.outbound <- &runtimeChannelOutbound{frame: frame, done: done}:
+		return nil
+	}
+}
+
+func (c *RuntimeChannelClient) generationDone(generation *runtimeChannelGeneration) <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current != generation {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return c.readyChange
+}
+
+func (c *RuntimeChannelClient) signalReadyChangeLocked() {
+	close(c.readyChange)
+	c.readyChange = make(chan struct{})
+}
+
+func (c *RuntimeChannelClient) Ready() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.current != nil && c.current.ready
 }
 
 // WaitAuthenticated blocks until control-panel-service has accepted the
@@ -262,20 +561,25 @@ func (c *RuntimeChannelClient) InvokePlatformAny(
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-c.connected:
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("runtime channel is not connected")
+	deadline := time.Now().Add(timeout)
+	if err := c.waitReady(ctx, deadline); err != nil {
+		return nil, err
 	}
 	correlationID, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
-	reply := make(chan *cpv1.RuntimeFrame, 8)
+	reply := make(chan runtimeChannelPendingResult, 8)
 	c.mu.Lock()
-	c.pending[correlationID] = reply
+	generation := c.current
+	if generation == nil || !generation.ready {
+		c.mu.Unlock()
+		return nil, status.Error(codes.Unavailable, "runtime channel is not authenticated")
+	}
+	c.pending[correlationID] = &runtimeChannelPendingCall{
+		generation: generation.id,
+		reply:      reply,
+	}
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
@@ -283,8 +587,7 @@ func (c *RuntimeChannelClient) InvokePlatformAny(
 		c.mu.Unlock()
 	}()
 
-	deadline := time.Now().Add(timeout)
-	if err := c.Send(&cpv1.RuntimeFrame{
+	requestFrame := &cpv1.RuntimeFrame{
 		CorrelationId:  correlationID,
 		FrameType:      cpv1.FrameType_FRAME_TYPE_REQUEST,
 		DeadlineUnixMs: deadline.UnixMilli(),
@@ -292,8 +595,11 @@ func (c *RuntimeChannelClient) InvokePlatformAny(
 			Method:  method,
 			Request: request,
 		}},
-	}); err != nil {
-		return nil, err
+	}
+	select {
+	case generation.outbound <- &runtimeChannelOutbound{frame: requestFrame}:
+	default:
+		return nil, status.Error(codes.ResourceExhausted, "runtime channel outbound queue is full")
 	}
 
 	timer := time.NewTimer(time.Until(deadline))
@@ -303,7 +609,11 @@ func (c *RuntimeChannelClient) InvokePlatformAny(
 		return nil, ctx.Err()
 	case <-timer.C:
 		return nil, fmt.Errorf("runtime platform request timed out: %s", method)
-	case frame := <-reply:
+	case result := <-reply:
+		if result.err != nil {
+			return nil, result.err
+		}
+		frame := result.frame
 		switch frame.GetFrameType() {
 		case cpv1.FrameType_FRAME_TYPE_RESPONSE:
 			resp := frame.GetResponse()
@@ -319,6 +629,36 @@ func (c *RuntimeChannelClient) InvokePlatformAny(
 			return nil, fmt.Errorf("%s: %s", errFrame.GetCode(), errFrame.GetMessage())
 		default:
 			return nil, fmt.Errorf("unexpected runtime platform frame_type=%v", frame.GetFrameType())
+		}
+	}
+}
+
+func (c *RuntimeChannelClient) waitReady(ctx context.Context, deadline time.Time) error {
+	for {
+		c.mu.Lock()
+		ready := c.current != nil && c.current.ready
+		changed := c.readyChange
+		c.mu.Unlock()
+		if ready {
+			return nil
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return status.Error(codes.Unavailable, "runtime channel is not authenticated")
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-changed:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			return status.Error(codes.Unavailable, "runtime channel is not authenticated")
 		}
 	}
 }
@@ -350,6 +690,32 @@ func (c *RuntimeChannelClient) heartbeatLoop(
 	}
 }
 
+func (c *RuntimeChannelClient) generationHeartbeatLoop(
+	ctx context.Context,
+	generation *runtimeChannelGeneration,
+) {
+	ticks := c.cfg.HeartbeatTicks
+	var ticker *time.Ticker
+	if ticks == nil {
+		ticker = time.NewTicker(time.Duration(c.cfg.HeartbeatSeconds) * time.Second)
+		ticks = ticker.C
+		defer ticker.Stop()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-ticks:
+			if !ok {
+				return
+			}
+			if err := c.enqueueGeneration(ctx, generation, c.heartbeatFrame(), nil); err != nil {
+				return
+			}
+		}
+	}
+}
+
 func (c *RuntimeChannelClient) heartbeatFrame() *cpv1.RuntimeFrame {
 	c.mu.Lock()
 	fingerprint := c.fingerprint
@@ -361,6 +727,98 @@ func (c *RuntimeChannelClient) heartbeatFrame() *cpv1.RuntimeFrame {
 			Fingerprint:  fingerprint,
 		}},
 	}
+}
+
+func (c *RuntimeChannelClient) handleGenerationInboundFrame(
+	ctx context.Context,
+	generation *runtimeChannelGeneration,
+	frame *cpv1.RuntimeFrame,
+) bool {
+	if frame == nil {
+		return false
+	}
+	if c.deliverPending(frame) {
+		return false
+	}
+	send := func(outbound *cpv1.RuntimeFrame) {
+		_ = c.enqueueGeneration(ctx, generation, outbound, nil)
+	}
+	switch frame.GetFrameType() {
+	case cpv1.FrameType_FRAME_TYPE_HELLO_ACK:
+		ack := frame.GetHelloAck()
+		if ack == nil {
+			return false
+		}
+		c.mu.Lock()
+		if c.current != generation || generation.ready {
+			c.mu.Unlock()
+			return false
+		}
+		if runtimeID := strings.TrimSpace(ack.GetRuntimeId()); runtimeID != "" {
+			c.runtimeID = runtimeID
+		}
+		if token := strings.TrimSpace(ack.GetResumeToken()); token != "" {
+			c.resumeToken = token
+		}
+		if fingerprint := strings.TrimSpace(firstNonEmpty(ack.GetFingerprint(), ack.GetResumeToken())); fingerprint != "" {
+			c.fingerprint = fingerprint
+		}
+		generation.ready = true
+		c.signalReadyChangeLocked()
+		c.mu.Unlock()
+		c.connectOnce.Do(func() { close(c.connected) })
+		return true
+	case cpv1.FrameType_FRAME_TYPE_HEARTBEAT_ACK:
+		ack := frame.GetHeartbeatAck()
+		if ack != nil {
+			c.mu.Lock()
+			if c.current == generation {
+				if runtimeID := strings.TrimSpace(ack.GetRuntimeId()); runtimeID != "" {
+					c.runtimeID = runtimeID
+				}
+				if fingerprint := strings.TrimSpace(ack.GetFingerprint()); fingerprint != "" {
+					c.fingerprint = fingerprint
+					c.resumeToken = fingerprint
+				}
+			}
+			c.mu.Unlock()
+		}
+	case cpv1.FrameType_FRAME_TYPE_REQUEST:
+		handler := c.cfg.RequestHandler
+		if handler == nil {
+			send(runtimeErrorFrame(frame.GetCorrelationId(), "Unimplemented", "runtime request handler is not configured"))
+			return false
+		}
+		go func() {
+			response := handler(ctx, frame)
+			if response == nil {
+				response = runtimeErrorFrame(frame.GetCorrelationId(), "Internal", "runtime request handler returned nil")
+			}
+			send(response)
+		}()
+	case cpv1.FrameType_FRAME_TYPE_DATASET_CHUNK,
+		cpv1.FrameType_FRAME_TYPE_LIVE_KLINE_BATCH,
+		cpv1.FrameType_FRAME_TYPE_ORDER_UPDATE_BATCH,
+		cpv1.FrameType_FRAME_TYPE_INCOME_BATCH:
+		var err error
+		if c.cfg.DataHandler != nil {
+			err = c.cfg.DataHandler(ctx, frame)
+		} else {
+			err = fmt.Errorf("runtime data handler is not configured")
+		}
+		if err != nil {
+			if backpressure := dataBackpressureForFrame(frame, err); backpressure != nil {
+				send(backpressure)
+			}
+			return false
+		}
+		if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_INCOME_BATCH {
+			if ack := dataAckForFrame(frame); ack != nil {
+				send(ack)
+			}
+		}
+	}
+	return false
 }
 
 func (c *RuntimeChannelClient) handleInboundFrame(
@@ -380,6 +838,7 @@ func (c *RuntimeChannelClient) handleInboundFrame(
 		if ack != nil {
 			c.mu.Lock()
 			c.runtimeID = strings.TrimSpace(ack.GetRuntimeId())
+			c.resumeToken = strings.TrimSpace(firstNonEmpty(ack.GetResumeToken(), ack.GetFingerprint()))
 			c.fingerprint = strings.TrimSpace(firstNonEmpty(ack.GetFingerprint(), ack.GetResumeToken()))
 			c.mu.Unlock()
 			c.connectOnce.Do(func() { close(c.connected) })
@@ -448,13 +907,13 @@ func (c *RuntimeChannelClient) deliverPending(frame *cpv1.RuntimeFrame) bool {
 		return false
 	}
 	c.mu.Lock()
-	reply := c.pending[correlationID]
+	pending := c.pending[correlationID]
 	c.mu.Unlock()
-	if reply == nil {
+	if pending == nil {
 		return false
 	}
 	select {
-	case reply <- frame:
+	case pending.reply <- runtimeChannelPendingResult{frame: frame}:
 	default:
 	}
 	return true

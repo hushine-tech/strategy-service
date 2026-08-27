@@ -18,6 +18,8 @@ import (
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
 	"github.com/hushine-tech/strategy-service/internal/runtimeagent"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestHostedDependencyGateFailsBeforeAnyRuntimeReadiness(t *testing.T) {
@@ -232,6 +234,32 @@ func TestCoordinateRuntimeLifecycleKeepsChannelContextAliveUntilAgentShutdown(
 		"runtime-channel-stopped",
 	}) {
 		t.Fatalf("lifecycle events = %v", got)
+	}
+}
+
+func TestCoordinateRuntimeLifecyclePermanentChannelErrorTriggersAgentShutdown(t *testing.T) {
+	signalCtx := context.Background()
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	shutdownCalls := 0
+	permanent := status.Error(codes.PermissionDenied, "runtime credential revoked")
+	runErr, shutdownErr := coordinateRuntimeLifecycle(
+		signalCtx,
+		serviceCtx,
+		cancelService,
+		func(context.Context) error { return permanent },
+		func() error {
+			shutdownCalls++
+			return nil
+		},
+	)
+	if status.Code(runErr) != codes.PermissionDenied || shutdownErr != nil {
+		t.Fatalf("lifecycle result = run:%v shutdown:%v", runErr, shutdownErr)
+	}
+	if shutdownCalls != 1 {
+		t.Fatalf("Agent shutdown calls = %d, want 1", shutdownCalls)
+	}
+	if serviceCtx.Err() == nil {
+		t.Fatal("service context remained active after permanent channel error")
 	}
 }
 

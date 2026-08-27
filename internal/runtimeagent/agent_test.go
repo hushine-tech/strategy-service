@@ -531,11 +531,14 @@ func (h *strategyStartProtocolHarness) InvokePlatformAny(
 			return nil, err
 		}
 		h.mu.Lock()
-		committed := h.committedSession
+		var committed *portfoliov1.StrategySessionEntry
+		if h.committedSession != nil {
+			committed = proto.Clone(h.committedSession).(*portfoliov1.StrategySessionEntry)
+		}
 		h.mu.Unlock()
 		if committed != nil && committed.GetSessionId() == get.GetSessionId() {
 			return anypb.New(&portfoliov1.GetSessionResponse{
-				Session: proto.Clone(committed).(*portfoliov1.StrategySessionEntry),
+				Session: committed,
 			})
 		}
 	}
