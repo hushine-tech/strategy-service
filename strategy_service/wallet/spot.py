@@ -482,13 +482,13 @@ class SpotWallet:
 
     def _release_order_locks(self, order: SpotOpenOrder, metadata: SpotSymbolMetadata) -> None:
         quote = self.assets[norm_symbol(metadata.quote_asset)]
-        base = self.assets.setdefault(norm_symbol(metadata.base_asset), SpotAsset())
         if order.locked_quote > ZERO:
             release = min(order.locked_quote, quote.locked)
             quote.locked -= release
             quote.free += release
             order.locked_quote -= release
         if order.locked_base > ZERO:
+            base = self.assets.setdefault(norm_symbol(metadata.base_asset), SpotAsset())
             release = min(order.locked_base, base.locked)
             base.locked -= release
             base.free += release
