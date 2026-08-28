@@ -689,9 +689,13 @@ func (c *RuntimeChannelClient) InvokePlatformAny(
 			if errFrame == nil {
 				return nil, fmt.Errorf("runtime platform request failed")
 			}
+			detailJSON := errFrame.GetErrorDetailJson()
+			if strings.TrimSpace(detailJSON) == "" {
+				detailJSON = streamErrorDetailJSON(errFrame.GetDependencyError())
+			}
 			return nil, &runtimeChannelPlatformError{
 				code: errFrame.GetCode(), message: errFrame.GetMessage(),
-				detailJSON:      streamErrorDetailJSON(errFrame.GetDependencyError()),
+				detailJSON:      detailJSON,
 				dependencyError: cloneDependencyError(errFrame.GetDependencyError()),
 			}
 		default:
@@ -1202,6 +1206,21 @@ func runtimeErrorFrameWithDependency(
 	message string,
 	dependencyError *strategyv1.RuntimeDependencyError,
 ) *cpv1.RuntimeFrame {
+	return runtimeErrorFrameWithDetail(
+		correlationID, code, message, "", dependencyError,
+	)
+}
+
+func runtimeErrorFrameWithDetail(
+	correlationID string,
+	code string,
+	message string,
+	errorDetailJSON string,
+	dependencyError *strategyv1.RuntimeDependencyError,
+) *cpv1.RuntimeFrame {
+	if strings.TrimSpace(errorDetailJSON) == "" {
+		errorDetailJSON = "{}"
+	}
 	return &cpv1.RuntimeFrame{
 		CorrelationId: correlationID,
 		FrameType:     cpv1.FrameType_FRAME_TYPE_ERROR,
@@ -1209,6 +1228,7 @@ func runtimeErrorFrameWithDependency(
 			Code:            code,
 			Message:         message,
 			DependencyError: dependencyError,
+			ErrorDetailJson: errorDetailJSON,
 		}},
 	}
 }

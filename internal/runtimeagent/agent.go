@@ -3962,13 +3962,27 @@ func (a *Agent) invokeWorkerUnary(
 			return nil, fmt.Errorf("runtime worker returned empty response")
 		}
 		if !result.GetOk() {
-			message := strings.TrimSpace(result.GetError())
-			if message == "" {
+			errorCode := strings.TrimSpace(result.GetErrorCode())
+			if errorCode == "" {
+				errorCode = "FailedPrecondition"
+			}
+			message := result.GetErrorMessage()
+			if strings.TrimSpace(message) == "" {
+				message = result.GetError()
+			}
+			if strings.TrimSpace(message) == "" {
 				message = "runtime worker request failed"
 			}
+			detailJSON := result.GetErrorDetailJson()
+			if strings.TrimSpace(detailJSON) == "" {
+				detailJSON = "{}"
+			}
 			return nil, &RuntimeRequestError{
-				Code:            "FailedPrecondition",
+				Code:            errorCode,
 				Message:         message,
+				ErrorCode:       errorCode,
+				ErrorMessage:    message,
+				ErrorDetailJSON: detailJSON,
 				DependencyError: cloneDependencyError(result.GetDependencyError()),
 			}
 		}
@@ -3986,10 +4000,11 @@ func runtimeRequestErrorFrame(correlationID string, err error) *cpv1.RuntimeFram
 		if code == "" {
 			code = "FailedPrecondition"
 		}
-		return runtimeErrorFrameWithDependency(
+		return runtimeErrorFrameWithDetail(
 			correlationID,
 			code,
 			requestErr.Error(),
+			requestErr.ErrorDetailJSON,
 			cloneDependencyError(requestErr.DependencyError),
 		)
 	}

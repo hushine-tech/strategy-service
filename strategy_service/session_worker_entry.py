@@ -144,6 +144,17 @@ def _report_start_rejection(
         status="failed",
         error=detail,
     )
+    error_code = str(getattr(context, "runtime_error_code", "") or "")
+    error_message = str(getattr(context, "runtime_error_message", "") or "")
+    error_detail_json = str(
+        getattr(context, "runtime_error_detail_json", "{}") or "{}"
+    ).strip() or "{}"
+    if error_code or error_message or error_detail_json != "{}":
+        progress.update(
+            error_code=error_code,
+            error_message=error_message,
+            error_detail_json=error_detail_json,
+        )
     if context.runtime_dependency_error is not None:
         progress["dependency_error"] = context.runtime_dependency_error
     client.send_progress(**progress)
@@ -418,6 +429,9 @@ class _WorkerContext:
         self.details = ""
         self.start_session_id = str(start_session_id or "")
         self.runtime_dependency_error = None
+        self.runtime_error_code = ""
+        self.runtime_error_message = ""
+        self.runtime_error_detail_json = "{}"
         self._publication_lock = threading.Lock()
         self._running_publication = None
 
@@ -432,6 +446,19 @@ class _WorkerContext:
 
     def set_runtime_dependency_error(self, detail) -> None:
         self.runtime_dependency_error = detail
+
+    def set_runtime_error(
+        self,
+        *,
+        code: str,
+        message: str,
+        detail_json: str,
+        dependency_error=None,
+    ) -> None:
+        self.runtime_error_code = str(code or "")
+        self.runtime_error_message = str(message or "")
+        self.runtime_error_detail_json = str(detail_json or "{}").strip() or "{}"
+        self.runtime_dependency_error = dependency_error
 
     def bind_running_publication(self, session_id: str, state) -> None:
         binding = (str(session_id or ""), state)

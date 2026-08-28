@@ -369,3 +369,32 @@ def test_start_rejection_preserves_typed_dependency_detail():
         "error": "strategy dependency validation failed",
         "dependency_error": detail,
     }]
+
+
+def test_start_rejection_preserves_typed_platform_error_fields():
+    client = _FinalClient()
+    context = _WorkerContext(start_session_id="5" * 32)
+    dependency = strategy_pb2.RuntimeDependencyError(
+        code="STRATEGY_DEPENDENCY_UNAVAILABLE",
+        module="portfolio.v1",
+    )
+    context.set_code(grpc.StatusCode.UNAVAILABLE)
+    context.set_details("portfolio route is unavailable")
+    context.set_runtime_error(
+        code="PLATFORM_ROUTE_UNAVAILABLE",
+        message="portfolio route is unavailable",
+        detail_json='{"runtime_id":"rt-test","retryable":true}',
+        dependency_error=dependency,
+    )
+
+    _report_start_rejection(client, "5" * 32, context)
+
+    assert client.progress == [{
+        "session_id": "5" * 32,
+        "status": "failed",
+        "error": "portfolio route is unavailable",
+        "error_code": "PLATFORM_ROUTE_UNAVAILABLE",
+        "error_message": "portfolio route is unavailable",
+        "error_detail_json": '{"runtime_id":"rt-test","retryable":true}',
+        "dependency_error": dependency,
+    }]

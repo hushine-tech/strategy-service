@@ -2468,6 +2468,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                 session_id,
                 state,
             )
+        except WorkerPlatformCallError as error:
+            return self._abort_persisted_startup(
+                session_id=session_id,
+                state=state,
+                environment=environment,
+                context=context,
+                error=error.message,
+                error_code=error.code,
+                error_message=error.message,
+                error_detail_json=error.detail_json,
+                dependency_error=error.dependency_error,
+                status_code=grpc.StatusCode.UNAVAILABLE,
+                detail=error.message,
+            )
         except BaseException:
             return self._abort_persisted_startup(
                 session_id=session_id,
@@ -2535,12 +2549,21 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         error: str,
         status_code: grpc.StatusCode,
         detail: str,
+        error_code: str = "",
+        error_message: str = "",
+        error_detail_json: str = "{}",
+        dependency_error: Any = None,
     ) -> pb2.RunStrategyResponse:
         startup = state.startup_result()
         if isinstance(startup, _SessionStartupResult):
             startup.abort.set()
             self._bounded_join_startup_thread(state)
-        state.force_failed(error)
+        state.force_failed(
+            error,
+            error_code=error_code,
+            error_message=error_message,
+            error_detail_json=error_detail_json,
+        )
         release_confirmed = True
         if environment == 1:
             try:
@@ -2555,6 +2578,25 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
 
         if release_confirmed:
             self._sessions.discard(session_id, state)
+        set_runtime_error = getattr(context, "set_runtime_error", None)
+        if callable(set_runtime_error) and (
+            error_code
+            or error_message
+            or str(error_detail_json or "{}").strip() != "{}"
+            or dependency_error is not None
+        ):
+            set_runtime_error(
+                code=error_code,
+                message=error_message,
+                detail_json=error_detail_json,
+                dependency_error=dependency_error,
+            )
+        elif dependency_error is not None:
+            set_dependency_error = getattr(
+                context, "set_runtime_dependency_error", None
+            )
+            if callable(set_dependency_error):
+                set_dependency_error(dependency_error)
         context.set_code(status_code)
         context.set_details(detail)
         return pb2.RunStrategyResponse()

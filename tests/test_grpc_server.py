@@ -673,6 +673,9 @@ class _FakeContext:
         self.code = None
         self.details = ""
         self.runtime_dependency_error = None
+        self.runtime_error_code = ""
+        self.runtime_error_message = ""
+        self.runtime_error_detail_json = "{}"
 
     def set_code(self, code) -> None:
         self.code = code
@@ -682,6 +685,19 @@ class _FakeContext:
 
     def set_runtime_dependency_error(self, detail) -> None:
         self.runtime_dependency_error = detail
+
+    def set_runtime_error(
+        self,
+        *,
+        code: str,
+        message: str,
+        detail_json: str,
+        dependency_error=None,
+    ) -> None:
+        self.runtime_error_code = code
+        self.runtime_error_message = message
+        self.runtime_error_detail_json = detail_json
+        self.runtime_dependency_error = dependency_error
 
     def bind_running_publication(self, session_id: str, state: SessionState) -> None:
         self.running_publication = (session_id, state)
@@ -7238,6 +7254,85 @@ def test_committed_running_publish_exception_never_sends_unguarded_failed(monkey
     assert calls["update_session"][0]["status"] == "running"
     assert calls["update_session"][0]["expected_status"] == "pending"
     assert calls["update_session"][0]["strict"] is True
+
+
+def test_committed_running_publish_preserves_typed_platform_failure(monkeypatch):
+    source = (
+        "class MyStrategy:\n"
+        '    INPUTS = [{"exchange": "binance", "market": "perpetual_futures", "symbol": "BTCUSDT", "interval": "1m"}]\n'
+        "    ORDER_TARGETS = []\n"
+        "    def on_market_data(self, data, wallet): return None\n"
+    )
+    servicer, calls = _build_servicer_with_faked_preflight_deps(
+        monkeypatch=monkeypatch,
+        environment=0,
+        strategy_code=source,
+        market_data_policy={"preflight_enabled": False},
+    )
+    digest = _prepare_strategy_code_for_test(
+        "<committed-running-typed>", source
+    ).gated_source.resolved.source_sha256
+    canonical_id = "9" * 32
+    servicer._session_bootstrap = pb2.StrategySessionBootstrap(
+        session_id=canonical_id,
+        launch_operation_id="launch-running-typed",
+        strategy_source_sha256=digest,
+        environment=0,
+    )
+    dependency = pb2.RuntimeDependencyError(
+        code="STRATEGY_DEPENDENCY_UNAVAILABLE",
+        module="portfolio.v1",
+    )
+
+    def reject_running(**kwargs):
+        calls["update_session"].append(dict(kwargs))
+        raise grpc_server.WorkerPlatformCallError(
+            "portfolio route is unavailable",
+            dependency,
+            code="PLATFORM_ROUTE_UNAVAILABLE",
+            detail_json='{"runtime_id":"rt-test","retryable":true}',
+        )
+
+    servicer._platform_proxy.portfolio.update_session = reject_running
+    context = _PublicationContext(canonical_id)
+    response = servicer.RunStrategy(
+        pb2.RunStrategyRequest(
+            portfolio_id=704,
+            user_id=17,
+            runtime_id="rt-test",
+            interval="1m",
+            start_time_ms=1,
+            end_time_ms=2,
+        ),
+        context,
+    )
+
+    assert response.ok is False
+    assert context.code == grpc.StatusCode.UNAVAILABLE
+    assert context.details == "portfolio route is unavailable"
+    assert context.runtime_error_code == "PLATFORM_ROUTE_UNAVAILABLE"
+    assert context.runtime_error_message == "portfolio route is unavailable"
+    assert context.runtime_error_detail_json == '{"runtime_id":"rt-test","retryable":true}'
+    assert context.runtime_dependency_error == dependency
+    assert len(calls["update_session"]) == 1
+    assert calls["update_session"][0]["expected_status"] == "pending"
+    progress = []
+    from strategy_service.session_worker_entry import _report_start_rejection
+
+    _report_start_rejection(
+        SimpleNamespace(send_progress=lambda **kwargs: progress.append(kwargs)),
+        canonical_id,
+        context,
+    )
+    assert progress == [{
+        "session_id": canonical_id,
+        "status": "failed",
+        "error": "portfolio route is unavailable",
+        "error_code": "PLATFORM_ROUTE_UNAVAILABLE",
+        "error_message": "portfolio route is unavailable",
+        "error_detail_json": '{"runtime_id":"rt-test","retryable":true}',
+        "dependency_error": dependency,
+    }]
 
 
 def test_committed_empty_fact_bootstrap_rejects_environment_mismatch(monkeypatch):

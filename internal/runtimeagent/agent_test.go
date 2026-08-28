@@ -1704,6 +1704,94 @@ func TestAgentRunStrategyRejectsMismatchedCanonicalSessionID(t *testing.T) {
 	}
 }
 
+func TestInvokeWorkerUnaryPreservesTypedWorkerError(t *testing.T) {
+	sender := &fakeWorkerSender{}
+	agent := NewAgent(AgentConfig{WorkerSender: sender, RequestTimeout: time.Second})
+	dependency := &strategyv1.RuntimeDependencyError{
+		Code: "STRATEGY_DEPENDENCY_UNAVAILABLE", Module: "portfolio.v1",
+	}
+	sender.onSend = func(sessionID string, frame *rwv1.AgentFrame) {
+		call := frame.GetPlatformCall()
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_PlatformCallResult{PlatformCallResult: &rwv1.PlatformCallResult{
+					CallId: call.GetCallId(), Ok: false,
+					Error: "legacy platform failure", ErrorCode: "PLATFORM_ROUTE_UNAVAILABLE",
+					ErrorMessage:    "portfolio route is unavailable",
+					ErrorDetailJson: `{"runtime_id":"rt-test","retryable":true}`,
+					DependencyError: dependency,
+				}},
+			}, nil)
+		}()
+	}
+
+	_, err := agent.invokeWorkerUnary(
+		context.Background(), "session-typed", "GetStrategyStatus",
+		&anypb.Any{TypeUrl: "type.googleapis.com/strategy.v1.GetStrategyStatusRequest"}, time.Second,
+	)
+	var requestErr *RuntimeRequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("error = %T %v, want RuntimeRequestError", err, err)
+	}
+	if requestErr.Code != "PLATFORM_ROUTE_UNAVAILABLE" ||
+		requestErr.Message != "portfolio route is unavailable" ||
+		requestErr.ErrorCode != "PLATFORM_ROUTE_UNAVAILABLE" ||
+		requestErr.ErrorMessage != "portfolio route is unavailable" ||
+		requestErr.ErrorDetailJSON != `{"runtime_id":"rt-test","retryable":true}` ||
+		!proto.Equal(requestErr.DependencyError, dependency) {
+		t.Fatalf("typed request error = %+v", requestErr)
+	}
+
+	errorFrame := runtimeRequestErrorFrame("corr-typed", requestErr)
+	if got := errorFrame.GetError().GetCode(); got != "PLATFORM_ROUTE_UNAVAILABLE" {
+		t.Fatalf("runtime error code = %q", got)
+	}
+	if got := errorFrame.GetError().GetMessage(); got != "portfolio route is unavailable" {
+		t.Fatalf("runtime error message = %q", got)
+	}
+	detailField := errorFrame.GetError().ProtoReflect().Descriptor().Fields().ByName("error_detail_json")
+	if detailField == nil {
+		t.Fatal("runtime StreamError.error_detail_json is missing")
+	}
+	if got := errorFrame.GetError().ProtoReflect().Get(detailField).String(); got != `{"runtime_id":"rt-test","retryable":true}` {
+		t.Fatalf("runtime error detail = %q", got)
+	}
+	if got := errorFrame.GetError().GetDependencyError(); !proto.Equal(got, dependency) {
+		t.Fatalf("runtime dependency error = %+v", got)
+	}
+}
+
+func TestInvokeWorkerUnaryUsesLegacyErrorFallbacks(t *testing.T) {
+	sender := &fakeWorkerSender{}
+	agent := NewAgent(AgentConfig{WorkerSender: sender, RequestTimeout: time.Second})
+	sender.onSend = func(sessionID string, frame *rwv1.AgentFrame) {
+		call := frame.GetPlatformCall()
+		go func() {
+			_ = agent.HandleWorkerFrame(context.Background(), sessionID, &rwv1.WorkerFrame{
+				Payload: &rwv1.WorkerFrame_PlatformCallResult{PlatformCallResult: &rwv1.PlatformCallResult{
+					CallId: call.GetCallId(), Ok: false, Error: "legacy worker failure",
+				}},
+			}, nil)
+		}()
+	}
+
+	_, err := agent.invokeWorkerUnary(
+		context.Background(), "session-legacy", "GetStrategyStatus",
+		&anypb.Any{TypeUrl: "type.googleapis.com/strategy.v1.GetStrategyStatusRequest"}, time.Second,
+	)
+	var requestErr *RuntimeRequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("error = %T %v, want RuntimeRequestError", err, err)
+	}
+	if requestErr.Code != "FailedPrecondition" ||
+		requestErr.Message != "legacy worker failure" ||
+		requestErr.ErrorCode != "FailedPrecondition" ||
+		requestErr.ErrorMessage != "legacy worker failure" ||
+		requestErr.ErrorDetailJSON != "{}" || requestErr.DependencyError != nil {
+		t.Fatalf("legacy request error = %+v", requestErr)
+	}
+}
+
 func TestValidateDependencyFailureIsTypedAndOneShotWorkerIsRemoved(t *testing.T) {
 	starter := &fakeWorkerStarter{}
 	stopper := &fakeWorkerStopper{}

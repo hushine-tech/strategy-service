@@ -147,11 +147,24 @@ class SessionState:
                 self.error_detail_json = error_detail_json
             return True
 
-    def force_failed(self, error: str) -> None:
+    def force_failed(
+        self,
+        error: str,
+        *,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        error_detail_json: str | None = None,
+    ) -> None:
         """Mark the session failed even after a terminal runtime transition."""
         with self._lock:
             self.status = "failed"
             self.error = error
+            if error_code is not None:
+                self.error_code = error_code
+            if error_message is not None:
+                self.error_message = error_message
+            if error_detail_json is not None:
+                self.error_detail_json = error_detail_json
             self._running_publication_state = _PUBLICATION_TERMINAL
 
     def is_active(self) -> bool:

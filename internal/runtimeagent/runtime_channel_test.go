@@ -729,7 +729,7 @@ func TestRuntimeChannelClientPreservesStreamErrorFields(t *testing.T) {
 		requestFrame: make(chan *cpv1.RuntimeFrame, 1),
 		errorFrame: &cpv1.StreamError{
 			Code: "FailedPrecondition", Message: "platform route unavailable",
-			DependencyError: dependency,
+			DependencyError: dependency, ErrorDetailJson: `{"route":"portfolio.GetSession"}`,
 		},
 	}
 	cpv1.RegisterControlPanelServiceServer(server, capture)
@@ -768,18 +768,29 @@ func TestRuntimeChannelClientPreservesStreamErrorFields(t *testing.T) {
 	}
 	if typed.PlatformErrorCode() != "FailedPrecondition" ||
 		typed.PlatformErrorMessage() != "platform route unavailable" ||
+		typed.PlatformErrorDetailJSON() != `{"route":"portfolio.GetSession"}` ||
 		typed.PlatformDependencyError().GetModule() != "google.cloud" {
 		t.Fatalf("typed error = %#v", typed)
 	}
-	var detail map[string]any
-	if err := json.Unmarshal([]byte(typed.PlatformErrorDetailJSON()), &detail); err != nil {
-		t.Fatalf("detail JSON = %q: %v", typed.PlatformErrorDetailJSON(), err)
-	}
-	if detail["code"] != "STRATEGY_DEPENDENCY_UNAVAILABLE" || detail["module"] != "google.cloud" {
-		t.Fatalf("detail = %#v", detail)
-	}
 	cancel()
 	<-errCh
+}
+
+func TestStreamErrorDetailJSONPreservesDependencyFallback(t *testing.T) {
+	detailJSON := streamErrorDetailJSON(&strategyv1.RuntimeDependencyError{
+		Code: "STRATEGY_DEPENDENCY_UNAVAILABLE", Module: "google.cloud",
+		RuntimeProfile: "platform-python-3.13", Message: "dependency unavailable",
+	})
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(detailJSON), &detail); err != nil {
+		t.Fatalf("detail JSON = %q: %v", detailJSON, err)
+	}
+	if detail["code"] != "STRATEGY_DEPENDENCY_UNAVAILABLE" ||
+		detail["module"] != "google.cloud" ||
+		detail["runtime_profile"] != "platform-python-3.13" ||
+		detail["message"] != "dependency unavailable" {
+		t.Fatalf("detail = %#v", detail)
+	}
 }
 
 func TestRuntimeChannelHeartbeatIndependentOfBlockedRequestHandler(

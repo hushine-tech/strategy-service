@@ -4101,6 +4101,7 @@ type StreamError struct {
 	Code            string                             `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
 	Message         string                             `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	DependencyError *strategyv1.RuntimeDependencyError `protobuf:"bytes,3,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
+	ErrorDetailJson string                             `protobuf:"bytes,4,opt,name=error_detail_json,json=errorDetailJson,proto3" json:"error_detail_json,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4154,6 +4155,13 @@ func (x *StreamError) GetDependencyError() *strategyv1.RuntimeDependencyError {
 		return x.DependencyError
 	}
 	return nil
+}
+
+func (x *StreamError) GetErrorDetailJson() string {
+	if x != nil {
+		return x.ErrorDetailJson
+	}
+	return ""
 }
 
 type RuntimeCommandFrame struct {
@@ -5314,11 +5322,12 @@ const file_control_panel_service_proto_rawDesc = "" +
 	"\n" +
 	"runtime_id\x18\x01 \x01(\tR\truntimeId\x12 \n" +
 	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\x12P\n" +
-	"\x16fingerprint_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x14fingerprintExpiresAt\"\x8b\x01\n" +
+	"\x16fingerprint_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x14fingerprintExpiresAt\"\xb7\x01\n" +
 	"\vStreamError\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12N\n" +
-	"\x10dependency_error\x18\x03 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\xc5\x01\n" +
+	"\x10dependency_error\x18\x03 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\x12*\n" +
+	"\x11error_detail_json\x18\x04 \x01(\tR\x0ferrorDetailJson\"\xc5\x01\n" +
 	"\x13RuntimeCommandFrame\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12!\n" +
