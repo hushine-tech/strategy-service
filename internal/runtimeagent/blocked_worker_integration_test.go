@@ -208,6 +208,20 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("RuntimeChannel did not connect")
 	}
+	select {
+	case <-control.heartbeats:
+	case err := <-runtimeDone:
+		t.Fatalf("RuntimeChannel stopped before initial heartbeat: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("RuntimeChannel did not send its initial authenticated heartbeat")
+	}
+	initialHeartbeatDeadline := time.Now().Add(5 * time.Second)
+	for control.heartbeatACKCount() != 1 && time.Now().Before(initialHeartbeatDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if control.heartbeatACKCount() != 1 {
+		t.Fatalf("initial Runtime heartbeat ACKs = %d, want exactly 1", control.heartbeatACKCount())
+	}
 
 	runRequest, err := anypb.New(&strategyv1.RunStrategyRequest{
 		PortfolioId: 7,
@@ -294,9 +308,9 @@ func TestBlockedWorkerKeepsRuntimeHeartbeatAndCanBeReplaced(t *testing.T) {
 		runtimeDone,
 		600,
 	)
-	if control.heartbeatACKCount() != 600 {
+	if control.heartbeatACKCount() != 601 {
 		t.Fatalf(
-			"Runtime heartbeat ACKs = %d, want exactly 600",
+			"Runtime heartbeat ACKs = %d, want initial + 600 logical ticks",
 			control.heartbeatACKCount(),
 		)
 	}
@@ -478,6 +492,7 @@ func advanceBlockedWorkerHeartbeatTicks(
 	count int,
 ) {
 	t.Helper()
+	initialACKCount := control.heartbeatACKCount()
 	logicalNow := time.Unix(1_780_000_000, 0)
 	for index := 0; index < count; index++ {
 		select {
@@ -499,7 +514,8 @@ func advanceBlockedWorkerHeartbeatTicks(
 		}
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for control.heartbeatACKCount() != count && time.Now().Before(deadline) {
+	wantACKCount := initialACKCount + count
+	for control.heartbeatACKCount() != wantACKCount && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 }
