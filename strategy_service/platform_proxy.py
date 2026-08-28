@@ -425,7 +425,7 @@ def _validate_backtest_funding_response(response: Any, request: Any):
     requested_legs: dict[tuple[str, str, str], Decimal] = {}
     requested_leg_quantity_strings: dict[tuple[str, str, str], str] = {}
     for leg in request.position_legs:
-        identity = (leg.symbol, position_side_label(int(leg.position_side)), leg.margin_mode)
+        identity = (leg.symbol, position_side_label(leg.position_side), leg.margin_mode)
         if identity in requested_legs:
             raise BacktestFundingResponseError(
                 "settlement request contains a duplicate position leg"

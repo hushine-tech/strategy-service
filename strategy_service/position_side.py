@@ -37,6 +37,14 @@ def position_side_from_label(value: str | None) -> int:
     return descriptor.number
 
 
+def position_side_value(value: int | str | None) -> int:
+    """Validate a generated enum value or exact public short label."""
+    if type(value) is int:
+        position_side_label(value)
+        return value
+    return position_side_from_label(value)
+
+
 def position_direction_key(*, position_mode: str, position_side: int) -> int:
     """Derive the private wallet key solely from the shared enum value."""
     position_side_label(position_side)

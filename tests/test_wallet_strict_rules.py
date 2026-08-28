@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from strategy_service.position_side import BOTH
+from strategy_service.position_side import BOTH, LONG, SHORT
 from tests.helpers.wallet_fixtures import make_testnet_wallet
 
 
@@ -73,3 +73,36 @@ def test_hedge_mode_on_order_requires_explicit_valid_position_side() -> None:
     # there should still be no positions because every attempted fill
     # raised before mutating state.
     assert wallet.futures.positions == {}
+
+
+def test_one_way_on_order_rejects_explicit_hedge_side() -> None:
+    wallet = make_testnet_wallet(margin_mode="cross", position_mode="one_way")
+
+    class FillWithLongSide:
+        status = "FILLED"
+        side = "BUY"
+        position_side = "LONG"
+        qty = 0.1
+        fill_price = 50_000.0
+        order_id = "one-way-long-side-1"
+
+    with pytest.raises(ValueError, match="one-way FuturesPosition must use BOTH"):
+        wallet.on_order("BTCUSDT", "futures", FillWithLongSide())
+
+    class FillWithProtoLong:
+        status = "FILLED"
+        side = "BUY"
+        position_side = LONG
+        qty = 0.1
+        fill_price = 50_000.0
+        order_id = "one-way-proto-long-side-1"
+
+    with pytest.raises(ValueError, match="one-way FuturesPosition must use BOTH"):
+        wallet.on_order("BTCUSDT", "futures", FillWithProtoLong())
+
+
+def test_hedge_order_key_is_derived_from_shared_position_side() -> None:
+    wallet = make_testnet_wallet(margin_mode="cross", position_mode="hedge")
+
+    assert wallet.futures._position_key_from_order("BTCUSDT", "LONG", "BUY") == 1
+    assert wallet.futures._position_key_from_order("BTCUSDT", SHORT, "SELL") == -1

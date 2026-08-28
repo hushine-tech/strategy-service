@@ -58,6 +58,17 @@ def test_one_way_partial_and_terminal_fills_use_exact_decimals_once():
     ]
 
 
+def test_one_way_lifecycle_rejects_explicit_hedge_side():
+    tracker = FundingPositionTracker()
+
+    with pytest.raises(ValueError, match="one-way FuturesPosition must use BOTH"):
+        tracker.on_lifecycle_fill(
+            _fill(position_side="LONG"),
+            position_mode="one_way",
+            margin_mode="cross",
+        )
+
+
 def test_hedge_legs_and_venues_remain_independent_with_isolated_attribution():
     tracker = FundingPositionTracker()
     tracker.on_lifecycle_fill(

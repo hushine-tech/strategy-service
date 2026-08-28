@@ -16,6 +16,7 @@ from .canonical import (
     CanonicalSpotAssetState,
     CanonicalSpotState,
     norm_symbol,
+    validate_canonical_futures_positions,
 )
 from .spot import SpotWallet
 from strategy_service.position_side import (
@@ -23,6 +24,7 @@ from strategy_service.position_side import (
     position_direction_key,
     position_side_from_label,
     position_side_label,
+    position_side_value,
 )
 
 __all__ = [
@@ -325,6 +327,7 @@ class BinanceFuturesBook:
     """Exchange-aware futures runtime with explicit local/oracle boundaries."""
 
     def __init__(self, state: CanonicalFuturesState) -> None:
+        validate_canonical_futures_positions(state)
         self.margin_mode = str(state.margin_mode or "cross").strip().lower()
         self.position_mode = str(state.position_mode or "one_way").strip().lower()
         self.multi_assets_mode = bool(state.multi_assets_mode)
@@ -409,15 +412,17 @@ class BinanceFuturesBook:
         """Recompute aggregate risk after a complete target overlay batch."""
         self._refresh_portfolio_fields()
 
-    def _position_key_from_order(self, symbol: str, position_side: str, side: str) -> int:
-        if self.position_mode != "hedge":
-            return 0
-        normalized_side = str(position_side or "").strip().upper()
-        if normalized_side == "LONG":
-            return +1
-        if normalized_side == "SHORT":
-            return -1
-        raise ValueError("hedge-mode parity orders require explicit position_side")
+    def _position_key_from_order(self, symbol: str, position_side: object, side: str) -> int:
+        raw_position_side = None if position_side in (None, "") else position_side
+        try:
+            return position_direction_key(
+                position_mode=self.position_mode,
+                position_side=position_side_value(raw_position_side),
+            )
+        except ValueError as exc:
+            if self.position_mode == "hedge":
+                raise ValueError("hedge-mode parity orders require explicit position_side") from exc
+            raise
 
     def _normalize_order_id(
         self,
@@ -752,7 +757,7 @@ class BinanceFuturesBook:
             raise ValueError(f"unsupported futures order status: {status!r}")
         direction_key = self._position_key_from_order(
             norm_symbol(symbol),
-            str(getattr(order_resp, "position_side", "") or ""),
+            getattr(order_resp, "position_side", None),
             side,
         )
         raw_price = float(
@@ -1063,12 +1068,12 @@ class BinanceFuturesBook:
         if self.position_mode == "hedge":
             if allocation.position_side not in {"LONG", "SHORT"}:
                 return None
-            direction_key = position_direction_key(
-                position_mode="hedge",
-                position_side=position_side_from_label(allocation.position_side),
-            )
-        else:
-            direction_key = 0
+        direction_key = position_direction_key(
+            position_mode=self.position_mode,
+            position_side=position_side_value(
+                None if allocation.position_side == "" else allocation.position_side
+            ),
+        )
         position = self.positions.get((norm_symbol(allocation.symbol), direction_key))
         if allocation.margin_mode == "isolated" or require_cross_position:
             if position is None or position.margin_mode != allocation.margin_mode:

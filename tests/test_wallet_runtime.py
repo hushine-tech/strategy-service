@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,7 +18,12 @@ from strategy_service.position_side import (
 )
 from strategy_service.types import OrderResponse
 from strategy_service.wallet import BinanceWalletRuntime, LedgerEvent
-from strategy_service.wallet.canonical import SpotSymbolMetadata
+from strategy_service.wallet.canonical import (
+    CanonicalFuturesPositionState,
+    CanonicalFuturesState,
+    CanonicalPortfolioState,
+    SpotSymbolMetadata,
+)
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet_factory import (
     RUNTIME_REGISTRY,
@@ -113,6 +119,115 @@ def test_shared_position_side_constants_match_core_enum_descriptor() -> None:
 def test_position_key_rejects_non_generated_enum_values() -> None:
     with pytest.raises(ValueError, match="invalid FuturesPositionSide"):
         position_direction_key(position_mode="hedge", position_side=True)
+
+
+def test_direct_canonical_hedge_both_leg_is_rejected_before_runtime_installation() -> None:
+    portfolio = CanonicalPortfolioState(
+        environment=0,
+        futures=CanonicalFuturesState(
+            position_mode="hedge",
+            positions=[
+                CanonicalFuturesPositionState(
+                    symbol="BTCUSDT",
+                    position_side=BOTH,
+                    direction_key=0,
+                    margin_mode="cross",
+                )
+            ],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="hedge FuturesPosition requires LONG or SHORT"):
+        build_wallet_from_portfolio(portfolio)
+
+
+def test_direct_canonical_position_key_must_match_shared_enum() -> None:
+    portfolio = CanonicalPortfolioState(
+        environment=0,
+        futures=CanonicalFuturesState(
+            position_mode="hedge",
+            positions=[
+                CanonicalFuturesPositionState(
+                    symbol="BTCUSDT",
+                    position_side=LONG,
+                    direction_key=0,
+                    margin_mode="cross",
+                )
+            ],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="direction_key"):
+        build_wallet_from_portfolio(portfolio)
+
+
+def test_direct_canonical_invalid_position_mode_is_rejected_without_positions() -> None:
+    portfolio = CanonicalPortfolioState(
+        environment=0,
+        futures=CanonicalFuturesState(position_mode="unknown"),
+    )
+
+    with pytest.raises(ValueError, match="position_mode"):
+        build_wallet_from_portfolio(portfolio)
+
+
+def test_wallet_adapter_rejects_any_typed_boolean_position_side() -> None:
+    position = SimpleNamespace(
+        symbol="BTCUSDT",
+        position_side=True,
+        qty=0.1,
+        margin_mode="cross",
+        initial_balance=0.0,
+        leverage=10.0,
+        fee_rate=0.0004,
+        mark_price=50_000.0,
+        entry_price=50_000.0,
+        unrealized_pnl=0.0,
+        notional=5_000.0,
+        initial_margin=500.0,
+        position_initial_margin=500.0,
+        open_order_initial_margin=0.0,
+        maint_margin=0.0,
+        isolated_wallet=0.0,
+        liquidation_price=0.0,
+        break_even_price=0.0,
+    )
+    futures = SimpleNamespace(
+        position_mode="hedge",
+        positions=[position],
+        margin_mode="cross",
+        multi_assets_mode=False,
+        portfolio_margin=False,
+        initial_balance=0.0,
+        deposit_sum=0.0,
+        withdrawal_sum=0.0,
+        wallet_balance=1_000.0,
+        available_balance=1_000.0,
+        margin_balance=1_000.0,
+        unrealized_pnl=0.0,
+        total_margin_balance=1_000.0,
+        total_unrealized_pnl=0.0,
+        total_position_initial_margin=0.0,
+        total_open_order_initial_margin=0.0,
+        total_maint_margin=0.0,
+        total_cross_wallet_balance=1_000.0,
+        total_cross_un_pnl=0.0,
+        last_applied_income_entry_id=0,
+        risk_metadata=[],
+    )
+    wallet = SimpleNamespace(
+        futures=futures,
+        spot=None,
+        environment=0,
+        total_value=1_000.0,
+        spot_estimated_value=0.0,
+        futures_position_equity=1_000.0,
+        metrics_authoritative=False,
+        updated_at=None,
+    )
+
+    with pytest.raises(ValueError, match="invalid FuturesPositionSide"):
+        proto_to_portfolio_spec(wallet)
 
 
 def _isolated_wallet_proto_with_metadata() -> portfolio_service_pb2.PortfolioWalletState:

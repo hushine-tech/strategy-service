@@ -105,7 +105,7 @@ def _exact_funding_legs_from_venue(venue: Any) -> list[FundingPositionLegFact]:
         if position_venue_id != venue_id:
             raise ValueError("Futures position venue_id conflicts with VenueSnapshot")
         symbol = str(getattr(position, "symbol", "") or "").strip().upper()
-        side = position_side_label(int(getattr(position, "position_side", 0)))
+        side = position_side_label(getattr(position, "position_side", 0))
         margin = str(getattr(position, "margin_mode", "") or "").strip().lower()
         if not symbol or margin not in {"cross", "isolated"}:
             raise ValueError("canonical Futures position route or margin_mode is invalid")

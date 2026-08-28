@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
-from strategy_service.position_side import position_side_from_label, position_side_label
+from strategy_service.position_side import (
+    position_direction_key,
+    position_side_from_label,
+    position_side_label,
+    position_side_value,
+)
 from typing import Iterable
 
 
@@ -77,15 +82,20 @@ class FundingPositionTracker:
         if not qty.is_finite() or qty <= 0:
             raise ValueError("qty_decimal must be a positive finite decimal")
 
-        if mode == "one_way":
-            position_side = "BOTH"
-        else:
-            raw_position_side = _canonical_position_side_label(
-                getattr(event, "position_side", None)
+        raw_position_side = getattr(event, "position_side", None)
+        try:
+            position_side_value_raw = position_side_value(
+                None if raw_position_side in (None, "") else raw_position_side
             )
-            if raw_position_side not in {"LONG", "SHORT"}:
-                raise ValueError("position_side is required for hedge mode")
-            position_side = raw_position_side
+            position_direction_key(
+                position_mode=mode,
+                position_side=position_side_value_raw,
+            )
+        except ValueError as exc:
+            if mode == "hedge":
+                raise ValueError("position_side is required for hedge mode") from exc
+            raise
+        position_side = position_side_label(position_side_value_raw)
 
         signed_qty = qty if side == "BUY" else -qty
         key = (venue_id, symbol, position_side, margin)

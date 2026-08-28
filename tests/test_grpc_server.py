@@ -9563,7 +9563,7 @@ def test_proxy_only_mode2_live_delivers_order_updates_before_next_kline():
                     exchange="binance",
                     market="perpetual_futures",
                     side="BUY",
-                    position_side="both",
+                    position_side="BOTH",
                     event_type="fill",
                     order_status="FILLED",
                     order_id="order-44",

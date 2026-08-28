@@ -95,6 +95,22 @@ class CanonicalFuturesState:
     risk_metadata: list[CanonicalFuturesRiskMetadata] = field(default_factory=list)
 
 
+def validate_canonical_futures_positions(state: CanonicalFuturesState) -> None:
+    """Enforce the shared position-side invariant before runtime installation."""
+    position_mode = str(state.position_mode or "").strip().lower()
+    if position_mode not in {"one_way", "hedge"}:
+        raise ValueError("canonical Futures position_mode is missing or invalid")
+    for position in state.positions:
+        expected_direction_key = derive_position_key(
+            position_mode=position_mode,
+            position_side=position.position_side,
+        )
+        if type(position.direction_key) is not int or position.direction_key != expected_direction_key:
+            raise ValueError(
+                "canonical FuturesPosition.direction_key does not match position_side"
+            )
+
+
 @dataclass(slots=True)
 class CanonicalSpotAssetState:
     asset: str

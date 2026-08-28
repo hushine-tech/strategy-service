@@ -12,6 +12,7 @@ from strategy_service.wallet.canonical import (
     CanonicalSpotAssetState,
     CanonicalSpotState,
     norm_symbol,
+    validate_canonical_futures_positions,
 )
 from strategy_service.position_side import position_direction_key, position_side_from_label
 
@@ -334,6 +335,7 @@ def build_wallet_from_portfolio(
     """
     if not isinstance(portfolio, CanonicalPortfolioState):
         portfolio = portfolio_dict_to_canonical_state(portfolio)
+    validate_canonical_futures_positions(portfolio.futures)
 
     _populate_runtime_registry()
     provider, environment_name = resolve_target(int(portfolio.environment))

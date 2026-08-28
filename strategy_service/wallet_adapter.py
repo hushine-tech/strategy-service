@@ -99,9 +99,10 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
         for pos in fw.positions:
             position_qty = _strict_position_qty(pos)
             margin_mode = _strict_margin_mode(pos)
+            position_side = pos.position_side
             direction_key = derive_position_key(
                 position_mode=position_mode,
-                position_side=int(pos.position_side),
+                position_side=position_side,
             )
             futures_positions.append(CanonicalFuturesPositionState(
                 symbol=pos.symbol,
@@ -113,7 +114,7 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
                 position_qty=position_qty,
                 entry_price=float(pos.entry_price or 0.0),
                 unrealized_pnl=float(pos.unrealized_pnl or 0.0),
-                position_side=int(pos.position_side),
+                position_side=position_side,
                 margin_mode=str(margin_mode or ""),
                 notional=float(getattr(pos, "notional", 0.0) or 0.0),
                 initial_margin=float(getattr(pos, "initial_margin", 0.0) or 0.0),
