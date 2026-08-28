@@ -134,9 +134,9 @@ def _matrix_funding_leg(
         "expected_wallet_after_close",
     ),
     [
-        ("one_way", "cross", 997.0, 1017.0, 797.0, 1001.75),
+        ("one_way", "cross", 998.978, 1018.978, 798.978, 1003.728),
         ("one_way", "isolated", 999.0, 1019.0, 799.0, 1003.75),
-        ("hedge", "cross", 997.5, 1027.5, 697.5, 1002.25),
+        ("hedge", "cross", 998.489, 1028.489, 698.489, 1003.239),
         ("hedge", "isolated", 998.5, 1028.5, 698.5, 1003.25),
     ],
     ids=["one-way-cross", "one-way-isolated", "hedge-cross", "hedge-isolated"],
@@ -175,7 +175,7 @@ def test_futures_position_margin_wallet_matrix_tracks_each_leg_and_balance(
             ),
         )
         funding_legs = [
-            _matrix_funding_leg("BOTH", margin_mode, "2", "-2"),
+            _matrix_funding_leg("BOTH", margin_mode, "2", "-0.022"),
         ]
         expected_initial_margin = 220.0
         expected_unrealized_pnl = 20.0
@@ -206,8 +206,8 @@ def test_futures_position_margin_wallet_matrix_tracks_each_leg_and_balance(
             ),
         )
         funding_legs = [
-            _matrix_funding_leg("LONG", margin_mode, "2", "-2"),
-            _matrix_funding_leg("SHORT", margin_mode, "-1", "1"),
+            _matrix_funding_leg("LONG", margin_mode, "2", "-0.022"),
+            _matrix_funding_leg("SHORT", margin_mode, "-1", "0.011"),
         ]
         expected_initial_margin = 330.0
         expected_unrealized_pnl = 30.0
@@ -226,13 +226,18 @@ def test_futures_position_margin_wallet_matrix_tracks_each_leg_and_balance(
         assert short_leg.position_qty == pytest.approx(-1.0)
         assert long_leg.get_unrealized_pnl() == pytest.approx(20.0)
         assert short_leg.get_unrealized_pnl() == pytest.approx(10.0)
+        assert long_leg.position_initial_margin == pytest.approx(220.0)
+        assert short_leg.position_initial_margin == pytest.approx(110.0)
+    else:
+        only_leg = wallet.futures.positions[("BTCUSDT", BOTH)]
+        assert only_leg.position_initial_margin == pytest.approx(220.0)
 
     funding_wallet_before = wallet.futures.wallet_balance
     funding_targets = {
-        ("BTCUSDT", BOTH): -2.0,
+        ("BTCUSDT", BOTH): -0.022,
     } if position_mode == "one_way" else {
-        ("BTCUSDT", LONG): -2.0,
-        ("BTCUSDT", -1): 1.0,
+        ("BTCUSDT", LONG): -0.022,
+        ("BTCUSDT", -1): 0.011,
     }
     isolated_before = {
         key: wallet.futures.positions[key].isolated_wallet
@@ -242,6 +247,13 @@ def test_futures_position_margin_wallet_matrix_tracks_each_leg_and_balance(
         key: wallet.futures.positions[key].carry_cost
         for key in funding_targets
     }
+    for leg in funding_legs:
+        expected_amount = -(
+            Decimal(leg["signed_qty_decimal"])
+            * Decimal(leg["mark_price_decimal"])
+            * Decimal(leg["funding_rate_decimal"])
+        )
+        assert Decimal(leg["applied_amount_decimal"]) == expected_amount
 
     portfolio.apply_funding_income_entry(
         "binance",
@@ -278,6 +290,18 @@ def test_futures_position_margin_wallet_matrix_tracks_each_leg_and_balance(
             assert position.carry_cost - carry_before[key] == pytest.approx(-amount)
 
     wallet_before_close = wallet.futures.wallet_balance
+    close_leg_before = wallet.futures.positions[("BTCUSDT", BOTH if position_mode == "one_way" else LONG)]
+    close_qty_before = close_leg_before.position_qty
+    close_entry_price = close_leg_before.entry_price
+    short_before = None
+    if position_mode == "hedge":
+        short_leg = wallet.futures.positions[("BTCUSDT", -1)]
+        short_before = (
+            short_leg.position_qty,
+            short_leg.entry_price,
+            short_leg.position_initial_margin,
+            short_leg.get_unrealized_pnl(),
+        )
     wallet.on_order(
         "BTCUSDT",
         "futures",
@@ -302,10 +326,25 @@ def test_futures_position_margin_wallet_matrix_tracks_each_leg_and_balance(
     remaining_long = wallet.futures.positions[("BTCUSDT", direction_key)]
     assert remaining_long.position_qty == pytest.approx(1.5)
     assert remaining_long.get_unrealized_pnl() == pytest.approx(15.0)
+    assert remaining_long.position_initial_margin == pytest.approx(165.0)
+    realized_long = (close_qty_before - remaining_long.position_qty) * (
+        110.0 - close_entry_price
+    )
+    assert realized_long == pytest.approx(5.0)
+    assert wallet.futures.wallet_balance - wallet_before_close + 0.25 == pytest.approx(
+        realized_long
+    )
     if position_mode == "hedge":
         remaining_short = wallet.futures.positions[("BTCUSDT", -1)]
         assert remaining_short.position_qty == pytest.approx(-1.0)
         assert remaining_short.get_unrealized_pnl() == pytest.approx(10.0)
+        assert remaining_short.position_initial_margin == pytest.approx(110.0)
+        assert short_before == pytest.approx((
+            remaining_short.position_qty,
+            remaining_short.entry_price,
+            remaining_short.position_initial_margin,
+            remaining_short.get_unrealized_pnl(),
+        ))
         assert wallet.futures.unrealized_pnl == pytest.approx(25.0)
     else:
         assert wallet.futures.unrealized_pnl == pytest.approx(15.0)
@@ -314,9 +353,9 @@ def test_futures_position_margin_wallet_matrix_tracks_each_leg_and_balance(
 def test_three_day_funding_entries_apply_once_without_netting_hedge_details():
     portfolio, wallet = _portfolio(long_margin="cross", short_margin="cross")
     entries = [
-        _entry(201, [_leg("LONG", "cross", "-0.020"), _leg("SHORT", "cross", "0.015")]),
-        _entry(202, [_leg("LONG", "cross", "0.010"), _leg("SHORT", "cross", "-0.004")]),
-        _entry(203, [_leg("LONG", "cross", "-0.003"), _leg("SHORT", "cross", "0.001")]),
+        _entry(201, [_leg("LONG", "cross", "-0.01"), _leg("SHORT", "cross", "0.005")]),
+        _entry(202, [_leg("LONG", "cross", "-0.01"), _leg("SHORT", "cross", "0.005")]),
+        _entry(203, [_leg("LONG", "cross", "-0.01"), _leg("SHORT", "cross", "0.005")]),
     ]
 
     for entry in entries:
@@ -327,7 +366,7 @@ def test_three_day_funding_entries_apply_once_without_netting_hedge_details():
             "binance", "perpetual_futures", 11, entry
         )
 
-    assert wallet.futures.wallet_balance == pytest.approx(99.999)
+    assert wallet.futures.wallet_balance == pytest.approx(99.985)
     assert wallet.futures.last_applied_income_entry_id == 203
     # Binance cross Funding settles against wallet balance. It must not be
     # folded into either remaining position's break-even/carry basis.
