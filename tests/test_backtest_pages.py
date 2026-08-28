@@ -114,6 +114,45 @@ def test_timeline_reads_page_boundary_funding_once_before_same_time_kline():
     assert client.calls[1]["start_after_time_ms"] == 2_000
 
 
+def test_three_day_funding_timeline_emits_every_settlement_once_across_pages():
+    day = 86_400_000
+    first = funding("BTCUSDT", 1_000)
+    second = funding("BTCUSDT", day + 1_000)
+    third = funding("BTCUSDT", 2 * day + 1_000)
+    client = FakeMarketDataClient({
+        "binance/futures/kline/BTCUSDT/1s": [
+            {
+                "klines": [kline("BTCUSDT", 1_000), kline("BTCUSDT", day + 1_000)],
+                "funding_facts": [first, second],
+                "funding_coverage_complete": True,
+            },
+            {
+                "klines": [kline("BTCUSDT", 2 * day + 1_000)],
+                # The page boundary repeats the prior settlement. The
+                # timeline must keep it idempotent without hiding day three.
+                "funding_facts": [second, third],
+                "funding_coverage_complete": True,
+            },
+        ],
+    })
+    source = PagedBacktestDataSource(
+        client,
+        start_time_ms=1_000,
+        end_time_ms=3 * day,
+        streams=[binding("BTCUSDT")],
+    )
+
+    funding_events = [
+        event for event in source.iter_timeline() if event.kind == "funding"
+    ]
+
+    assert [event.market_time_ms for event in funding_events] == [
+        1_000,
+        day + 1_000,
+        2 * day + 1_000,
+    ]
+
+
 def test_btc_eth_zec_same_time_funding_precedes_every_kline_in_stream_order():
     client = FakeMarketDataClient({
         "binance/futures/kline/BTCUSDT/1s": [{

@@ -79,6 +79,262 @@ def _leg(side: str, margin: str, amount: str) -> dict[str, str]:
     }
 
 
+def _matrix_order(
+    order_id: str,
+    *,
+    side: str,
+    position_side: str,
+    qty: float,
+    price: float,
+    fee: float,
+    reduce_only: bool = False,
+):
+    return SimpleNamespace(
+        status="FILLED",
+        side=side,
+        position_side=position_side,
+        qty=qty,
+        fill_price=price,
+        fee=fee,
+        order_id=order_id,
+        orig_qty=qty,
+        executed_qty=qty,
+        remaining_qty=0.0,
+        price=price,
+        reduce_only=reduce_only,
+    )
+
+
+def _matrix_funding_leg(
+    side: str,
+    margin_mode: str,
+    signed_qty: str,
+    amount: str,
+) -> dict[str, str]:
+    return {
+        "symbol": "BTCUSDT",
+        "position_side": side,
+        "margin_mode": margin_mode,
+        "signed_qty_decimal": signed_qty,
+        "funding_rate_decimal": "0.0001",
+        "mark_price_decimal": "110",
+        "calculated_amount_decimal": amount,
+        "applied_amount_decimal": amount,
+        "calculator_version": "binance-usdm-linear-v1",
+    }
+
+
+@pytest.mark.parametrize(
+    (
+        "position_mode",
+        "margin_mode",
+        "expected_wallet_after_funding",
+        "expected_margin_after_funding",
+        "expected_available_after_funding",
+        "expected_wallet_after_close",
+    ),
+    [
+        ("one_way", "cross", 997.0, 1017.0, 797.0, 1001.75),
+        ("one_way", "isolated", 999.0, 1019.0, 799.0, 1003.75),
+        ("hedge", "cross", 997.5, 1027.5, 697.5, 1002.25),
+        ("hedge", "isolated", 998.5, 1028.5, 698.5, 1003.25),
+    ],
+    ids=["one-way-cross", "one-way-isolated", "hedge-cross", "hedge-isolated"],
+)
+def test_futures_position_margin_wallet_matrix_tracks_each_leg_and_balance(
+    position_mode,
+    margin_mode,
+    expected_wallet_after_funding,
+    expected_margin_after_funding,
+    expected_available_after_funding,
+    expected_wallet_after_close,
+):
+    wallet = make_backtest_wallet(
+        margin_mode=margin_mode,
+        position_mode=position_mode,
+        wallet_balance=1000.0,
+    )
+    wallet.futures.venue_id = 11
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): wallet},
+    )
+
+    if position_mode == "one_way":
+        wallet.on_order(
+            "BTCUSDT",
+            "futures",
+            _matrix_order(
+                "open-both",
+                side="BUY",
+                position_side="BOTH",
+                qty=2.0,
+                price=100.0,
+                fee=1.0,
+            ),
+        )
+        funding_legs = [
+            _matrix_funding_leg("BOTH", margin_mode, "2", "-2"),
+        ]
+        expected_initial_margin = 220.0
+        expected_unrealized_pnl = 20.0
+        close_side = "BOTH"
+    else:
+        wallet.on_order(
+            "BTCUSDT",
+            "futures",
+            _matrix_order(
+                "open-long",
+                side="BUY",
+                position_side="LONG",
+                qty=2.0,
+                price=100.0,
+                fee=1.0,
+            ),
+        )
+        wallet.on_order(
+            "BTCUSDT",
+            "futures",
+            _matrix_order(
+                "open-short",
+                side="SELL",
+                position_side="SHORT",
+                qty=1.0,
+                price=120.0,
+                fee=0.5,
+            ),
+        )
+        funding_legs = [
+            _matrix_funding_leg("LONG", margin_mode, "2", "-2"),
+            _matrix_funding_leg("SHORT", margin_mode, "-1", "1"),
+        ]
+        expected_initial_margin = 330.0
+        expected_unrealized_pnl = 30.0
+        close_side = "LONG"
+
+    wallet.on_market_data("BTCUSDT", "futures", 110.0)
+
+    assert wallet.futures.total_position_initial_margin == pytest.approx(
+        expected_initial_margin
+    )
+    assert wallet.futures.unrealized_pnl == pytest.approx(expected_unrealized_pnl)
+    if position_mode == "hedge":
+        long_leg = wallet.futures.positions[("BTCUSDT", LONG)]
+        short_leg = wallet.futures.positions[("BTCUSDT", -1)]
+        assert long_leg.position_qty == pytest.approx(2.0)
+        assert short_leg.position_qty == pytest.approx(-1.0)
+        assert long_leg.get_unrealized_pnl() == pytest.approx(20.0)
+        assert short_leg.get_unrealized_pnl() == pytest.approx(10.0)
+
+    funding_wallet_before = wallet.futures.wallet_balance
+    funding_targets = {
+        ("BTCUSDT", BOTH): -2.0,
+    } if position_mode == "one_way" else {
+        ("BTCUSDT", LONG): -2.0,
+        ("BTCUSDT", -1): 1.0,
+    }
+    isolated_before = {
+        key: wallet.futures.positions[key].isolated_wallet
+        for key in funding_targets
+    }
+    carry_before = {
+        key: wallet.futures.positions[key].carry_cost
+        for key in funding_targets
+    }
+
+    portfolio.apply_funding_income_entry(
+        "binance",
+        "perpetual_futures",
+        11,
+        _entry(100, funding_legs),
+    )
+
+    assert wallet.futures.wallet_balance == pytest.approx(
+        expected_wallet_after_funding
+    )
+    assert wallet.futures.margin_balance == pytest.approx(
+        expected_margin_after_funding
+    )
+    assert wallet.futures.available_balance == pytest.approx(
+        expected_available_after_funding
+    )
+    assert wallet.futures.last_applied_income_entry_id == 100
+    if margin_mode == "cross":
+        assert wallet.futures.wallet_balance - funding_wallet_before == pytest.approx(
+            sum(funding_targets.values())
+        )
+        for key in funding_targets:
+            assert wallet.futures.positions[key].carry_cost == pytest.approx(
+                carry_before[key]
+            )
+    else:
+        assert wallet.futures.wallet_balance == pytest.approx(funding_wallet_before)
+        for key, amount in funding_targets.items():
+            position = wallet.futures.positions[key]
+            assert position.isolated_wallet - isolated_before[key] == pytest.approx(
+                amount
+            )
+            assert position.carry_cost - carry_before[key] == pytest.approx(-amount)
+
+    wallet_before_close = wallet.futures.wallet_balance
+    wallet.on_order(
+        "BTCUSDT",
+        "futures",
+        _matrix_order(
+            "close-long",
+            side="SELL",
+            position_side=close_side,
+            qty=0.5,
+            price=110.0,
+            fee=0.25,
+            reduce_only=True,
+        ),
+    )
+
+    assert wallet.futures.wallet_balance == pytest.approx(
+        expected_wallet_after_close
+    )
+    assert wallet.futures.wallet_balance - wallet_before_close == pytest.approx(
+        5.0 - 0.25
+    )
+    direction_key = BOTH if position_mode == "one_way" else LONG
+    remaining_long = wallet.futures.positions[("BTCUSDT", direction_key)]
+    assert remaining_long.position_qty == pytest.approx(1.5)
+    assert remaining_long.get_unrealized_pnl() == pytest.approx(15.0)
+    if position_mode == "hedge":
+        remaining_short = wallet.futures.positions[("BTCUSDT", -1)]
+        assert remaining_short.position_qty == pytest.approx(-1.0)
+        assert remaining_short.get_unrealized_pnl() == pytest.approx(10.0)
+        assert wallet.futures.unrealized_pnl == pytest.approx(25.0)
+    else:
+        assert wallet.futures.unrealized_pnl == pytest.approx(15.0)
+
+
+def test_three_day_funding_entries_apply_once_without_netting_hedge_details():
+    portfolio, wallet = _portfolio(long_margin="cross", short_margin="cross")
+    entries = [
+        _entry(201, [_leg("LONG", "cross", "-0.020"), _leg("SHORT", "cross", "0.015")]),
+        _entry(202, [_leg("LONG", "cross", "0.010"), _leg("SHORT", "cross", "-0.004")]),
+        _entry(203, [_leg("LONG", "cross", "-0.003"), _leg("SHORT", "cross", "0.001")]),
+    ]
+
+    for entry in entries:
+        portfolio.apply_funding_income_entry(
+            "binance", "perpetual_futures", 11, entry
+        )
+        portfolio.apply_funding_income_entry(
+            "binance", "perpetual_futures", 11, entry
+        )
+
+    assert wallet.futures.wallet_balance == pytest.approx(99.999)
+    assert wallet.futures.last_applied_income_entry_id == 203
+    # Binance cross Funding settles against wallet balance. It must not be
+    # folded into either remaining position's break-even/carry basis.
+    assert wallet.futures.positions[("BTCUSDT", LONG)].carry_cost == pytest.approx(0.0)
+    assert wallet.futures.positions[("BTCUSDT", -1)].carry_cost == pytest.approx(0.0)
+
+
 def test_atomic_income_applies_both_isolated_hedge_legs_then_advances_cursor_once():
     portfolio, wallet = _portfolio()
     long = wallet.futures.positions[("BTCUSDT", 1)]

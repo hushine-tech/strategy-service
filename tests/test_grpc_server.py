@@ -9264,6 +9264,124 @@ def test_backtest_incomplete_funding_coverage_is_typed_only_with_open_futures_le
         assert Engine.calls == 1
 
 
+def test_backtest_funding_gap_can_be_filled_and_same_run_retried(monkeypatch):
+    from market_data.models import MarketKline
+    from strategy_service.backtest_pages import BacktestFundingDataGapError
+    from strategy_service.inputs import StrategyInput
+
+    route_wallet = make_backtest_wallet(
+        wallet_balance=100.0,
+        futures_positions=[{
+            "symbol": "BTCUSDT",
+            "position_qty": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 100.0,
+            "margin_mode": "cross",
+        }],
+    )
+    route_wallet.futures.venue_id = 11
+    portfolio = PortfolioWalletRuntime(
+        portfolio_id=7,
+        allowed_routes={("binance", "perpetual_futures")},
+        wallets={("binance", "perpetual_futures", 11): route_wallet},
+    )
+    portfolio.funding_position_tracker.restore(11, [
+        FundingPositionLegFact("BTCUSDT", "BOTH", "cross", "1")
+    ])
+    fact = MarketFundingFact(
+        exchange="binance",
+        market="futures",
+        symbol="BTCUSDT",
+        funding_time_ms=9_000,
+        funding_rate_decimal="0.0001",
+        mark_price_decimal="100",
+        settlement_asset="USDT",
+    )
+    page_state = {"complete": False}
+
+    class MarketDataClient:
+        @staticmethod
+        def fetch_backtest_page(**_kwargs):
+            return SimpleNamespace(
+                klines=[MarketKline(
+                    symbol="BTCUSDT", interval="1m", open_time=9_000,
+                    close_time=9_999, open=100.0, high=100.0, low=100.0,
+                    close=100.0, volume=1.0, timestamp=9_999, market="futures",
+                )],
+                funding_facts=[fact] if page_state["complete"] else [],
+                funding_coverage_complete=page_state["complete"],
+                next_cursor_time_ms=9_000,
+                has_more=False,
+            )
+
+    class PortfolioClient:
+        calls = 0
+
+        @classmethod
+        def settle_backtest_funding(cls, **_kwargs):
+            cls.calls += 1
+            return portfolio_service_pb2.VenueIncomeEntry(
+                income_entry_id=81,
+                session_id="sess-gap-retry",
+                venue_id=11,
+                income_type="funding_fee",
+                symbol="BTCUSDT",
+                asset="USDT",
+                applied_amount_decimal="-0.01",
+                calculation_details_json=json.dumps([{
+                    "symbol": "BTCUSDT",
+                    "position_side": "BOTH",
+                    "margin_mode": "cross",
+                    "signed_qty_decimal": "1",
+                    "funding_rate_decimal": "0.0001",
+                    "mark_price_decimal": "100",
+                    "calculated_amount_decimal": "-0.01",
+                    "applied_amount_decimal": "-0.01",
+                    "calculator_version": "binance-usdm-linear-v1",
+                }], separators=(",", ":")),
+                status="calculated",
+            )
+
+    class Engine:
+        strategies = {}
+        calls = 0
+
+        @classmethod
+        def running_strategy(cls, _market_data):
+            cls.calls += 1
+
+    servicer = StrategyServiceServicer("", "", {}, "", restore_running_sessions=False)
+    monkeypatch.setattr(servicer, "_marketdata_client", lambda: MarketDataClient())
+    monkeypatch.setattr(servicer, "_portfolio_client", lambda: PortfolioClient())
+    monkeypatch.setattr(
+        servicer, "_install_indicator_collection", lambda *_args, **_kwargs: lambda: None
+    )
+    invoke = lambda: servicer._run_backtest_via_platform_proxy(
+        session_id="sess-gap-retry",
+        state=SessionState(environment=0, user_id=17),
+        engine=Engine(),
+        request=SimpleNamespace(start_time_ms=9_000, end_time_ms=10_000),
+        declared_inputs=[
+            StrategyInput("binance", "perpetual_futures", "BTCUSDT", "1m")
+        ],
+        wallet=portfolio,
+    )
+
+    with pytest.raises(BacktestFundingDataGapError):
+        invoke()
+    assert PortfolioClient.calls == 0
+    assert Engine.calls == 0
+    assert route_wallet.futures.wallet_balance == pytest.approx(100.0)
+
+    page_state["complete"] = True
+    invoke()
+
+    assert PortfolioClient.calls == 1
+    assert Engine.calls == 1
+    assert route_wallet.futures.wallet_balance == pytest.approx(99.99)
+    assert route_wallet.futures.last_applied_income_entry_id == 81
+
+
 @pytest.mark.parametrize("page_shape", ["funding_and_kline", "funding_only", "empty"])
 def test_incomplete_futures_page_fails_before_settlement_or_callback(
     monkeypatch,
