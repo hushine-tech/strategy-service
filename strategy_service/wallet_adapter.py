@@ -23,6 +23,7 @@ from typing import Any
 from strategy_service.wallet.canonical import (
     CanonicalPortfolioState,
     CanonicalFuturesPositionState,
+    CanonicalFuturesOrderCheckpoint,
     CanonicalFuturesRiskBracket,
     CanonicalFuturesRiskMetadata,
     CanonicalFuturesState,
@@ -149,6 +150,16 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
             )
             for item in getattr(fw, "risk_metadata", [])
         ]
+        order_checkpoints = [
+            CanonicalFuturesOrderCheckpoint(
+                order_id=str(getattr(item, "order_id", "") or ""),
+                executed_qty_decimal=str(
+                    getattr(item, "executed_qty_decimal", "") or ""
+                ),
+                terminal=bool(getattr(item, "terminal", False)),
+            )
+            for item in getattr(fw, "order_checkpoints", [])
+        ]
 
         futures_state = CanonicalFuturesState(
             margin_mode=fw.margin_mode or "cross",
@@ -170,6 +181,7 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
             total_cross_un_pnl=float(getattr(fw, "total_cross_un_pnl", 0.0) or 0.0),
             last_applied_income_entry_id=int(getattr(fw, "last_applied_income_entry_id", 0) or 0),
             risk_metadata=risk_metadata,
+            order_checkpoints=order_checkpoints,
         )
 
     spot_state = CanonicalSpotState()

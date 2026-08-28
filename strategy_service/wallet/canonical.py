@@ -72,6 +72,13 @@ class CanonicalFuturesRiskMetadata:
         return norm_symbol(self.symbol)
 
 
+@dataclass(frozen=True, slots=True)
+class CanonicalFuturesOrderCheckpoint:
+    order_id: str
+    executed_qty_decimal: str
+    terminal: bool
+
+
 @dataclass(slots=True)
 class CanonicalFuturesState:
     margin_mode: str = "cross"
@@ -93,6 +100,7 @@ class CanonicalFuturesState:
     total_cross_un_pnl: float = 0.0
     last_applied_income_entry_id: int = 0
     risk_metadata: list[CanonicalFuturesRiskMetadata] = field(default_factory=list)
+    order_checkpoints: list[CanonicalFuturesOrderCheckpoint] = field(default_factory=list)
 
 
 def validate_canonical_futures_positions(state: CanonicalFuturesState) -> None:

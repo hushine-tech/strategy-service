@@ -844,6 +844,46 @@ def test_stale_futures_snapshot_cannot_lower_income_cursor():
     assert routed.get("binance", "perpetual_futures").futures.last_applied_income_entry_id == 8
 
 
+def test_authoritative_futures_snapshot_preserves_local_terminal_order_checkpoint():
+    current = _futures_wallet(wallet_balance=1000.0, available_balance=1000.0, margin_balance=1000.0)
+    routed = build_portfolio_wallet_from_snapshot(
+        _snapshot(_venue(venue_id=11, market=MARKET_PERPETUAL_FUTURES, wallet=current)),
+        allowed_routes={("binance", "perpetual_futures")},
+    )
+    terminal = SimpleNamespace(
+        order_id="terminal-across-authoritative-snapshot",
+        status="FILLED",
+        side="BUY",
+        position_side="BOTH",
+        qty=1.0,
+        fill_price=100.0,
+        fee=0.04,
+        orig_qty=1.0,
+        executed_qty=1.0,
+        remaining_qty=0.0,
+        price=100.0,
+        reduce_only=False,
+    )
+    routed.get("binance", "perpetual_futures").on_order("BTCUSDT", "futures", terminal)
+    replacement = _venue(
+        venue_id=11,
+        market=MARKET_PERPETUAL_FUTURES,
+        wallet=_futures_wallet(wallet_balance=999.96, available_balance=999.96, margin_balance=999.96),
+    )
+    replacement.environment = 1
+
+    apply_venue_wallet_snapshot(routed, replacement, expected_environment=1)
+    refreshed = routed.get("binance", "perpetual_futures")
+    refreshed.on_order("BTCUSDT", "futures", terminal)
+
+    assert refreshed.futures.wallet_balance == pytest.approx(999.96)
+    assert ("BTCUSDT", 0) not in refreshed.futures.positions
+    assert [
+        item.order_id
+        for item in refreshed.to_canonical_state().futures.order_checkpoints
+    ] == ["terminal-across-authoritative-snapshot"]
+
+
 def test_futures_empty_compact_without_full_wallet_fails_closed():
     snapshot = _snapshot(
         _venue(

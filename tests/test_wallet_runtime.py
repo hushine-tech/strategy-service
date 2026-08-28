@@ -1039,6 +1039,37 @@ def test_funding_income_cursor_survives_canonical_serialize_and_rebuild():
     assert rebuilt.futures.last_applied_income_entry_id == 7
 
 
+def test_terminal_order_checkpoint_survives_proto_serialize_and_rebuild():
+    wallet = make_testnet_wallet(wallet_balance=1000.0)
+    terminal = SimpleNamespace(
+        order_id="terminal-proto-round-trip",
+        status="FILLED",
+        side="BUY",
+        position_side="BOTH",
+        qty=1.0,
+        fill_price=100.0,
+        fee=0.04,
+        orig_qty=1.0,
+        executed_qty=1.0,
+        remaining_qty=0.0,
+        price=100.0,
+        reduce_only=False,
+    )
+    wallet.on_order("BTCUSDT", "futures", terminal)
+    state = _wallet_proto(environment=1)
+    state.futures.CopyFrom(_serialize_future_wallet(wallet.futures))
+
+    rebuilt = build_wallet_from_portfolio(proto_to_portfolio_spec(state))
+    rebuilt.on_order("BTCUSDT", "futures", terminal)
+
+    assert rebuilt.futures.wallet_balance == pytest.approx(999.96)
+    assert rebuilt.futures.positions[("BTCUSDT", 0)].position_qty == pytest.approx(1.0)
+    checkpoints = rebuilt.to_canonical_state().futures.order_checkpoints
+    assert [(item.order_id, item.executed_qty_decimal, item.terminal) for item in checkpoints] == [
+        ("terminal-proto-round-trip", "1.0", True)
+    ]
+
+
 def test_funding_income_isolated_updates_the_specific_leg_wallet():
     wallet = build_wallet_from_portfolio(proto_to_portfolio_spec(_isolated_wallet_proto_with_metadata()))
     wallet.futures.venue_id = 11

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import copy
 import json
+from collections import OrderedDict
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import math
+import re
 
 from .canonical import (
     CanonicalPortfolioState,
     CanonicalFuturesPositionState,
+    CanonicalFuturesOrderCheckpoint,
     CanonicalFuturesRiskMetadata,
     CanonicalFuturesState,
     CanonicalSpotAssetState,
@@ -54,6 +57,8 @@ class _FundingAllocation:
 _ACTIVE_ORDER_STATUSES = {"NEW", "PARTIALLY_FILLED"}
 _TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELED", "EXPIRED"}
 _SUPPORTED_ORDER_STATUSES = _ACTIVE_ORDER_STATUSES | _TERMINAL_ORDER_STATUSES
+_ORDER_CHECKPOINT_LIMIT = 1024
+_PLAIN_UNSIGNED_DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z")
 
 
 def _sign(value: float) -> int:
@@ -359,9 +364,55 @@ class BinanceFuturesBook:
             pos._refresh_derived_fields()
             self.positions[(norm_symbol(pos.symbol), int(pos.direction_key))] = pos
         self.open_orders: dict[str, BinanceOpenOrder] = {}
-        self._executed_qty_by_order: dict[str, float] = {}
-        self._terminal_order_ids: set[str] = set()
+        self._order_checkpoints: OrderedDict[str, CanonicalFuturesOrderCheckpoint] = OrderedDict()
+        self.install_canonical_order_checkpoints(state.order_checkpoints)
         self._refresh_portfolio_fields()
+
+    def install_canonical_order_checkpoints(
+        self, checkpoints: list[CanonicalFuturesOrderCheckpoint]
+    ) -> None:
+        if len(checkpoints) > _ORDER_CHECKPOINT_LIMIT:
+            raise ValueError("canonical Futures order checkpoints exceed retention limit")
+        restored: OrderedDict[str, CanonicalFuturesOrderCheckpoint] = OrderedDict()
+        for checkpoint in checkpoints:
+            order_id = str(checkpoint.order_id or "").strip()
+            executed = str(checkpoint.executed_qty_decimal or "")
+            if not order_id or order_id in restored:
+                raise ValueError("canonical Futures order checkpoint identity is invalid")
+            if _PLAIN_UNSIGNED_DECIMAL.fullmatch(executed) is None:
+                raise ValueError("canonical Futures order checkpoint quantity is invalid")
+            value = Decimal(executed)
+            if not value.is_finite() or value < 0:
+                raise ValueError("canonical Futures order checkpoint quantity is invalid")
+            restored[order_id] = CanonicalFuturesOrderCheckpoint(
+                order_id=order_id,
+                executed_qty_decimal=executed,
+                terminal=bool(checkpoint.terminal),
+            )
+        self._order_checkpoints = restored
+
+    @property
+    def order_checkpoints(self) -> list[CanonicalFuturesOrderCheckpoint]:
+        return list(self._order_checkpoints.values())
+
+    def _remember_order_checkpoint(
+        self, order_id: str, executed_qty: float, terminal: bool
+    ) -> None:
+        if not order_id:
+            return
+        existing = self._order_checkpoints.get(order_id)
+        executed = Decimal(str(max(0.0, float(executed_qty or 0.0))))
+        if existing is not None:
+            executed = max(executed, Decimal(existing.executed_qty_decimal))
+            terminal = bool(terminal or existing.terminal)
+        self._order_checkpoints[order_id] = CanonicalFuturesOrderCheckpoint(
+            order_id=order_id,
+            executed_qty_decimal=format(executed, "f"),
+            terminal=bool(terminal),
+        )
+        self._order_checkpoints.move_to_end(order_id)
+        while len(self._order_checkpoints) > _ORDER_CHECKPOINT_LIMIT:
+            self._order_checkpoints.popitem(last=False)
 
     def _get_positions_for_symbol(self, symbol: str) -> list[tuple[tuple[str, int], BinancePosition]]:
         sym = norm_symbol(symbol)
@@ -805,7 +856,12 @@ class BinanceFuturesBook:
         previous_executed = (
             float(existing.executed_qty or 0.0)
             if existing is not None
-            else float(self._executed_qty_by_order.get(order_id, 0.0))
+            else float(
+                self._order_checkpoints.get(
+                    order_id,
+                    CanonicalFuturesOrderCheckpoint(order_id, "0", False),
+                ).executed_qty_decimal
+            )
         )
         fill_delta, executed_total = self._extract_fill_delta(
             previous_executed=previous_executed,
@@ -911,7 +967,8 @@ class BinanceFuturesBook:
             return
 
         order, fill_delta, fill_price, fee, terminal = self._event_order_payload(symbol, order_resp)
-        if order.order_id in self._terminal_order_ids:
+        checkpoint = self._order_checkpoints.get(order.order_id)
+        if checkpoint is not None and checkpoint.terminal:
             terminal = True
             order.remaining_qty = 0.0
         if fill_delta > _QTY_EPS:
@@ -924,14 +981,10 @@ class BinanceFuturesBook:
                 fee=fee,
             )
 
-        self._executed_qty_by_order[order.order_id] = max(
-            float(self._executed_qty_by_order.get(order.order_id, 0.0)),
-            float(order.executed_qty or 0.0),
-        )
+        self._remember_order_checkpoint(order.order_id, order.executed_qty, terminal)
 
         if terminal or order.remaining_qty <= _QTY_EPS:
             self.open_orders.pop(order.order_id, None)
-            self._terminal_order_ids.add(order.order_id)
         else:
             self.open_orders[order.order_id] = order
             self._ensure_position(order.symbol, order.direction_key, order.position_side)
@@ -1168,6 +1221,7 @@ class BinanceFuturesBook:
             total_cross_un_pnl=self.get_unrealized_pnl() if self.margin_mode == "cross" else self.total_cross_un_pnl,
             last_applied_income_entry_id=self.last_applied_income_entry_id,
             risk_metadata=list(self.risk_metadata.values()),
+            order_checkpoints=list(self._order_checkpoints.values()),
         )
 
 

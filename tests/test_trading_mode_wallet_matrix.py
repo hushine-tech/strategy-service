@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from strategy_service.wallet.order_types import OrderResponse
+from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.spot import SpotWallet
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 from tests.test_spot_end_to_end import spot_metadata
@@ -135,3 +136,55 @@ def test_futures_canonical_order_outcome_wallet_delta_matrix(
     else:
         assert position is None
     assert (order_id in wallet.futures.open_orders) is want_open
+
+
+def test_futures_terminal_replay_remains_idempotent_after_canonical_round_trip():
+    wallet = make_backtest_wallet(wallet_balance=1000.0)
+    terminal = SimpleNamespace(
+        order_id="futures-round-trip",
+        status="FILLED",
+        side="BUY",
+        position_side="BOTH",
+        qty=1.0,
+        fill_price=100.0,
+        fee=0.04,
+        orig_qty=1.0,
+        executed_qty=1.0,
+        remaining_qty=0.0,
+        price=100.0,
+        reduce_only=False,
+    )
+    wallet.on_order("BTCUSDT", "futures", terminal)
+
+    state = wallet.to_canonical_state()
+    assert len(state.futures.order_checkpoints) == 1
+    rehydrated = BinanceWalletRuntime.from_canonical(state)
+    rehydrated.on_order("BTCUSDT", "futures", terminal)
+
+    assert rehydrated.futures.wallet_balance == pytest.approx(999.96)
+    assert rehydrated.futures.positions[("BTCUSDT", 0)].position_qty == pytest.approx(1.0)
+
+
+def test_futures_order_checkpoint_retention_is_bounded():
+    wallet = make_backtest_wallet(wallet_balance=1000.0)
+    for index in range(1030):
+        wallet.on_order(
+            "BTCUSDT",
+            "futures",
+            SimpleNamespace(
+                order_id=f"futures-expired-{index}",
+                status="EXPIRED",
+                side="BUY",
+                position_side="BOTH",
+                qty=0.0,
+                fill_price=0.0,
+                fee=0.0,
+                orig_qty=1.0,
+                executed_qty=0.0,
+                remaining_qty=0.0,
+                price=100.0,
+                reduce_only=False,
+            ),
+        )
+
+    assert len(wallet.to_canonical_state().futures.order_checkpoints) == 1024
