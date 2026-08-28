@@ -871,6 +871,11 @@ def test_authoritative_futures_snapshot_preserves_local_terminal_order_checkpoin
         wallet=_futures_wallet(wallet_balance=999.96, available_balance=999.96, margin_balance=999.96),
     )
     replacement.environment = 1
+    replacement.wallet.futures.order_checkpoints.add(
+        order_id="older-authoritative-checkpoint",
+        executed_qty_decimal="0.5",
+        terminal=True,
+    )
 
     apply_venue_wallet_snapshot(routed, replacement, expected_environment=1)
     refreshed = routed.get("binance", "perpetual_futures")
@@ -881,7 +886,10 @@ def test_authoritative_futures_snapshot_preserves_local_terminal_order_checkpoin
     assert [
         item.order_id
         for item in refreshed.to_canonical_state().futures.order_checkpoints
-    ] == ["terminal-across-authoritative-snapshot"]
+    ] == [
+        "older-authoritative-checkpoint",
+        "terminal-across-authoritative-snapshot",
+    ]
 
 
 def test_futures_empty_compact_without_full_wallet_fails_closed():

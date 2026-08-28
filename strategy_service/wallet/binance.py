@@ -373,23 +373,40 @@ class BinanceFuturesBook:
     ) -> None:
         if len(checkpoints) > _ORDER_CHECKPOINT_LIMIT:
             raise ValueError("canonical Futures order checkpoints exceed retention limit")
-        restored: OrderedDict[str, CanonicalFuturesOrderCheckpoint] = OrderedDict()
+        self._order_checkpoints = OrderedDict()
+        self.merge_canonical_order_checkpoints(checkpoints)
+
+    def merge_canonical_order_checkpoints(
+        self, checkpoints: list[CanonicalFuturesOrderCheckpoint]
+    ) -> None:
         for checkpoint in checkpoints:
             order_id = str(checkpoint.order_id or "").strip()
             executed = str(checkpoint.executed_qty_decimal or "")
-            if not order_id or order_id in restored:
+            if not order_id:
                 raise ValueError("canonical Futures order checkpoint identity is invalid")
             if _PLAIN_UNSIGNED_DECIMAL.fullmatch(executed) is None:
                 raise ValueError("canonical Futures order checkpoint quantity is invalid")
             value = Decimal(executed)
             if not value.is_finite() or value < 0:
                 raise ValueError("canonical Futures order checkpoint quantity is invalid")
-            restored[order_id] = CanonicalFuturesOrderCheckpoint(
+            existing = self._order_checkpoints.get(order_id)
+            if existing is not None:
+                previous = Decimal(existing.executed_qty_decimal)
+                if previous > value:
+                    executed = existing.executed_qty_decimal
+                checkpoint = CanonicalFuturesOrderCheckpoint(
+                    order_id=order_id,
+                    executed_qty_decimal=executed,
+                    terminal=bool(checkpoint.terminal or existing.terminal),
+                )
+            self._order_checkpoints[order_id] = CanonicalFuturesOrderCheckpoint(
                 order_id=order_id,
                 executed_qty_decimal=executed,
                 terminal=bool(checkpoint.terminal),
             )
-        self._order_checkpoints = restored
+            self._order_checkpoints.move_to_end(order_id)
+        while len(self._order_checkpoints) > _ORDER_CHECKPOINT_LIMIT:
+            self._order_checkpoints.popitem(last=False)
 
     @property
     def order_checkpoints(self) -> list[CanonicalFuturesOrderCheckpoint]:

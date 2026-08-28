@@ -348,10 +348,9 @@ def apply_venue_wallet_snapshot(
             existing_cursor,
             int(getattr(replacement.futures, "last_applied_income_entry_id", 0) or 0),
         )
-        if not replacement.futures.to_canonical().order_checkpoints:
-            replacement.futures.install_canonical_order_checkpoints(
-                existing_order_checkpoints
-            )
+        replacement.futures.merge_canonical_order_checkpoints(
+            existing_order_checkpoints
+        )
     runtime.wallets[key] = replacement
     if funding_legs is not None:
         runtime.funding_position_tracker.replace_venue_snapshot(venue_id, funding_legs)
