@@ -4016,6 +4016,18 @@ def test_run_session_live_finalizes_strategy_end_without_direct_terminal_write(m
                 '{"venue_id":17}',
             ),
         ),
+        (
+            grpc_server.WorkerPlatformCallError(
+                "order execution outcome could not be established",
+                code="ORDER_EXECUTION_UNKNOWN",
+                detail_json='{"intent_id":"intent-unknown","transport_code":"UNAVAILABLE"}',
+            ),
+            (
+                "ORDER_EXECUTION_UNKNOWN",
+                "order execution outcome could not be established",
+                '{"intent_id":"intent-unknown","transport_code":"UNAVAILABLE"}',
+            ),
+        ),
     ],
 )
 def test_run_session_failure_persists_failed_status_and_error(

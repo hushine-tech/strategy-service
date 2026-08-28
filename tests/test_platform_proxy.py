@@ -27,6 +27,7 @@ from strategy_service.platform_proxy import (
     MARKETDATA_FETCH_KLINES,
     MARKETDATA_GET_STATUS,
     ORDER_PLACE,
+    ORDER_RESOLVE_ATTEMPT,
     ORDER_CLOSE_SPOT_TARGETS,
     ORDER_LIST_LIFECYCLE_EVENTS,
     RuntimeChannelLogHandler,
@@ -36,6 +37,7 @@ from strategy_service.platform_proxy import (
 from strategy_service.funding_position_tracker import FundingPositionLegFact
 from strategy_service.inputs import StrategyOrderTarget
 from strategy_service.types import OrderDecision
+from strategy_service.worker_agent_client import WorkerPlatformCallError
 
 
 def test_proxy_portfolio_client_sends_pending_status_cas():
@@ -925,3 +927,96 @@ class _FakeRuntimeChannel:
         if resp is None:
             return response_type()
         return resp
+
+
+@pytest.mark.parametrize(
+    "transport_code",
+    ["InvalidArgument", "FailedPrecondition", "PermissionDenied", "NotFound"],
+)
+def test_proxy_order_rejects_pre_persistence_request_without_resolving(transport_code):
+    """A proxy-only classifier branch must preserve deterministic rejection."""
+    runtime = _FakeRuntimeChannel()
+    runtime.errors[ORDER_PLACE] = WorkerPlatformCallError(
+        "proxy placement rejected", code=transport_code
+    )
+    client = RuntimeChannelPlatformProxy(runtime).order_client()
+
+    with pytest.raises(WorkerPlatformCallError) as raised:
+        client.place_order(
+            13,
+            OrderDecision(
+                exchange="binance", market="perpetual_futures", symbol="ETHUSDT",
+                side="BUY", qty="0.05", order_type="MARKET",
+            ),
+            51000.0,
+            intent_id="proxy-intent-rejected",
+        )
+
+    assert raised.value.code == "ORDER_REQUEST_REJECTED"
+    assert json.loads(raised.value.detail_json) == {
+        "intent_id": "proxy-intent-rejected",
+        "transport_cause": "WorkerPlatformCallError",
+        "transport_code": transport_code,
+    }
+    assert [method for method, _ in runtime.calls] == [ORDER_PLACE]
+
+
+@pytest.mark.parametrize(
+    "transport_code",
+    ["Unavailable", "DeadlineExceeded", "Unknown"],
+)
+def test_proxy_order_unknown_outcome_resolves_once_without_replaying_place(transport_code):
+    """A replay or absent-attempt feedback return must fail this test."""
+    runtime = _FakeRuntimeChannel()
+    runtime.errors[ORDER_PLACE] = WorkerPlatformCallError(
+        "proxy transport unavailable", code=transport_code
+    )
+    runtime.responses[ORDER_RESOLVE_ATTEMPT] = order_service_pb2.ResolveOrderAttemptResponse(
+        intent_id="proxy-intent-unknown",
+        attempt_status="FAILED",
+        error_message="attempt not found; no local execution record exists",
+    )
+    client = RuntimeChannelPlatformProxy(runtime).order_client()
+
+    with pytest.raises(WorkerPlatformCallError) as raised:
+        client.place_order(
+            13,
+            OrderDecision(
+                exchange="binance", market="perpetual_futures", symbol="ETHUSDT",
+                side="BUY", qty="0.05", order_type="MARKET",
+            ),
+            51000.0,
+            intent_id="proxy-intent-unknown",
+        )
+
+    assert raised.value.code == "ORDER_EXECUTION_UNKNOWN"
+    assert [method for method, _ in runtime.calls] == [ORDER_PLACE, ORDER_RESOLVE_ATTEMPT]
+
+
+def test_proxy_order_returns_persisted_failed_attempt_after_uncertain_transport():
+    """A persisted FAILED result remains business feedback for proxy clients."""
+    runtime = _FakeRuntimeChannel()
+    runtime.errors[ORDER_PLACE] = WorkerPlatformCallError(
+        "proxy transport unavailable", code="Unavailable"
+    )
+    runtime.responses[ORDER_RESOLVE_ATTEMPT] = order_service_pb2.ResolveOrderAttemptResponse(
+        intent_id="proxy-intent-persisted-failed",
+        attempt_id="proxy-attempt-persisted-failed",
+        attempt_status="FAILED",
+        error_message="venue rejected order",
+    )
+    client = RuntimeChannelPlatformProxy(runtime).order_client()
+
+    feedback = client.place_order(
+        13,
+        OrderDecision(
+            exchange="binance", market="perpetual_futures", symbol="ETHUSDT",
+            side="BUY", qty="0.05", order_type="MARKET",
+        ),
+        51000.0,
+        intent_id="proxy-intent-persisted-failed",
+    )
+
+    assert feedback.attempt_id == "proxy-attempt-persisted-failed"
+    assert feedback.attempt_status == "FAILED"
+    assert [method for method, _ in runtime.calls] == [ORDER_PLACE, ORDER_RESOLVE_ATTEMPT]

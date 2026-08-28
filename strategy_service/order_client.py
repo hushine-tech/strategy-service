@@ -18,6 +18,7 @@ from strategy_service.position_side import (
     position_side_from_label,
     position_side_label,
 )
+from strategy_service.order_error import resolve_order_placement_error
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,7 @@ class OrderClient:
         if not self._stub:
             raise RuntimeError("order.v1 gRPC client is not configured")
 
+        req = None
         try:
             from strategy_service.gen import order_service_pb2
 
@@ -224,17 +226,19 @@ class OrderClient:
 
             req = order_service_pb2.PlaceOrderRequest(**kwargs)
             resp = self._stub.PlaceOrder(req)
-            return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
         except Exception as exc:
+            if req is None:
+                raise
             logger.warning("OrderClient.place_order failed for %d/%s", portfolio_id, decision.symbol, exc_info=True)
             return self._resolve_unknown_attempt(
                 portfolio_id=portfolio_id,
                 intent_id=intent,
-                error_message=str(exc),
+                error=exc,
                 decision=decision,
                 market=effective_market,
                 symbol=symbol,
             )
+        return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
 
     def close_spot_targets(
         self,
@@ -509,41 +513,24 @@ class OrderClient:
         *,
         portfolio_id: int,
         intent_id: str,
-        error_message: str,
+        error: BaseException,
         decision: OrderDecision,
         market: str,
         symbol: str,
     ) -> ExecutionFeedback:
-        if not self._stub:
-            return ExecutionFeedback(
-                intent_id=intent_id,
-                attempt_status="UNKNOWN",
-                error_message=error_message,
-                order=None,
-                fill_count=0,
-                delta_qty=0.0,
-            )
-        try:
-            from strategy_service.gen import order_service_pb2
+        from strategy_service.gen import order_service_pb2
 
-            resp = self._stub.ResolveOrderAttempt(order_service_pb2.ResolveOrderAttemptRequest(
-                portfolio_id=int(portfolio_id),
-                intent_id=intent_id,
-            ))
-            feedback = self._feedback_from_response(resp, decision=decision, market=market, symbol=symbol)
-            if not feedback.error_message:
-                feedback.error_message = error_message
-            return feedback
-        except Exception:
-            logger.warning("OrderClient.resolve_unknown_attempt failed for %d/%s", portfolio_id, symbol, exc_info=True)
-            return ExecutionFeedback(
-                intent_id=intent_id,
-                attempt_status="UNKNOWN",
-                error_message=error_message,
-                order=None,
-                fill_count=0,
-                delta_qty=0.0,
-            )
+        resp = resolve_order_placement_error(
+            error,
+            intent_id=intent_id,
+            resolve_attempt=lambda: self._stub.ResolveOrderAttempt(
+                order_service_pb2.ResolveOrderAttemptRequest(
+                    portfolio_id=int(portfolio_id),
+                    intent_id=intent_id,
+                )
+            ),
+        )
+        return self._feedback_from_response(resp, decision=decision, market=market, symbol=symbol)
 
     def _feedback_from_response(self, resp, *, decision: OrderDecision, market: str, symbol: str) -> ExecutionFeedback:
         error_fields = self._structured_error_fields(resp)

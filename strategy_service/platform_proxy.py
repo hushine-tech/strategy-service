@@ -35,6 +35,7 @@ from strategy_service.order_client import (
     _market_time_to_proto,
     canonical_decimal_text,
 )
+from strategy_service.order_error import resolve_order_placement_error
 from strategy_service.position_side import position_side_from_label, position_side_label
 from strategy_service.types import ExecutionFeedback, OrderDecision
 
@@ -938,6 +939,7 @@ class ProxyOrderClient(OrderClient):
                     f"market argument {market!r} does not match decision.market {effective_market!r}"
                 )
         position_side_code = self._position_side_code(getattr(decision, "position_side", None))
+        req = None
         try:
             from strategy_service.gen import order_service_pb2
 
@@ -978,22 +980,25 @@ class ProxyOrderClient(OrderClient):
             ).strip()
             if effective_spot_snapshot_id:
                 kwargs["spot_risk_snapshot_id"] = effective_spot_snapshot_id
+            req = order_service_pb2.PlaceOrderRequest(**kwargs)
             resp = self._proxy.invoke(
                 ORDER_PLACE,
-                order_service_pb2.PlaceOrderRequest(**kwargs),
+                req,
                 order_service_pb2.PlaceOrderResponse,
             )
-            return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
         except Exception as exc:
+            if req is None:
+                raise
             logger.warning("Proxy OrderClient.place_order failed for %d/%s", portfolio_id, symbol, exc_info=True)
             return self._resolve_unknown_attempt(
                 portfolio_id=portfolio_id,
                 intent_id=intent,
-                error_message=str(exc),
+                error=exc,
                 decision=decision,
                 market=effective_market,
                 symbol=symbol,
             )
+        return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
 
     def close_spot_targets(
         self,
@@ -1063,36 +1068,26 @@ class ProxyOrderClient(OrderClient):
         *,
         portfolio_id: int,
         intent_id: str,
-        error_message: str,
+        error: BaseException,
         decision: OrderDecision,
         market: str,
         symbol: str,
     ) -> ExecutionFeedback:
-        try:
-            from strategy_service.gen import order_service_pb2
+        from strategy_service.gen import order_service_pb2
 
-            resp = self._proxy.invoke(
+        resp = resolve_order_placement_error(
+            error,
+            intent_id=intent_id,
+            resolve_attempt=lambda: self._proxy.invoke(
                 ORDER_RESOLVE_ATTEMPT,
                 order_service_pb2.ResolveOrderAttemptRequest(
                     portfolio_id=int(portfolio_id),
                     intent_id=intent_id,
                 ),
                 order_service_pb2.ResolveOrderAttemptResponse,
-            )
-            feedback = self._feedback_from_response(resp, decision=decision, market=market, symbol=symbol)
-            if not feedback.error_message:
-                feedback.error_message = error_message
-            return feedback
-        except Exception:
-            logger.warning("Proxy OrderClient.resolve_unknown_attempt failed for %d/%s", portfolio_id, symbol, exc_info=True)
-            return ExecutionFeedback(
-                intent_id=intent_id,
-                attempt_status="UNKNOWN",
-                error_message=error_message,
-                order=None,
-                fill_count=0,
-                delta_qty=0.0,
-            )
+            ),
+        )
+        return self._feedback_from_response(resp, decision=decision, market=market, symbol=symbol)
 
 
 class ProxyLogClient:

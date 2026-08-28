@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import grpc
 import pytest
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from strategy_service.gen import order_service_pb2
 from strategy_service.order_client import OrderClient, canonical_decimal_text
 from strategy_service.types import OrderDecision, OrderUpdateEvent, OrderUpdateFill
+from strategy_service.worker_agent_client import WorkerPlatformCallError
 
 
 def test_canonical_decimal_text_normalizes_signed_zero() -> None:
@@ -35,9 +38,12 @@ class _Stub:
     def __init__(self, response: order_service_pb2.PlaceOrderResponse) -> None:
         self.response = response
         self.last_request: order_service_pb2.PlaceOrderRequest | None = None
+        self.place_calls = 0
         self.resolve_response: order_service_pb2.ResolveOrderAttemptResponse | None = None
         self.raise_on_place: Exception | None = None
+        self.raise_on_resolve: Exception | None = None
         self.last_resolve_request: order_service_pb2.ResolveOrderAttemptRequest | None = None
+        self.resolve_calls = 0
         self.lifecycle_response: order_service_pb2.ListOrderLifecycleEventsResponse | None = None
         self.last_lifecycle_request: order_service_pb2.ListOrderLifecycleEventsRequest | None = None
         self.last_lifecycle_timeout: float | None = None
@@ -45,13 +51,17 @@ class _Stub:
         self.last_close_request: order_service_pb2.CloseSpotTargetsRequest | None = None
 
     def PlaceOrder(self, request: order_service_pb2.PlaceOrderRequest):
+        self.place_calls += 1
+        self.last_request = request
         if self.raise_on_place is not None:
             raise self.raise_on_place
-        self.last_request = request
         return self.response
 
     def ResolveOrderAttempt(self, request: order_service_pb2.ResolveOrderAttemptRequest):
+        self.resolve_calls += 1
         self.last_resolve_request = request
+        if self.raise_on_resolve is not None:
+            raise self.raise_on_resolve
         if self.resolve_response is None:
             raise RuntimeError("resolve response not configured")
         return self.resolve_response
@@ -73,6 +83,17 @@ class _Stub:
         if self.close_response is None:
             raise RuntimeError("close response not configured")
         return self.close_response
+
+
+class _TransportError(grpc.RpcError):
+    def __init__(self, code: grpc.StatusCode) -> None:
+        self._code = code
+
+    def code(self) -> grpc.StatusCode:
+        return self._code
+
+    def details(self) -> str:
+        return "order transport failed"
 
 
 def test_close_spot_targets_preserves_operation_and_canonical_routes():
@@ -136,6 +157,140 @@ def _decision(
         good_till_date=good_till_date,
         reduce_only=reduce_only,
     )
+
+
+@pytest.mark.parametrize(
+    "transport_code",
+    [
+        grpc.StatusCode.INVALID_ARGUMENT,
+        grpc.StatusCode.FAILED_PRECONDITION,
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.NOT_FOUND,
+    ],
+)
+def test_place_order_rejects_pre_persistence_request_without_resolving(transport_code):
+    """A code-branch change to resolve deterministic rejects must fail this test."""
+    client = OrderClient("")
+    stub = _Stub(order_service_pb2.PlaceOrderResponse())
+    stub.raise_on_place = _TransportError(transport_code)
+    client._stub = stub
+
+    with pytest.raises(WorkerPlatformCallError) as raised:
+        client.place_order(
+            13,
+            _decision(),
+            51000.0,
+            portfolio_symbol="ETHUSDT",
+            market="perpetual_futures",
+            intent_id="intent-rejected",
+        )
+
+    assert raised.value.code == "ORDER_REQUEST_REJECTED"
+    assert json.loads(raised.value.detail_json) == {
+        "intent_id": "intent-rejected",
+        "transport_cause": "_TransportError",
+        "transport_code": transport_code.name,
+    }
+    assert stub.place_calls == 1
+    assert stub.resolve_calls == 0
+
+
+@pytest.mark.parametrize(
+    "transport_code",
+    [
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+        grpc.StatusCode.UNKNOWN,
+    ],
+)
+def test_place_order_unknown_outcome_resolves_once_and_fails_when_no_attempt_exists(transport_code):
+    """Removing resolve or accepting an absent attempt must fail this test."""
+    client = OrderClient("")
+    stub = _Stub(order_service_pb2.PlaceOrderResponse())
+    stub.raise_on_place = _TransportError(transport_code)
+    stub.resolve_response = order_service_pb2.ResolveOrderAttemptResponse(
+        intent_id="intent-unknown",
+        attempt_status="FAILED",
+        error_message="attempt not found; no local execution record exists",
+    )
+    client._stub = stub
+
+    with pytest.raises(WorkerPlatformCallError) as raised:
+        client.place_order(
+            13,
+            _decision(),
+            51000.0,
+            portfolio_symbol="ETHUSDT",
+            market="perpetual_futures",
+            intent_id="intent-unknown",
+        )
+
+    assert raised.value.code == "ORDER_EXECUTION_UNKNOWN"
+    assert json.loads(raised.value.detail_json) == {
+        "intent_id": "intent-unknown",
+        "transport_cause": "_TransportError",
+        "transport_code": transport_code.name,
+    }
+    assert stub.place_calls == 1
+    assert stub.resolve_calls == 1
+
+
+def test_place_order_returns_persisted_failed_attempt_after_uncertain_transport():
+    """Treating persisted FAILED as fatal must fail this test."""
+    client = OrderClient("")
+    stub = _Stub(order_service_pb2.PlaceOrderResponse())
+    stub.raise_on_place = _TransportError(grpc.StatusCode.UNAVAILABLE)
+    stub.resolve_response = order_service_pb2.ResolveOrderAttemptResponse(
+        intent_id="intent-persisted-failed",
+        attempt_id="attempt-persisted-failed",
+        attempt_status="FAILED",
+        error_message="venue rejected order",
+    )
+    client._stub = stub
+
+    feedback = client.place_order(
+        13,
+        _decision(),
+        51000.0,
+        portfolio_symbol="ETHUSDT",
+        market="perpetual_futures",
+        intent_id="intent-persisted-failed",
+    )
+
+    assert feedback.attempt_id == "attempt-persisted-failed"
+    assert feedback.attempt_status == "FAILED"
+    assert stub.place_calls == 1
+    assert stub.resolve_calls == 1
+
+
+def test_place_order_fails_unknown_when_resolution_cannot_establish_attempt():
+    """Swallowing resolution transport failures must fail this test."""
+    client = OrderClient("")
+    stub = _Stub(order_service_pb2.PlaceOrderResponse())
+    stub.raise_on_place = _TransportError(grpc.StatusCode.UNAVAILABLE)
+    stub.raise_on_resolve = _TransportError(grpc.StatusCode.UNAVAILABLE)
+    client._stub = stub
+
+    with pytest.raises(WorkerPlatformCallError) as raised:
+        client.place_order(
+            13,
+            _decision(),
+            51000.0,
+            portfolio_symbol="ETHUSDT",
+            market="perpetual_futures",
+            intent_id="intent-resolution-failed",
+        )
+
+    assert raised.value.code == "ORDER_EXECUTION_UNKNOWN"
+    assert json.loads(raised.value.detail_json) == {
+        "intent_id": "intent-resolution-failed",
+        "resolution_cause": "_TransportError",
+        "resolution_code": "UNAVAILABLE",
+        "transport_cause": "_TransportError",
+        "transport_code": "UNAVAILABLE",
+    }
+    assert stub.place_calls == 1
+    assert stub.resolve_calls == 1
 
 
 def test_place_order_uses_canonical_symbol_and_emits_fill_events():
