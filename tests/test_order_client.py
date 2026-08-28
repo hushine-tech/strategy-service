@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -728,6 +729,53 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
     assert order_response.quote_qty_decimal == "250.00000000"
     assert order_response.executed_qty_decimal == "0.10000000"
     assert order_response.cumulative_quote_qty_decimal == "250.00000000"
+
+
+def test_order_lifecycle_conversion_rejects_boolean_position_side_without_coercion() -> None:
+    item = SimpleNamespace(
+        event_id=101,
+        session_id="sess-1",
+        portfolio_id=7,
+        venue_id=20,
+        exchange=1,
+        market=2,
+        position_side=True,
+        side="BUY",
+        event_type="fill",
+        order_status="FILLED",
+        HasField=lambda _field: False,
+    )
+
+    with pytest.raises(ValueError, match="invalid FuturesPositionSide"):
+        OrderClient.order_update_event_from_proto(item)
+
+
+def test_order_fill_conversion_rejects_boolean_position_side_without_coercion() -> None:
+    order = SimpleNamespace(
+        side="BUY",
+        status="FILLED",
+        order_id="order-1",
+        price_decimal="",
+        orig_qty_decimal="1",
+    )
+    fill = SimpleNamespace(
+        status="",
+        qty_decimal="1",
+        fill_price_decimal="100",
+        quote_qty_decimal="100",
+        fee_decimal="0",
+        position_side=True,
+        HasField=lambda _field: False,
+    )
+
+    with pytest.raises(ValueError, match="invalid FuturesPositionSide"):
+        OrderClient._build_fill_events(
+            order,
+            [fill],
+            fallback_side="BUY",
+            market="perpetual_futures",
+            symbol="BTCUSDT",
+        )
 
 
 def test_lifecycle_mapping_rejects_missing_canonical_time() -> None:

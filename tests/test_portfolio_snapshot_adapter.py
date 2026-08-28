@@ -10,6 +10,7 @@ from strategy_service.gen import portfolio_service_pb2
 from strategy_service.position_side import BOTH, position_side_from_label
 from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
 from strategy_service.wallet.binance import BinanceWalletRuntime
+from strategy_service.wallet import portfolio_adapter
 from strategy_service.wallet.portfolio_adapter import (
     apply_venue_wallet_snapshot,
     attach_spot_risk_snapshots,
@@ -55,6 +56,29 @@ def _position(
         margin_balance=margin_balance,
         liquidation_price=liquidation_price,
     )
+
+
+def test_exact_funding_legs_reject_boolean_position_side_without_coercion():
+    venue = SimpleNamespace(
+        venue_id=11,
+        wallet=SimpleNamespace(
+            futures=SimpleNamespace(
+                position_mode="one_way",
+                positions=[
+                    SimpleNamespace(
+                        venue_id=11,
+                        symbol="BTCUSDT",
+                        position_side=True,
+                        margin_mode="cross",
+                        signed_qty_decimal="1",
+                    )
+                ],
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="invalid FuturesPositionSide"):
+        portfolio_adapter._exact_funding_legs_from_venue(venue)
 
 
 def _futures_wallet(

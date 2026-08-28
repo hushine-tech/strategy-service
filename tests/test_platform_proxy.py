@@ -341,6 +341,45 @@ def test_proxy_portfolio_client_rejects_lexically_different_leg_quantity():
         )
 
 
+def test_backtest_funding_response_validation_rejects_boolean_requested_side():
+    request = SimpleNamespace(
+        session_id="session-1",
+        fact=SimpleNamespace(
+            venue_id=11,
+            symbol="BTCUSDT",
+            settlement_asset="USDT",
+            funding_time=Timestamp(seconds=100),
+        ),
+        position_legs=[
+            SimpleNamespace(
+                symbol="BTCUSDT",
+                position_side=True,
+                margin_mode="cross",
+                signed_qty_decimal="1",
+            )
+        ],
+    )
+    entry = SimpleNamespace(
+        income_entry_id=1,
+        session_id="session-1",
+        venue_id=11,
+        source="backtest",
+        status="calculated",
+        income_type="FUNDING_FEE",
+        symbol="BTCUSDT",
+        asset="USDT",
+        occurred_at=Timestamp(seconds=100),
+        external_transaction_id="",
+        exchange_amount_decimal="",
+    )
+    entry.HasField = lambda field: field == "occurred_at"
+    response = SimpleNamespace(entry=entry)
+    response.HasField = lambda field: field == "entry"
+
+    with pytest.raises(ValueError, match="invalid FuturesPositionSide"):
+        platform_proxy._validate_backtest_funding_response(response, request)
+
+
 def test_proxy_portfolio_client_preflight_sends_session_metadata_over_runtime_channel():
     runtime = _FakeRuntimeChannel()
     runtime.responses[PORTFOLIO_PREFLIGHT_STRATEGY_SESSION] = (
