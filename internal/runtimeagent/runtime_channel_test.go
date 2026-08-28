@@ -432,6 +432,155 @@ func TestRuntimeChannelSupervisorProductionInterceptorPreservesPermanentStatus(t
 	}
 }
 
+func TestRuntimeChannelSupervisorWaitsForReceiveStatusAfterAuthenticatedSendFailure(t *testing.T) {
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.FailedPrecondition} {
+		t.Run(code.String(), func(t *testing.T) {
+			listener := bufconn.Listen(1024 * 1024)
+			server := grpc.NewServer()
+			capture := &sendFirstTerminalRuntimeChannelServer{
+				code:              code,
+				authenticated:     make(chan struct{}),
+				requestReceived:   make(chan struct{}),
+				allowTerminal:     make(chan struct{}),
+				serverContextDone: make(chan struct{}),
+			}
+			cpv1.RegisterControlPanelServiceServer(server, capture)
+			go func() { _ = server.Serve(listener) }()
+			defer server.Stop()
+
+			physicalSendComplete := make(chan struct{})
+			allowSendFailure := make(chan struct{})
+			client := newSupervisorTestRuntimeClient(listener)
+			client.cfg.DialOptions = append(client.cfg.DialOptions, RuntimeChannelDialOptions(nil)...)
+			client.cfg.DialOptions = append(client.cfg.DialOptions, grpc.WithChainStreamInterceptor(
+				completeRequestThenFailStreamInterceptor(physicalSendComplete, allowSendFailure),
+			))
+			client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
+			var reconnectWaits atomic.Int64
+			client.cfg.ReconnectWait = func(context.Context, time.Duration) error {
+				reconnectWaits.Add(1)
+				return status.Error(codes.Aborted, "unexpected reconnect after terminal status")
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runDone := make(chan error, 1)
+			go func() { runDone <- client.Run(ctx) }()
+			receiveRuntimeSignal(t, capture.authenticated, "server authentication")
+			waitForRuntimeReady(t, client, true)
+
+			sendDone := make(chan error, 1)
+			go func() {
+				sendDone <- client.Send(&cpv1.RuntimeFrame{
+					FrameType: cpv1.FrameType_FRAME_TYPE_REQUEST,
+					Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+						Method: "trigger-send-first-terminal",
+					}},
+				})
+			}()
+			receiveRuntimeSignal(t, capture.requestReceived, "server request receive")
+			receiveRuntimeSignal(t, physicalSendComplete, "physical outbound send completion")
+			close(allowSendFailure)
+			select {
+			case err := <-sendDone:
+				if status.Code(err) != codes.Unavailable {
+					t.Fatalf("Send error = %v, want Unavailable", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("send-side failure did not reach caller")
+			}
+			waitForRuntimeReady(t, client, false)
+			close(capture.allowTerminal)
+
+			select {
+			case err := <-runDone:
+				if status.Code(err) != code {
+					t.Fatalf("Run error = %v (code %s), want %s", err, status.Code(err), code)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Run did not return terminal receive status")
+			}
+			if got := reconnectWaits.Load(); got != 0 {
+				t.Fatalf("reconnect waits = %d, want 0", got)
+			}
+			if got := capture.calls.Load(); got != 1 {
+				t.Fatalf("RuntimeChannel attempts = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestRuntimeChannelSupervisorRootCancelStopsReceiveWaitAfterSendFailure(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	capture := &sendFirstTerminalRuntimeChannelServer{
+		code:              codes.PermissionDenied,
+		authenticated:     make(chan struct{}),
+		requestReceived:   make(chan struct{}),
+		allowTerminal:     make(chan struct{}),
+		serverContextDone: make(chan struct{}),
+	}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	physicalSendComplete := make(chan struct{})
+	allowSendFailure := make(chan struct{})
+	client := newSupervisorTestRuntimeClient(listener)
+	client.cfg.DialOptions = append(client.cfg.DialOptions, RuntimeChannelDialOptions(nil)...)
+	client.cfg.DialOptions = append(client.cfg.DialOptions, grpc.WithChainStreamInterceptor(
+		completeRequestThenFailStreamInterceptor(physicalSendComplete, allowSendFailure),
+	))
+	client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
+	var reconnectWaits atomic.Int64
+	client.cfg.ReconnectWait = func(ctx context.Context, _ time.Duration) error {
+		reconnectWaits.Add(1)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- client.Run(ctx) }()
+	receiveRuntimeSignal(t, capture.authenticated, "server authentication")
+	waitForRuntimeReady(t, client, true)
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- client.Send(&cpv1.RuntimeFrame{
+			FrameType: cpv1.FrameType_FRAME_TYPE_REQUEST,
+			Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
+				Method: "trigger-send-first-cancel",
+			}},
+		})
+	}()
+	receiveRuntimeSignal(t, capture.requestReceived, "server request receive")
+	receiveRuntimeSignal(t, physicalSendComplete, "physical outbound send completion")
+	close(allowSendFailure)
+	select {
+	case <-sendDone:
+	case <-time.After(time.Second):
+		t.Fatal("send-side failure did not reach caller")
+	}
+	waitForRuntimeReady(t, client, false)
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run after root cancellation = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run hung waiting for a terminal receive status after root cancellation")
+	}
+	receiveRuntimeSignal(t, capture.serverContextDone, "server stream context cancellation")
+	if got := reconnectWaits.Load(); got != 0 {
+		t.Fatalf("reconnect waits = %d, want 0", got)
+	}
+	if got := capture.calls.Load(); got != 1 {
+		t.Fatalf("RuntimeChannel attempts = %d, want 1", got)
+	}
+}
+
 func TestRuntimeChannelSupervisorBackoffStartsAt250MillisecondsAndCapsAt5Seconds(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -1248,6 +1397,18 @@ type permanentRuntimeChannelServer struct {
 	calls atomic.Int64
 }
 
+type sendFirstTerminalRuntimeChannelServer struct {
+	cpv1.UnimplementedControlPanelServiceServer
+	code              codes.Code
+	authenticated     chan struct{}
+	requestReceived   chan struct{}
+	allowTerminal     chan struct{}
+	serverContextDone chan struct{}
+	calls             atomic.Int64
+	requestOnce       sync.Once
+	contextDoneOnce   sync.Once
+}
+
 type alwaysUnavailableRuntimeChannelServer struct {
 	cpv1.UnimplementedControlPanelServiceServer
 }
@@ -1314,6 +1475,40 @@ func (s *permanentRuntimeChannelServer) RuntimeChannel(
 		return err
 	}
 	return status.Error(s.code, "terminal admission")
+}
+
+func (s *sendFirstTerminalRuntimeChannelServer) RuntimeChannel(
+	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
+) error {
+	s.calls.Add(1)
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	if err := stream.Send(runtimeChannelAckForTest("send-first-token")); err != nil {
+		return err
+	}
+	select {
+	case s.authenticated <- struct{}{}:
+	default:
+	}
+	for {
+		frame, err := stream.Recv()
+		if err != nil {
+			s.contextDoneOnce.Do(func() { close(s.serverContextDone) })
+			return err
+		}
+		if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_REQUEST {
+			continue
+		}
+		s.requestOnce.Do(func() { close(s.requestReceived) })
+		select {
+		case <-s.allowTerminal:
+			return status.Error(s.code, "terminal after send-side completion")
+		case <-stream.Context().Done():
+			s.contextDoneOnce.Do(func() { close(s.serverContextDone) })
+			return stream.Context().Err()
+		}
+	}
 }
 
 type gatedResumeRuntimeChannelServer struct {
@@ -1384,7 +1579,51 @@ func failFirstGenerationDataACKStreamInterceptor(
 					return false, nil
 				}
 				failedOnce.Do(func() { close(failed) })
+				_ = stream.CloseSend()
 				return true, status.Error(codes.Unavailable, "injected old-generation DATA_ACK send failure")
+			},
+		}, nil
+	}
+}
+
+func completeRequestThenFailStreamInterceptor(
+	physicalSendComplete chan<- struct{},
+	allowSendFailure <-chan struct{},
+) grpc.StreamClientInterceptor {
+	var completedOnce sync.Once
+	return func(
+		ctx context.Context,
+		desc *grpc.StreamDesc,
+		cc *grpc.ClientConn,
+		method string,
+		streamer grpc.Streamer,
+		opts ...grpc.CallOption,
+	) (grpc.ClientStream, error) {
+		stream, err := streamer(ctx, desc, cc, method, opts...)
+		if err != nil {
+			return nil, err
+		}
+		return &runtimeChannelSendCompletionClientStream{
+			ClientStream: stream,
+			onComplete: func(frame *cpv1.RuntimeFrame, sendErr error) error {
+				if sendErr != nil || frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_REQUEST {
+					return sendErr
+				}
+				injected := false
+				completedOnce.Do(func() {
+					injected = true
+					close(physicalSendComplete)
+				})
+				if !injected {
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-allowSendFailure:
+					_ = stream.CloseSend()
+					return status.Error(codes.Unavailable, "injected send-side stream termination")
+				}
 			},
 		}, nil
 	}
@@ -1396,6 +1635,11 @@ type runtimeChannelTestClientStream struct {
 	onSend     func(int64, *cpv1.RuntimeFrame) (bool, error)
 }
 
+type runtimeChannelSendCompletionClientStream struct {
+	grpc.ClientStream
+	onComplete func(*cpv1.RuntimeFrame, error) error
+}
+
 func (s *runtimeChannelTestClientStream) SendMsg(message any) error {
 	if frame, ok := message.(*cpv1.RuntimeFrame); ok && s.onSend != nil {
 		if handled, err := s.onSend(s.generation, frame); handled {
@@ -1403,6 +1647,15 @@ func (s *runtimeChannelTestClientStream) SendMsg(message any) error {
 		}
 	}
 	return s.ClientStream.SendMsg(message)
+}
+
+func (s *runtimeChannelSendCompletionClientStream) SendMsg(message any) error {
+	err := s.ClientStream.SendMsg(message)
+	frame, ok := message.(*cpv1.RuntimeFrame)
+	if !ok || s.onComplete == nil {
+		return err
+	}
+	return s.onComplete(frame, err)
 }
 
 func (s *gatedResumeRuntimeChannelServer) RuntimeChannel(

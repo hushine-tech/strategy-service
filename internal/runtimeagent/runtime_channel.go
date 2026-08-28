@@ -309,7 +309,8 @@ func (c *RuntimeChannelClient) runConnection(ctx context.Context, address string
 	select {
 	case <-ctx.Done():
 		result = nil
-	case result = <-sendDone:
+	case <-sendDone:
+		result = waitForRuntimeChannelReceive(runCtx, recvDone)
 	case result = <-recvDone:
 	case <-authenticatedCh:
 		authenticated = true
@@ -341,16 +342,31 @@ func (c *RuntimeChannelClient) runAuthenticatedGeneration(
 		c.generationHeartbeatLoop(ctx, generation)
 	}()
 	if err := c.enqueueGeneration(ctx, generation, c.heartbeatFrame(), nil); err != nil {
-		return err
+		c.markGenerationUnready(generation)
+		return waitForRuntimeChannelReceive(ctx, recvDone)
 	}
 	if err := c.replayRetainedACKs(ctx, generation); err != nil {
-		return err
+		c.markGenerationUnready(generation)
+		return waitForRuntimeChannelReceive(ctx, recvDone)
 	}
 	select {
 	case <-ctx.Done():
 		return nil
-	case err := <-sendDone:
+	case <-sendDone:
+		c.markGenerationUnready(generation)
+		return waitForRuntimeChannelReceive(ctx, recvDone)
+	case err := <-recvDone:
 		return err
+	}
+}
+
+// waitForRuntimeChannelReceive gives RecvMsg ownership of the stream's final
+// RPC status after the send loop terminates. Root cancellation remains the only
+// escape when the peer does not publish a final receive status.
+func waitForRuntimeChannelReceive(ctx context.Context, recvDone <-chan error) error {
+	select {
+	case <-ctx.Done():
+		return nil
 	case err := <-recvDone:
 		return err
 	}
