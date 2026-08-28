@@ -28,6 +28,9 @@ type TerminalRetryRecord struct {
 	EffectiveStatus       string                        `json:"effective_status"`
 	BarsProcessed         int64                         `json:"bars_processed"`
 	Reason                string                        `json:"reason"`
+	ErrorCode             string                        `json:"error_code,omitempty"`
+	ErrorMessage          string                        `json:"error_message,omitempty"`
+	ErrorDetailJSON       string                        `json:"error_detail_json,omitempty"`
 	ExpectedStatus        string                        `json:"expected_status,omitempty"`
 	CommittedStartBinding *committedStartBinding        `json:"committed_start_binding,omitempty"`
 	Indicators            *IndicatorSessionCheckpointV2 `json:"indicators,omitempty"`

@@ -29,8 +29,18 @@ class FinalStatusRejected(RuntimeError):
 
 
 class WorkerPlatformCallError(RuntimeError):
-    def __init__(self, message: str, dependency_error) -> None:
+    def __init__(
+        self,
+        message: str,
+        dependency_error=None,
+        *,
+        code: str = "",
+        detail_json: str = "{}",
+    ) -> None:
         super().__init__(message)
+        self.code = str(code or "")
+        self.message = str(message or "")
+        self.detail_json = str(detail_json or "{}").strip() or "{}"
         self.dependency_error = dependency_error
 
 
@@ -190,10 +200,16 @@ class WorkerAgentClient:
             except queue.Empty as exc:
                 raise TimeoutError(f"platform call timed out: {method}") from exc
             if not result.ok:
-                message = result.error or f"platform call failed: {method}"
-                if result.HasField("dependency_error"):
-                    raise WorkerPlatformCallError(message, result.dependency_error)
-                raise RuntimeError(message)
+                message = result.error_message or result.error or f"platform call failed: {method}"
+                dependency_error = (
+                    result.dependency_error if result.HasField("dependency_error") else None
+                )
+                raise WorkerPlatformCallError(
+                    message,
+                    dependency_error,
+                    code=result.error_code,
+                    detail_json=result.error_detail_json or "{}",
+                )
             response = response_type()
             if not result.response.Unpack(response):
                 raise RuntimeError(f"platform response type mismatch for {method}")
@@ -209,6 +225,9 @@ class WorkerAgentClient:
         status: str,
         bars_processed: int = 0,
         error: str = "",
+        error_code: str = "",
+        error_message: str = "",
+        error_detail_json: str = "{}",
         dependency_error=None,
     ) -> None:
         self._enqueue_outbound(
@@ -218,6 +237,9 @@ class WorkerAgentClient:
                     status=status,
                     bars_processed=int(bars_processed),
                     error=error,
+                    error_code=str(error_code or ""),
+                    error_message=str(error_message or ""),
+                    error_detail_json=str(error_detail_json or "{}").strip() or "{}",
                     dependency_error=dependency_error,
                 )
             )
@@ -250,6 +272,9 @@ class WorkerAgentClient:
         status: str,
         bars_processed: int = 0,
         error: str = "",
+        error_code: str = "",
+        error_message: str = "",
+        error_detail_json: str = "{}",
         reconciliation_run_id: str = "",
         dependency_error=None,
         timeout_seconds: float = 35.0,
@@ -267,6 +292,9 @@ class WorkerAgentClient:
                         status=status,
                         bars_processed=int(bars_processed),
                         error=error,
+                        error_code=str(error_code or ""),
+                        error_message=str(error_message or ""),
+                        error_detail_json=str(error_detail_json or "{}").strip() or "{}",
                         dependency_error=dependency_error,
                         reconciliation_run_id=str(reconciliation_run_id or "").strip(),
                     ),
@@ -289,6 +317,9 @@ class WorkerAgentClient:
         ok: bool,
         response: Any | None = None,
         error: str = "",
+        error_code: str = "",
+        error_message: str = "",
+        error_detail_json: str = "{}",
         dependency_error=None,
     ) -> None:
         packed = response if response is not None else Any()
@@ -299,6 +330,9 @@ class WorkerAgentClient:
                     ok=bool(ok),
                     response=packed,
                     error=str(error or ""),
+                    error_code=str(error_code or ""),
+                    error_message=str(error_message or ""),
+                    error_detail_json=str(error_detail_json or "{}").strip() or "{}",
                     dependency_error=dependency_error,
                 )
             )
@@ -505,6 +539,9 @@ class WorkerAgentClient:
                 call_id=call.call_id,
                 ok=False,
                 error=str(exc),
+                error_code=exc.code,
+                error_message=exc.message,
+                error_detail_json=exc.detail_json,
                 dependency_error=exc.dependency_error,
             )
         except Exception as exc:  # noqa: BLE001

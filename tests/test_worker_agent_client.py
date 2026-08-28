@@ -105,6 +105,41 @@ def test_platform_call_dependency_failure_is_typed():
     assert captured.value.dependency_error.module == "google.cloud"
 
 
+def test_platform_call_failure_preserves_typed_error_payload_without_inference():
+    stub = _FakeWorkerStub([
+        worker_pb2.AgentFrame(
+            platform_call_result=worker_pb2.PlatformCallResult(
+                call_id="call-typed",
+                ok=False,
+                error="legacy display text",
+                error_code="ORDER_REQUEST_REJECTED",
+                error_message="order request was rejected",
+                error_detail_json='{"venue_id":17}',
+            )
+        )
+    ])
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=stub,
+        call_id_factory=lambda: "call-typed",
+    )
+    client.start()
+
+    with pytest.raises(WorkerPlatformCallError) as captured:
+        client.invoke_platform_unary(
+            "PlaceOrder",
+            strategy_pb2.GetStrategyStatusRequest(session_id="sess-1"),
+            strategy_pb2.GetStrategyStatusResponse,
+            timeout_seconds=1.0,
+        )
+
+    client.close()
+    assert captured.value.code == "ORDER_REQUEST_REJECTED"
+    assert captured.value.message == "order request was rejected"
+    assert captured.value.detail_json == '{"venue_id":17}'
+    assert captured.value.dependency_error is None
+
+
 class _FinalAckStub:
     def __init__(self, *, error: str = ""):
         self.sent = []
@@ -199,6 +234,35 @@ def test_send_final_status_carries_reconciliation_run_id():
     client.close()
     final = next(frame.final_status for frame in stub.sent if frame.WhichOneof("payload") == "final_status")
     assert final.reconciliation_run_id == "recon-123"
+
+
+def test_progress_and_final_status_copy_typed_error_payload_intact():
+    stub = _FinalAckStub()
+    stub.allow_ack.set()
+    client = WorkerAgentClient(
+        WorkerEnv(agent_addr="127.0.0.1:1", token="token", session_id="sess-1"),
+        stub=stub,
+        call_id_factory=lambda: "final-typed",
+    )
+    client.start()
+    fields = {
+        "error_code": "ORDER_REQUEST_REJECTED",
+        "error_message": "order request was rejected",
+        "error_detail_json": '{"venue_id":17}',
+    }
+
+    client.send_progress(session_id="sess-1", status="failed", **fields)
+    client.send_final_status(
+        session_id="sess-1", status="failed", timeout_seconds=1.0, **fields,
+    )
+    client.close()
+
+    progress = next(frame.progress for frame in stub.sent if frame.WhichOneof("payload") == "progress")
+    final = next(frame.final_status for frame in stub.sent if frame.WhichOneof("payload") == "final_status")
+    for payload in (progress, final):
+        assert payload.error_code == fields["error_code"]
+        assert payload.error_message == fields["error_message"]
+        assert payload.error_detail_json == fields["error_detail_json"]
 
 
 def test_send_final_status_raises_when_agent_returns_error():

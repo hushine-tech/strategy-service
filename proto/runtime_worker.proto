@@ -117,6 +117,9 @@ message SessionProgress {
   string error = 4;
   int64 last_market_time_ms = 5;
   strategy.v1.RuntimeDependencyError dependency_error = 6;
+  string error_code = 7;
+  string error_message = 8;
+  string error_detail_json = 9;
 }
 
 message PlatformCall {
@@ -132,6 +135,9 @@ message PlatformCallResult {
   google.protobuf.Any response = 3;
   string error = 4;
   strategy.v1.RuntimeDependencyError dependency_error = 5;
+  string error_code = 6;
+  string error_message = 7;
+  string error_detail_json = 8;
 }
 
 message IndicatorDefinition {
@@ -192,6 +198,9 @@ message FinalStatus {
   string error = 4;
   strategy.v1.RuntimeDependencyError dependency_error = 5;
   string reconciliation_run_id = 6;
+  string error_code = 7;
+  string error_message = 8;
+  string error_detail_json = 9;
 }
 
 message WorkerError {

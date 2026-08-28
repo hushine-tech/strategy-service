@@ -96,6 +96,9 @@ func (a *Agent) checkpointTerminalRetry(
 		EffectiveStatus: effectiveStatus,
 		BarsProcessed:   request.BarsProcessed,
 		Reason:          strings.TrimSpace(reason),
+		ErrorCode:       strings.TrimSpace(request.ErrorCode),
+		ErrorMessage:    request.ErrorMessage,
+		ErrorDetailJSON: strings.TrimSpace(request.ErrorDetailJSON),
 		ExpectedStatus:  strings.TrimSpace(strings.ToLower(request.ExpectedStatus)),
 	}
 	if request.committedStartBinding != nil {
@@ -218,6 +221,9 @@ func (a *Agent) retainWorkerGenerationFinalizationFailure(
 					effectiveStatus,
 					request.BarsProcessed,
 					request.Error,
+					request.ErrorCode,
+					request.ErrorMessage,
+					request.ErrorDetailJSON,
 					&pending,
 				)
 			}
@@ -478,6 +484,9 @@ func (a *Agent) replayTerminalSession(
 		statusValue,
 		barsProcessed,
 		message,
+		record.ErrorCode,
+		record.ErrorMessage,
+		record.ErrorDetailJSON,
 		&pending,
 		record.ExpectedStatus,
 	); err != nil {

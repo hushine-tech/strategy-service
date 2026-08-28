@@ -69,7 +69,35 @@ type RuntimeFrameSender interface {
 type RuntimeRequestError struct {
 	Code            string
 	Message         string
+	ErrorCode       string
+	ErrorMessage    string
+	ErrorDetailJSON string
 	DependencyError *strategyv1.RuntimeDependencyError
+}
+
+type sessionErrorFields struct {
+	Legacy     string
+	Code       string
+	Message    string
+	DetailJSON string
+}
+
+func runtimeRequestSessionError(err *RuntimeRequestError) sessionErrorFields {
+	if err == nil {
+		return sessionErrorFields{}
+	}
+	return sessionErrorFields{
+		Legacy: err.Error(), Code: err.ErrorCode,
+		Message: err.ErrorMessage, DetailJSON: err.ErrorDetailJSON,
+	}
+}
+
+type typedPlatformError interface {
+	error
+	PlatformErrorCode() string
+	PlatformErrorMessage() string
+	PlatformErrorDetailJSON() string
+	PlatformDependencyError() *strategyv1.RuntimeDependencyError
 }
 
 func (e *RuntimeRequestError) Error() string {
@@ -747,7 +775,9 @@ func (a *Agent) handleRunStrategy(
 		}
 		select {
 		case requestErr := <-pending.failed:
-			failureErr := a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
+			failureErr := a.failCommittedWorkerGenerationWithError(
+				sessionID, generation, runtimeRequestSessionError(requestErr),
+			)
 			if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
 				a.rememberRunRequest(sessionID, req.GetRequest())
 				a.rememberSessionStart(sessionID, start)
@@ -769,7 +799,9 @@ func (a *Agent) handleRunStrategy(
 			return responseFrame(frame.GetCorrelationId(), successfulRunResponse(startedSessionID, &commitResponse))
 		default:
 		}
-		failureErr := a.failCommittedWorkerGeneration(sessionID, generation, requestErr.Error())
+		failureErr := a.failCommittedWorkerGenerationWithError(
+			sessionID, generation, runtimeRequestSessionError(requestErr),
+		)
 		if errors.Is(failureErr, errCommittedStartAcceptedRunning) {
 			a.rememberRunRequest(sessionID, req.GetRequest())
 			a.rememberSessionStart(sessionID, start)
@@ -1215,6 +1247,16 @@ func (a *Agent) checkpointCommittedStartFailure(
 	generation *workerGeneration,
 	reason string,
 ) error {
+	return a.checkpointCommittedStartFailureWithError(
+		sessionID, generation, sessionErrorFields{Legacy: reason},
+	)
+}
+
+func (a *Agent) checkpointCommittedStartFailureWithError(
+	sessionID string,
+	generation *workerGeneration,
+	sessionError sessionErrorFields,
+) error {
 	if generation == nil {
 		return fmt.Errorf("worker generation is required")
 	}
@@ -1226,13 +1268,16 @@ func (a *Agent) checkpointCommittedStartFailure(
 		TerminalRequest{
 			SessionID:             sessionID,
 			Status:                "failed",
-			Error:                 reason,
+			Error:                 sessionError.Legacy,
+			ErrorCode:             sessionError.Code,
+			ErrorMessage:          sessionError.Message,
+			ErrorDetailJSON:       sessionError.DetailJSON,
 			ExpectedStatus:        "pending",
 			committedStartBinding: &binding,
 		},
 		generation.generation,
 		"failed",
-		reason,
+		sessionError.Legacy,
 	)
 }
 
@@ -1240,6 +1285,16 @@ func (a *Agent) markCommittedStartFailed(
 	sessionID string,
 	generation *workerGeneration,
 	reason string,
+) error {
+	return a.markCommittedStartFailedWithError(
+		sessionID, generation, sessionErrorFields{Legacy: reason},
+	)
+}
+
+func (a *Agent) markCommittedStartFailedWithError(
+	sessionID string,
+	generation *workerGeneration,
+	sessionError sessionErrorFields,
 ) error {
 	if generation == nil {
 		return fmt.Errorf("worker generation is required")
@@ -1254,13 +1309,13 @@ func (a *Agent) markCommittedStartFailed(
 	case <-generation.freezeStartupAdmission():
 	case <-ctx.Done():
 		err := fmt.Errorf("drain startup platform calls: %w", ctx.Err())
-		checkpointErr := a.checkpointCommittedStartFailure(
-			sessionID, generation, reason,
+		checkpointErr := a.checkpointCommittedStartFailureWithError(
+			sessionID, generation, sessionError,
 		)
-		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+		a.scheduleCommittedStartFailureRetryWithError(sessionID, generation, sessionError)
 		return errors.Join(err, checkpointErr)
 	}
-	return a.reconcileCommittedStartFailure(ctx, sessionID, generation, reason)
+	return a.reconcileCommittedStartFailureWithError(ctx, sessionID, generation, sessionError)
 }
 
 func (a *Agent) reconcileCommittedStartFailure(
@@ -1269,6 +1324,18 @@ func (a *Agent) reconcileCommittedStartFailure(
 	generation *workerGeneration,
 	reason string,
 ) error {
+	return a.reconcileCommittedStartFailureWithError(
+		ctx, sessionID, generation, sessionErrorFields{Legacy: reason},
+	)
+}
+
+func (a *Agent) reconcileCommittedStartFailureWithError(
+	ctx context.Context,
+	sessionID string,
+	generation *workerGeneration,
+	sessionError sessionErrorFields,
+) error {
+	reason := sessionError.Legacy
 	binding, bindingErr := a.committedStartBindingForGeneration(sessionID, generation)
 	if bindingErr != nil {
 		return bindingErr
@@ -1288,10 +1355,10 @@ func (a *Agent) reconcileCommittedStartFailure(
 			// operator.
 			err = indeterminateCommittedStartNotFound(err)
 		}
-		checkpointErr := a.checkpointCommittedStartFailure(
-			sessionID, generation, reason,
+		checkpointErr := a.checkpointCommittedStartFailureWithError(
+			sessionID, generation, sessionError,
 		)
-		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+		a.scheduleCommittedStartFailureRetryWithError(sessionID, generation, sessionError)
 		return errors.Join(err, checkpointErr)
 	}
 	session := response.GetSession()
@@ -1300,8 +1367,8 @@ func (a *Agent) reconcileCommittedStartFailure(
 			fmt.Errorf("committed startup cleanup reconciliation mismatch"),
 			err,
 		)
-		checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
-		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+		checkpointErr := a.checkpointCommittedStartFailureWithError(sessionID, generation, sessionError)
+		a.scheduleCommittedStartFailureRetryWithError(sessionID, generation, sessionError)
 		return errors.Join(err, checkpointErr)
 	}
 	statusValue := strings.ToLower(strings.TrimSpace(session.GetStatus()))
@@ -1320,8 +1387,9 @@ func (a *Agent) reconcileCommittedStartFailure(
 		_ = a.deleteTerminalRetry(sessionID, generation.generation)
 		return a.cleanupWorkerGeneration(sessionID, generation, reason)
 	case "pending":
-		if err := a.updateSessionExpected(
-			ctx, sessionID, "failed", int64(session.GetBarsProcessed()), reason, "pending",
+		if err := a.updateSessionWithIndicatorFinalization(
+			ctx, sessionID, "failed", int64(session.GetBarsProcessed()), reason,
+			sessionError.Code, sessionError.Message, sessionError.DetailJSON, nil, "pending",
 		); err != nil {
 			var readbackErr error
 			var readbackBindingErr error
@@ -1355,8 +1423,8 @@ func (a *Agent) reconcileCommittedStartFailure(
 				// startup checkpoint and never accept or terminalize that row.
 				readbackErr = indeterminateCommittedStartNotFound(readErr)
 			}
-			checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
-			a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+			checkpointErr := a.checkpointCommittedStartFailureWithError(sessionID, generation, sessionError)
+			a.scheduleCommittedStartFailureRetryWithError(sessionID, generation, sessionError)
 			return errors.Join(err, readbackErr, readbackBindingErr, checkpointErr)
 		}
 		generation.mu.Lock()
@@ -1366,8 +1434,8 @@ func (a *Agent) reconcileCommittedStartFailure(
 		return a.cleanupWorkerGeneration(sessionID, generation, reason)
 	default:
 		err := fmt.Errorf("cannot reconcile committed startup from status %q", session.GetStatus())
-		checkpointErr := a.checkpointCommittedStartFailure(sessionID, generation, reason)
-		a.scheduleCommittedStartFailureRetry(sessionID, generation, reason)
+		checkpointErr := a.checkpointCommittedStartFailureWithError(sessionID, generation, sessionError)
+		a.scheduleCommittedStartFailureRetryWithError(sessionID, generation, sessionError)
 		return errors.Join(err, checkpointErr)
 	}
 }
@@ -1380,10 +1448,28 @@ func (a *Agent) failCommittedWorkerGeneration(
 	return a.markCommittedStartFailed(sessionID, generation, reason)
 }
 
+func (a *Agent) failCommittedWorkerGenerationWithError(
+	sessionID string,
+	generation *workerGeneration,
+	sessionError sessionErrorFields,
+) error {
+	return a.markCommittedStartFailedWithError(sessionID, generation, sessionError)
+}
+
 func (a *Agent) scheduleCommittedStartFailureRetry(
 	sessionID string,
 	generation *workerGeneration,
 	reason string,
+) {
+	a.scheduleCommittedStartFailureRetryWithError(
+		sessionID, generation, sessionErrorFields{Legacy: reason},
+	)
+}
+
+func (a *Agent) scheduleCommittedStartFailureRetryWithError(
+	sessionID string,
+	generation *workerGeneration,
+	sessionError sessionErrorFields,
 ) {
 	delay := 250 * time.Millisecond
 	if a.cfg.RequestTimeout >= 100*time.Millisecond && a.cfg.RequestTimeout < delay {
@@ -1402,8 +1488,8 @@ func (a *Agent) scheduleCommittedStartFailureRetry(
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		_ = a.reconcileCommittedStartFailure(
-			ctx, sessionID, generation, reason,
+		_ = a.reconcileCommittedStartFailureWithError(
+			ctx, sessionID, generation, sessionError,
 		)
 	})
 }
@@ -2279,6 +2365,9 @@ func (a *Agent) updateReconciledTerminalSession(
 		request.Status,
 		request.BarsProcessed,
 		request.Error,
+		request.ErrorCode,
+		request.ErrorMessage,
+		request.ErrorDetailJSON,
 		request.IndicatorFinalizationPending,
 	)
 	if err == nil {
@@ -2637,6 +2726,9 @@ func (a *Agent) handleWorkerFrameForGeneration(
 			select {
 			case pending.failed <- &RuntimeRequestError{
 				Code: "FailedPrecondition", Message: message,
+				ErrorCode:       progress.GetErrorCode(),
+				ErrorMessage:    progress.GetErrorMessage(),
+				ErrorDetailJSON: progress.GetErrorDetailJson(),
 				DependencyError: cloneDependencyError(progress.GetDependencyError()),
 			}:
 			default:
@@ -3426,11 +3518,24 @@ func (a *Agent) invokeWorkerPlatformCall(ctx context.Context, call *rwv1.Platfor
 	}
 	response, err := a.cfg.PlatformInvoker.InvokePlatformAny(ctx, call.GetMethod(), call.GetRequest(), timeout)
 	if err != nil {
-		return &rwv1.PlatformCallResult{
-			CallId: call.GetCallId(),
-			Ok:     false,
-			Error:  err.Error(),
+		result := &rwv1.PlatformCallResult{
+			CallId:          call.GetCallId(),
+			Ok:              false,
+			Error:           err.Error(),
+			ErrorMessage:    err.Error(),
+			ErrorDetailJson: "{}",
 		}
+		var typed typedPlatformError
+		if errors.As(err, &typed) {
+			result.ErrorCode = typed.PlatformErrorCode()
+			result.ErrorMessage = typed.PlatformErrorMessage()
+			result.ErrorDetailJson = typed.PlatformErrorDetailJSON()
+			if strings.TrimSpace(result.ErrorDetailJson) == "" {
+				result.ErrorDetailJson = "{}"
+			}
+			result.DependencyError = cloneDependencyError(typed.PlatformDependencyError())
+		}
+		return result
 	}
 	return &rwv1.PlatformCallResult{
 		CallId:   call.GetCallId(),
@@ -3496,6 +3601,9 @@ func (a *Agent) handleWorkerFinalStatus(
 				"recoverable",
 				request.BarsProcessed,
 				reason,
+				"",
+				"",
+				"{}",
 				&pending,
 			)
 			checkpointErr := a.checkpointTerminalRetry(
@@ -3528,6 +3636,9 @@ func (a *Agent) handleWorkerFinalStatus(
 			terminal.Status,
 			terminal.BarsProcessed,
 			terminal.Error,
+			terminal.ErrorCode,
+			terminal.ErrorMessage,
+			terminal.ErrorDetailJSON,
 			terminal.IndicatorFinalizationPending,
 		)
 	})
@@ -3598,6 +3709,9 @@ func (a *Agent) updateSessionExpected(
 		status,
 		barsProcessed,
 		message,
+		"",
+		"",
+		"{}",
 		nil,
 		expectedStatus,
 	)
@@ -3609,6 +3723,9 @@ func (a *Agent) updateSessionWithIndicatorFinalization(
 	status string,
 	barsProcessed int64,
 	message string,
+	errorCode string,
+	errorMessage string,
+	errorDetailJSON string,
 	indicatorFinalizationPending *bool,
 	expectedStatus ...string,
 ) error {
@@ -3623,6 +3740,8 @@ func (a *Agent) updateSessionWithIndicatorFinalization(
 		SessionId: sessionID, Status: status, BarsProcessed: int32(barsProcessed),
 		Error: message, RuntimeId: strings.TrimSpace(a.cfg.RuntimeID),
 		IndicatorFinalizationPending: indicatorFinalizationPending,
+		ErrorCode:                    strings.TrimSpace(errorCode), ErrorMessage: errorMessage,
+		ErrorDetailJson: strings.TrimSpace(errorDetailJSON),
 	}
 	if len(expectedStatus) > 0 {
 		req.ExpectedStatus = strings.TrimSpace(expectedStatus[0])

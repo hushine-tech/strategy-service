@@ -3984,7 +3984,27 @@ def test_run_session_live_finalizes_strategy_end_without_direct_terminal_write(m
     ]
 
 
-def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
+@pytest.mark.parametrize(
+    ("failure", "typed_error"),
+    [
+        (RuntimeError("schema mismatch from downstream feed"), ("", "", "{}")),
+        (
+            grpc_server.WorkerPlatformCallError(
+                "order request was rejected",
+                code="ORDER_REQUEST_REJECTED",
+                detail_json='{"venue_id":17}',
+            ),
+            (
+                "ORDER_REQUEST_REJECTED",
+                "order request was rejected",
+                '{"venue_id":17}',
+            ),
+        ),
+    ],
+)
+def test_run_session_failure_persists_failed_status_and_error(
+    monkeypatch, failure, typed_error,
+):
     wallet = _wallet_with_futures_slot()
     servicer = StrategyServiceServicer("acct:1", "order:1", {}, "127.0.0.1:9092", restore_running_sessions=False)
     state = SessionState(environment=0)
@@ -4026,7 +4046,7 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
 
     def fake_run_backtest(session_id, inner_state, engine, req, declared_inputs, wallet):
         del wallet
-        raise RuntimeError("schema mismatch from downstream feed")
+        raise failure
 
     _install_portfolio_client(monkeypatch, FakePortfolioClient)
     _install_order_client(monkeypatch, FakeOrderClient)
@@ -4049,7 +4069,8 @@ def test_run_session_failure_persists_failed_status_and_error(monkeypatch):
     )
 
     assert state.status == "failed"
-    assert state.error == "schema mismatch from downstream feed"
+    assert state.error == str(failure)
+    assert (state.error_code, state.error_message, state.error_detail_json) == typed_error
     assert events == [
         ("wallet_sync", 3, 606, "sess-failed", 505, 17),
     ]

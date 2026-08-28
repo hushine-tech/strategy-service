@@ -1087,6 +1087,9 @@ type SessionProgress struct {
 	Error            string                             `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	LastMarketTimeMs int64                              `protobuf:"varint,5,opt,name=last_market_time_ms,json=lastMarketTimeMs,proto3" json:"last_market_time_ms,omitempty"`
 	DependencyError  *strategyv1.RuntimeDependencyError `protobuf:"bytes,6,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
+	ErrorCode        string                             `protobuf:"bytes,7,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage     string                             `protobuf:"bytes,8,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ErrorDetailJson  string                             `protobuf:"bytes,9,opt,name=error_detail_json,json=errorDetailJson,proto3" json:"error_detail_json,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1161,6 +1164,27 @@ func (x *SessionProgress) GetDependencyError() *strategyv1.RuntimeDependencyErro
 		return x.DependencyError
 	}
 	return nil
+}
+
+func (x *SessionProgress) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *SessionProgress) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *SessionProgress) GetErrorDetailJson() string {
+	if x != nil {
+		return x.ErrorDetailJson
+	}
+	return ""
 }
 
 type PlatformCall struct {
@@ -1238,6 +1262,9 @@ type PlatformCallResult struct {
 	Response        *anypb.Any                         `protobuf:"bytes,3,opt,name=response,proto3" json:"response,omitempty"`
 	Error           string                             `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	DependencyError *strategyv1.RuntimeDependencyError `protobuf:"bytes,5,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
+	ErrorCode       string                             `protobuf:"bytes,6,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage    string                             `protobuf:"bytes,7,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ErrorDetailJson string                             `protobuf:"bytes,8,opt,name=error_detail_json,json=errorDetailJson,proto3" json:"error_detail_json,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1305,6 +1332,27 @@ func (x *PlatformCallResult) GetDependencyError() *strategyv1.RuntimeDependencyE
 		return x.DependencyError
 	}
 	return nil
+}
+
+func (x *PlatformCallResult) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *PlatformCallResult) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *PlatformCallResult) GetErrorDetailJson() string {
+	if x != nil {
+		return x.ErrorDetailJson
+	}
+	return ""
 }
 
 type IndicatorDefinition struct {
@@ -1795,6 +1843,9 @@ type FinalStatus struct {
 	Error               string                             `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	DependencyError     *strategyv1.RuntimeDependencyError `protobuf:"bytes,5,opt,name=dependency_error,json=dependencyError,proto3" json:"dependency_error,omitempty"`
 	ReconciliationRunId string                             `protobuf:"bytes,6,opt,name=reconciliation_run_id,json=reconciliationRunId,proto3" json:"reconciliation_run_id,omitempty"`
+	ErrorCode           string                             `protobuf:"bytes,7,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage        string                             `protobuf:"bytes,8,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ErrorDetailJson     string                             `protobuf:"bytes,9,opt,name=error_detail_json,json=errorDetailJson,proto3" json:"error_detail_json,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -1867,6 +1918,27 @@ func (x *FinalStatus) GetDependencyError() *strategyv1.RuntimeDependencyError {
 func (x *FinalStatus) GetReconciliationRunId() string {
 	if x != nil {
 		return x.ReconciliationRunId
+	}
+	return ""
+}
+
+func (x *FinalStatus) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *FinalStatus) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *FinalStatus) GetErrorDetailJson() string {
+	if x != nil {
+		return x.ErrorDetailJson
 	}
 	return ""
 }
@@ -2159,7 +2231,7 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\x0eShutdownWorker\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x84\x02\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xf4\x02\n" +
 	"\x0fSessionProgress\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
@@ -2167,19 +2239,27 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\x0ebars_processed\x18\x03 \x01(\x03R\rbarsProcessed\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12-\n" +
 	"\x13last_market_time_ms\x18\x05 \x01(\x03R\x10lastMarketTimeMs\x12N\n" +
-	"\x10dependency_error\x18\x06 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\x8e\x01\n" +
+	"\x10dependency_error\x18\x06 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\a \x01(\tR\terrorCode\x12#\n" +
+	"\rerror_message\x18\b \x01(\tR\ferrorMessage\x12*\n" +
+	"\x11error_detail_json\x18\t \x01(\tR\x0ferrorDetailJson\"\x8e\x01\n" +
 	"\fPlatformCall\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x16\n" +
 	"\x06method\x18\x02 \x01(\tR\x06method\x12.\n" +
 	"\arequest\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\arequest\x12\x1d\n" +
 	"\n" +
-	"timeout_ms\x18\x04 \x01(\x03R\ttimeoutMs\"\xd5\x01\n" +
+	"timeout_ms\x18\x04 \x01(\x03R\ttimeoutMs\"\xc5\x02\n" +
 	"\x12PlatformCallResult\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x0e\n" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x120\n" +
 	"\bresponse\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\bresponse\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12N\n" +
-	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\"\xe3\x01\n" +
+	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\x06 \x01(\tR\terrorCode\x12#\n" +
+	"\rerror_message\x18\a \x01(\tR\ferrorMessage\x12*\n" +
+	"\x11error_detail_json\x18\b \x01(\tR\x0ferrorDetailJson\"\xe3\x01\n" +
 	"\x13IndicatorDefinition\x12#\n" +
 	"\rindicator_key\x18\x01 \x01(\tR\findicatorKey\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -2228,7 +2308,7 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12'\n" +
 	"\x0fsnapshot_reason\x18\x02 \x01(\tR\x0esnapshotReason\x12,\n" +
-	"\x06wallet\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\x06wallet\"\x85\x02\n" +
+	"\x06wallet\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\x06wallet\"\xf5\x02\n" +
 	"\vFinalStatus\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
@@ -2236,7 +2316,11 @@ const file_runtime_worker_proto_rawDesc = "" +
 	"\x0ebars_processed\x18\x03 \x01(\x03R\rbarsProcessed\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12N\n" +
 	"\x10dependency_error\x18\x05 \x01(\v2#.strategy.v1.RuntimeDependencyErrorR\x0fdependencyError\x122\n" +
-	"\x15reconciliation_run_id\x18\x06 \x01(\tR\x13reconciliationRunId\"\xcb\x01\n" +
+	"\x15reconciliation_run_id\x18\x06 \x01(\tR\x13reconciliationRunId\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\a \x01(\tR\terrorCode\x12#\n" +
+	"\rerror_message\x18\b \x01(\tR\ferrorMessage\x12*\n" +
+	"\x11error_detail_json\x18\t \x01(\tR\x0ferrorDetailJson\"\xcb\x01\n" +
 	"\vWorkerError\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +

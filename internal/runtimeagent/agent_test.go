@@ -561,6 +561,9 @@ func (h *strategyStartProtocolHarness) InvokePlatformAny(
 		if h.committedSession != nil && h.committedSession.GetSessionId() == update.GetSessionId() {
 			h.committedSession.Status = update.GetStatus()
 			h.committedSession.Error = update.GetError()
+			h.committedSession.ErrorCode = update.GetErrorCode()
+			h.committedSession.ErrorMessage = update.GetErrorMessage()
+			h.committedSession.ErrorDetailJson = update.GetErrorDetailJson()
 		}
 		h.mu.Unlock()
 		return response, nil
@@ -2929,9 +2932,12 @@ func TestAgentRunStrategyReturnsWorkerStartFailure(t *testing.T) {
 		go func() {
 			_ = agent.HandleWorkerFrame(context.Background(), pendingSessionID, &rwv1.WorkerFrame{
 				Payload: &rwv1.WorkerFrame_Progress{Progress: &rwv1.SessionProgress{
-					SessionId: pendingSessionID,
-					Status:    "failed",
-					Error:     "backtest profile preflight failed",
+					SessionId:       pendingSessionID,
+					Status:          "failed",
+					Error:           "backtest profile preflight failed",
+					ErrorCode:       "PLATFORM_ROUTE_UNAVAILABLE",
+					ErrorMessage:    "portfolio route is unavailable",
+					ErrorDetailJson: `{"runtime_id":"rt-1"}`,
 				}},
 			}, nil)
 		}()
@@ -2959,6 +2965,19 @@ func TestAgentRunStrategyReturnsWorkerStartFailure(t *testing.T) {
 	}
 	if respFrame.GetError().GetCode() != "FailedPrecondition" || respFrame.GetError().GetMessage() != "backtest profile preflight failed" {
 		t.Fatalf("error frame = %+v", respFrame.GetError())
+	}
+	harness, ok := agent.cfg.PlatformInvoker.(*strategyStartProtocolHarness)
+	if !ok {
+		t.Fatalf("platform invoker = %T", agent.cfg.PlatformInvoker)
+	}
+	harness.mu.Lock()
+	committed := proto.Clone(harness.committedSession).(*portfoliov1.StrategySessionEntry)
+	harness.mu.Unlock()
+	if committed.GetStatus() != "failed" ||
+		committed.GetErrorCode() != "PLATFORM_ROUTE_UNAVAILABLE" ||
+		committed.GetErrorMessage() != "portfolio route is unavailable" ||
+		committed.GetErrorDetailJson() != `{"runtime_id":"rt-1"}` {
+		t.Fatalf("committed startup failure = %+v", committed)
 	}
 }
 
@@ -3159,6 +3178,45 @@ func TestAgentForwardsWorkerPlatformCall(t *testing.T) {
 	result := sent.GetPlatformCallResult()
 	if result == nil || !result.GetOk() || result.GetCallId() != "call-1" {
 		t.Fatalf("platform result = %+v", result)
+	}
+}
+
+type testTypedPlatformError struct {
+	code, message, detail string
+	dependency            *strategyv1.RuntimeDependencyError
+}
+
+func (e *testTypedPlatformError) Error() string                   { return e.code + ": " + e.message }
+func (e *testTypedPlatformError) PlatformErrorCode() string       { return e.code }
+func (e *testTypedPlatformError) PlatformErrorMessage() string    { return e.message }
+func (e *testTypedPlatformError) PlatformErrorDetailJSON() string { return e.detail }
+func (e *testTypedPlatformError) PlatformDependencyError() *strategyv1.RuntimeDependencyError {
+	return e.dependency
+}
+
+func TestAgentPreservesTypedRuntimeChannelErrorForWorker(t *testing.T) {
+	dependency := &strategyv1.RuntimeDependencyError{
+		Code: "STRATEGY_DEPENDENCY_UNAVAILABLE", Module: "google.cloud",
+		Message: "dependency unavailable",
+	}
+	invoker := &fakePlatformInvoker{onInvoke: func(string, *anypb.Any) (*anypb.Any, error) {
+		return nil, &testTypedPlatformError{
+			code: "FailedPrecondition", message: "platform route unavailable",
+			detail: `{"route":"portfolio.UpdateSession"}`, dependency: dependency,
+		}
+	}}
+	agent := NewAgent(AgentConfig{PlatformInvoker: invoker})
+	result := agent.invokeWorkerPlatformCall(context.Background(), &rwv1.PlatformCall{
+		CallId: "call-typed", Method: "portfolio.UpdateSession",
+	})
+
+	if result.GetOk() || result.GetCallId() != "call-typed" ||
+		result.GetErrorCode() != "FailedPrecondition" ||
+		result.GetErrorMessage() != "platform route unavailable" ||
+		result.GetErrorDetailJson() != `{"route":"portfolio.UpdateSession"}` ||
+		result.GetError() != "FailedPrecondition: platform route unavailable" ||
+		result.GetDependencyError().GetModule() != "google.cloud" {
+		t.Fatalf("typed platform result = %+v", result)
 	}
 }
 
@@ -5089,9 +5147,12 @@ func TestAgentTerminalStatusPersistFailureRetriesDesiredStatusBeforeCleanup(
 			FrameId: "final-persist-retry",
 			Payload: &rwv1.WorkerFrame_FinalStatus{
 				FinalStatus: &rwv1.FinalStatus{
-					SessionId:     sessionID,
-					Status:        "finished",
-					BarsProcessed: 1,
+					SessionId:       sessionID,
+					Status:          "finished",
+					BarsProcessed:   1,
+					ErrorCode:       "ORDER_REQUEST_REJECTED",
+					ErrorMessage:    "order request was rejected",
+					ErrorDetailJson: `{"venue_id":17}`,
 				},
 			},
 		},
@@ -5381,9 +5442,12 @@ func TestAgentReloadsDurableIndicatorTailAndClearsPendingAfterRetry(t *testing.T
 			FrameId: "final-durable-retry",
 			Payload: &rwv1.WorkerFrame_FinalStatus{
 				FinalStatus: &rwv1.FinalStatus{
-					SessionId:     sessionID,
-					Status:        "finished",
-					BarsProcessed: 1,
+					SessionId:       sessionID,
+					Status:          "finished",
+					BarsProcessed:   1,
+					ErrorCode:       "ORDER_REQUEST_REJECTED",
+					ErrorMessage:    "order request was rejected",
+					ErrorDetailJson: `{"venue_id":17}`,
 				},
 			},
 		},
@@ -5479,7 +5543,10 @@ func TestAgentReloadsDurableIndicatorTailAndClearsPendingAfterRetry(t *testing.T
 	}
 	if retryUpdate.GetStatus() != "recoverable" ||
 		retryUpdate.IndicatorFinalizationPending == nil ||
-		retryUpdate.GetIndicatorFinalizationPending() {
+		retryUpdate.GetIndicatorFinalizationPending() ||
+		retryUpdate.GetErrorCode() != "ORDER_REQUEST_REJECTED" ||
+		retryUpdate.GetErrorMessage() != "order request was rejected" ||
+		retryUpdate.GetErrorDetailJson() != `{"venue_id":17}` {
 		t.Fatalf("retry pending-clear update = %+v", &retryUpdate)
 	}
 	store, err := NewTerminalRetryStore(stateRoot)
@@ -5857,13 +5924,19 @@ func TestAgentFinalStatusPreservesFailedStatus(t *testing.T) {
 		FrameId: "final-1",
 		Payload: &rwv1.WorkerFrame_FinalStatus{FinalStatus: &rwv1.FinalStatus{
 			SessionId: "sess-1", Status: "failed", BarsProcessed: 17, Error: "strategy error",
+			ErrorCode: "ORDER_REQUEST_REJECTED", ErrorMessage: "order request was rejected",
+			ErrorDetailJson: `{"venue_id":17}`,
 		}},
 	}, func(frame *rwv1.AgentFrame) error { ack = frame; return nil })
 	if err != nil {
 		t.Fatalf("HandleWorkerFrame final: %v", err)
 	}
 	_, updates := invoker.snapshot()
-	if len(updates) != 1 || updates[0].GetStatus() != "failed" || updates[0].GetError() != "strategy error" {
+	if len(updates) != 1 || updates[0].GetStatus() != "failed" ||
+		updates[0].GetError() != "strategy error" ||
+		updates[0].GetErrorCode() != "ORDER_REQUEST_REJECTED" ||
+		updates[0].GetErrorMessage() != "order request was rejected" ||
+		updates[0].GetErrorDetailJson() != `{"venue_id":17}` {
 		t.Fatalf("updates = %+v", updates)
 	}
 	if ack == nil || ack.GetReplyTo() != "final-1" || ack.GetPayload() != nil {

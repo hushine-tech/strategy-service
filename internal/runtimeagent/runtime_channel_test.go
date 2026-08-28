@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -717,6 +718,70 @@ func TestRuntimeChannelClientInvokesPlatformRequest(t *testing.T) {
 	<-errCh
 }
 
+func TestRuntimeChannelClientPreservesStreamErrorFields(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	dependency := &strategyv1.RuntimeDependencyError{
+		Code: "STRATEGY_DEPENDENCY_UNAVAILABLE", Module: "google.cloud",
+		RuntimeProfile: "platform-python-3.13", Message: "dependency unavailable",
+	}
+	capture := &platformRequestRuntimeChannelServer{
+		requestFrame: make(chan *cpv1.RuntimeFrame, 1),
+		errorFrame: &cpv1.StreamError{
+			Code: "FailedPrecondition", Message: "platform route unavailable",
+			DependencyError: dependency,
+		},
+	}
+	cpv1.RegisterControlPanelServiceServer(server, capture)
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := NewRuntimeChannelClient(RuntimeChannelClientConfig{
+		Address: "bufnet",
+		Identity: RuntimeIdentity{Source: "bare", UserID: 6, RuntimeID: "bare-6-test",
+			DependencyProfile: validEmbeddedRuntimeFacts("bare").Profile},
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	errCh := make(chan error, 1)
+	go func() { errCh <- client.Run(ctx) }()
+	request, err := anypb.New(&strategyv1.GetStrategyStatusRequest{SessionId: "sess-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.InvokePlatformAny(ctx, "GetStrategyStatus", request, time.Second)
+	if err == nil {
+		t.Fatal("InvokePlatformAny error is nil")
+	}
+	typed, ok := err.(interface {
+		PlatformErrorCode() string
+		PlatformErrorMessage() string
+		PlatformErrorDetailJSON() string
+		PlatformDependencyError() *strategyv1.RuntimeDependencyError
+	})
+	if !ok {
+		t.Fatalf("error type = %T, want typed platform error", err)
+	}
+	if typed.PlatformErrorCode() != "FailedPrecondition" ||
+		typed.PlatformErrorMessage() != "platform route unavailable" ||
+		typed.PlatformDependencyError().GetModule() != "google.cloud" {
+		t.Fatalf("typed error = %#v", typed)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(typed.PlatformErrorDetailJSON()), &detail); err != nil {
+		t.Fatalf("detail JSON = %q: %v", typed.PlatformErrorDetailJSON(), err)
+	}
+	if detail["code"] != "STRATEGY_DEPENDENCY_UNAVAILABLE" || detail["module"] != "google.cloud" {
+		t.Fatalf("detail = %#v", detail)
+	}
+	cancel()
+	<-errCh
+}
+
 func TestRuntimeChannelHeartbeatIndependentOfBlockedRequestHandler(
 	t *testing.T,
 ) {
@@ -1014,6 +1079,7 @@ func (s *captureRuntimeChannelServer) RuntimeChannel(stream grpc.BidiStreamingSe
 type platformRequestRuntimeChannelServer struct {
 	cpv1.UnimplementedControlPanelServiceServer
 	requestFrame chan *cpv1.RuntimeFrame
+	errorFrame   *cpv1.StreamError
 }
 
 type blockedRequestRuntimeChannelServer struct {
@@ -1456,6 +1522,13 @@ func (s *platformRequestRuntimeChannelServer) RuntimeChannel(stream grpc.BidiStr
 			continue
 		}
 		s.requestFrame <- frame
+		if s.errorFrame != nil {
+			return stream.Send(&cpv1.RuntimeFrame{
+				CorrelationId: frame.GetCorrelationId(),
+				FrameType:     cpv1.FrameType_FRAME_TYPE_ERROR,
+				Payload:       &cpv1.RuntimeFrame_Error{Error: s.errorFrame},
+			})
+		}
 		response, _ := anypb.New(&strategyv1.GetStrategyStatusResponse{Status: "running"})
 		return stream.Send(&cpv1.RuntimeFrame{
 			CorrelationId: frame.GetCorrelationId(),

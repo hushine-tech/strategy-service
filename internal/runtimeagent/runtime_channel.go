@@ -42,6 +42,47 @@ type RuntimeIdentity struct {
 	DependencyProfile *strategyv1.RuntimeDependencyProfile
 }
 
+type runtimeChannelPlatformError struct {
+	code            string
+	message         string
+	detailJSON      string
+	dependencyError *strategyv1.RuntimeDependencyError
+}
+
+func (e *runtimeChannelPlatformError) Error() string {
+	if e == nil {
+		return "runtime platform request failed"
+	}
+	if strings.TrimSpace(e.code) == "" {
+		return e.message
+	}
+	return e.code + ": " + e.message
+}
+
+func (e *runtimeChannelPlatformError) PlatformErrorCode() string       { return e.code }
+func (e *runtimeChannelPlatformError) PlatformErrorMessage() string    { return e.message }
+func (e *runtimeChannelPlatformError) PlatformErrorDetailJSON() string { return e.detailJSON }
+func (e *runtimeChannelPlatformError) PlatformDependencyError() *strategyv1.RuntimeDependencyError {
+	return cloneDependencyError(e.dependencyError)
+}
+
+func streamErrorDetailJSON(detail *strategyv1.RuntimeDependencyError) string {
+	if detail == nil {
+		return "{}"
+	}
+	payload := map[string]string{
+		"code": detail.GetCode(), "module": detail.GetModule(),
+		"runtime_profile":         detail.GetRuntimeProfile(),
+		"runtime_profile_version": detail.GetRuntimeProfileVersion(),
+		"image_build_id":          detail.GetImageBuildId(), "message": detail.GetMessage(),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
 type RuntimeCredential struct {
 	KeyID         string
 	PrivateKeyPEM string
@@ -648,7 +689,11 @@ func (c *RuntimeChannelClient) InvokePlatformAny(
 			if errFrame == nil {
 				return nil, fmt.Errorf("runtime platform request failed")
 			}
-			return nil, fmt.Errorf("%s: %s", errFrame.GetCode(), errFrame.GetMessage())
+			return nil, &runtimeChannelPlatformError{
+				code: errFrame.GetCode(), message: errFrame.GetMessage(),
+				detailJSON:      streamErrorDetailJSON(errFrame.GetDependencyError()),
+				dependencyError: cloneDependencyError(errFrame.GetDependencyError()),
+			}
 		default:
 			return nil, fmt.Errorf("unexpected runtime platform frame_type=%v", frame.GetFrameType())
 		}

@@ -120,6 +120,9 @@ def main() -> int:
         _report_worker_failure(
             client,
             env.session_id,
+            error_code=exc.code,
+            error_message=exc.message,
+            error_detail_json=exc.detail_json,
             dependency_error=exc.dependency_error,
         )
         return 1
@@ -150,6 +153,9 @@ def _report_worker_failure(
     client: WorkerAgentClient,
     session_id: str,
     *,
+    error_code: str = "",
+    error_message: str = "",
+    error_detail_json: str = "{}",
     dependency_error=None,
 ) -> None:
     safe_session_id = str(session_id or "")
@@ -165,6 +171,12 @@ def _report_worker_failure(
             status="failed",
             error=safe_error,
         )
+        if error_code or error_message or error_detail_json != "{}":
+            progress.update(
+                error_code=error_code,
+                error_message=error_message,
+                error_detail_json=error_detail_json,
+            )
         if dependency_error is not None:
             progress["dependency_error"] = dependency_error
         client.send_progress(**progress)
@@ -209,6 +221,18 @@ def _poll_until_terminal(
                 ).strip()
                 if reconciliation_run_id:
                     final_kwargs["reconciliation_run_id"] = reconciliation_run_id
+                if state is not None and (
+                    str(getattr(state, "error_code", "") or "")
+                    or str(getattr(state, "error_message", "") or "")
+                    or str(getattr(state, "error_detail_json", "{}") or "{}") != "{}"
+                ):
+                    final_kwargs.update(
+                        error_code=str(getattr(state, "error_code", "") or ""),
+                        error_message=str(getattr(state, "error_message", "") or ""),
+                        error_detail_json=str(
+                            getattr(state, "error_detail_json", "{}") or "{}"
+                        ),
+                    )
                 client.send_final_status(**final_kwargs)
             except (FinalStatusRejected, TimeoutError) as exc:
                 logger.error("final session status was not acknowledged: %s", exc)
@@ -336,6 +360,9 @@ def _handle_agent_platform_call(
             call_id=call.call_id,
             ok=False,
             error=str(exc),
+            error_code=exc.code,
+            error_message=exc.message,
+            error_detail_json=exc.detail_json,
             dependency_error=exc.dependency_error,
         )
     except Exception as exc:  # noqa: BLE001

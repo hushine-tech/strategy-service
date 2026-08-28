@@ -21,14 +21,23 @@ from strategy_service.worker_agent_client import FinalStatusRejected
 
 
 class _TerminalServicer:
-    def __init__(self, status: str, bars: int, error: str = "", reconciliation_run_id: str = ""):
+    def __init__(
+        self, status: str, bars: int, error: str = "", reconciliation_run_id: str = "",
+        error_code: str = "", error_message: str = "", error_detail_json: str = "{}",
+    ):
         self.status = status
         self.bars = bars
         self.error = error
         self.reconciliation_run_id = reconciliation_run_id
+        self.error_code = error_code
+        self.error_message = error_message
+        self.error_detail_json = error_detail_json
         self._sessions = SimpleNamespace(
             get=lambda _session_id: SimpleNamespace(
                 reconciliation_run_id=self.reconciliation_run_id,
+                error_code=self.error_code,
+                error_message=self.error_message,
+                error_detail_json=self.error_detail_json,
             )
         )
 
@@ -162,6 +171,27 @@ def test_poll_until_terminal_preserves_failed_terminal_status():
     assert client.final[0]["error"] == "strategy error"
 
 
+def test_poll_until_terminal_copies_typed_session_error_intact():
+    client = _FinalClient()
+    result = _poll_until_terminal(
+        _TerminalServicer(
+            "failed", 9, "legacy display text",
+            error_code="ORDER_REQUEST_REJECTED",
+            error_message="order request was rejected",
+            error_detail_json='{"venue_id":17}',
+        ),
+        client,
+        "sess-typed",
+        7,
+        "rt-1",
+    )
+
+    assert result == 1
+    assert client.final[0]["error_code"] == "ORDER_REQUEST_REJECTED"
+    assert client.final[0]["error_message"] == "order request was rejected"
+    assert client.final[0]["error_detail_json"] == '{"venue_id":17}'
+
+
 def test_poll_until_terminal_forwards_stop_reconciliation_identity():
     client = _FinalClient()
 
@@ -214,6 +244,8 @@ def test_worker_servicer_defers_terminal_but_not_running_persistence():
         "error": "",
         "runtime_id": "rt-1",
     }]
+
+
 def test_worker_context_binds_exact_running_publication_once():
     context = _WorkerContext()
     state = SessionState(session_id="1" * 32, status="running")

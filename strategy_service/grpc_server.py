@@ -83,6 +83,7 @@ from strategy_service.wallet.portfolio_adapter import (
     build_portfolio_wallet_from_snapshot,
 )
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
+from strategy_service.worker_agent_client import WorkerPlatformCallError
 
 logger = logging.getLogger(__name__)
 
@@ -2659,6 +2660,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
                     )
                 except StrategyUserCodeFatalError as fatal:
                     primary_user_fatal = fatal
+                except WorkerPlatformCallError as error:
+                    logger.error(
+                        "STRATEGY_SESSION_PLATFORM_ERROR session=%s portfolio_id=%s strategy_id=%s",
+                        session_id,
+                        portfolio_id,
+                        strategy_id,
+                    )
+                    state.transition(
+                        "failed",
+                        error=error.message,
+                        error_code=error.code,
+                        error_message=error.message,
+                        error_detail_json=error.detail_json,
+                    )
                 except Exception as e:
                     logger.error(
                         "STRATEGY_SESSION_ERROR session=%s portfolio_id=%s strategy_id=%s",
@@ -4032,13 +4047,20 @@ class StrategyServiceServicer(pb2_grpc.StrategyServiceServicer):
         if state.status in TERMINAL_SESSION_STATUSES:
             return True
         acct_client = self._portfolio_client()
-        ok = acct_client.update_session(
+        update = dict(
             session_id=session_id,
             status=state.status,
             bars_processed=state.bars_processed,
             error=state.error,
             runtime_id=state.runtime_id,
         )
+        if state.error_code or state.error_message or state.error_detail_json != "{}":
+            update.update(
+                error_code=state.error_code,
+                error_message=state.error_message,
+                error_detail_json=state.error_detail_json,
+            )
+        ok = acct_client.update_session(**update)
         confirmed = ok is True
         if not confirmed:
             logger.warning("session %s: failed to persist status=%s", session_id, state.status)

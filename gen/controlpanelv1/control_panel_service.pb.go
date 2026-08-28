@@ -3641,8 +3641,10 @@ func (x *ReportRuntimeStartupFailureResponse) GetRecorded() bool {
 }
 
 type RuntimeHelloAck struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	RuntimeId            string                 `protobuf:"bytes,1,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	RuntimeId string                 `protobuf:"bytes,1,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	// HELLO issues this in-memory reconnect credential. RESUME acknowledges the
+	// same value with a refreshed TTL; it does not rotate before this ACK.
 	ResumeToken          string                 `protobuf:"bytes,2,opt,name=resume_token,json=resumeToken,proto3" json:"resume_token,omitempty"`
 	ResumeTokenExpiresAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=resume_token_expires_at,json=resumeTokenExpiresAt,proto3" json:"resume_token_expires_at,omitempty"`
 	Fingerprint          string                 `protobuf:"bytes,4,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
@@ -3717,8 +3719,10 @@ func (x *RuntimeHelloAck) GetFingerprintExpiresAt() *timestamppb.Timestamp {
 }
 
 type RuntimeResume struct {
-	state             protoimpl.MessageState               `protogen:"open.v1"`
-	RuntimeId         string                               `protobuf:"bytes,1,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	RuntimeId string                 `protobuf:"bytes,1,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	// Reuses the latest acknowledged HELLO/RESUME credential. A rejected RESUME
+	// is terminal for this agent process and must not fall back to HELLO.
 	ResumeToken       string                               `protobuf:"bytes,2,opt,name=resume_token,json=resumeToken,proto3" json:"resume_token,omitempty"`
 	Fingerprint       string                               `protobuf:"bytes,3,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
 	DependencyProfile *strategyv1.RuntimeDependencyProfile `protobuf:"bytes,4,opt,name=dependency_profile,json=dependencyProfile,proto3" json:"dependency_profile,omitempty"`

@@ -64,6 +64,9 @@ class SessionState:
     status: str = "running"          # running / stopping / recoverable / finished / stopped / failed / stop_failed
     bars_processed: int = 0
     error: str = ""
+    error_code: str = ""
+    error_message: str = ""
+    error_detail_json: str = "{}"
     environment: int = 0
     user_id: int = 0
     portfolio_id: int = 0
@@ -116,7 +119,16 @@ class SessionState:
     def __post_init__(self) -> None:
         self._decision_condition = threading.Condition(self._lock)
 
-    def transition(self, new_status: str, bars: int | None = None, error: str | None = None) -> bool:
+    def transition(
+        self,
+        new_status: str,
+        bars: int | None = None,
+        error: str | None = None,
+        *,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        error_detail_json: str | None = None,
+    ) -> bool:
         """Atomically transition status. Returns True if transition succeeded.
         Terminal statuses cannot be overwritten."""
         with self._lock:
@@ -127,6 +139,12 @@ class SessionState:
                 self.bars_processed = bars
             if error is not None:
                 self.error = error
+            if error_code is not None:
+                self.error_code = error_code
+            if error_message is not None:
+                self.error_message = error_message
+            if error_detail_json is not None:
+                self.error_detail_json = error_detail_json
             return True
 
     def force_failed(self, error: str) -> None:

@@ -17,6 +17,9 @@ type TerminalRequest struct {
 	Status                       string
 	BarsProcessed                int64
 	Error                        string
+	ErrorCode                    string
+	ErrorMessage                 string
+	ErrorDetailJSON              string
 	ReconciliationRunID          string
 	IndicatorFinalizationPending *bool
 	ExpectedStatus               string
@@ -105,6 +108,9 @@ func terminalRequestFromFinalStatus(status *rwv1.FinalStatus) (TerminalRequest, 
 		Status:              statusValue,
 		BarsProcessed:       status.GetBarsProcessed(),
 		Error:               status.GetError(),
+		ErrorCode:           status.GetErrorCode(),
+		ErrorMessage:        status.GetErrorMessage(),
+		ErrorDetailJSON:     status.GetErrorDetailJson(),
 		ReconciliationRunID: strings.TrimSpace(status.GetReconciliationRunId()),
 	}, nil
 }
