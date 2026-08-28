@@ -76,7 +76,7 @@ type RuntimeRequestError struct {
 }
 
 type sessionErrorFields struct {
-	Legacy     string
+	Text       string
 	Code       string
 	Message    string
 	DetailJSON string
@@ -87,7 +87,7 @@ func runtimeRequestSessionError(err *RuntimeRequestError) sessionErrorFields {
 		return sessionErrorFields{}
 	}
 	return sessionErrorFields{
-		Legacy: err.Error(), Code: err.ErrorCode,
+		Text: err.Error(), Code: err.ErrorCode,
 		Message: err.ErrorMessage, DetailJSON: err.ErrorDetailJSON,
 	}
 }
@@ -1248,7 +1248,7 @@ func (a *Agent) checkpointCommittedStartFailure(
 	reason string,
 ) error {
 	return a.checkpointCommittedStartFailureWithError(
-		sessionID, generation, sessionErrorFields{Legacy: reason},
+		sessionID, generation, sessionErrorFields{Text: reason},
 	)
 }
 
@@ -1268,7 +1268,7 @@ func (a *Agent) checkpointCommittedStartFailureWithError(
 		TerminalRequest{
 			SessionID:             sessionID,
 			Status:                "failed",
-			Error:                 sessionError.Legacy,
+			Error:                 sessionError.Text,
 			ErrorCode:             sessionError.Code,
 			ErrorMessage:          sessionError.Message,
 			ErrorDetailJSON:       sessionError.DetailJSON,
@@ -1277,7 +1277,7 @@ func (a *Agent) checkpointCommittedStartFailureWithError(
 		},
 		generation.generation,
 		"failed",
-		sessionError.Legacy,
+		sessionError.Text,
 	)
 }
 
@@ -1287,7 +1287,7 @@ func (a *Agent) markCommittedStartFailed(
 	reason string,
 ) error {
 	return a.markCommittedStartFailedWithError(
-		sessionID, generation, sessionErrorFields{Legacy: reason},
+		sessionID, generation, sessionErrorFields{Text: reason},
 	)
 }
 
@@ -1325,7 +1325,7 @@ func (a *Agent) reconcileCommittedStartFailure(
 	reason string,
 ) error {
 	return a.reconcileCommittedStartFailureWithError(
-		ctx, sessionID, generation, sessionErrorFields{Legacy: reason},
+		ctx, sessionID, generation, sessionErrorFields{Text: reason},
 	)
 }
 
@@ -1335,7 +1335,7 @@ func (a *Agent) reconcileCommittedStartFailureWithError(
 	generation *workerGeneration,
 	sessionError sessionErrorFields,
 ) error {
-	reason := sessionError.Legacy
+	reason := sessionError.Text
 	binding, bindingErr := a.committedStartBindingForGeneration(sessionID, generation)
 	if bindingErr != nil {
 		return bindingErr
@@ -1462,7 +1462,7 @@ func (a *Agent) scheduleCommittedStartFailureRetry(
 	reason string,
 ) {
 	a.scheduleCommittedStartFailureRetryWithError(
-		sessionID, generation, sessionErrorFields{Legacy: reason},
+		sessionID, generation, sessionErrorFields{Text: reason},
 	)
 }
 
