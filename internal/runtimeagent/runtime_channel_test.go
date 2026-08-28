@@ -399,58 +399,31 @@ func TestRuntimeChannelSupervisorDoesNotRetryPermanentStatus(t *testing.T) {
 	}
 }
 
-func TestRuntimeChannelSupervisorRetainsAuthenticatedTerminalStatusWhenSendFailsFirst(t *testing.T) {
-	for _, terminalCode := range []codes.Code{codes.PermissionDenied, codes.FailedPrecondition} {
-		t.Run(terminalCode.String(), func(t *testing.T) {
+func TestRuntimeChannelSupervisorProductionInterceptorPreservesPermanentStatus(t *testing.T) {
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.FailedPrecondition} {
+		t.Run(code.String(), func(t *testing.T) {
 			listener := bufconn.Listen(1024 * 1024)
 			server := grpc.NewServer()
-			capture := &authenticatedTerminalRuntimeChannelServer{
-				terminalCode:  terminalCode,
-				authenticated: make(chan struct{}),
-				revoke:        make(chan struct{}),
-			}
+			capture := &permanentRuntimeChannelServer{code: code}
 			cpv1.RegisterControlPanelServiceServer(server, capture)
 			go func() { _ = server.Serve(listener) }()
 			defer server.Stop()
 
 			client := newSupervisorTestRuntimeClient(listener)
-			client.cfg.DialOptions = append(client.cfg.DialOptions, grpc.WithStreamInterceptor(
-				authenticatedSendFirstTerminalStreamInterceptor(),
-			))
+			client.cfg.DialOptions = append(client.cfg.DialOptions, RuntimeChannelDialOptions(nil)...)
 			client.cfg.ReconnectJitter = func(time.Duration) time.Duration { return 0 }
 			var reconnectWaits atomic.Int64
 			client.cfg.ReconnectWait = func(context.Context, time.Duration) error {
 				reconnectWaits.Add(1)
-				return status.Error(codes.Aborted, "unexpected reconnect after terminal status")
+				return status.Error(codes.Aborted, "unexpected reconnect after permanent status")
 			}
 
-			runDone := make(chan error, 1)
-			go func() { runDone <- client.Run(context.Background()) }()
-			receiveRuntimeSignal(t, capture.authenticated, "authenticated generation")
-			waitForRuntimeReady(t, client, true)
-
-			sendErr := client.Send(&cpv1.RuntimeFrame{
-				FrameType: cpv1.FrameType_FRAME_TYPE_REQUEST,
-				Payload: &cpv1.RuntimeFrame_Request{Request: &cpv1.StrategyRequest{
-					Method: "send-side-transient-before-terminal-receive",
-				}},
-			})
-			if status.Code(sendErr) != codes.Unavailable {
-				t.Fatalf("forced send-side error = %v, want Unavailable", sendErr)
-			}
-			waitForRuntimeReady(t, client, false)
-			close(capture.revoke)
-
-			select {
-			case err := <-runDone:
-				if status.Code(err) != terminalCode {
-					t.Fatalf("Run error = %v, want retained %s", err, terminalCode)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("Run did not stop after authenticated terminal status")
+			err := client.Run(context.Background())
+			if status.Code(err) != code {
+				t.Fatalf("Run error = %v (code %s), want %s", err, status.Code(err), code)
 			}
 			if got := reconnectWaits.Load(); got != 0 {
-				t.Fatalf("reconnect waits = %d, want 0 after terminal status", got)
+				t.Fatalf("reconnect waits = %d, want 0", got)
 			}
 			if got := capture.calls.Load(); got != 1 {
 				t.Fatalf("RuntimeChannel attempts = %d, want 1", got)
@@ -1275,14 +1248,6 @@ type permanentRuntimeChannelServer struct {
 	calls atomic.Int64
 }
 
-type authenticatedTerminalRuntimeChannelServer struct {
-	cpv1.UnimplementedControlPanelServiceServer
-	terminalCode  codes.Code
-	authenticated chan struct{}
-	revoke        chan struct{}
-	calls         atomic.Int64
-}
-
 type alwaysUnavailableRuntimeChannelServer struct {
 	cpv1.UnimplementedControlPanelServiceServer
 }
@@ -1351,25 +1316,6 @@ func (s *permanentRuntimeChannelServer) RuntimeChannel(
 	return status.Error(s.code, "terminal admission")
 }
 
-func (s *authenticatedTerminalRuntimeChannelServer) RuntimeChannel(
-	stream grpc.BidiStreamingServer[cpv1.RuntimeFrame, cpv1.RuntimeFrame],
-) error {
-	s.calls.Add(1)
-	if _, err := stream.Recv(); err != nil {
-		return err
-	}
-	if err := stream.Send(runtimeChannelAckForTest("terminal-race-token")); err != nil {
-		return err
-	}
-	close(s.authenticated)
-	select {
-	case <-stream.Context().Done():
-		return stream.Context().Err()
-	case <-s.revoke:
-		return status.Error(s.terminalCode, "authenticated runtime became terminal")
-	}
-}
-
 type gatedResumeRuntimeChannelServer struct {
 	cpv1.UnimplementedControlPanelServiceServer
 	firstAuthenticated chan struct{}
@@ -1408,33 +1354,6 @@ func blockingFirstRequestStreamInterceptor(
 				blockedOnce.Do(func() { close(blocked) })
 				<-release
 				return true, status.Error(codes.Unavailable, "old-generation physical send released after disconnect")
-			},
-		}, nil
-	}
-}
-
-func authenticatedSendFirstTerminalStreamInterceptor() grpc.StreamClientInterceptor {
-	var streams atomic.Int64
-	return func(
-		ctx context.Context,
-		desc *grpc.StreamDesc,
-		cc *grpc.ClientConn,
-		method string,
-		streamer grpc.Streamer,
-		opts ...grpc.CallOption,
-	) (grpc.ClientStream, error) {
-		stream, err := streamer(ctx, desc, cc, method, opts...)
-		if err != nil {
-			return nil, err
-		}
-		return &runtimeChannelTestClientStream{
-			ClientStream: stream,
-			generation:   streams.Add(1),
-			onSend: func(generation int64, frame *cpv1.RuntimeFrame) (bool, error) {
-				if generation != 1 || frame.GetRequest().GetMethod() != "send-side-transient-before-terminal-receive" {
-					return false, nil
-				}
-				return true, status.Error(codes.Unavailable, "forced send-side transient")
 			},
 		}, nil
 	}

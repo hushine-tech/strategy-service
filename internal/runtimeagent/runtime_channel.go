@@ -150,8 +150,6 @@ type RuntimeChannelClient struct {
 	connectOnce sync.Once
 }
 
-const runtimeChannelTerminalStatusGrace = 250 * time.Millisecond
-
 func NewRuntimeChannelClient(cfg RuntimeChannelClientConfig) *RuntimeChannelClient {
 	if cfg.HeartbeatSeconds <= 0 {
 		cfg.HeartbeatSeconds = 10
@@ -311,8 +309,7 @@ func (c *RuntimeChannelClient) runConnection(ctx context.Context, address string
 	select {
 	case <-ctx.Done():
 		result = nil
-	case sendErr := <-sendDone:
-		result = awaitRuntimeChannelReceiveResult(ctx, sendErr, recvDone)
+	case result = <-sendDone:
 	case result = <-recvDone:
 	case <-authenticatedCh:
 		authenticated = true
@@ -322,7 +319,6 @@ func (c *RuntimeChannelClient) runConnection(ctx context.Context, address string
 	cancel()
 	_ = conn.Close()
 	loops.Wait()
-	result = retainRuntimeChannelTerminalResult(result, sendDone, recvDone)
 	if ctx.Err() != nil {
 		return authenticated, nil
 	}
@@ -354,47 +350,10 @@ func (c *RuntimeChannelClient) runAuthenticatedGeneration(
 	case <-ctx.Done():
 		return nil
 	case err := <-sendDone:
-		c.markGenerationUnready(generation)
-		return awaitRuntimeChannelReceiveResult(ctx, err, recvDone)
+		return err
 	case err := <-recvDone:
 		return err
 	}
-}
-
-func awaitRuntimeChannelReceiveResult(
-	ctx context.Context,
-	sendErr error,
-	recvDone <-chan error,
-) error {
-	if isPermanentRuntimeChannelError(sendErr) {
-		return sendErr
-	}
-	timer := time.NewTimer(runtimeChannelTerminalStatusGrace)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return nil
-	case recvErr := <-recvDone:
-		if isPermanentRuntimeChannelError(recvErr) {
-			return recvErr
-		}
-		return sendErr
-	case <-timer.C:
-		return sendErr
-	}
-}
-
-func retainRuntimeChannelTerminalResult(result error, done ...<-chan error) error {
-	for _, loopDone := range done {
-		select {
-		case loopErr := <-loopDone:
-			if isPermanentRuntimeChannelError(loopErr) {
-				return loopErr
-			}
-		default:
-		}
-	}
-	return result
 }
 
 func errorsIsEOF(err error) bool {
