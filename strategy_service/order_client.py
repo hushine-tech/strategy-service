@@ -18,7 +18,11 @@ from strategy_service.position_side import (
     position_side_from_label,
     position_side_label,
 )
-from strategy_service.order_error import resolve_order_placement_error
+from strategy_service.order_error import (
+    order_error_context,
+    require_persisted_order_attempt,
+    resolve_order_placement_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +182,12 @@ class OrderClient:
                     f"market argument {market!r} does not match decision.market {effective_market!r}"
                 )
         position_side_code = self._position_side_code(getattr(decision, "position_side", None))
+        error_context = order_error_context(
+            portfolio_id=portfolio_id,
+            symbol=symbol,
+            exchange=exchange_code,
+            market=market_code,
+        )
 
         if not self._stub:
             raise RuntimeError("order.v1 gRPC client is not configured")
@@ -234,11 +244,18 @@ class OrderClient:
                 portfolio_id=portfolio_id,
                 intent_id=intent,
                 error=exc,
+                error_context=error_context,
                 decision=decision,
                 market=effective_market,
                 symbol=symbol,
             )
-        return self._feedback_from_response(resp, decision=decision, market=effective_market, symbol=symbol)
+        response = require_persisted_order_attempt(
+            resp,
+            intent_id=intent,
+            context=error_context,
+            stage="place_order",
+        )
+        return self._feedback_from_response(response, decision=decision, market=effective_market, symbol=symbol)
 
     def close_spot_targets(
         self,
@@ -514,6 +531,7 @@ class OrderClient:
         portfolio_id: int,
         intent_id: str,
         error: BaseException,
+        error_context: dict[str, object],
         decision: OrderDecision,
         market: str,
         symbol: str,
@@ -523,6 +541,7 @@ class OrderClient:
         resp = resolve_order_placement_error(
             error,
             intent_id=intent_id,
+            context=error_context,
             resolve_attempt=lambda: self._stub.ResolveOrderAttempt(
                 order_service_pb2.ResolveOrderAttemptRequest(
                     portfolio_id=int(portfolio_id),

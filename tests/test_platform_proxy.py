@@ -40,6 +40,27 @@ from strategy_service.types import OrderDecision
 from strategy_service.worker_agent_client import WorkerPlatformCallError
 
 
+def _assert_proxy_order_error_detail(
+    detail_json: str,
+    *,
+    intent_id: str,
+    stage: str,
+    cause: str,
+    transport_code: str,
+    transport_cause: str | None = None,
+) -> None:
+    detail = json.loads(detail_json)
+    assert detail["intent_id"] == intent_id
+    assert detail["symbol"] == "ETHUSDT"
+    assert detail["venue"] == {"portfolio_id": 13, "exchange": 1, "market": 2}
+    assert detail["stage"] == stage
+    assert detail["cause"] == cause
+    assert detail["transport_code"] == transport_code
+    assert detail["transport_cause"] == (
+        transport_cause if transport_cause is not None else f"WorkerPlatformCallError:{transport_code}"
+    )
+
+
 def test_proxy_portfolio_client_sends_pending_status_cas():
     runtime = _FakeRuntimeChannel()
     proxy = RuntimeChannelPlatformProxy(runtime)
@@ -953,11 +974,13 @@ def test_proxy_order_rejects_pre_persistence_request_without_resolving(transport
         )
 
     assert raised.value.code == "ORDER_REQUEST_REJECTED"
-    assert json.loads(raised.value.detail_json) == {
-        "intent_id": "proxy-intent-rejected",
-        "transport_cause": "WorkerPlatformCallError",
-        "transport_code": transport_code,
-    }
+    _assert_proxy_order_error_detail(
+        raised.value.detail_json,
+        intent_id="proxy-intent-rejected",
+        stage="place_order",
+        cause="place_order transport failure",
+        transport_code=transport_code,
+    )
     assert [method for method, _ in runtime.calls] == [ORDER_PLACE]
 
 
@@ -990,6 +1013,13 @@ def test_proxy_order_unknown_outcome_resolves_once_without_replaying_place(trans
         )
 
     assert raised.value.code == "ORDER_EXECUTION_UNKNOWN"
+    _assert_proxy_order_error_detail(
+        raised.value.detail_json,
+        intent_id="proxy-intent-unknown",
+        stage="resolve_order_attempt",
+        cause="no persisted order attempt was found",
+        transport_code=transport_code,
+    )
     assert [method for method, _ in runtime.calls] == [ORDER_PLACE, ORDER_RESOLVE_ATTEMPT]
 
 
@@ -1020,3 +1050,37 @@ def test_proxy_order_returns_persisted_failed_attempt_after_uncertain_transport(
     assert feedback.attempt_id == "proxy-attempt-persisted-failed"
     assert feedback.attempt_status == "FAILED"
     assert [method for method, _ in runtime.calls] == [ORDER_PLACE, ORDER_RESOLVE_ATTEMPT]
+
+
+@pytest.mark.parametrize("attempt_id", ["", "   "])
+def test_proxy_order_success_without_persisted_attempt_identity_is_fatal(attempt_id):
+    """Proxy success cannot return business feedback without a persisted attempt."""
+    runtime = _FakeRuntimeChannel()
+    runtime.responses[ORDER_PLACE] = order_service_pb2.PlaceOrderResponse(
+        intent_id="proxy-intent-success-without-attempt",
+        attempt_id=attempt_id,
+        attempt_status="ACCEPTED",
+    )
+    client = RuntimeChannelPlatformProxy(runtime).order_client()
+
+    with pytest.raises(WorkerPlatformCallError) as raised:
+        client.place_order(
+            13,
+            OrderDecision(
+                exchange="binance", market="perpetual_futures", symbol="ETHUSDT",
+                side="BUY", qty="0.05", order_type="MARKET",
+            ),
+            51000.0,
+            intent_id="proxy-intent-success-without-attempt",
+        )
+
+    assert raised.value.code == "ORDER_EXECUTION_UNKNOWN"
+    _assert_proxy_order_error_detail(
+        raised.value.detail_json,
+        intent_id="proxy-intent-success-without-attempt",
+        stage="place_order",
+        cause="response missing persisted order attempt identity",
+        transport_code="",
+        transport_cause="successful_response",
+    )
+    assert [method for method, _ in runtime.calls] == [ORDER_PLACE]

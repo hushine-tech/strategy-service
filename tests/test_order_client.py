@@ -96,6 +96,27 @@ class _TransportError(grpc.RpcError):
         return "order transport failed"
 
 
+def _assert_order_error_detail(
+    detail_json: str,
+    *,
+    intent_id: str,
+    stage: str,
+    cause: str,
+    transport_code: str,
+    transport_cause: str | None = None,
+) -> None:
+    detail = json.loads(detail_json)
+    assert detail["intent_id"] == intent_id
+    assert detail["symbol"] == "ETHUSDT"
+    assert detail["venue"] == {"portfolio_id": 13, "exchange": 1, "market": 2}
+    assert detail["stage"] == stage
+    assert detail["cause"] == cause
+    assert detail["transport_code"] == transport_code
+    assert detail["transport_cause"] == (
+        transport_cause if transport_cause is not None else f"_TransportError:{transport_code}"
+    )
+
+
 def test_close_spot_targets_preserves_operation_and_canonical_routes():
     client = OrderClient("")
     stub = _Stub(order_service_pb2.PlaceOrderResponse())
@@ -186,11 +207,13 @@ def test_place_order_rejects_pre_persistence_request_without_resolving(transport
         )
 
     assert raised.value.code == "ORDER_REQUEST_REJECTED"
-    assert json.loads(raised.value.detail_json) == {
-        "intent_id": "intent-rejected",
-        "transport_cause": "_TransportError",
-        "transport_code": transport_code.name,
-    }
+    _assert_order_error_detail(
+        raised.value.detail_json,
+        intent_id="intent-rejected",
+        stage="place_order",
+        cause="place_order transport failure",
+        transport_code=transport_code.name,
+    )
     assert stub.place_calls == 1
     assert stub.resolve_calls == 0
 
@@ -226,11 +249,13 @@ def test_place_order_unknown_outcome_resolves_once_and_fails_when_no_attempt_exi
         )
 
     assert raised.value.code == "ORDER_EXECUTION_UNKNOWN"
-    assert json.loads(raised.value.detail_json) == {
-        "intent_id": "intent-unknown",
-        "transport_cause": "_TransportError",
-        "transport_code": transport_code.name,
-    }
+    _assert_order_error_detail(
+        raised.value.detail_json,
+        intent_id="intent-unknown",
+        stage="resolve_order_attempt",
+        cause="no persisted order attempt was found",
+        transport_code=transport_code.name,
+    )
     assert stub.place_calls == 1
     assert stub.resolve_calls == 1
 
@@ -282,15 +307,52 @@ def test_place_order_fails_unknown_when_resolution_cannot_establish_attempt():
         )
 
     assert raised.value.code == "ORDER_EXECUTION_UNKNOWN"
-    assert json.loads(raised.value.detail_json) == {
-        "intent_id": "intent-resolution-failed",
-        "resolution_cause": "_TransportError",
-        "resolution_code": "UNAVAILABLE",
-        "transport_cause": "_TransportError",
-        "transport_code": "UNAVAILABLE",
-    }
+    _assert_order_error_detail(
+        raised.value.detail_json,
+        intent_id="intent-resolution-failed",
+        stage="resolve_order_attempt",
+        cause="resolve_order_attempt transport failure",
+        transport_code="UNAVAILABLE",
+    )
+    detail = json.loads(raised.value.detail_json)
+    assert detail["resolution_cause"] == "_TransportError:UNAVAILABLE"
+    assert detail["resolution_code"] == "UNAVAILABLE"
     assert stub.place_calls == 1
     assert stub.resolve_calls == 1
+
+
+@pytest.mark.parametrize("attempt_id", ["", "   "])
+def test_place_order_success_without_persisted_attempt_identity_is_fatal(attempt_id):
+    """Returning feedback for a response without an attempt identity must fail."""
+    client = OrderClient("")
+    stub = _Stub(order_service_pb2.PlaceOrderResponse(
+        intent_id="intent-success-without-attempt",
+        attempt_id=attempt_id,
+        attempt_status="ACCEPTED",
+    ))
+    client._stub = stub
+
+    with pytest.raises(WorkerPlatformCallError) as raised:
+        client.place_order(
+            13,
+            _decision(),
+            51000.0,
+            portfolio_symbol="ETHUSDT",
+            market="perpetual_futures",
+            intent_id="intent-success-without-attempt",
+        )
+
+    assert raised.value.code == "ORDER_EXECUTION_UNKNOWN"
+    _assert_order_error_detail(
+        raised.value.detail_json,
+        intent_id="intent-success-without-attempt",
+        stage="place_order",
+        cause="response missing persisted order attempt identity",
+        transport_code="",
+        transport_cause="successful_response",
+    )
+    assert stub.place_calls == 1
+    assert stub.resolve_calls == 0
 
 
 def test_place_order_uses_canonical_symbol_and_emits_fill_events():
