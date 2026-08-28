@@ -37,6 +37,7 @@ class FilledOrderClient:
             "market_time": market_time,
             "spot_risk_snapshot_id": spot_risk_snapshot_id,
         })
+        sequence = len(self.calls)
         symbol = str(portfolio_symbol or decision.symbol).strip().upper()
         route_market = str(market or getattr(decision, "market", "") or "").strip().lower()
         raw_qty = abs(float(decision.qty))
@@ -57,15 +58,15 @@ class FilledOrderClient:
             qty=wallet_qty,
             fill_price=fill_price,
             status="FILLED",
-            order_id="test-order",
+            order_id=f"test-order-{sequence}",
             position_side=getattr(decision, "position_side", None),
             orig_qty=raw_qty,
             executed_qty=raw_qty,
             remaining_qty=0.0,
             exchange="binance",
             market=route_market,
-            exchange_order_id="test-exchange-order",
-            exchange_trade_id="test-trade",
+            exchange_order_id=f"test-exchange-order-{sequence}",
+            exchange_trade_id=f"test-trade-{sequence}",
             qty_decimal=qty_decimal,
             fill_price_decimal=fill_price_decimal,
             fee_decimal="0",
@@ -82,7 +83,7 @@ class FilledOrderClient:
         )
         return ExecutionFeedback(
             intent_id=intent_id,
-            attempt_id="test-attempt",
+            attempt_id=f"test-attempt-{sequence}",
             attempt_status="ACCEPTED",
             order=order,
             fill_count=1,
