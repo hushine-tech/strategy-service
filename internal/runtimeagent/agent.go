@@ -3534,6 +3534,9 @@ func (a *Agent) invokeWorkerPlatformCall(ctx context.Context, call *rwv1.Platfor
 				result.ErrorDetailJson = "{}"
 			}
 			result.DependencyError = cloneDependencyError(typed.PlatformDependencyError())
+		} else if transport, ok := grpcstatus.FromError(err); ok && transport.Code() != codes.OK {
+			result.ErrorCode = transport.Code().String()
+			result.ErrorMessage = transport.Message()
 		}
 		return result
 	}

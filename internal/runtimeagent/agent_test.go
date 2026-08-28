@@ -19,6 +19,8 @@ import (
 	cpv1 "github.com/hushine-tech/strategy-service/gen/controlpanelv1"
 	rwv1 "github.com/hushine-tech/strategy-service/gen/runtimeworkerv1"
 	strategyv1 "github.com/hushine-tech/strategy-service/gen/strategyv1"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -3274,6 +3276,13 @@ type testTypedPlatformError struct {
 	dependency            *strategyv1.RuntimeDependencyError
 }
 
+type testTypedGRPCPlatformError struct {
+	*testTypedPlatformError
+	transport *grpcstatus.Status
+}
+
+func (e *testTypedGRPCPlatformError) GRPCStatus() *grpcstatus.Status { return e.transport }
+
 func (e *testTypedPlatformError) Error() string                   { return e.code + ": " + e.message }
 func (e *testTypedPlatformError) PlatformErrorCode() string       { return e.code }
 func (e *testTypedPlatformError) PlatformErrorMessage() string    { return e.message }
@@ -3288,9 +3297,12 @@ func TestAgentPreservesTypedRuntimeChannelErrorForWorker(t *testing.T) {
 		Message: "dependency unavailable",
 	}
 	invoker := &fakePlatformInvoker{onInvoke: func(string, *anypb.Any) (*anypb.Any, error) {
-		return nil, &testTypedPlatformError{
-			code: "FailedPrecondition", message: "platform route unavailable",
-			detail: `{"route":"portfolio.UpdateSession"}`, dependency: dependency,
+		return nil, &testTypedGRPCPlatformError{
+			testTypedPlatformError: &testTypedPlatformError{
+				code: "FailedPrecondition", message: "platform route unavailable",
+				detail: `{"route":"portfolio.UpdateSession"}`, dependency: dependency,
+			},
+			transport: grpcstatus.New(grpccodes.PermissionDenied, "transport status must not override typed fields"),
 		}
 	}}
 	agent := NewAgent(AgentConfig{PlatformInvoker: invoker})
@@ -3305,6 +3317,81 @@ func TestAgentPreservesTypedRuntimeChannelErrorForWorker(t *testing.T) {
 		result.GetError() != "FailedPrecondition: platform route unavailable" ||
 		result.GetDependencyError().GetModule() != "google.cloud" {
 		t.Fatalf("typed platform result = %+v", result)
+	}
+}
+
+func TestAgentMapsGRPCPlatformErrorsForWorker(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:        "Unavailable",
+			err:         grpcstatus.Error(grpccodes.Unavailable, "runtime channel generation disconnected"),
+			wantCode:    "Unavailable",
+			wantMessage: "runtime channel generation disconnected",
+		},
+		{
+			name:        "FailedPrecondition",
+			err:         grpcstatus.Error(grpccodes.FailedPrecondition, "runtime dependency profile rejected"),
+			wantCode:    "FailedPrecondition",
+			wantMessage: "runtime dependency profile rejected",
+		},
+		{
+			name:        "PermissionDenied",
+			err:         grpcstatus.Error(grpccodes.PermissionDenied, "runtime credential revoked"),
+			wantCode:    "PermissionDenied",
+			wantMessage: "runtime credential revoked",
+		},
+		{
+			name: "wrapped Unavailable",
+			err: fmt.Errorf(
+				"invoke runtime channel: %w",
+				grpcstatus.Error(grpccodes.Unavailable, "runtime channel generation disconnected"),
+			),
+			wantCode: "Unavailable",
+			wantMessage: "invoke runtime channel: rpc error: code = Unavailable desc = " +
+				"runtime channel generation disconnected",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invoker := &fakePlatformInvoker{onInvoke: func(string, *anypb.Any) (*anypb.Any, error) {
+				return nil, test.err
+			}}
+			agent := NewAgent(AgentConfig{PlatformInvoker: invoker})
+			result := agent.invokeWorkerPlatformCall(context.Background(), &rwv1.PlatformCall{
+				CallId: "call-grpc", Method: "portfolio.GetSession",
+			})
+
+			if result.GetOk() || result.GetCallId() != "call-grpc" ||
+				result.GetErrorCode() != test.wantCode ||
+				result.GetErrorMessage() != test.wantMessage ||
+				result.GetErrorDetailJson() != "{}" ||
+				result.GetError() != test.err.Error() || result.GetDependencyError() != nil {
+				t.Fatalf("gRPC platform result = %+v", result)
+			}
+		})
+	}
+}
+
+func TestAgentKeepsPlainPlatformErrorLegacyFields(t *testing.T) {
+	plain := errors.New("plain platform failure")
+	invoker := &fakePlatformInvoker{onInvoke: func(string, *anypb.Any) (*anypb.Any, error) {
+		return nil, plain
+	}}
+	agent := NewAgent(AgentConfig{PlatformInvoker: invoker})
+	result := agent.invokeWorkerPlatformCall(context.Background(), &rwv1.PlatformCall{
+		CallId: "call-plain", Method: "portfolio.GetSession",
+	})
+
+	if result.GetOk() || result.GetCallId() != "call-plain" ||
+		result.GetErrorCode() != "" || result.GetErrorMessage() != "plain platform failure" ||
+		result.GetErrorDetailJson() != "{}" || result.GetError() != "plain platform failure" ||
+		result.GetDependencyError() != nil {
+		t.Fatalf("plain platform result = %+v", result)
 	}
 }
 
