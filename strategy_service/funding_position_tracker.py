@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+
+from strategy_service.position_side import position_side_from_label, position_side_label
 from typing import Iterable
 
 
@@ -75,10 +77,12 @@ class FundingPositionTracker:
         if not qty.is_finite() or qty <= 0:
             raise ValueError("qty_decimal must be a positive finite decimal")
 
-        raw_position_side = str(getattr(event, "position_side", "") or "").strip().upper()
         if mode == "one_way":
             position_side = "BOTH"
         else:
+            raw_position_side = _canonical_position_side_label(
+                getattr(event, "position_side", None)
+            )
             if raw_position_side not in {"LONG", "SHORT"}:
                 raise ValueError("position_side is required for hedge mode")
             position_side = raw_position_side
@@ -118,7 +122,7 @@ class FundingPositionTracker:
         restored: dict[tuple[int, str, str, str], Decimal] = {}
         for fact in facts:
             symbol = str(fact.symbol or "").strip().upper()
-            side = str(fact.position_side or "").strip().upper()
+            side = _canonical_position_side_label(fact.position_side)
             margin = str(fact.margin_mode or "").strip().lower()
             if not symbol or side not in {"BOTH", "LONG", "SHORT"} or margin not in {"cross", "isolated"}:
                 raise ValueError("FundingPositionLegFact is invalid")
@@ -173,3 +177,14 @@ def _canonical_time_key(value: object) -> tuple[int, int]:
     if type(value) is int and value >= 0:
         return value, 0
     raise ValueError("canonical lifecycle time is required")
+
+
+def _canonical_position_side_label(value: object) -> str:
+    try:
+        if type(value) is int:
+            return position_side_label(value)
+        if isinstance(value, str):
+            return position_side_label(position_side_from_label(value))
+    except ValueError as exc:
+        raise ValueError("position_side is required") from exc
+    raise ValueError("position_side is required")

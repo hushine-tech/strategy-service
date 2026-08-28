@@ -13,6 +13,7 @@ from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.canonical import SpotSymbolFilter, SpotSymbolMetadata
 from strategy_service.wallet.portfolio import PortfolioWalletRuntime
 from strategy_service.wallet_factory import install_simulated_target_leverages
+from strategy_service.position_side import position_side_label
 
 
 _EXCHANGE_LABELS = {
@@ -104,7 +105,7 @@ def _exact_funding_legs_from_venue(venue: Any) -> list[FundingPositionLegFact]:
         if position_venue_id != venue_id:
             raise ValueError("Futures position venue_id conflicts with VenueSnapshot")
         symbol = str(getattr(position, "symbol", "") or "").strip().upper()
-        side = str(getattr(position, "position_side", "") or "").strip().upper()
+        side = position_side_label(int(getattr(position, "position_side", 0)))
         margin = str(getattr(position, "margin_mode", "") or "").strip().lower()
         if not symbol or margin not in {"cross", "isolated"}:
             raise ValueError("canonical Futures position route or margin_mode is invalid")

@@ -34,6 +34,7 @@ from strategy_service.wallet.order_types import OrderResponse
 from strategy_service.wallet.canonical import CanonicalFuturesRiskMetadata, SpotSymbolMetadata
 from strategy_service.funding_position_tracker import FundingPositionLegFact
 from strategy_service.platform_proxy import MarketFundingFact
+from strategy_service.position_side import BOTH
 from tests.helpers.wallet_fixtures import make_testnet_wallet
 from tests.helpers.wallet_fixtures import make_backtest_wallet
 
@@ -497,8 +498,8 @@ def make_portfolio_snapshot_with_binance_perp_and_spot(
             positions=[
                 portfolio_service_pb2.FuturesPosition(
                     symbol="BTCUSDT",
-                    position_side="BOTH",
-                    position_qty=0.0,
+                    position_side=BOTH,
+                    qty=0.0,
                     signed_qty_decimal="0",
                     entry_price=0.0,
                     mark_price=50_000.0,

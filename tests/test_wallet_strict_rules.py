@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import pytest
 
+from strategy_service.position_side import BOTH
 from tests.helpers.wallet_fixtures import make_testnet_wallet
 
 
@@ -55,6 +56,17 @@ def test_hedge_mode_on_order_requires_explicit_valid_position_side() -> None:
 
     with pytest.raises(ValueError, match="explicit position_side"):
         wallet.on_order("BTCUSDT", "futures", FillWithInvalidSide())
+
+    class FillWithProtoDefaultSide:
+        status = "FILLED"
+        side = "BUY"
+        position_side = BOTH
+        qty = 0.1
+        fill_price = 50_000.0
+        order_id = "hedge-default-side-1"
+
+    with pytest.raises(ValueError, match="explicit position_side"):
+        wallet.on_order("BTCUSDT", "futures", FillWithProtoDefaultSide())
 
     # Sanity: after the raises the runtime state is unchanged (no partial
     # position created). Hedge mode builds positions lazily on valid fills;

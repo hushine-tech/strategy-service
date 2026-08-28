@@ -35,6 +35,7 @@ from strategy_service.order_client import (
     _market_time_to_proto,
     canonical_decimal_text,
 )
+from strategy_service.position_side import position_side_from_label, position_side_label
 from strategy_service.types import ExecutionFeedback, OrderDecision
 
 logger = logging.getLogger(__name__)
@@ -268,7 +269,7 @@ class ProxyPortfolioClient:
             position_legs=[
                 portfolio_service_pb2.FundingPositionLegFact(
                     symbol=str(leg.symbol or "").strip().upper(),
-                    position_side=str(leg.position_side or "").strip().upper(),
+                    position_side=position_side_from_label(leg.position_side),
                     margin_mode=str(leg.margin_mode or "").strip().lower(),
                     signed_qty_decimal=leg.signed_qty_decimal,
                 )
@@ -424,7 +425,7 @@ def _validate_backtest_funding_response(response: Any, request: Any):
     requested_legs: dict[tuple[str, str, str], Decimal] = {}
     requested_leg_quantity_strings: dict[tuple[str, str, str], str] = {}
     for leg in request.position_legs:
-        identity = (leg.symbol, leg.position_side, leg.margin_mode)
+        identity = (leg.symbol, position_side_label(int(leg.position_side)), leg.margin_mode)
         if identity in requested_legs:
             raise BacktestFundingResponseError(
                 "settlement request contains a duplicate position leg"

@@ -6,6 +6,7 @@ import logging
 from typing import Any, Optional
 
 from strategy_service.order_client import _market_time_to_proto
+from strategy_service.position_side import BOTH, LONG, SHORT
 
 logger = logging.getLogger(__name__)
 
@@ -381,17 +382,16 @@ def _serialize_future_wallet(fw: Any):
 
     positions = []
     position_mode = str(getattr(fw, "position_mode", "") or "").strip().lower()
-    for (symbol, direction), pos in fw.positions.items():
+    for (symbol, direction_key), pos in fw.positions.items():
         net_qty = float(getattr(pos, "net_qty", 0.0) or 0.0)
-        net_direction = int(getattr(pos, "net_direction", 0) or 0)
         if position_mode != "hedge":
-            position_side = "BOTH"
-        elif net_direction > 0:
-            position_side = "LONG"
-        elif net_direction < 0:
-            position_side = "SHORT"
+            position_side = BOTH
+        elif direction_key > 0:
+            position_side = LONG
+        elif direction_key < 0:
+            position_side = SHORT
         else:
-            position_side = str(getattr(pos, "position_side", "") or "")
+            raise ValueError("hedge Futures wallet contains an invalid position key")
         mark_price = getattr(pos, "mark_price", None)
         position_qty = float(getattr(pos, "position_qty", net_qty) or net_qty)
         unrealized_pnl = 0.0
@@ -402,12 +402,11 @@ def _serialize_future_wallet(fw: Any):
             unrealized_pnl = float(getattr(pos, "unrealized_pnl", 0.0) or 0.0)
         pf = portfolio_service_pb2.FuturesPosition(
             symbol=symbol,
-            direction=direction,
             initial_balance=float(getattr(pos, "initial_balance", 0.0) or 0.0),
             leverage=float(getattr(pos, "leverage", 1.0) or 1.0),
             fee_rate=float(getattr(pos, "fee_rate", 0.0004) or 0.0004),
             mark_price=float(mark_price) if mark_price is not None else 0.0,
-            position_qty=position_qty,
+            qty=position_qty,
             entry_price=float(getattr(pos, "avg_entry_price", getattr(pos, "entry_price", 0.0)) or 0.0),
             unrealized_pnl=unrealized_pnl,
             position_side=position_side,

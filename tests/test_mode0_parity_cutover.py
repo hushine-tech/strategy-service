@@ -16,6 +16,7 @@ from hushine_strategy.wallet import FuturesWallet as OfflineFuturesWallet
 
 from strategy_service import MarketData, StrategyEngine
 from strategy_service.gen import portfolio_service_pb2
+from strategy_service.position_side import position_side_from_label
 from strategy_service.strategy_imports import (
     gate_strategy_source,
     prepare_strategy,
@@ -53,8 +54,8 @@ def _canonical_mode0(
         for p in positions:
             fp = futures.positions.add()
             fp.symbol = p["symbol"]
-            fp.position_side = p.get("position_side", "BOTH")
-            fp.position_qty = float(p.get("position_qty", 0.0))
+            fp.position_side = position_side_from_label(p.get("position_side", "BOTH"))
+            fp.qty = float(p.get("position_qty", 0.0))
             fp.entry_price = float(p.get("entry_price", 0.0))
             fp.mark_price = float(p.get("mark_price", 0.0))
             fp.leverage = float(p.get("leverage", 10.0))

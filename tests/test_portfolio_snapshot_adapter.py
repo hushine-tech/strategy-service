@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from strategy_service.gen import portfolio_service_pb2
+from strategy_service.position_side import BOTH, position_side_from_label
 from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
 from strategy_service.wallet.binance import BinanceWalletRuntime
 from strategy_service.wallet.portfolio_adapter import (
@@ -46,7 +47,7 @@ def _position(
 ):
     return portfolio_service_pb2.PositionEntry(
         symbol=symbol,
-        position_side=position_side,
+        position_side=position_side_from_label(position_side),
         qty=qty,
         entry_price=entry_price,
         mark_price=mark_price,
@@ -224,8 +225,8 @@ def _futures_position(
     return portfolio_service_pb2.FuturesPosition(
         venue_id=venue_id,
         symbol=symbol,
-        position_side=position_side,
-        position_qty=position_qty,
+        position_side=position_side_from_label(position_side),
+        qty=position_qty,
         signed_qty_decimal=format(Decimal(str(position_qty)), "f"),
         entry_price=entry_price,
         mark_price=mark_price,
@@ -650,8 +651,8 @@ def test_futures_venue_uses_full_canonical_wallet_instead_of_compact_position_de
                 portfolio_service_pb2.FuturesPosition(
                     venue_id=11,
                     symbol="ETHUSDT",
-                    position_side="BOTH",
-                    position_qty=0.3,
+                    position_side=BOTH,
+                    qty=0.3,
                     signed_qty_decimal="0.3",
                     entry_price=3000.0,
                     mark_price=3050.0,

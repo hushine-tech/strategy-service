@@ -59,7 +59,7 @@ def _spot_asset_code(value: Any) -> str:
 
 
 def _strict_position_qty(pos: Any) -> float:
-    return float(getattr(pos, "position_qty", 0.0) or 0.0)
+    return float(getattr(pos, "qty", 0.0) or 0.0)
 
 
 def _strict_margin_mode(pos: Any) -> str:
@@ -101,9 +101,7 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
             margin_mode = _strict_margin_mode(pos)
             direction_key = derive_position_key(
                 position_mode=position_mode,
-                position_side=pos.position_side,
-                direction=int(getattr(pos, "direction", 0) or 0),
-                position_qty=position_qty,
+                position_side=int(pos.position_side),
             )
             futures_positions.append(CanonicalFuturesPositionState(
                 symbol=pos.symbol,
@@ -115,7 +113,7 @@ def proto_to_portfolio_spec(wallet_proto: Any) -> CanonicalPortfolioState:
                 position_qty=position_qty,
                 entry_price=float(pos.entry_price or 0.0),
                 unrealized_pnl=float(pos.unrealized_pnl or 0.0),
-                position_side=str(pos.position_side or ""),
+                position_side=int(pos.position_side),
                 margin_mode=str(margin_mode or ""),
                 notional=float(getattr(pos, "notional", 0.0) or 0.0),
                 initial_margin=float(getattr(pos, "initial_margin", 0.0) or 0.0),

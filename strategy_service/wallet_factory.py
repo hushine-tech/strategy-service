@@ -13,6 +13,7 @@ from strategy_service.wallet.canonical import (
     CanonicalSpotState,
     norm_symbol,
 )
+from strategy_service.position_side import position_direction_key, position_side_from_label
 
 
 _PLAIN_DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z")
@@ -28,7 +29,7 @@ _FUTURES_FIELDS = frozenset({
 })
 _FUTURES_POSITION_FIELDS = frozenset({
     "symbol",
-    "direction",
+    "position_side",
     "initial_balance",
     "leverage",
     "fee_rate",
@@ -141,17 +142,15 @@ def portfolio_dict_to_canonical_state(portfolio: dict[str, Any]) -> CanonicalPor
             raise ValueError(
                 "canonical contract error: missing FuturesPosition.position_qty"
             )
-        direction_key = int(raw.get("direction", 0) or 0)
-        position_side = "BOTH"
-        if position_mode == "hedge":
-            if direction_key > 0:
-                position_side = "LONG"
-            elif direction_key < 0:
-                position_side = "SHORT"
+        position_side = position_side_from_label(raw.get("position_side", "BOTH"))
+        direction_key = position_direction_key(
+            position_mode=position_mode,
+            position_side=position_side,
+        )
         futures_positions.append(
             CanonicalFuturesPositionState(
                 symbol=norm_symbol(raw.get("symbol", "")),
-                direction_key=direction_key if position_mode == "hedge" else 0,
+                direction_key=direction_key,
                 initial_balance=float(raw.get("initial_balance", 0.0) or 0.0),
                 leverage=float(raw.get("leverage", 1.0) or 1.0),
                 fee_rate=float(raw.get("fee_rate", 0.0004) or 0.0004),

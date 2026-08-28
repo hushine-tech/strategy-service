@@ -14,6 +14,10 @@ from strategy_service.types import (
     OrderUpdateEvent,
     OrderUpdateFill,
 )
+from strategy_service.position_side import (
+    position_side_from_label,
+    position_side_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,26 +36,12 @@ MARKET_CODES = {
     "delivery_futures": 3,
 }
 
-POSITION_SIDE_CODES = {
-    "": 0,
-    "none": 0,
-    "both": 0,
-    "long": 1,
-    "short": 2,
-}
-
 EXCHANGE_NAMES = {v: k for k, v in EXCHANGE_CODES.items()}
 MARKET_NAMES = {
     1: "spot",
     2: "perpetual_futures",
     3: "delivery_futures",
 }
-POSITION_SIDE_NAMES = {
-    0: "both",
-    1: "long",
-    2: "short",
-}
-
 
 def canonical_decimal_text(value: int | float | Decimal | str) -> str:
     try:
@@ -307,10 +297,7 @@ class OrderClient:
 
     @staticmethod
     def _position_side_code(position_side: str | None) -> int:
-        key = str(position_side or "").strip().lower()
-        if key not in POSITION_SIDE_CODES:
-            raise ValueError(f"unsupported position_side: {position_side!r}")
-        return POSITION_SIDE_CODES[key]
+        return position_side_from_label(position_side)
 
     def list_order_lifecycle_events(
         self,
@@ -479,7 +466,7 @@ class OrderClient:
             exchange=EXCHANGE_NAMES.get(int(item.exchange), f"exchange:{int(item.exchange)}"),
             market=MARKET_NAMES.get(int(item.market), f"market:{int(item.market)}"),
             side=str(item.side or ""),
-            position_side=POSITION_SIDE_NAMES.get(int(item.position_side), f"position_side:{int(item.position_side)}"),
+            position_side=position_side_label(int(item.position_side)),
             event_type=str(item.event_type or ""),
             order_status=str(item.order_status or ""),
             event_source=str(getattr(item, "event_source", "") or ""),
@@ -729,9 +716,7 @@ class OrderClient:
                 venue_id=int(getattr(fill, "venue_id", 0) or getattr(order, "venue_id", 0) or 0),
                 exchange=EXCHANGE_NAMES.get(int(getattr(fill, "exchange", 0) or getattr(order, "exchange", 0) or 0), ""),
                 market=MARKET_NAMES.get(int(getattr(fill, "market", 0) or getattr(order, "market", 0) or 0), market),
-                position_side=POSITION_SIDE_NAMES.get(
-                    int(getattr(fill, "position_side", 0) or 0), ""
-                ),
+                position_side=position_side_label(int(getattr(fill, "position_side", 0))),
                 exchange_order_id=str(getattr(fill, "exchange_order_id", "") or getattr(order, "exchange_order_id", "") or ""),
                 exchange_trade_id=exchange_trade_id,
                 fee_asset=str(getattr(fill, "fee_asset", "") or ""),

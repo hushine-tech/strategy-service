@@ -655,7 +655,7 @@ def test_order_response_from_update_rejects_missing_market_route() -> None:
         venue_id=20,
         exchange="binance",
         market="",
-        position_side="both",
+        position_side="BOTH",
         side="BUY",
         event_type="fill",
         order_status="FILLED",
@@ -711,7 +711,7 @@ def test_public_order_update_event_from_proto_converts_lifecycle_entry() -> None
     assert event.event_id == 101
     assert event.exchange == "binance"
     assert event.market == "perpetual_futures"
-    assert event.position_side == "both"
+    assert event.position_side == "BOTH"
     assert event.symbol == "ETHUSDT"
     assert event.event_type == "fill"
     assert event.occurred_at == (100, 7)
@@ -816,7 +816,7 @@ def test_list_order_lifecycle_events_maps_route_facts_and_fill():
     assert event.event_id == 11
     assert event.exchange == "binance"
     assert event.market == "perpetual_futures"
-    assert event.position_side == "both"
+    assert event.position_side == "BOTH"
     assert event.side == "BUY"
     assert event.event_source == "force_close"
     assert event.symbol == "ETHUSDT"

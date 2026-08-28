@@ -9,6 +9,7 @@ from strategy_service.funding_position_tracker import (
     FundingPositionLegFact,
     FundingPositionTracker,
 )
+from strategy_service.position_side import BOTH, LONG, SHORT
 
 
 def _fill(**overrides):
@@ -204,3 +205,14 @@ def test_decimal_authority_never_reconstructs_from_float_qty():
     )
 
     assert _legs(tracker, 11, "BTCUSDT")[-1][-1] == "0.100000000000000001"
+
+
+def test_generated_enum_inputs_are_labeled_before_funding_details_are_serialized():
+    tracker = FundingPositionTracker()
+    tracker.on_lifecycle_fill(
+        _fill(position_side=LONG, exchange_trade_id="long-enum"),
+        position_mode="hedge",
+        margin_mode="cross",
+    )
+
+    assert _legs(tracker, 11, "BTCUSDT") == [("BTCUSDT", "LONG", "cross", "0.100000000000000001")]

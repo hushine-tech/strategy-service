@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from strategy_service.position_side import BOTH, position_direction_key
+
 
 def norm_symbol(symbol: str) -> str:
     return str(symbol).strip().upper()
@@ -13,33 +15,10 @@ def norm_symbol(symbol: str) -> str:
 def derive_position_key(
     *,
     position_mode: str,
-    position_side: str,
-    direction: int = 0,
-    position_qty: float = 0.0,
+    position_side: int,
 ) -> int:
-    """Return the runtime position key direction.
-
-    - one_way -> always 0
-    - hedge LONG -> +1
-    - hedge SHORT -> -1
-    """
-    pm = str(position_mode or "one_way").strip().lower()
-    if pm != "hedge":
-        return 0
-
-    side = str(position_side or "").strip().upper()
-    if side == "LONG":
-        return +1
-    if side == "SHORT":
-        return -1
-    if direction in (+1, -1):
-        return direction
-    qty = float(position_qty)
-    if qty > 0:
-        return +1
-    if qty < 0:
-        return -1
-    return 0
+    """Return the private wallet key from the shared enum contract only."""
+    return position_direction_key(position_mode=position_mode, position_side=position_side)
 
 
 @dataclass(slots=True)
@@ -53,7 +32,7 @@ class CanonicalFuturesPositionState:
     position_qty: float = 0.0
     entry_price: float = 0.0
     unrealized_pnl: float = 0.0
-    position_side: str = ""
+    position_side: int = BOTH
     margin_mode: str = ""
     notional: float = 0.0
     initial_margin: float = 0.0

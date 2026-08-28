@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from strategy_service.gen import portfolio_service_pb2
+from strategy_service.position_side import position_side_from_label
 from strategy_service.wallet import BinanceWalletRuntime
 from strategy_service.wallet_adapter import proto_to_portfolio_spec
 from strategy_service.wallet_factory import build_wallet_from_portfolio
@@ -53,8 +54,8 @@ def _apply_futures_position(
     effective_margin_mode = (margin_mode or portfolio_margin_mode).strip().lower()
     p = futures_proto.positions.add()
     p.symbol = symbol
-    p.position_side = position_side
-    p.position_qty = float(position_qty)
+    p.position_side = position_side_from_label(position_side)
+    p.qty = float(position_qty)
     p.entry_price = float(entry_price)
     p.mark_price = float(mark_price)
     p.leverage = float(leverage)

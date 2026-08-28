@@ -8,6 +8,13 @@ import pytest
 from strategy_service.portfolio_client import _serialize_future_wallet
 from strategy_service.gen import portfolio_service_pb2
 from strategy_service.inputs import parse_order_targets, resolve_order_target_leverages
+from strategy_service.position_side import (
+    BOTH,
+    LONG,
+    SHORT,
+    position_direction_key,
+    position_side_label,
+)
 from strategy_service.types import OrderResponse
 from strategy_service.wallet import BinanceWalletRuntime, LedgerEvent
 from strategy_service.wallet.canonical import SpotSymbolMetadata
@@ -49,15 +56,14 @@ def _wallet_proto(*, environment: int) -> portfolio_service_pb2.PortfolioWalletS
             positions=[
                 portfolio_service_pb2.FuturesPosition(
                     symbol="BTCUSDT",
-                    direction=0,
                     initial_balance=100.0,
                     leverage=10.0,
                     fee_rate=0.0004,
                     mark_price=110.0,
-                    position_qty=0.1,
+                    qty=0.1,
                     entry_price=100.0,
                     unrealized_pnl=1.0,
-                    position_side="BOTH",
+                    position_side=BOTH,
                     margin_mode="cross",
                     notional=11.0,
                     initial_margin=1.1,
@@ -77,6 +83,36 @@ def _wallet_proto(*, environment: int) -> portfolio_service_pb2.PortfolioWalletS
             ),
         ]),
     )
+
+
+def test_one_way_negative_position_serializes_as_canonical_both_leg() -> None:
+    """One-way exposure sign must never change its shared position-side enum."""
+    wallet = make_testnet_wallet(margin_mode="cross", position_mode="one_way")
+    wallet.futures.positions[("BTCUSDT", 0)] = wallet.futures._ensure_position(
+        "BTCUSDT", 0, BOTH
+    )
+    wallet.futures.positions[("BTCUSDT", 0)].position_qty = -0.25
+
+    serialized = _serialize_future_wallet(wallet.futures)
+
+    assert serialized.positions[0].position_side == BOTH
+    assert position_side_label(serialized.positions[0].position_side) == "BOTH"
+
+
+def test_shared_position_side_constants_match_core_enum_descriptor() -> None:
+    enum = portfolio_service_pb2.FuturesPositionSide
+
+    assert enum.DESCRIPTOR.full_name == "portfolio.v1.FuturesPositionSide"
+    assert (BOTH, LONG, SHORT) == (
+        enum.Value("FUTURES_POSITION_SIDE_BOTH"),
+        enum.Value("FUTURES_POSITION_SIDE_LONG"),
+        enum.Value("FUTURES_POSITION_SIDE_SHORT"),
+    )
+
+
+def test_position_key_rejects_non_generated_enum_values() -> None:
+    with pytest.raises(ValueError, match="invalid FuturesPositionSide"):
+        position_direction_key(position_mode="hedge", position_side=True)
 
 
 def _isolated_wallet_proto_with_metadata() -> portfolio_service_pb2.PortfolioWalletState:
@@ -100,15 +136,14 @@ def _isolated_wallet_proto_with_metadata() -> portfolio_service_pb2.PortfolioWal
             positions=[
                 portfolio_service_pb2.FuturesPosition(
                     symbol="BTCUSDT",
-                    direction=0,
                     initial_balance=5.0,
                     leverage=10.0,
                     fee_rate=0.0004,
                     mark_price=110.0,
-                    position_qty=0.1,
+                    qty=0.1,
                     entry_price=100.0,
                     unrealized_pnl=1.0,
-                    position_side="BOTH",
+                    position_side=BOTH,
                     margin_mode="isolated",
                     notional=11.0,
                     initial_margin=1.1,
@@ -195,7 +230,7 @@ def test_build_wallet_from_http_backtest_dict_uses_binance_runtime_after_c2a():
             "positions": [
                 {
                     "symbol": "BTCUSDT",
-                    "direction": 0,
+                    "position_side": "BOTH",
                     "initial_balance": 5_000.0,
                     "leverage": 20.0,
                     "fee_rate": 0.0004,
@@ -385,12 +420,11 @@ def test_backtest_leverage_overlay_refreshes_position_order_and_portfolio_risk_f
             positions=[
                 portfolio_service_pb2.FuturesPosition(
                     symbol="BTCUSDT",
-                    direction=0,
                     leverage=20.0,
                     mark_price=100_000.0,
-                    position_qty=0.1,
+                    qty=0.1,
                     entry_price=100_000.0,
-                    position_side="BOTH",
+                    position_side=BOTH,
                     margin_mode="cross",
                     notional=10_000.0,
                     initial_margin=500.0,
@@ -598,21 +632,19 @@ def test_binance_parity_wallet_bootstraps_isolated_wallet_balance_from_position_
             positions=[
                 portfolio_service_pb2.FuturesPosition(
                     symbol="BTCUSDT",
-                    direction=0,
                     initial_balance=5_000.0,
                     leverage=10.0,
                     fee_rate=0.0004,
                     margin_mode="isolated",
-                    position_side="BOTH",
+                    position_side=BOTH,
                 ),
                 portfolio_service_pb2.FuturesPosition(
                     symbol="ETHUSDT",
-                    direction=0,
                     initial_balance=3_000.0,
                     leverage=10.0,
                     fee_rate=0.0004,
                     margin_mode="isolated",
-                    position_side="BOTH",
+                    position_side=BOTH,
                 ),
             ],
         ),
@@ -735,14 +767,13 @@ def test_cross_long_liquidation_clamps_to_zero_when_wallet_balance_covers_positi
             positions=[
                 portfolio_service_pb2.FuturesPosition(
                     symbol="ETHUSDT",
-                    direction=0,
                     leverage=5.0,
                     fee_rate=0.0004,
                     mark_price=2_318.47,
-                    position_qty=0.021,
+                    qty=0.021,
                     entry_price=2_316.94,
                     unrealized_pnl=0.03213,
-                    position_side="BOTH",
+                    position_side=BOTH,
                     margin_mode="cross",
                     notional=48.68787,
                     initial_margin=9.737574,
@@ -805,14 +836,13 @@ def test_cross_short_liquidation_is_estimated_when_exchange_price_and_brackets_a
             positions=[
                 portfolio_service_pb2.FuturesPosition(
                     symbol="ETHUSDT",
-                    direction=0,
                     leverage=5.0,
                     fee_rate=0.0004,
                     mark_price=1_900.0,
-                    position_qty=-0.5,
+                    qty=-0.5,
                     entry_price=2_000.0,
                     unrealized_pnl=50.0,
-                    position_side="BOTH",
+                    position_side=BOTH,
                     margin_mode="cross",
                     notional=-950.0,
                     initial_margin=190.0,
@@ -1130,7 +1160,7 @@ def test_one_way_short_position_serializes_as_both_not_short():
             "position_qty": -0.021,
             "entry_price": 2328.08476,
             "mark_price": 2327.5776938,
-            "position_side": "SHORT",
+            "position_side": "BOTH",
             "margin_mode": "cross",
         }],
     )
@@ -1139,7 +1169,7 @@ def test_one_way_short_position_serializes_as_both_not_short():
     assert len(positions) == 1
     assert positions[0].symbol == "ETHUSDT"
     assert positions[0].position_qty == pytest.approx(-0.021)
-    assert positions[0].position_side == "BOTH"
+    assert positions[0].position_side == BOTH
 
 
 def test_serialize_future_wallet_one_way_long_and_short_export_both():
@@ -1152,7 +1182,7 @@ def test_serialize_future_wallet_one_way_long_and_short_export_both():
                 "position_qty": qty,
                 "entry_price": 2328.08476,
                 "mark_price": 2328.08476,
-                "position_side": "LONG" if qty > 0 else "SHORT",
+                "position_side": "BOTH",
                 "margin_mode": "cross",
             }],
         )
@@ -1160,8 +1190,8 @@ def test_serialize_future_wallet_one_way_long_and_short_export_both():
         proto_fw = _serialize_future_wallet(wallet.futures)
 
         assert len(proto_fw.positions) == 1
-        assert proto_fw.positions[0].position_qty == pytest.approx(qty)
-        assert proto_fw.positions[0].position_side == "BOTH"
+        assert proto_fw.positions[0].qty == pytest.approx(qty)
+        assert proto_fw.positions[0].position_side == BOTH
 
 
 def test_new_position_uses_configured_leverage_for_initial_margin_after_fill():
@@ -1255,14 +1285,13 @@ def _mode2_eth_snapshot_without_position_leverage(*, include_risk_metadata: bool
             positions=[
                 portfolio_service_pb2.FuturesPosition(
                     symbol="ETHUSDT",
-                    direction=0,
                     leverage=0.0,
                     fee_rate=0.0,
                     mark_price=2304.55582809,
-                    position_qty=-0.105,
+                    qty=-0.105,
                     entry_price=2322.030550747,
                     unrealized_pnl=1.83484587,
-                    position_side="BOTH",
+                    position_side=BOTH,
                     margin_mode="cross",
                     notional=-241.97836194,
                     initial_margin=12.0989181,
@@ -1768,8 +1797,8 @@ def test_hedge_mode_ledger_event_without_position_side_does_not_crash():
     # itself doesn't specify a side.
     long_pos = wallet_proto.futures.positions.add()
     long_pos.symbol = "BTCUSDT"
-    long_pos.position_side = "LONG"
-    long_pos.position_qty = 0.1
+    long_pos.position_side = LONG
+    long_pos.qty = 0.1
     long_pos.entry_price = 45_000.0
     long_pos.mark_price = 45_000.0
     long_pos.leverage = 20.0
@@ -1816,8 +1845,8 @@ def test_hedge_mode_ledger_event_with_explicit_position_side_still_routes():
     )
     short_pos = wallet_proto.futures.positions.add()
     short_pos.symbol = "BTCUSDT"
-    short_pos.position_side = "SHORT"
-    short_pos.position_qty = -0.1
+    short_pos.position_side = SHORT
+    short_pos.qty = -0.1
     short_pos.entry_price = 45_000.0
     short_pos.mark_price = 45_000.0
     short_pos.leverage = 20.0

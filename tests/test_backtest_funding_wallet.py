@@ -8,6 +8,7 @@ import pytest
 
 from strategy_service.gen import portfolio_service_pb2
 from strategy_service.funding_position_tracker import FundingPositionLegFact
+from strategy_service.position_side import BOTH, LONG
 from strategy_service.wallet.portfolio_adapter import (
     apply_venue_wallet_snapshot,
     build_portfolio_wallet_from_snapshot,
@@ -172,8 +173,8 @@ def test_portfolio_snapshot_restores_exact_initial_funding_legs_by_venue():
             initial_balance=100.0,
             positions=[portfolio_service_pb2.FuturesPosition(
                 symbol="BTCUSDT",
-                position_side="LONG",
-                position_qty=0.1,
+                position_side=LONG,
+                qty=0.1,
                 signed_qty_decimal="0.100000000000000001",
                 venue_id=11,
                 margin_mode="isolated",
@@ -211,8 +212,8 @@ def test_portfolio_snapshot_replacement_refreshes_exact_funding_legs_and_clears_
                 initial_balance=100.0,
                 positions=[portfolio_service_pb2.FuturesPosition(
                     symbol="ETHUSDT",
-                    position_side="BOTH",
-                    position_qty=float(quantity),
+                    position_side=BOTH,
+                    qty=float(quantity),
                     signed_qty_decimal=quantity,
                     venue_id=11,
                     margin_mode="cross",
@@ -221,7 +222,7 @@ def test_portfolio_snapshot_replacement_refreshes_exact_funding_legs_and_clears_
         )
         if include_zec:
             wallet.futures.positions.append(portfolio_service_pb2.FuturesPosition(
-                symbol="ZECUSDT", position_side="BOTH", position_qty=1.0,
+                symbol="ZECUSDT", position_side=BOTH, qty=1.0,
                 signed_qty_decimal="1", venue_id=11, margin_mode="cross",
             ))
         item.wallet.CopyFrom(wallet)
@@ -262,7 +263,7 @@ def test_invalid_replacement_leaves_prior_exact_tracker_snapshot_unchanged():
         futures=portfolio_service_pb2.FuturesWallet(
             margin_mode="cross", position_mode="one_way", initial_balance=100.0,
             positions=[portfolio_service_pb2.FuturesPosition(
-                symbol="ETHUSDT", position_side="BOTH", position_qty=1.0,
+                symbol="ETHUSDT", position_side=BOTH, qty=1.0,
                 signed_qty_decimal="1.000000000000000001", venue_id=11,
                 margin_mode="cross",
             )],
@@ -298,8 +299,8 @@ def test_portfolio_snapshot_rejects_float_only_initial_futures_position():
             initial_balance=100.0,
             positions=[portfolio_service_pb2.FuturesPosition(
                 symbol="ZECUSDT",
-                position_side="BOTH",
-                position_qty=1.0,
+                position_side=BOTH,
+                qty=1.0,
                 venue_id=11,
                 margin_mode="cross",
             )],
@@ -330,8 +331,8 @@ def test_portfolio_snapshot_rejects_missing_or_mismatched_position_venue_identit
             initial_balance=100.0,
             positions=[portfolio_service_pb2.FuturesPosition(
                 symbol="BTCUSDT",
-                position_side="BOTH",
-                position_qty=1.0,
+                position_side=BOTH,
+                qty=1.0,
                 signed_qty_decimal="1",
                 venue_id=position_venue_id,
                 margin_mode="cross",

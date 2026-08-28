@@ -18,6 +18,12 @@ from .canonical import (
     norm_symbol,
 )
 from .spot import SpotWallet
+from strategy_service.position_side import (
+    BOTH,
+    position_direction_key,
+    position_side_from_label,
+    position_side_label,
+)
 
 __all__ = [
     "BinanceWalletRuntime",
@@ -165,9 +171,11 @@ class BinancePosition:
             fee_rate=float(state.fee_rate or 0.0004),
             margin_mode=margin_mode,
             position_side=(
-                "BOTH"
+                position_side_label(BOTH)
                 if int(state.direction_key) == 0
-                else _normalize_position_side(state.position_side, int(state.direction_key))
+                else _normalize_position_side(
+                    position_side_label(state.position_side), int(state.direction_key)
+                )
             ),
             initial_balance=float(state.initial_balance or 0.0),
             position_qty=qty,
@@ -298,7 +306,7 @@ class BinancePosition:
             position_qty=self.position_qty,
             entry_price=self.entry_price,
             unrealized_pnl=self.get_unrealized_pnl(),
-            position_side=canonical_side,
+            position_side=position_side_from_label(canonical_side),
             margin_mode=self.margin_mode,
             notional=self.notional if self.notional else self.oracle_notional,
             initial_margin=self.initial_margin if self.initial_margin else self.oracle_initial_margin,
@@ -1053,10 +1061,15 @@ class BinanceFuturesBook:
         self, allocation: _FundingAllocation, *, require_cross_position: bool
     ) -> BinancePosition | None:
         if self.position_mode == "hedge":
-            direction = 1 if allocation.position_side == "LONG" else -1
+            if allocation.position_side not in {"LONG", "SHORT"}:
+                return None
+            direction_key = position_direction_key(
+                position_mode="hedge",
+                position_side=position_side_from_label(allocation.position_side),
+            )
         else:
-            direction = 0
-        position = self.positions.get((norm_symbol(allocation.symbol), direction))
+            direction_key = 0
+        position = self.positions.get((norm_symbol(allocation.symbol), direction_key))
         if allocation.margin_mode == "isolated" or require_cross_position:
             if position is None or position.margin_mode != allocation.margin_mode:
                 raise ValueError("Funding Income calculation leg has no matching wallet position")
