@@ -409,12 +409,18 @@ func isPermanentRuntimeChannelError(err error) bool {
 }
 
 func (c *RuntimeChannelClient) finishGeneration(generation *runtimeChannelGeneration) {
-	unavailable := status.Error(codes.Unavailable, "runtime channel generation disconnected")
 	c.mu.Lock()
 	if c.current == generation {
 		c.current = nil
 		c.signalReadyChangeLocked()
 	}
+	c.mu.Unlock()
+	c.failGenerationPendingCalls(generation)
+}
+
+func (c *RuntimeChannelClient) failGenerationPendingCalls(generation *runtimeChannelGeneration) {
+	unavailable := status.Error(codes.Unavailable, "runtime channel generation disconnected")
+	c.mu.Lock()
 	failures := make([]chan runtimeChannelPendingResult, 0)
 	for correlationID, pending := range c.pending {
 		if pending.generation == generation.id {
@@ -430,12 +436,12 @@ func (c *RuntimeChannelClient) finishGeneration(generation *runtimeChannelGenera
 
 func (c *RuntimeChannelClient) markGenerationUnready(generation *runtimeChannelGeneration) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current != generation || !generation.ready {
-		return
+	if c.current == generation && generation.ready {
+		generation.ready = false
+		c.signalReadyChangeLocked()
 	}
-	generation.ready = false
-	c.signalReadyChangeLocked()
+	c.mu.Unlock()
+	c.failGenerationPendingCalls(generation)
 }
 
 func normalizeRuntimeChannelAddress(address string) string {

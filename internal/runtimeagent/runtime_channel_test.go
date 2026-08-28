@@ -480,6 +480,20 @@ func TestRuntimeChannelSupervisorWaitsForReceiveStatusAfterAuthenticatedSendFail
 			}()
 			receiveRuntimeSignal(t, capture.requestReceived, "server request receive")
 			receiveRuntimeSignal(t, physicalSendComplete, "physical outbound send completion")
+
+			pendingRequest, err := anypb.New(&strategyv1.GetStrategyStatusRequest{SessionId: "send-first-pending"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pendingDone := make(chan error, 1)
+			go func() {
+				_, invokeErr := client.InvokePlatformAny(
+					context.Background(), "GetStrategyStatus", pendingRequest, 5*time.Second,
+				)
+				pendingDone <- invokeErr
+			}()
+			waitForRuntimePendingCallCount(t, client, 1)
+
 			close(allowSendFailure)
 			select {
 			case err := <-sendDone:
@@ -490,6 +504,15 @@ func TestRuntimeChannelSupervisorWaitsForReceiveStatusAfterAuthenticatedSendFail
 				t.Fatal("send-side failure did not reach caller")
 			}
 			waitForRuntimeReady(t, client, false)
+			select {
+			case pendingErr := <-pendingDone:
+				pendingStatus, ok := status.FromError(pendingErr)
+				if !ok || pendingStatus.Code() != codes.Unavailable {
+					t.Fatalf("pending invocation error = %v, want typed Unavailable", pendingErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("pending invocation remained blocked while final receive status was withheld")
+			}
 			close(capture.allowTerminal)
 
 			select {
@@ -505,6 +528,9 @@ func TestRuntimeChannelSupervisorWaitsForReceiveStatusAfterAuthenticatedSendFail
 			}
 			if got := capture.calls.Load(); got != 1 {
 				t.Fatalf("RuntimeChannel attempts = %d, want 1", got)
+			}
+			if got := capture.requests.Load(); got != 1 {
+				t.Fatalf("server request frames = %d, want only the send-failure trigger", got)
 			}
 		})
 	}
@@ -1319,6 +1345,24 @@ func waitForRuntimeReady(t *testing.T, client *RuntimeChannelClient, want bool) 
 	t.Fatalf("RuntimeChannel ready = %v, want %v", client.Ready(), want)
 }
 
+func waitForRuntimePendingCallCount(t *testing.T, client *RuntimeChannelClient, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		client.mu.Lock()
+		got := len(client.pending)
+		client.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	client.mu.Lock()
+	got := len(client.pending)
+	client.mu.Unlock()
+	t.Fatalf("RuntimeChannel pending calls = %d, want %d", got, want)
+}
+
 type resumeSupervisorRuntimeChannelServer struct {
 	cpv1.UnimplementedControlPanelServiceServer
 	firstAuthenticated  chan struct{}
@@ -1405,6 +1449,7 @@ type sendFirstTerminalRuntimeChannelServer struct {
 	allowTerminal     chan struct{}
 	serverContextDone chan struct{}
 	calls             atomic.Int64
+	requests          atomic.Int64
 	requestOnce       sync.Once
 	contextDoneOnce   sync.Once
 }
@@ -1500,6 +1545,7 @@ func (s *sendFirstTerminalRuntimeChannelServer) RuntimeChannel(
 		if frame.GetFrameType() != cpv1.FrameType_FRAME_TYPE_REQUEST {
 			continue
 		}
+		s.requests.Add(1)
 		s.requestOnce.Do(func() { close(s.requestReceived) })
 		select {
 		case <-s.allowTerminal:
