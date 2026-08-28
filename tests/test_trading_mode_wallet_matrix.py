@@ -83,15 +83,14 @@ def test_spot_canonical_order_outcome_wallet_delta_matrix(
 @pytest.mark.parametrize(
     ("case", "status", "fill_qty", "remaining_qty", "want_open"),
     [
-        ("gtc-full", "FILLED", 1.0, 0.0, False),
+        ("full", "FILLED", 1.0, 0.0, False),
         ("gtc-partial", "PARTIALLY_FILLED", 0.2, 0.8, True),
-        ("ioc-partial", "EXPIRED", 0.2, 0.0, False),
-        ("fok-full", "FILLED", 1.0, 0.0, False),
+        ("ioc-partial-expired", "EXPIRED", 0.2, 0.0, False),
         ("fok-zero", "EXPIRED", 0.0, 0.0, False),
     ],
-    ids=["gtc-full", "gtc-partial", "ioc-partial", "fok-full", "fok-zero"],
+    ids=["full", "gtc-partial", "ioc-partial-expired", "fok-zero"],
 )
-def test_futures_time_in_force_wallet_delta_matrix(
+def test_futures_canonical_order_outcome_wallet_delta_matrix(
     case: str,
     status: str,
     fill_qty: float,
@@ -100,12 +99,10 @@ def test_futures_time_in_force_wallet_delta_matrix(
 ):
     wallet = make_backtest_wallet(wallet_balance=1000.0)
     order_id = f"futures-{case}"
-    wallet.on_order(
-        "BTCUSDT",
-        "futures",
-        SimpleNamespace(
+    def update_for(event_status: str, event_remaining: float) -> SimpleNamespace:
+        return SimpleNamespace(
             order_id=order_id,
-            status=status,
+            status=event_status,
             side="BUY",
             position_side="BOTH",
             qty=fill_qty,
@@ -113,11 +110,19 @@ def test_futures_time_in_force_wallet_delta_matrix(
             fee=fill_qty * 0.04,
             orig_qty=1.0,
             executed_qty=fill_qty,
-            remaining_qty=remaining_qty,
+            remaining_qty=event_remaining,
             price=100.0,
             reduce_only=False,
-        ),
-    )
+        )
+
+    if case == "ioc-partial-expired":
+        wallet.on_order(
+            "BTCUSDT", "futures", update_for("PARTIALLY_FILLED", 0.8)
+        )
+    terminal_or_current = update_for(status, remaining_qty)
+    wallet.on_order("BTCUSDT", "futures", terminal_or_current)
+    if case == "full":
+        wallet.on_order("BTCUSDT", "futures", terminal_or_current)
 
     assert wallet.futures.wallet_balance == pytest.approx(
         1000.0 - fill_qty * 0.04

@@ -359,6 +359,8 @@ class BinanceFuturesBook:
             pos._refresh_derived_fields()
             self.positions[(norm_symbol(pos.symbol), int(pos.direction_key))] = pos
         self.open_orders: dict[str, BinanceOpenOrder] = {}
+        self._executed_qty_by_order: dict[str, float] = {}
+        self._terminal_order_ids: set[str] = set()
         self._refresh_portfolio_fields()
 
     def _get_positions_for_symbol(self, symbol: str) -> list[tuple[tuple[str, int], BinancePosition]]:
@@ -737,12 +739,12 @@ class BinanceFuturesBook:
     def _extract_fill_delta(
         self,
         *,
-        existing: BinanceOpenOrder | None,
+        previous_executed: float,
         status: str,
         event_qty: float,
         executed_qty: float,
     ) -> tuple[float, float]:
-        previous_executed = float(existing.executed_qty or 0.0) if existing is not None else 0.0
+        previous_executed = max(0.0, float(previous_executed or 0.0))
         if executed_qty > 0.0:
             return max(0.0, executed_qty - previous_executed), executed_qty
         if status in {"PARTIALLY_FILLED", "FILLED"} and event_qty > 0.0:
@@ -800,8 +802,13 @@ class BinanceFuturesBook:
             if raw_price <= 0.0:
                 raw_price = float(existing.price or 0.0)
 
+        previous_executed = (
+            float(existing.executed_qty or 0.0)
+            if existing is not None
+            else float(self._executed_qty_by_order.get(order_id, 0.0))
+        )
         fill_delta, executed_total = self._extract_fill_delta(
-            existing=existing,
+            previous_executed=previous_executed,
             status=status,
             event_qty=event_qty,
             executed_qty=executed_qty,
@@ -904,6 +911,9 @@ class BinanceFuturesBook:
             return
 
         order, fill_delta, fill_price, fee, terminal = self._event_order_payload(symbol, order_resp)
+        if order.order_id in self._terminal_order_ids:
+            terminal = True
+            order.remaining_qty = 0.0
         if fill_delta > _QTY_EPS:
             self._apply_fill(
                 order.symbol,
@@ -914,8 +924,14 @@ class BinanceFuturesBook:
                 fee=fee,
             )
 
+        self._executed_qty_by_order[order.order_id] = max(
+            float(self._executed_qty_by_order.get(order.order_id, 0.0)),
+            float(order.executed_qty or 0.0),
+        )
+
         if terminal or order.remaining_qty <= _QTY_EPS:
             self.open_orders.pop(order.order_id, None)
+            self._terminal_order_ids.add(order.order_id)
         else:
             self.open_orders[order.order_id] = order
             self._ensure_position(order.symbol, order.direction_key, order.position_side)
